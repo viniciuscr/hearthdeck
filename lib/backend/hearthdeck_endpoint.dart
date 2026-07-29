@@ -22,6 +22,9 @@ class HearthdeckEndpoint {
   factory HearthdeckEndpoint.local() =>
       HearthdeckEndpoint.parse('http://127.0.0.1:38400');
 
+  factory HearthdeckEndpoint.localAdmin() =>
+      HearthdeckEndpoint.parse('http://127.0.0.1:38401');
+
   final Uri baseUri;
 
   Uri api(String path) {

@@ -53,6 +53,22 @@ just build-services
 just install-services
 ```
 
+## CachyOS and Arch Linux
+
+GitHub Actions produces an `x86_64` pacman package containing the Flutter
+client, the local bridge and daemon, a desktop entry, and systemd user units.
+Download `hearthdeck-*.pkg.tar.zst` from the workflow run, then install it:
+
+```sh
+sudo pacman -U hearthdeck-*.pkg.tar.zst
+systemctl --user daemon-reload
+systemctl --user enable --now hearthdeck-bridge.service hearthdeck-daemon.service
+```
+
+The services discover applications on the target machine's graphical session.
+The package's client pairs with its loopback daemon automatically. See
+`docs/arch-package.md` for package contents and troubleshooting.
+
 ## Controller support
 
 The dashboard uses `flutter_gamepads`, backed by Flame Engine's cross-platform

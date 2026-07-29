@@ -1,0 +1,24 @@
+[Unit]
+Description=Hearthdeck local API daemon
+After=hearthdeck-bridge.service
+Requires=hearthdeck-bridge.service
+
+[Service]
+Type=exec
+EnvironmentFile=-%h/.config/hearthdeck/daemon.env
+Environment=HEARTHDECK_LOG_FORMAT=json
+Environment=RUST_LOG=hearthdeck_daemon=info,tower_http=info
+RuntimeDirectory=hearthdeck
+ExecStart=/usr/lib/hearthdeck/hearthdeck-daemon
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/hearthdeck %t/hearthdeck
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hearthdeck-daemon
+
+[Install]
+WantedBy=default.target

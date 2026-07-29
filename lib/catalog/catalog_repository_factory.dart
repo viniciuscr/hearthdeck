@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import '../backend/hearthdeck_api_client.dart';
 import '../backend/hearthdeck_endpoint.dart';
 import 'api_catalog_repository.dart';
 import 'catalog_repository.dart';
+import 'local_catalog_repository.dart';
 import 'mock_catalog_repository.dart';
 
 /// Selects an explicit catalog source without making macOS development depend
@@ -10,13 +13,17 @@ import 'mock_catalog_repository.dart';
 CatalogRepository createCatalogRepository() {
   const backendUrl = String.fromEnvironment('HEARTHDECK_BACKEND_URL');
   const token = String.fromEnvironment('HEARTHDECK_PAIRING_TOKEN');
-  if (backendUrl.isEmpty || token.isEmpty) {
-    return const MockCatalogRepository();
+  if (backendUrl.isNotEmpty && token.isNotEmpty) {
+    return ApiCatalogRepository(
+      HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.parse(backendUrl),
+        token: token,
+      ),
+    );
   }
-  return ApiCatalogRepository(
-    HearthdeckApiClient(
-      endpoint: HearthdeckEndpoint.parse(backendUrl),
-      token: token,
-    ),
-  );
+  const useLocalCatalog = bool.fromEnvironment('HEARTHDECK_USE_LOCAL_CATALOG');
+  if (useLocalCatalog && Platform.isLinux) {
+    return LocalCatalogRepository();
+  }
+  return const MockCatalogRepository();
 }

@@ -1,0 +1,55 @@
+name: Arch Linux Package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    container: ghcr.io/archlinux/archlinux:base-devel
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Arch build dependencies
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman --sync --refresh --sysupgrade --noconfirm
+          pacman --sync --noconfirm clang cmake curl git gtk3 just ninja pkgconf rust unzip xz zsh
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: clippy,rustfmt
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.8
+          cache: true
+
+      - name: Configure package builder
+        run: |
+          flutter_root=$(dirname "$(dirname "$(command -v flutter)")")
+          useradd --create-home builder
+          cp -a /root/.cargo /root/.rustup /home/builder/
+          chown -R builder:builder "$flutter_root" /home/builder "$GITHUB_WORKSPACE"
+
+      - name: Build pacman package
+        run: |
+          flutter_bin=$(dirname "$(command -v flutter)")
+          su --login builder --command "cd '$GITHUB_WORKSPACE' && PATH='$flutter_bin:/home/builder/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/bin' just ci-package-arch"
+
+      - name: Archive pacman package
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthdeck-pacman-x86_64
+          path: packaging/arch/hearthdeck-*.pkg.tar.zst
+          if-no-files-found: error
+          retention-days: 7

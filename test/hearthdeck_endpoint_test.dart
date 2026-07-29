@@ -11,6 +11,13 @@ void main() {
     );
   });
 
+  test('local admin endpoint uses the loopback pairing listener', () {
+    expect(
+      HearthdeckEndpoint.localAdmin().api('pairing').toString(),
+      'http://127.0.0.1:38401/v1/pairing',
+    );
+  });
+
   test('remote endpoint requires HTTPS', () {
     expect(
       () => HearthdeckEndpoint.parse('http://192.168.1.10:38400'),

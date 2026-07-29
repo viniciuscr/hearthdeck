@@ -1,0 +1,24 @@
+post_install() {
+  cat <<'EOF'
+Hearthdeck installs local services as systemd user units.
+
+Enable them for the logged-in desktop user:
+  systemctl --user daemon-reload
+  systemctl --user enable --now hearthdeck-bridge.service hearthdeck-daemon.service
+
+The launcher pairs with the loopback daemon automatically. Optional LAN/TLS
+configuration belongs in ~/.config/hearthdeck/daemon.env; see
+/usr/share/doc/hearthdeck/daemon.env.example.
+EOF
+}
+
+post_upgrade() {
+  post_install
+}
+
+post_remove() {
+  cat <<'EOF'
+If this was the final Hearthdeck package removal, disable its user services:
+  systemctl --user disable --now hearthdeck-daemon.service hearthdeck-bridge.service
+EOF
+}

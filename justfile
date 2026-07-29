@@ -77,6 +77,21 @@ refresh-metadata url token provider="appstream-local":
 # Run all portable project checks.
 check: format check-services test-app
 
+# Run source validation in CI after Flutter and Rust have been installed.
+ci-check:
+  flutter pub get
+  dart format --output=none --set-exit-if-changed lib test
+  cargo fmt --manifest-path services/Cargo.toml --all -- --check
+  cargo check --manifest-path services/Cargo.toml --workspace
+  cargo test --manifest-path services/Cargo.toml --workspace
+  cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets -- -D warnings
+  flutter analyze
+  flutter test
+
+# Build the Arch Linux package from the current source checkout.
+ci-package-arch:
+  cd packaging/arch && makepkg --cleanbuild --noconfirm
+
 # Install Linux systemd user units and enable the local services.
 install-services:
   mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/bin"

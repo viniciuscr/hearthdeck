@@ -16,6 +16,16 @@ class HearthdeckApiClient {
   final String? token;
   final http.Client _client;
 
+  Future<HearthdeckPairingCode> createPairingCode() async {
+    final response = await _client.post(endpoint.api('pairing'));
+    if (response.statusCode != 200) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+    return HearthdeckPairingCode.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
+  }
+
   Future<HearthdeckPairing> completePairing({
     required String code,
     required String clientName,
@@ -147,6 +157,15 @@ class HearthdeckPairing {
 
   final String clientId;
   final String token;
+}
+
+class HearthdeckPairingCode {
+  const HearthdeckPairingCode({required this.code});
+
+  factory HearthdeckPairingCode.fromJson(Map<String, dynamic> json) =>
+      HearthdeckPairingCode(code: json['code'] as String);
+
+  final String code;
 }
 
 class HearthdeckLibraryItem {

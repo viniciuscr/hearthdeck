@@ -73,6 +73,21 @@ void main() {
     expect(event.recordCount, 49);
   });
 
+  test(
+    'API client creates local pairing codes without a bearer token',
+    () async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.localAdmin(),
+        token: null,
+        client: _PairingHttpClient(),
+      );
+
+      final pairingCode = await client.createPairingCode();
+
+      expect(pairingCode.code, 'ABC123');
+    },
+  );
+
   test('API catalog reloads on metadata provider events', () async {
     final client = HearthdeckApiClient(
       endpoint: HearthdeckEndpoint.local(),
@@ -117,6 +132,21 @@ class _UnrecognizedKindHttpClient extends http.BaseClient {
     const body = '''[
       {"id":"jellyfin:movie","source_id":"jellyfin","title":"A Movie","kind":"movie","desktop_id":null,"icon":null,"metadata":{}}
     ]''';
+    return http.StreamedResponse(
+      Stream<List<int>>.value(body.codeUnits),
+      200,
+      headers: const <String, String>{'content-type': 'application/json'},
+    );
+  }
+}
+
+class _PairingHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    expect(request.method, 'POST');
+    expect(request.url.toString(), 'http://127.0.0.1:38401/v1/pairing');
+    expect(request.headers, isNot(contains('authorization')));
+    const body = '{"code":"ABC123","expires_at":"2026-01-01T00:00:00Z"}';
     return http.StreamedResponse(
       Stream<List<int>>.value(body.codeUnits),
       200,

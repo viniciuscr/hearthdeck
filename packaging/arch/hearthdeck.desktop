@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Hearthdeck
+Comment=Remote-friendly TV launcher
+Exec=hearthdeck
+Icon=io.github.viniciuscr.hearthdeck
+Terminal=false
+Type=Application
+Categories=Game;Utility;
+StartupWMClass=io.github.viniciuscr.hearthdeck
