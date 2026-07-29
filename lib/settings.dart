@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import 'catalog/catalog_repository.dart';
 import 'catalog/catalog_repository_factory.dart';
+import 'platform_session.dart';
 import 'settings_models.dart';
 import 'system_health.dart';
 import 'theme_settings.dart';
@@ -14,9 +15,10 @@ import 'tv_theme.dart';
 import 'tv_two_pane.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, this.catalogRepository});
+  const SettingsPage({super.key, this.catalogRepository, this.platformSession});
 
   final CatalogRepository? catalogRepository;
+  final PlatformSession? platformSession;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -27,7 +29,16 @@ class _SettingsPageState extends State<SettingsPage> {
   late final CatalogRepository _catalogRepository =
       widget.catalogRepository ?? createCatalogRepository();
 
-  List<SettingsOption> get _options => settingsOptions[_category]!;
+  late final PlatformSession _platformSession =
+      widget.platformSession ?? const NativePlatformSession();
+
+  List<SettingsOption> get _options => settingsOptions[_category]!
+      .where(
+        (SettingsOption option) =>
+            option.id != 'exit-to-desktop' ||
+            _platformSession.supportsExitToDesktop,
+      )
+      .toList(growable: false);
 
   void _selectCategory(SettingsCategory category) {
     setState(() => _category = category);
@@ -45,6 +56,25 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not request rescan: $error')),
+        );
+      }
+    }
+  }
+
+  Future<void> _confirmExitToDesktop() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => const _ExitToDesktopDialog(),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    try {
+      await _platformSession.exitToDesktop();
+    } on Object catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not exit to desktop: $error')),
         );
       }
     }
@@ -113,6 +143,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           options: _options,
                           layout: layout,
                           onLibraryRescan: _requestLibraryRescan,
+                          onExitToDesktop: _confirmExitToDesktop,
                           onThemeSettings: () => Navigator.of(context).push(
                             MaterialPageRoute<void>(
                               settings: const RouteSettings(
@@ -186,6 +217,7 @@ class _SettingsContent extends StatelessWidget {
     required this.options,
     required this.layout,
     required this.onLibraryRescan,
+    required this.onExitToDesktop,
     required this.onThemeSettings,
     required this.onServiceStatus,
   });
@@ -194,6 +226,7 @@ class _SettingsContent extends StatelessWidget {
   final List<SettingsOption> options;
   final _SettingsLayout layout;
   final VoidCallback onLibraryRescan;
+  final VoidCallback onExitToDesktop;
   final VoidCallback onThemeSettings;
   final VoidCallback onServiceStatus;
 
@@ -245,6 +278,7 @@ class _SettingsContent extends StatelessWidget {
                     autofocus: index == 0,
                     onActivate: switch (option.id) {
                       'rescan-library' => onLibraryRescan,
+                      'exit-to-desktop' => onExitToDesktop,
                       'service-status' => onServiceStatus,
                       'personalization' => onThemeSettings,
                       _ => () => _showSettingsMessage(context, option),
@@ -254,6 +288,33 @@ class _SettingsContent extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ExitToDesktopDialog extends StatelessWidget {
+  const _ExitToDesktopDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
+    return AlertDialog(
+      backgroundColor: tv.surface,
+      title: const Text('Exit to desktop?'),
+      content: Text(
+        'Hearthdeck will close. Console mode returns to the login screen; a desktop session returns to its desktop.',
+        style: TextStyle(color: tv.secondaryText),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Exit to desktop'),
         ),
       ],
     );

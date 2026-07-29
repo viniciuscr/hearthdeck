@@ -52,6 +52,9 @@ Select the COSMIC session there to return to the desktop. If the console shell
 crashes, Gamescope exits as well and the display manager remains available for
 recovery.
 
+Use **Settings > General > Exit to desktop** inside Hearthdeck Console. Confirm
+the prompt to close the console session and return to the display manager.
+
 The bridge scans the target machine's Freedesktop entries and launches only a
 re-discovered desktop entry. Linux launches are placed in a transient systemd
 user scope, allowing Hearthdeck to query and stop the active managed session.

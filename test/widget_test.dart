@@ -12,6 +12,7 @@ import 'package:hearthdeck/content_details.dart';
 import 'package:hearthdeck/dashboard_models.dart';
 import 'package:hearthdeck/full_library.dart';
 import 'package:hearthdeck/main.dart';
+import 'package:hearthdeck/platform_session.dart';
 import 'package:hearthdeck/search.dart';
 import 'package:hearthdeck/settings.dart';
 import 'package:hearthdeck/settings/user_settings_repository.dart';
@@ -187,6 +188,39 @@ void main() {
       find.byKey(const ValueKey<String>('settings-option-rescan-library')),
       findsOneWidget,
     );
+  });
+
+  testWidgets('settings confirms exit to desktop before ending the session', (
+    WidgetTester tester,
+  ) async {
+    final session = _FakePlatformSession();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SettingsPage(
+          catalogRepository: const MockCatalogRepository(),
+          platformSession: session,
+        ),
+      ),
+    );
+
+    final exitToDesktop = find.byKey(
+      const ValueKey<String>('settings-option-exit-to-desktop'),
+    );
+    await tester.scrollUntilVisible(
+      exitToDesktop,
+      240,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(exitToDesktop);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Exit to desktop?'), findsOneWidget);
+    expect(session.exitRequested, isFalse);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Exit to desktop'));
+    await tester.pumpAndSettle();
+
+    expect(session.exitRequested, isTrue);
   });
 
   testWidgets('settings opens live provider health', (
@@ -534,6 +568,18 @@ class _EventFailingCatalogRepository implements CatalogRepository {
   @override
   Stream<CatalogEvent> watch() =>
       Stream<CatalogEvent>.error(StateError('event feed unavailable'));
+}
+
+class _FakePlatformSession implements PlatformSession {
+  bool exitRequested = false;
+
+  @override
+  bool get supportsExitToDesktop => true;
+
+  @override
+  Future<void> exitToDesktop() async {
+    exitRequested = true;
+  }
 }
 
 class _HealthCatalogRepository extends MockCatalogRepository {

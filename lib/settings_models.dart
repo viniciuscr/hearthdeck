@@ -108,6 +108,12 @@ const Map<SettingsCategory, List<SettingsOption>> settingsOptions =
           description: 'Sleep, wake, and startup behavior',
           icon: Icons.power_settings_new_rounded,
         ),
+        SettingsOption(
+          id: 'exit-to-desktop',
+          label: 'Exit to desktop',
+          description: 'Close Hearthdeck and return to the desktop',
+          icon: Icons.logout_rounded,
+        ),
       ],
       SettingsCategory.account: <SettingsOption>[
         SettingsOption(

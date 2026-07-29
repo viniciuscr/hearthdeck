@@ -84,6 +84,9 @@ scopes, so the host can identify and stop the active managed application. Remote
 clients can inspect host capabilities and request an installation for host-side
 approval, but cannot execute a package manager or arbitrary host command.
 
+Choose **Settings > General > Exit to desktop** to leave Hearthdeck Console and
+return to the display manager, then select COSMIC.
+
 ## Controller support
 
 The dashboard uses `flutter_gamepads`, backed by Flame Engine's cross-platform

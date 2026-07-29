@@ -7,7 +7,25 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  FlMethodChannel* session_channel;
 };
+
+static constexpr char kSessionChannel[] =
+    "io.github.viniciuscr.hearthdeck/session";
+
+static void session_method_call_cb(FlMethodChannel* channel,
+                                   FlMethodCall* method_call,
+                                   gpointer user_data) {
+  (void)channel;
+  MyApplication* self = MY_APPLICATION(user_data);
+  const gchar* method = fl_method_call_get_name(method_call);
+  if (g_strcmp0(method, "exitToDesktop") == 0) {
+    fl_method_call_respond_success(method_call, nullptr, nullptr);
+    g_application_quit(G_APPLICATION(self));
+    return;
+  }
+  fl_method_call_respond_not_implemented(method_call, nullptr);
+}
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
@@ -30,6 +48,13 @@ static void my_application_activate(GApplication* application) {
       project, self->dart_entrypoint_arguments);
 
   FlView* view = fl_view_new(project);
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  self->session_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)), kSessionChannel,
+      FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(self->session_channel,
+                                             session_method_call_cb, self,
+                                             nullptr);
   GdkRGBA background_color;
   // Background defaults to black, override it here if necessary, e.g. #00000000
   // for transparent.
@@ -92,6 +117,7 @@ static void my_application_shutdown(GApplication* application) {
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  g_clear_object(&self->session_channel);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 
