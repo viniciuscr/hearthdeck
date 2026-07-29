@@ -30,6 +30,11 @@ The bridge scans the target machine's Freedesktop entries and invokes
 the SQLite catalog at `~/.local/share/hearthdeck/hearthdeck.db` and exposes a
 loopback API at `127.0.0.1:38400`.
 
+Discovery follows the XDG desktop-entry locations, including
+`/usr/share/applications`, the user's XDG data directory, and Flatpak's user
+and system exports. Executables without an exported `.desktop` entry are not
+treated as launchable applications.
+
 The packaged client obtains a fresh loopback pairing token on each app launch.
 It does not expose the pairing-code endpoint to the LAN. Full Library and the
 Library rescan setting use this local catalog; the dashboard's current shelves

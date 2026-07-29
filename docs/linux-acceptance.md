@@ -33,6 +33,14 @@ curl http://127.0.0.1:38400/v1/library \
 Confirm entries are discovered from KDE/Freedesktop `.desktop` files and that
 hidden/non-application entries do not appear.
 
+The bridge follows the XDG data-directory defaults even when a systemd user
+environment leaves them empty. It also scans Flatpak's user and system export
+directories. Check its structured scan-directory log if the catalog is empty:
+
+```sh
+journalctl --user -u hearthdeck-bridge.service --since '10 minutes ago' -o cat
+```
+
 ## Launch
 
 Call `POST /v1/apps/{id}/launch` with an ID returned by the library endpoint.
