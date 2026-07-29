@@ -20,7 +20,7 @@ void main() {
     },
   );
 
-  test('API catalog groups records by backend provider source', () async {
+  test('API catalog groups records by content category and exposes metadata', () async {
     final client = HearthdeckApiClient(
       endpoint: HearthdeckEndpoint.local(),
       token: 'test-token',
@@ -28,13 +28,19 @@ void main() {
     );
     final catalog = await ApiCatalogRepository(client).load();
 
-    expect(catalog.gameSources.single.label, 'Steam');
-    expect(catalog.appSources.single.label, 'Desktop Apps');
+    expect(catalog.gameSources.single.label, 'All games');
+    expect(catalog.appSources.single.label, 'Graphics');
     expect(catalog.gameSources.single.items.single.title, 'Orbit');
     expect(catalog.appSources.single.items.single.title, 'Gallery');
     expect(
       catalog.appSources.single.items.single.details?.facts.any(
-        (ContentFact fact) => fact.label == 'Rich metadata',
+        (ContentFact fact) => fact.label == 'Metadata',
+      ),
+      isTrue,
+    );
+    expect(
+      catalog.appSources.single.items.single.details?.actions.any(
+        (ContentAction action) => action.label == 'Website',
       ),
       isTrue,
     );
@@ -159,8 +165,8 @@ class _CatalogHttpClient extends http.BaseClient {
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     expect(request.headers['authorization'], 'Bearer test-token');
     const body = '''[
-      {"id":"steam:orbit","source_id":"steam","title":"Orbit","kind":"game","launch_id":null,"icon":null,"metadata":{}},
-      {"id":"desktop:gallery","source_id":"desktop-apps","title":"Gallery","kind":"application","launch_id":"gallery.desktop","icon":null,"metadata":{}}
+      {"id":"steam:orbit","source_id":"steam","title":"Orbit","kind":"game","launch_id":null,"icon":null,"metadata":{"summary":"Space exploration","categories":["Adventure"],"urls":{},"provenance":"steam"}},
+      {"id":"desktop:gallery","source_id":"desktop-apps","title":"Gallery","kind":"application","launch_id":"gallery.desktop","icon":null,"metadata":{"summary":"Browse photos","categories":["Graphics"],"urls":{"homepage":"https://example.org/gallery"},"provenance":"appstream-local"}}
     ]''';
     return http.StreamedResponse(
       Stream<List<int>>.value(body.codeUnits),
@@ -174,7 +180,7 @@ class _UnrecognizedKindHttpClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     const body = '''[
-      {"id":"jellyfin:movie","source_id":"jellyfin","title":"A Movie","kind":"movie","desktop_id":null,"icon":null,"metadata":{}}
+      {"id":"jellyfin:movie","source_id":"jellyfin","title":"A Movie","kind":"movie","launch_id":null,"icon":null,"metadata":{}}
     ]''';
     return http.StreamedResponse(
       Stream<List<int>>.value(body.codeUnits),

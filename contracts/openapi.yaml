@@ -261,4 +261,21 @@ components:
         kind: { type: string }
         launch_id: { type: [string, 'null'] }
         icon: { type: [string, 'null'] }
-        metadata: {}
+        metadata:
+          type: object
+          required: [summary, categories, urls, provenance]
+          properties:
+            summary: { type: string }
+            description: { type: [string, 'null'] }
+            categories:
+              type: array
+              items: { type: string }
+            developer: { type: [string, 'null'] }
+            project_license: { type: [string, 'null'] }
+            urls:
+              type: object
+              additionalProperties: { type: string, format: uri-reference }
+            screenshots:
+              type: array
+              items: { type: string, format: uri }
+            provenance: { type: string }

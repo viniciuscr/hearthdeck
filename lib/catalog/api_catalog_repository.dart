@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:flutter/material.dart';
 
 import '../backend/hearthdeck_api_client.dart';
@@ -16,28 +18,35 @@ class ApiCatalogRepository implements CatalogRepository {
   @override
   Future<CatalogData> load() async {
     final items = await _apiClient.library();
-    final sourcesById = <String, List<HearthdeckLibraryItem>>{};
+    final games = <HearthdeckLibraryItem>[];
+    final appsByCategory = <String, List<HearthdeckLibraryItem>>{};
     for (final item in items) {
-      sourcesById
-          .putIfAbsent(item.sourceId, () => <HearthdeckLibraryItem>[])
-          .add(item);
-    }
-    final gameSources = <CatalogSource>[];
-    final appSources = <CatalogSource>[];
-    for (final entry in sourcesById.entries) {
-      final source = CatalogSource(
-        id: entry.key,
-        label: _sourceLabel(entry.key),
-        items: entry.value.map(_toDashboardItem).toList(growable: false),
-      );
-      if (entry.value.every(
-        (HearthdeckLibraryItem item) => item.kind == 'game',
-      )) {
-        gameSources.add(source);
+      if (item.kind == 'game') {
+        games.add(item);
       } else {
-        appSources.add(source);
+        appsByCategory
+            .putIfAbsent(_primaryCategoryFor(item), () => <HearthdeckLibraryItem>[])
+            .add(item);
       }
     }
+    final gameSources = games.isEmpty
+        ? const <CatalogSource>[]
+        : <CatalogSource>[
+            CatalogSource(
+              id: 'all-games',
+              label: 'All games',
+              items: games.map(_toDashboardItem).toList(growable: false),
+            ),
+          ];
+    final appSources = SplayTreeMap<String, List<HearthdeckLibraryItem>>.from(
+      appsByCategory,
+    ).entries.map((MapEntry<String, List<HearthdeckLibraryItem>> entry) {
+      return CatalogSource(
+        id: 'category-${entry.key.toLowerCase().replaceAll(' ', '-')}',
+        label: entry.key,
+        items: entry.value.map(_toDashboardItem).toList(growable: false),
+      );
+    }).toList(growable: false);
     return CatalogData(gameSources: gameSources, appSources: appSources);
   }
 
@@ -66,59 +75,73 @@ class ApiCatalogRepository implements CatalogRepository {
 
   DashboardItem _toDashboardItem(HearthdeckLibraryItem item) {
     final kind = _kindFor(item.kind);
-    final enrichment = _enrichment(item.metadata);
+    final metadata = _metadata(item.metadata);
     return DashboardItem(
       id: item.id,
       title: item.title,
-      description: item.launchId == null
-          ? 'Available from Hearthdeck'
-          : 'Installed application',
+      description: metadata['summary'] as String? ?? item.title,
       icon: _iconFor(kind),
       colors: _colorsFor(item.id),
       kind: kind,
-      details: _detailsFor(item, enrichment),
+      details: _detailsFor(item, metadata),
     );
   }
 
   ContentDetails? _detailsFor(
     HearthdeckLibraryItem item,
-    Map<String, dynamic>? enrichment,
+    Map<String, dynamic> metadata,
   ) {
-    if (enrichment == null) {
-      return _discoveryOnlyDetails(item);
-    }
-    final summary = enrichment['summary'] as String?;
-    final description = enrichment['description'] as String?;
-    final developer = enrichment['developer'] as String?;
-    final license = enrichment['project_license'] as String?;
+    final summary = metadata['summary'] as String?;
+    final description = metadata['description'] as String?;
+    final developer = metadata['developer'] as String?;
+    final license = metadata['project_license'] as String?;
     final categories =
-        (enrichment['categories'] as List<dynamic>? ?? const <dynamic>[])
+        (metadata['categories'] as List<dynamic>? ?? const <dynamic>[])
             .whereType<String>()
             .toList(growable: false);
-    final urls =
-        (enrichment['urls'] as Map<String, dynamic>? ??
-                const <String, dynamic>{})
-            .values
-            .whereType<String>()
-            .toList(growable: false);
+    final urls = (metadata['urls'] as Map<String, dynamic>? ??
+            const <String, dynamic>{})
+        .entries
+        .where(
+          (MapEntry<String, dynamic> entry) =>
+              entry.value is String && _isHttpUrl(entry.value as String),
+        )
+        .map(
+          (MapEntry<String, dynamic> entry) =>
+              MapEntry(entry.key, entry.value as String),
+        )
+        .toList(growable: false);
 
     return ContentDetails(
       summary: description ?? summary ?? item.title,
       actions: <ContentAction>[
-        const ContentAction(
-          id: 'launch',
-          label: 'Launch',
-          icon: Icons.open_in_new_rounded,
-          isPrimary: true,
-        ),
-        if (urls.isNotEmpty)
+        if (item.launchId != null)
           const ContentAction(
-            id: 'official-page',
-            label: 'Official page',
-            icon: Icons.language_rounded,
+            id: 'launch',
+            label: 'Launch',
+            icon: Icons.open_in_new_rounded,
+            isPrimary: true,
           ),
+        ...urls.map(
+          (MapEntry<String, String> entry) => ContentAction(
+            id: 'open-${entry.key}',
+            label: _urlLabel(entry.key),
+            icon: _urlIcon(entry.key),
+            url: entry.value,
+          ),
+        ),
       ],
       facts: <ContentFact>[
+        ContentFact(
+          label: 'Source',
+          value: _sourceLabel(item.sourceId),
+          icon: Icons.inventory_2_outlined,
+        ),
+        ContentFact(
+          label: 'Metadata',
+          value: _metadataLabel(metadata['provenance'] as String?),
+          icon: Icons.info_outline_rounded,
+        ),
         if (developer != null)
           ContentFact(
             label: 'Developer',
@@ -149,46 +172,75 @@ class ApiCatalogRepository implements CatalogRepository {
     );
   }
 
-  ContentDetails _discoveryOnlyDetails(HearthdeckLibraryItem item) {
-    return ContentDetails(
-      summary: item.launchId == null
-          ? 'Discovered by the local Hearthdeck catalog service.'
-          : 'Installed application discovered by the local Hearthdeck catalog service.',
-      actions: const <ContentAction>[
-        ContentAction(
-          id: 'launch',
-          label: 'Launch',
-          icon: Icons.open_in_new_rounded,
-          isPrimary: true,
-        ),
-      ],
-      facts: <ContentFact>[
-        ContentFact(
-          label: 'Source',
-          value: _sourceLabel(item.sourceId),
-          icon: Icons.inventory_2_outlined,
-        ),
-        if (item.launchId != null)
-          ContentFact(
-            label: 'Launch ID',
-            value: item.launchId!,
-            icon: Icons.terminal_rounded,
-          ),
-        const ContentFact(
-          label: 'Rich metadata',
-          value: 'Not available from this source',
-          icon: Icons.info_outline_rounded,
-        ),
-      ],
-      galleryTitle: 'Application details',
-      gallery: const <ContentGalleryItem>[],
-    );
+  Map<String, dynamic> _metadata(Map<String, dynamic> metadata) {
+    return metadata;
   }
 
-  Map<String, dynamic>? _enrichment(Map<String, dynamic> metadata) {
-    final enrichment = metadata['enrichment'];
-    return enrichment is Map<String, dynamic> ? enrichment : null;
+  String _primaryCategoryFor(HearthdeckLibraryItem item) {
+    final categories = (item.metadata['categories'] as List<dynamic>? ??
+            const <dynamic>[])
+        .whereType<String>();
+    for (final category in categories) {
+      final mapped = _libraryCategory(category);
+      if (mapped != null) {
+        return mapped;
+      }
+    }
+    return 'Other';
   }
+
+  String? _libraryCategory(String category) => switch (category) {
+    'AudioVideo' || 'Audio' || 'Video' => 'Media',
+    'Development' || 'IDE' || 'Building' => 'Development',
+    'Education' => 'Education',
+    'Graphics' || 'Photography' || 'Viewer' => 'Graphics',
+    'Network' || 'WebBrowser' || 'Email' || 'Chat' => 'Network',
+    'Office' || 'Spreadsheet' || 'WordProcessor' => 'Office',
+    'Science' || 'Math' => 'Science',
+    'Settings' || 'System' || 'Security' => 'System',
+    'Utility' || 'FileTools' || 'TextEditor' => 'Utility',
+    _ => null,
+  };
+
+  String _categoryLabel(String category) => category
+      .replaceAll('-', ' ')
+      .split(' ')
+      .where((String word) => word.isNotEmpty)
+      .map(
+        (String word) =>
+            '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}',
+      )
+      .join(' ');
+
+  String _urlLabel(String type) => switch (type) {
+    'homepage' => 'Website',
+    'bugtracker' => 'Report issue',
+    'vcs-browser' => 'Source code',
+    'donation' => 'Support project',
+    _ => 'Open ${_categoryLabel(type)}',
+  };
+
+  IconData _urlIcon(String type) => switch (type) {
+    'homepage' => Icons.language_rounded,
+    'bugtracker' => Icons.bug_report_outlined,
+    'vcs-browser' => Icons.code_rounded,
+    'donation' => Icons.volunteer_activism_outlined,
+    _ => Icons.open_in_new_rounded,
+  };
+
+  bool _isHttpUrl(String value) {
+    final uri = Uri.tryParse(value);
+    return uri != null &&
+        uri.hasAuthority &&
+        (uri.scheme == 'http' || uri.scheme == 'https');
+  }
+
+  String _metadataLabel(String? provenance) => switch (provenance) {
+    'appstream-local' => 'AppStream',
+    'desktop-entry' => 'Desktop entry',
+    null || '' => 'Local catalog',
+    final String value => _sourceLabel(value),
+  };
 
   // Single choke point every backend `kind` string passes through. An
   // unrecognized value (a new provider shipping "movie" or "show", say)

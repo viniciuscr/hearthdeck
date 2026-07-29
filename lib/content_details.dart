@@ -5,6 +5,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import 'dashboard_models.dart';
+import 'external_link.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
 
@@ -14,11 +15,13 @@ class ContentDetailsPage extends StatefulWidget {
     required this.sourceShape,
     super.key,
     this.onPrimaryAction,
+    this.externalLink,
   });
 
   final DashboardItem item;
   final TvTileShape sourceShape;
   final Future<void> Function(DashboardItem item)? onPrimaryAction;
+  final ExternalLink? externalLink;
 
   @override
   State<ContentDetailsPage> createState() => _ContentDetailsPageState();
@@ -88,6 +91,9 @@ class _ContentDetailsPageState extends State<ContentDetailsPage> {
                                     sourceShape: widget.sourceShape,
                                     layout: layout,
                                     onPrimaryAction: widget.onPrimaryAction,
+                                    externalLink:
+                                        widget.externalLink ??
+                                        const NativeExternalLink(),
                                   ),
                                 ),
                                 SliverToBoxAdapter(
@@ -216,6 +222,7 @@ class _DetailsHeader extends StatelessWidget {
     required this.sourceShape,
     required this.layout,
     this.onPrimaryAction,
+    required this.externalLink,
   });
 
   final DashboardItem item;
@@ -223,6 +230,7 @@ class _DetailsHeader extends StatelessWidget {
   final TvTileShape sourceShape;
   final _ContentDetailsLayout layout;
   final Future<void> Function(DashboardItem item)? onPrimaryAction;
+  final ExternalLink externalLink;
 
   @override
   Widget build(BuildContext context) {
@@ -239,6 +247,7 @@ class _DetailsHeader extends StatelessWidget {
       details: details,
       layout: layout,
       onPrimaryAction: onPrimaryAction,
+      externalLink: externalLink,
     );
 
     if (layout.isHorizontalHeader) {
@@ -269,12 +278,14 @@ class _DetailsInformation extends StatelessWidget {
     required this.details,
     required this.layout,
     this.onPrimaryAction,
+    required this.externalLink,
   });
 
   final DashboardItem item;
   final ContentDetails details;
   final _ContentDetailsLayout layout;
   final Future<void> Function(DashboardItem item)? onPrimaryAction;
+  final ExternalLink externalLink;
 
   @override
   Widget build(BuildContext context) {
@@ -302,13 +313,31 @@ class _DetailsInformation extends StatelessWidget {
           spacing: layout.itemGap,
           runSpacing: layout.itemGap,
           children: details.actions
+              .asMap()
+              .entries
               .map(
-                (ContentAction action) => TvDetailAction(
-                  action: action,
-                  autofocus: action.isPrimary,
+                (MapEntry<int, ContentAction> entry) => TvDetailAction(
+                  action: entry.value,
+                  autofocus:
+                      entry.value.isPrimary ||
+                      (entry.key == 0 &&
+                          !details.actions.any(
+                            (ContentAction action) => action.isPrimary,
+                          )),
                   onActivate: () async {
-                    if (action.isPrimary && onPrimaryAction != null) {
+                    final action = entry.value;
+                    if (action.id == 'launch' && onPrimaryAction != null) {
                       await onPrimaryAction!(item);
+                    } else if (action.url case final String url) {
+                      try {
+                        await externalLink.open(url);
+                      } on Object catch (error) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Could not open link: $error')),
+                          );
+                        }
+                      }
                     } else if (context.mounted) {
                       _showDetailFeedback(context, item, action);
                     }

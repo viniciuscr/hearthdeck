@@ -10,6 +10,7 @@ import 'package:hearthdeck/catalog/catalog_repository.dart';
 import 'package:hearthdeck/catalog/mock_catalog_repository.dart';
 import 'package:hearthdeck/content_details.dart';
 import 'package:hearthdeck/dashboard_models.dart';
+import 'package:hearthdeck/external_link.dart';
 import 'package:hearthdeck/full_library.dart';
 import 'package:hearthdeck/main.dart';
 import 'package:hearthdeck/platform_session.dart';
@@ -68,6 +69,45 @@ void main() {
 
     expect(find.byType(ContentDetailsPage), findsOneWidget);
     expect(find.text('Play'), findsOneWidget);
+  });
+
+  testWidgets('content details open an external metadata link', (
+    WidgetTester tester,
+  ) async {
+    final externalLink = _FakeExternalLink();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ContentDetailsPage(
+          item: const DashboardItem(
+            id: 'example',
+            title: 'Example',
+            icon: Icons.apps_rounded,
+            colors: <Color>[Color(0xFF000000), Color(0xFF111111)],
+            details: ContentDetails(
+              summary: 'Example application',
+              actions: <ContentAction>[
+                ContentAction(
+                  id: 'homepage',
+                  label: 'Website',
+                  icon: Icons.language_rounded,
+                  url: 'https://example.org',
+                ),
+              ],
+              facts: <ContentFact>[],
+              galleryTitle: 'Screenshots',
+              gallery: <ContentGalleryItem>[],
+            ),
+          ),
+          sourceShape: TvTileShape.square,
+          externalLink: externalLink,
+        ),
+      ),
+    );
+
+    await tester.tap(find.bySemanticsLabel('Website'));
+    await tester.pumpAndSettle();
+
+    expect(externalLink.openedUrl, 'https://example.org');
   });
 
   testWidgets('library keeps loaded catalog when event stream fails', (
@@ -579,6 +619,15 @@ class _FakePlatformSession implements PlatformSession {
   @override
   Future<void> exitToDesktop() async {
     exitRequested = true;
+  }
+}
+
+class _FakeExternalLink implements ExternalLink {
+  String? openedUrl;
+
+  @override
+  Future<void> open(String url) async {
+    openedUrl = url;
   }
 }
 

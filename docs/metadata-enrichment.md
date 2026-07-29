@@ -16,6 +16,27 @@ Discovery answers "what is installed and how can it launch?" Metadata answers
 "what is it, who made it, where is its project, and what media is available?"
 They have separate schedules, workers, tables, and provenance.
 
+## Minimum Catalog Metadata
+
+Every library item has a stable minimum presentation record, even when no rich
+metadata provider matches it:
+
+- identity: item ID, title, content kind, launch ID, and icon reference;
+- summary: AppStream description/summary when available, otherwise the desktop
+  entry comment, otherwise the title;
+- categories: AppStream categories when available, otherwise Freedesktop
+  desktop-entry categories, otherwise `Other`;
+- provenance: the winning metadata provider or `desktop-entry`.
+
+The client uses these categories as app-library tabs rather than placing every
+desktop application in one provider-wide list. A desktop entry with the
+Freedesktop `Game` category is classified as a game; future game providers own
+their more specific genres and store categories.
+
+Project HTTP(S) URLs are emitted as typed metadata URL entries. The client
+renders each valid URL as a dedicated action, such as **Website**, **Source
+code**, or **Report issue**; link types are never presented as inert facts.
+
 ## Source Policy
 
 | Provider | Trust | Intended data | Policy |

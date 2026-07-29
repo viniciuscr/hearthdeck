@@ -10,12 +10,14 @@ class ContentAction {
     required this.label,
     required this.icon,
     this.isPrimary = false,
+    this.url,
   });
 
   final String id;
   final String label;
   final IconData icon;
   final bool isPrimary;
+  final String? url;
 }
 
 class ContentFact {

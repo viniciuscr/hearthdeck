@@ -102,9 +102,10 @@ The Flutter UI depends on `CatalogRepository`, never on an HTTP client or a
 provider name. Implementations are:
 
 - `MockCatalogRepository`: fixture sources for macOS UI development and tests.
-- `ApiCatalogRepository`: converts daemon library records into UI sources by
-  grouping `source_id`; a new backend provider automatically appears as a
-  source tab without a frontend provider-specific branch.
+- `ApiCatalogRepository`: converts daemon library records into Games and
+  category-based App tabs from canonical `kind` and `metadata.categories`.
+  Desktop-entry and AppStream categories therefore classify applications
+  without a frontend provider-specific branch.
 
 `FullLibraryPage` accepts a repository by injection. The default factory uses
 an explicit API repository when both `HEARTHDECK_BACKEND_URL` and

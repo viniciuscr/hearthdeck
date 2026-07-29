@@ -16,6 +16,17 @@ impl DesktopAppsProvider {
     }
 }
 
+fn content_kind(categories: &[String]) -> &'static str {
+    if categories
+        .iter()
+        .any(|category| category.eq_ignore_ascii_case("Game"))
+    {
+        "game"
+    } else {
+        "application"
+    }
+}
+
 #[async_trait]
 impl DiscoveryProvider for DesktopAppsProvider {
     fn source_id(&self) -> &'static str {
@@ -45,7 +56,7 @@ impl DiscoveryProvider for DesktopAppsProvider {
             .map(|application| CatalogRecord {
                 id: format!("desktop:{}", application.application_id),
                 title: application.name,
-                kind: "application".to_owned(),
+                kind: content_kind(&application.categories).to_owned(),
                 launch_id: Some(application.application_id),
                 icon: application.icon,
                 metadata: serde_json::json!({
@@ -55,5 +66,19 @@ impl DiscoveryProvider for DesktopAppsProvider {
                 updated_at: updated_at.clone(),
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::content_kind;
+
+    #[test]
+    fn classifies_freedesktop_games_as_games() {
+        assert_eq!(
+            content_kind(&["Game".to_owned(), "ActionGame".to_owned()]),
+            "game"
+        );
+        assert_eq!(content_kind(&["Utility".to_owned()]), "application");
     }
 }
