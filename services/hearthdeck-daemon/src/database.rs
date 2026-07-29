@@ -1,0 +1,82 @@
+use std::path::Path;
+
+use anyhow::Result;
+use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
+
+#[derive(Clone)]
+pub struct Database {
+    pool: SqlitePool,
+}
+
+impl Database {
+    pub async fn connect(path: &Path) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+        Ok(Self {
+            pool: SqlitePool::connect_with(options).await?,
+        })
+    }
+
+    pub async fn migrate(&self) -> Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS paired_clients (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              token_hash TEXT NOT NULL UNIQUE,
+              created_at TEXT NOT NULL,
+              last_seen_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS pairing_sessions (
+              code_hash TEXT PRIMARY KEY,
+              expires_at TEXT NOT NULL,
+              consumed_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS library_items (
+              id TEXT PRIMARY KEY,
+              source_id TEXT NOT NULL DEFAULT 'legacy',
+              title TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              launch_id TEXT,
+              icon TEXT,
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS catalog_enrichments (
+              provider_id TEXT NOT NULL,
+              application_id TEXT NOT NULL,
+              priority INTEGER NOT NULL,
+              payload_json TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (provider_id, application_id)
+            );
+            CREATE INDEX IF NOT EXISTS catalog_enrichments_lookup
+              ON catalog_enrichments (application_id, priority DESC, updated_at DESC);
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        // Existing development databases predate source ownership. SQLite has
+        // no `ADD COLUMN IF NOT EXISTS`, so a duplicate-column error is the
+        // expected no-op case after the first migration.
+        let _ = sqlx::query(
+            "ALTER TABLE library_items ADD COLUMN source_id TEXT NOT NULL DEFAULT 'legacy'",
+        )
+        .execute(&self.pool)
+        .await;
+        let _ = sqlx::query("ALTER TABLE library_items ADD COLUMN launch_id TEXT")
+            .execute(&self.pool)
+            .await;
+        Ok(())
+    }
+
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+}

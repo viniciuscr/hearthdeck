@@ -1,0 +1,5 @@
+[tools]
+"gem:cocoapods" = "1.17.0"
+flutter = "3.44.8"
+ruby = "4.0.6"
+rust = "1.97.1"

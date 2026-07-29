@@ -1,0 +1,138 @@
+openapi: 3.1.1
+info:
+  title: Hearthdeck Local API
+  version: 0.1.0
+  description: |
+    Local-first API for Hearthdeck clients. The daemon exposes this API to paired
+    clients. It never exposes arbitrary shell-command execution.
+servers:
+  - url: https://{host}:38400
+    variables:
+      host:
+        default: hearthdeck.local
+paths:
+  /v1/health:
+    get:
+      operationId: getHealth
+      responses:
+        '200':
+          description: Daemon status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /v1/pairing/complete:
+    post:
+      operationId: completePairing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PairingRequest'
+      responses:
+        '200':
+          description: Paired client credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PairedClient'
+  /v1/library:
+    get:
+      operationId: listLibrary
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Library items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LibraryItem'
+  /v1/library/rescan:
+    post:
+      operationId: rescanLibrary
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: Discovery jobs accepted
+  /v1/discovery/{source_id}/refresh:
+    post:
+      operationId: refreshDiscoverySource
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Provider refresh accepted
+  /v1/metadata/{provider_id}/refresh:
+    post:
+      operationId: refreshMetadataProvider
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: provider_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Metadata provider refresh accepted
+  /v1/apps/{id}/launch:
+    post:
+      operationId: launchApp
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Registered desktop app launch accepted
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Health:
+      type: object
+      required: [version, lan_enabled, transport]
+      properties:
+        version: { type: string }
+        lan_enabled: { type: boolean }
+        transport: { type: string, enum: [http, https] }
+    PairingRequest:
+      type: object
+      required: [code, client_name]
+      properties:
+        code: { type: string, minLength: 12, maxLength: 12 }
+        client_name: { type: string, maxLength: 128 }
+    PairedClient:
+      type: object
+      required: [client_id, token]
+      properties:
+        client_id: { type: string }
+        token: { type: string }
+    LibraryItem:
+      type: object
+      required: [id, source_id, title, kind, metadata]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        kind: { type: string }
+        launch_id: { type: [string, 'null'] }
+        icon: { type: [string, 'null'] }
+        metadata: {}

@@ -1,0 +1,98 @@
+#!/bin/zsh
+set -e
+
+device="${1:-macos}"
+runtime_dir=$(mktemp -d /tmp/hearthdeck-dev.XXXXXX)
+log_dir="${HEARTHDECK_DEV_LOG_DIR:-$runtime_dir}"
+flutter_command="${HEARTHDECK_DEV_FLUTTER_COMMAND:-}"
+
+# Build through the project task runner before isolating service runtime state.
+just build-services-debug
+
+cleanup() {
+  kill "${log_pid:-}" "${daemon_pid:-}" "${bridge_pid:-}" 2>/dev/null || true
+  wait "${log_pid:-}" "${daemon_pid:-}" "${bridge_pid:-}" 2>/dev/null || true
+  if [[ "${keep_runtime_dir:-false}" == "true" ]]; then
+    print -u2 "Hearthdeck development logs retained at: $runtime_dir"
+  else
+    rm -rf "$runtime_dir"
+  fi
+}
+
+trap cleanup EXIT INT TERM
+mkdir -p "$runtime_dir/runtime" "$runtime_dir/data" "$log_dir"
+
+if [[ -n "${HEARTHDECK_DEV_LOG_DIR:-}" ]]; then
+  print "Hearthdeck service logs: $log_dir"
+fi
+
+env \
+  XDG_RUNTIME_DIR="$runtime_dir/runtime" \
+  XDG_DATA_HOME="$runtime_dir/data" \
+  HEARTHDECK_BRIDGE_SOCKET="$runtime_dir/runtime/bridge.sock" \
+  ./services/target/debug/hearthdeck-bridge \
+  > "$log_dir/bridge.log" 2>&1 &
+bridge_pid=$!
+
+env \
+  XDG_RUNTIME_DIR="$runtime_dir/runtime" \
+  XDG_DATA_HOME="$runtime_dir/data" \
+  HEARTHDECK_BRIDGE_SOCKET="$runtime_dir/runtime/bridge.sock" \
+  HEARTHDECK_DATABASE_PATH="$runtime_dir/data/hearthdeck.db" \
+  HEARTHDECK_BIND_ADDRESS="127.0.0.1:38400" \
+  HEARTHDECK_LOCAL_ADMIN_ADDRESS="127.0.0.1:38401" \
+  ./services/target/debug/hearthdeck-daemon \
+  > "$log_dir/daemon.log" 2>&1 &
+daemon_pid=$!
+
+if [[ "${HEARTHDECK_DEV_SHOW_LOGS:-true}" == "true" ]]; then
+  tail -n 0 -f "$log_dir/bridge.log" "$log_dir/daemon.log" &
+  log_pid=$!
+fi
+
+for attempt in {1..100}; do
+  if curl --fail --silent http://127.0.0.1:38400/v1/health > /dev/null; then
+    break
+  fi
+  if ! kill -0 "$bridge_pid" 2>/dev/null || ! kill -0 "$daemon_pid" 2>/dev/null; then
+    cat "$log_dir/bridge.log" "$log_dir/daemon.log" >&2
+    keep_runtime_dir=true
+    exit 1
+  fi
+  sleep 0.1
+done
+
+if ! curl --fail --silent http://127.0.0.1:38400/v1/health > /dev/null; then
+  print -u2 "Hearthdeck services did not become healthy within 10 seconds."
+  cat "$log_dir/bridge.log" "$log_dir/daemon.log" >&2
+  keep_runtime_dir=true
+  exit 1
+fi
+
+pairing_code=$(curl --fail --silent -X POST http://127.0.0.1:38401/v1/pairing | \
+  ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("code")')
+pairing_token=$(curl --fail --silent -X POST http://127.0.0.1:38400/v1/pairing/complete \
+  -H 'content-type: application/json' \
+  --data "{\"code\":\"$pairing_code\",\"client_name\":\"hearthdeck-dev-$device\"}" | \
+  ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("token")')
+
+for attempt in {1..100}; do
+  catalog=$(curl --fail --silent http://127.0.0.1:38400/v1/library \
+    -H "authorization: Bearer $pairing_token")
+  catalog_count=$(printf '%s' "$catalog" | ruby -rjson -e 'print JSON.parse(STDIN.read).length')
+  if [[ "$catalog_count" -gt 0 ]]; then
+    print "Hearthdeck catalog ready: $catalog_count discovered items"
+    break
+  fi
+  sleep 0.1
+done
+
+if [[ "${catalog_count:-0}" -eq 0 ]]; then
+  print -u2 "Hearthdeck catalog is still empty; Flutter will continue and reload on the next provider event."
+fi
+
+if [[ -n "$flutter_command" ]]; then
+  eval "$flutter_command"
+else
+  just app-live http://127.0.0.1:38400 "$pairing_token" "$device"
+fi

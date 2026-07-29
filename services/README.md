@@ -1,0 +1,39 @@
+# Hearthdeck Services
+
+The backend is split into two Rust processes:
+
+- `hearthdeck-daemon`: HTTP/WebSocket API, pairing tokens, SQLite state, and events.
+- `hearthdeck-bridge`: Linux desktop-entry scanning and allowlisted app launching.
+
+Discovery uses independently registered provider modules. The current
+`desktop-apps` provider scans Freedesktop entries. Future Steam, GOG, Epic,
+emulator, movie, and stream providers each get their own source ID, schedule,
+and scanner while sharing the catalog repository and event stream. Each source
+has a separate coalescing worker, so one slow provider cannot block another.
+
+The daemon listens on `127.0.0.1:38400` over HTTP by default. LAN binding
+requires `HEARTHDECK_LAN_ENABLED=true`, a certificate path, and a private key path;
+the daemon then serves HTTPS through Rustls. Pairing code creation is exposed
+only on the loopback admin listener at `127.0.0.1:38401`.
+
+The processes communicate through `$XDG_RUNTIME_DIR/hearthdeck/bridge.sock` using
+newline-delimited JSON defined in `hearthdeck-protocol`. The protocol has typed scan
+and launch requests only. Arbitrary command execution is deliberately absent,
+and desktop-entry `Exec` text never crosses the bridge boundary.
+
+## Development
+
+```sh
+mise exec -- cargo run -p hearthdeck-bridge
+mise exec -- cargo run -p hearthdeck-daemon
+```
+
+In a separate shell, create a pairing code:
+
+```sh
+curl -X POST http://127.0.0.1:38401/v1/pairing
+```
+
+The API contract is at `../contracts/openapi.yaml`. Android clients must pin or
+otherwise verify the configured server certificate before storing a pairing
+token.

@@ -1,0 +1,84 @@
+# Backend Observability
+
+## Logging Model
+
+Services use Rust `tracing`, not ad hoc prints. Every service writes one event
+per line to stderr; systemd captures it in the user journal.
+
+- Production default: newline-delimited JSON (`HEARTHDECK_LOG_FORMAT=json`).
+- Development: readable output (`HEARTHDECK_LOG_FORMAT=pretty`).
+- Filtering: `RUST_LOG`, for example `RUST_LOG=hearthdeck_daemon=debug,tower_http=info`.
+- Service identity: systemd assigns `SYSLOG_IDENTIFIER` as `hearthdeck-daemon` or
+  `hearthdeck-bridge`.
+
+Do not log bearer tokens, pairing codes, certificate/private-key paths,
+authorization headers, request bodies, desktop `Exec` strings, or media paths.
+
+## Events
+
+| Area | Fields |
+| --- | --- |
+| HTTP | `request_id`, `method`, `path`, `status_code`, `latency_ms` |
+| Pairing | client ID and expiry, never code/token |
+| Discovery | `source_id`, queue/coalesce state, `record_count`, `duration_ms` |
+| Catalog | `source_id`, `record_count` |
+| Bridge | socket lifecycle, desktop entry count, desktop ID launch outcome |
+| Startup | service version, bind addresses, transport mode, database readiness |
+
+The request trace intentionally excludes headers and bodies. It correlates API
+logs with the `x-request-id` response header.
+
+For catalog synchronization, expect this lifecycle in order:
+
+1. `all discovery providers refresh requested` or a source refresh event.
+2. `discovery started` with `source_id`.
+3. `catalog source replaced` with `record_count`.
+4. `discovery completed` with `duration_ms`.
+5. A `library_changed` WebSocket event to live Flutter clients.
+
+## Operations
+
+```sh
+just services-logs
+just logs-daemon
+just logs-bridge
+just logs-errors
+```
+
+For local readable development output:
+
+```sh
+HEARTHDECK_LOG_FORMAT=pretty RUST_LOG=hearthdeck_daemon=debug just daemon
+HEARTHDECK_LOG_FORMAT=pretty RUST_LOG=hearthdeck_bridge=debug just bridge
+```
+
+To retain logs from the combined development target:
+
+```sh
+HEARTHDECK_LOG_FORMAT=pretty HEARTHDECK_DEV_LOG_DIR=/tmp/hearthdeck-logs just dev
+tail -f /tmp/hearthdeck-logs/daemon.log /tmp/hearthdeck-logs/bridge.log
+```
+
+`just dev` follows bridge and daemon logs in the terminal by default. Disable
+that only for quiet automation:
+
+```sh
+HEARTHDECK_DEV_SHOW_LOGS=false just dev
+```
+
+For a bounded incident window on Linux:
+
+```sh
+journalctl --user -u hearthdeck-daemon.service --since '15 minutes ago' -o json-pretty
+```
+
+## Investigation Order
+
+1. Filter daemon logs by `request_id` or `item_id`.
+2. Check discovery records for `source_id`, `duration_ms`, and `record_count`.
+3. Check bridge logs for the matching desktop ID outcome.
+4. Check `systemctl --user status` if no lifecycle event exists.
+
+Absence of a discovery completion event means the provider failed before
+catalog persistence. A catalog completion event with zero records means the
+provider completed successfully but found no source content.

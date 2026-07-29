@@ -1,0 +1,82 @@
+#!/bin/zsh
+set -e
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  print -u2 "macos-discovery-check must run on macOS"
+  exit 1
+fi
+
+runtime_dir=$(mktemp -d /tmp/hearthdeck-macos-discovery.XXXXXX)
+
+cleanup() {
+  kill "${daemon_pid:-}" "${bridge_pid:-}" 2>/dev/null || true
+  wait "${daemon_pid:-}" "${bridge_pid:-}" 2>/dev/null || true
+  rm -rf "$runtime_dir"
+}
+
+trap cleanup EXIT INT TERM
+mkdir -p "$runtime_dir/runtime" "$runtime_dir/data"
+
+env \
+  XDG_RUNTIME_DIR="$runtime_dir/runtime" \
+  XDG_DATA_HOME="$runtime_dir/data" \
+  HEARTHDECK_BRIDGE_SOCKET="$runtime_dir/runtime/bridge.sock" \
+  ./services/target/debug/hearthdeck-bridge \
+  > "$runtime_dir/bridge.log" 2>&1 &
+bridge_pid=$!
+
+env \
+  XDG_RUNTIME_DIR="$runtime_dir/runtime" \
+  XDG_DATA_HOME="$runtime_dir/data" \
+  HEARTHDECK_BRIDGE_SOCKET="$runtime_dir/runtime/bridge.sock" \
+  HEARTHDECK_DATABASE_PATH="$runtime_dir/data/hearthdeck.db" \
+  HEARTHDECK_BIND_ADDRESS="127.0.0.1:39400" \
+  HEARTHDECK_LOCAL_ADMIN_ADDRESS="127.0.0.1:39401" \
+  ./services/target/debug/hearthdeck-daemon \
+  > "$runtime_dir/daemon.log" 2>&1 &
+daemon_pid=$!
+
+for attempt in {1..100}; do
+  if curl --fail --silent http://127.0.0.1:39400/v1/health > /dev/null; then
+    break
+  fi
+  if ! kill -0 "$bridge_pid" 2>/dev/null || ! kill -0 "$daemon_pid" 2>/dev/null; then
+    cat "$runtime_dir/bridge.log" "$runtime_dir/daemon.log" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+
+code=$(curl --fail --silent -X POST http://127.0.0.1:39401/v1/pairing | \
+  ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("code")')
+token=$(curl --fail --silent -X POST http://127.0.0.1:39400/v1/pairing/complete \
+  -H 'content-type: application/json' \
+  --data "{\"code\":\"$code\",\"client_name\":\"macos-discovery-check\"}" | \
+  ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("token")')
+
+curl --fail --silent -X POST http://127.0.0.1:39400/v1/discovery/macos-apps/refresh \
+  -H "authorization: Bearer $token" > /dev/null
+
+for attempt in {1..100}; do
+  catalog=$(curl --fail --silent http://127.0.0.1:39400/v1/library \
+    -H "authorization: Bearer $token")
+  count=$(printf '%s' "$catalog" | ruby -rjson -e 'print JSON.parse(STDIN.read).length')
+  if [[ "$count" -gt 0 ]]; then
+    break
+  fi
+  sleep 0.1
+done
+
+printf '%s' "$catalog" | ruby -rjson -e '
+  applications = JSON.parse(STDIN.read)
+  abort("no macOS applications discovered") if applications.empty?
+  puts("discovered=#{applications.length} source=#{applications.first.fetch("source_id")}")
+  applications.first(10).each { |app| puts "- #{app.fetch("title")}" }
+  firefox = applications.find { |app| app.fetch("title") == "Firefox" }
+  if firefox
+    enrichment = firefox.fetch("metadata").fetch("enrichment")
+    provider = firefox.fetch("metadata").fetch("enrichment_provider")
+    puts "firefox_enrichment_provider=#{provider.inspect}"
+    puts "firefox_enrichment_available=#{!enrichment.nil?}"
+  end
+'
