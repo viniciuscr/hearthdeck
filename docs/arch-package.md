@@ -21,6 +21,9 @@ systemctl --user enable --now hearthdeck-bridge.service hearthdeck-daemon.servic
 
 Pacman deliberately does not enable a per-user service during a root package
 transaction. Enable it as the desktop user that will launch applications.
+The units retain `NoNewPrivileges`, but do not use mount-namespace sandboxing:
+Arch systemd user units cannot reliably support directives such as
+`ProtectSystem`, `ReadWritePaths`, or `PrivateTmp`.
 
 The bridge scans the target machine's Freedesktop entries and invokes
 `gtk-launch` only for a desktop ID returned by that scan. The daemon maintains

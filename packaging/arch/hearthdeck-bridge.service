@@ -12,7 +12,6 @@ ExecStart=/usr/lib/hearthdeck/hearthdeck-bridge
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes
-PrivateTmp=yes
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hearthdeck-bridge
