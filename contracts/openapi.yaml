@@ -130,8 +130,57 @@ paths:
           schema:
             type: string
       responses:
-        '202':
+        '200':
           description: Registered desktop app launch accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationSession'
+  /v1/sessions/active:
+    get:
+      operationId: getActiveApplicationSession
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Active host application session, if one exists
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ApplicationSession'
+                  - type: 'null'
+  /v1/sessions/{id}/stop:
+    post:
+      operationId: stopApplicationSession
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Active application session stop accepted
+  /v1/install-requests:
+    post:
+      operationId: requestInstall
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item_id]
+              properties:
+                item_id: { type: string }
+      responses:
+        '202':
+          description: Install request accepted for host-side approval
 components:
   securitySchemes:
     bearerAuth:
@@ -140,7 +189,7 @@ components:
   schemas:
     Health:
       type: object
-      required: [version, lan_enabled, transport, providers]
+      required: [version, lan_enabled, transport, providers, capabilities]
       properties:
         version: { type: string }
         lan_enabled: { type: boolean }
@@ -149,6 +198,23 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ProviderHealth'
+        capabilities:
+          $ref: '#/components/schemas/HostCapabilities'
+    HostCapabilities:
+      type: object
+      required: [launch, application_sessions, install_requests]
+      properties:
+        launch: { type: boolean }
+        application_sessions: { type: boolean }
+        install_requests: { type: boolean }
+    ApplicationSession:
+      type: object
+      required: [id, source_id, application_id, state]
+      properties:
+        id: { type: string }
+        source_id: { type: string }
+        application_id: { type: string }
+        state: { type: string, enum: [running] }
     ProviderHealth:
       type: object
       required: [id, kind, status, record_count, last_success_at, last_error]

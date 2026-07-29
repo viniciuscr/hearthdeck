@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use hearthdeck_protocol::ApplicationSession;
 use tokio::sync::broadcast;
 
 use crate::{
@@ -119,7 +120,10 @@ pub enum ServerEvent {
         provider_id: String,
         record_count: usize,
     },
-    ActionCompleted {
+    ApplicationSessionChanged {
+        session: Option<ApplicationSession>,
+    },
+    InstallRequested {
         item_id: String,
     },
 }

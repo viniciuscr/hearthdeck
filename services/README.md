@@ -3,7 +3,8 @@
 The backend is split into two Rust processes:
 
 - `hearthdeck-daemon`: HTTP/WebSocket API, pairing tokens, SQLite state, and events.
-- `hearthdeck-bridge`: Linux desktop-entry scanning and allowlisted app launching.
+- `hearthdeck-bridge`: Linux desktop-entry scanning and allowlisted, supervised
+  app launching.
 
 Discovery uses independently registered provider modules. The current
 `desktop-apps` provider scans Freedesktop entries. Future Steam, GOG, Epic,
@@ -18,8 +19,16 @@ only on the loopback admin listener at `127.0.0.1:38401`.
 
 The processes communicate through `$XDG_RUNTIME_DIR/hearthdeck/bridge.sock` using
 newline-delimited JSON defined in `hearthdeck-protocol`. The protocol has typed scan
-and launch requests only. Arbitrary command execution is deliberately absent,
-and desktop-entry `Exec` text never crosses the bridge boundary.
+launch, active-session, and stop requests only. Arbitrary command execution is
+deliberately absent. The daemon supplies a discovered desktop ID, while the
+bridge resolves and validates the local launch specification before placing it
+in a transient systemd user scope.
+
+`GET /v1/health` exposes host capabilities. Remote clients, including Android,
+may browse the library and send install requests when supported, but must not
+assume they can launch host applications. An install request is a typed request
+for host-side approval; it never invokes pacman, Flatpak, Steam, or another
+package manager directly.
 
 On Linux, `hearthdeck.target` is the systemd user-session root. It starts the
 API daemon and owns `hearthdeck-bridge.socket`; the bridge process starts only

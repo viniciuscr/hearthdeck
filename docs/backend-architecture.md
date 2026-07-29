@@ -36,7 +36,7 @@ branch on macOS, Linux, or Android.
 | Concern | Linux host | macOS development host | Android client |
 | --- | --- | --- | --- |
 | Application discovery | `desktop-apps` provider | `macos-apps` provider | None |
-| Application launch | `gtk-launch` adapter | LaunchServices `open -b` adapter | Never launches host apps directly |
+| Application launch | Supervised systemd user scope | LaunchServices `open -b` adapter | Never launches host apps directly |
 | Backend transport | Local daemon | Local integration daemon | Paired HTTPS daemon |
 | Flutter platform code | No Linux-specific discovery code | macOS entitlements only | Android network/security config only |
 
@@ -144,10 +144,11 @@ just macos-discovery-check
 ## Trust Boundaries
 
 - The client API receives typed resource and action IDs, never shell commands.
-- The bridge protocol has `health`, `scan_desktop_entries`, and
-  `launch_desktop_entry` requests. It has no command or argument field.
-- The bridge re-discovers the requested desktop ID locally before invoking
-  `gtk-launch`; it does not accept `Exec` strings from the daemon.
+- The bridge protocol has typed health, discovery, launch, active-session, and
+  stop-session requests. It has no command or argument field.
+- The bridge re-discovers the requested desktop ID locally and validates its
+  launch specification before creating a transient systemd user scope; it does
+  not accept `Exec` strings from the daemon.
 - The bridge socket is created with mode `0600` under the active user's runtime
   directory.
 - The API binds to loopback HTTP by default.

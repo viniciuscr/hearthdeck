@@ -71,6 +71,19 @@ demand for host requests. The package's client pairs with its loopback daemon
 automatically. See
 `docs/arch-package.md` for package contents and troubleshooting.
 
+## Console Session
+
+The Arch package depends on the distribution `gamescope` package and installs a
+**Hearthdeck Console** Wayland session. Select it from a display manager or set
+it as the autologin session to boot directly into Hearthdeck without KDE or
+another desktop shell. Gamescope is not bundled because its GPU/DRM components
+must match the host graphics stack.
+
+Hearthdeck launches approved Linux desktop entries in transient systemd user
+scopes, so the host can identify and stop the active managed application. Remote
+clients can inspect host capabilities and request an installation for host-side
+approval, but cannot execute a package manager or arbitrary host command.
+
 ## Controller support
 
 The dashboard uses `flutter_gamepads`, backed by Flame Engine's cross-platform

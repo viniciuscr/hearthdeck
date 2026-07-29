@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use hearthdeck_protocol::DiscoveredApplication;
 use tokio::process::Command;
 
-use super::MACOS_APPS_SOURCE;
+use super::{LaunchedApplication, MACOS_APPS_SOURCE};
 
 pub async fn discover_applications(source_id: &str) -> Result<Vec<DiscoveredApplication>> {
     if source_id != MACOS_APPS_SOURCE {
@@ -35,7 +35,11 @@ pub async fn discover_applications(source_id: &str) -> Result<Vec<DiscoveredAppl
     Ok(applications)
 }
 
-pub async fn launch_application(source_id: &str, application_id: &str) -> Result<()> {
+pub async fn launch_application(
+    source_id: &str,
+    application_id: &str,
+    _session_id: &str,
+) -> Result<LaunchedApplication> {
     let application = discover_applications(source_id)
         .await?
         .into_iter()
@@ -46,7 +50,7 @@ pub async fn launch_application(source_id: &str, application_id: &str) -> Result
         .arg(&application.application_id)
         .spawn()
         .context("could not invoke macOS LaunchServices")?;
-    Ok(())
+    Ok(LaunchedApplication { unit_name: None })
 }
 
 fn application_directories() -> Vec<PathBuf> {

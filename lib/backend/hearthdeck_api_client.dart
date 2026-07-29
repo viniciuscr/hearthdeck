@@ -75,6 +75,46 @@ class HearthdeckApiClient {
       endpoint.api('apps/$itemId/launch'),
       headers: _authorizationHeaders(),
     );
+    if (response.statusCode != 200) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+  }
+
+  Future<HearthdeckApplicationSession?> activeApplicationSession() async {
+    final response = await _client.get(
+      endpoint.api('sessions/active'),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 200) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+    if (response.body.trim() == 'null') {
+      return null;
+    }
+    return HearthdeckApplicationSession.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
+  }
+
+  Future<void> stopApplicationSession(String sessionId) async {
+    final response = await _client.post(
+      endpoint.api('sessions/$sessionId/stop'),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 202) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+  }
+
+  Future<void> requestInstall(String itemId) async {
+    final response = await _client.post(
+      endpoint.api('install-requests'),
+      headers: <String, String>{
+        ..._authorizationHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(<String, String>{'item_id': itemId}),
+    );
     if (response.statusCode != 202) {
       throw HearthdeckApiException(response.statusCode, response.body);
     }
@@ -179,6 +219,11 @@ class HearthdeckHealth {
     required this.lanEnabled,
     required this.transport,
     required this.providers,
+    this.capabilities = const HearthdeckHostCapabilities(
+      launch: false,
+      applicationSessions: false,
+      installRequests: false,
+    ),
   });
 
   factory HearthdeckHealth.fromJson(Map<String, dynamic> json) =>
@@ -190,12 +235,58 @@ class HearthdeckHealth {
             .cast<Map<String, dynamic>>()
             .map(HearthdeckProviderHealth.fromJson)
             .toList(growable: false),
+        capabilities: HearthdeckHostCapabilities.fromJson(
+          json['capabilities'] as Map<String, dynamic>? ??
+              const <String, dynamic>{},
+        ),
       );
 
   final String version;
   final bool lanEnabled;
   final String transport;
   final List<HearthdeckProviderHealth> providers;
+  final HearthdeckHostCapabilities capabilities;
+}
+
+class HearthdeckHostCapabilities {
+  const HearthdeckHostCapabilities({
+    required this.launch,
+    required this.applicationSessions,
+    required this.installRequests,
+  });
+
+  factory HearthdeckHostCapabilities.fromJson(Map<String, dynamic> json) =>
+      HearthdeckHostCapabilities(
+        launch: json['launch'] as bool? ?? false,
+        applicationSessions: json['application_sessions'] as bool? ?? false,
+        installRequests: json['install_requests'] as bool? ?? false,
+      );
+
+  final bool launch;
+  final bool applicationSessions;
+  final bool installRequests;
+}
+
+class HearthdeckApplicationSession {
+  const HearthdeckApplicationSession({
+    required this.id,
+    required this.sourceId,
+    required this.applicationId,
+    required this.state,
+  });
+
+  factory HearthdeckApplicationSession.fromJson(Map<String, dynamic> json) =>
+      HearthdeckApplicationSession(
+        id: json['id'] as String,
+        sourceId: json['source_id'] as String,
+        applicationId: json['application_id'] as String,
+        state: json['state'] as String,
+      );
+
+  final String id;
+  final String sourceId;
+  final String applicationId;
+  final String state;
 }
 
 class HearthdeckProviderHealth {
@@ -327,8 +418,17 @@ sealed class HearthdeckServerEvent {
           providerId: providerId,
           recordCount: recordCount,
         ),
-      {'type': 'action_completed', 'item_id': String itemId} =>
-        HearthdeckActionCompleted(itemId: itemId),
+      {'type': 'install_requested', 'item_id': String itemId} =>
+        HearthdeckInstallRequested(itemId: itemId),
+      {
+        'type': 'application_session_changed',
+        'session': final Map<String, dynamic>? session,
+      } =>
+        HearthdeckApplicationSessionChanged(
+          session: session == null
+              ? null
+              : HearthdeckApplicationSession.fromJson(session),
+        ),
       _ => const HearthdeckUnknownEvent(),
     };
   }
@@ -344,10 +444,16 @@ class HearthdeckLibraryChanged extends HearthdeckServerEvent {
   final int recordCount;
 }
 
-class HearthdeckActionCompleted extends HearthdeckServerEvent {
-  const HearthdeckActionCompleted({required this.itemId});
+class HearthdeckInstallRequested extends HearthdeckServerEvent {
+  const HearthdeckInstallRequested({required this.itemId});
 
   final String itemId;
+}
+
+class HearthdeckApplicationSessionChanged extends HearthdeckServerEvent {
+  const HearthdeckApplicationSessionChanged({required this.session});
+
+  final HearthdeckApplicationSession? session;
 }
 
 class HearthdeckMetadataChanged extends HearthdeckServerEvent {

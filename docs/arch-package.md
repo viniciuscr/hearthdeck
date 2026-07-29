@@ -9,6 +9,10 @@ CachyOS. It installs:
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
   API daemon user units.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
+- `/usr/share/wayland-sessions/hearthdeck-gamescope.desktop`: the direct DRM
+  console session shown by compatible display managers.
+- `/usr/lib/hearthdeck/hearthdeck-console-client`: restarts the Flutter shell
+  if it exits so the console session remains recoverable.
 
 ## Install
 
@@ -38,10 +42,18 @@ If you previously used `just install-services`, its copies in
 enabling the packaged target, then preserve any local customization in a
 systemd drop-in.
 
-The bridge scans the target machine's Freedesktop entries and invokes
-`gtk-launch` only for a desktop ID returned by that scan. The daemon maintains
-the SQLite catalog at `~/.local/share/hearthdeck/hearthdeck.db` and exposes a
-loopback API at `127.0.0.1:38400`.
+`gamescope` is a runtime dependency, installed by pacman with Hearthdeck. It
+is intentionally not bundled: Gamescope needs to match the host's Mesa,
+Vulkan, DRM, and kernel graphics stack. Select **Hearthdeck Console** in the
+display manager, or configure it as the autologin session, for the minimal
+direct-to-display experience. A normal desktop session remains a separate
+recovery option; it is not started behind Hearthdeck Console.
+
+The bridge scans the target machine's Freedesktop entries and launches only a
+re-discovered desktop entry. Linux launches are placed in a transient systemd
+user scope, allowing Hearthdeck to query and stop the active managed session.
+The daemon maintains the SQLite catalog at `~/.local/share/hearthdeck/hearthdeck.db`
+and exposes a loopback API at `127.0.0.1:38400`.
 
 Discovery follows the XDG desktop-entry locations, including
 `/usr/share/applications`, the user's XDG data directory, and Flatpak's user

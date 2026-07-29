@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Hearthdeck Console
+Comment=Direct Gamescope console session
+Exec=/usr/lib/hearthdeck/hearthdeck-gamescope-session
+Type=Application
+DesktopNames=gamescope;hearthdeck

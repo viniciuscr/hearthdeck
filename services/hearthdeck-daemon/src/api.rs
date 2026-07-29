@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
-use hearthdeck_protocol::{BridgeRequest, BridgeResponse};
+use hearthdeck_protocol::{ApplicationSession, BridgeRequest, BridgeResponse};
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -31,6 +31,9 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/discovery/{source_id}/refresh", post(refresh_source))
         .route("/v1/metadata/{provider_id}/refresh", post(refresh_metadata))
         .route("/v1/apps/{id}/launch", post(launch_app))
+        .route("/v1/sessions/active", get(active_application_session))
+        .route("/v1/sessions/{id}/stop", post(stop_application_session))
+        .route("/v1/install-requests", post(request_install))
         .route("/v1/events", get(events))
         .with_state(state)
 }
@@ -53,7 +56,35 @@ async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
             "http"
         },
         providers: state.provider_health().await,
+        capabilities: host_capabilities(),
     })
+}
+
+#[cfg(target_os = "linux")]
+fn host_capabilities() -> HostCapabilities {
+    HostCapabilities {
+        launch: true,
+        application_sessions: true,
+        install_requests: true,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn host_capabilities() -> HostCapabilities {
+    HostCapabilities {
+        launch: true,
+        application_sessions: false,
+        install_requests: true,
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn host_capabilities() -> HostCapabilities {
+    HostCapabilities {
+        launch: false,
+        application_sessions: false,
+        install_requests: false,
+    }
 }
 
 async fn create_pairing(
@@ -234,14 +265,18 @@ async fn launch_app(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<ApplicationSession>, ApiError> {
     authenticate(&state, &headers).await?;
+    if !host_capabilities().launch {
+        return Err(ApiError::capability_unavailable("application launch"));
+    }
     let launch_id = state
         .catalog
         .launch_id_for(&id)
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(ApiError::not_found)?;
+    let session_id = Uuid::new_v4().to_string();
     let response = crate::bridge::request(
         &state.config.bridge_socket_path,
         BridgeRequest::LaunchApplication {
@@ -252,17 +287,96 @@ async fn launch_app(
                 .map_err(ApiError::internal)?
                 .ok_or_else(ApiError::not_found)?,
             application_id: launch_id,
+            session_id,
         },
     )
     .await
     .map_err(ApiError::bad_gateway)?;
-    if !matches!(response, BridgeResponse::LaunchAccepted { .. }) {
+    let BridgeResponse::LaunchAccepted { session } = response else {
         return Err(ApiError::bad_gateway("bridge rejected application launch"));
-    }
+    };
     info!(item_id = %id, "catalog launch accepted");
+    let _ = state.events.send(ServerEvent::ApplicationSessionChanged {
+        session: Some(session.clone()),
+    });
+    Ok(Json(session))
+}
+
+async fn active_application_session(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<Option<ApplicationSession>>, ApiError> {
+    authenticate(&state, &headers).await?;
+    if !host_capabilities().application_sessions {
+        return Err(ApiError::capability_unavailable("application sessions"));
+    }
+    let response = crate::bridge::request(
+        &state.config.bridge_socket_path,
+        BridgeRequest::ActiveApplicationSession,
+    )
+    .await
+    .map_err(ApiError::bad_gateway)?;
+    let BridgeResponse::ApplicationSession { session } = response else {
+        return Err(ApiError::bad_gateway(
+            "bridge rejected application-session lookup",
+        ));
+    };
+    Ok(Json(session))
+}
+
+async fn stop_application_session(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    if !host_capabilities().application_sessions {
+        return Err(ApiError::capability_unavailable("application sessions"));
+    }
+    let response = crate::bridge::request(
+        &state.config.bridge_socket_path,
+        BridgeRequest::StopApplicationSession {
+            session_id: id.clone(),
+        },
+    )
+    .await
+    .map_err(ApiError::bad_gateway)?;
+    if !matches!(response, BridgeResponse::StopAccepted { .. }) {
+        return Err(ApiError::bad_gateway(
+            "bridge rejected application-session stop",
+        ));
+    }
     let _ = state
         .events
-        .send(ServerEvent::ActionCompleted { item_id: id });
+        .send(ServerEvent::ApplicationSessionChanged { session: None });
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn request_install(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<InstallRequest>,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    if !host_capabilities().install_requests {
+        return Err(ApiError::capability_unavailable("install requests"));
+    }
+    if request.item_id.trim().is_empty() || request.item_id.chars().count() > 512 {
+        return Err(ApiError::invalid_install_request());
+    }
+    if state
+        .catalog
+        .launch_id_for(&request.item_id)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some()
+    {
+        return Err(ApiError::install_not_available());
+    }
+    info!(item_id = %request.item_id, "install request recorded for host approval");
+    let _ = state.events.send(ServerEvent::InstallRequested {
+        item_id: request.item_id,
+    });
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -316,6 +430,19 @@ struct HealthResponse {
     lan_enabled: bool,
     transport: &'static str,
     providers: Vec<ProviderHealth>,
+    capabilities: HostCapabilities,
+}
+
+#[derive(Clone, Copy, Serialize)]
+struct HostCapabilities {
+    launch: bool,
+    application_sessions: bool,
+    install_requests: bool,
+}
+
+#[derive(Deserialize)]
+struct InstallRequest {
+    item_id: String,
 }
 
 #[derive(Serialize)]
@@ -398,6 +525,22 @@ impl ApiError {
         }
     }
 
+    fn invalid_install_request() -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: "item_id must contain 1 to 512 characters".to_owned(),
+            settings: None,
+        }
+    }
+
+    fn install_not_available() -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: "the item is already installed or cannot be installed by this host".to_owned(),
+            settings: None,
+        }
+    }
+
     fn settings_conflict(settings: UserSettings) -> Self {
         Self {
             status: StatusCode::CONFLICT,
@@ -413,6 +556,14 @@ impl ApiError {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             message: "discovery service is unavailable".to_owned(),
+            settings: None,
+        }
+    }
+
+    fn capability_unavailable(capability: &str) -> Self {
+        Self {
+            status: StatusCode::NOT_IMPLEMENTED,
+            message: format!("{capability} are unavailable on this host"),
             settings: None,
         }
     }
@@ -641,6 +792,11 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(health["providers"][0]["id"], "test-apps");
         assert_eq!(health["providers"][0]["status"], "starting");
+        assert!(
+            health["capabilities"]["install_requests"]
+                .as_bool()
+                .unwrap()
+        );
 
         let rescan = router(state.clone())
             .oneshot(

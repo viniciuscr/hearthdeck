@@ -1,6 +1,6 @@
 # Linux Acceptance Checklist
 
-Run this on the CachyOS KDE handheld after installing the two user services.
+Run this on the CachyOS desktop after installing the two user services.
 Everything except the final graphical launch is tested on macOS in the Rust
 workspace test suite.
 
@@ -54,10 +54,12 @@ launchable applications.
 ## Launch
 
 Call `POST /v1/apps/{id}/launch` with an ID returned by the library endpoint.
-Confirm the registered desktop app opens in the active KDE/Wayland session.
+Confirm the registered desktop app opens in the active graphical session.
 
-The bridge intentionally re-discovers the desktop ID locally and invokes
-`gtk-launch`; an API client cannot supply an `Exec` command or arguments.
+The bridge intentionally re-discovers the desktop ID locally and creates a
+transient systemd user scope; an API client cannot supply an `Exec` command or
+arguments. Query `GET /v1/sessions/active` after launch, then use
+`POST /v1/sessions/{id}/stop` to confirm the managed process exits.
 
 ## LAN Mode
 

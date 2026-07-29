@@ -16,6 +16,11 @@ pub enum BridgeRequest {
     LaunchApplication {
         source_id: String,
         application_id: String,
+        session_id: String,
+    },
+    ActiveApplicationSession,
+    StopApplicationSession {
+        session_id: String,
     },
 }
 
@@ -30,13 +35,32 @@ pub enum BridgeResponse {
         applications: Vec<DiscoveredApplication>,
     },
     LaunchAccepted {
-        source_id: String,
-        application_id: String,
+        session: ApplicationSession,
+    },
+    ApplicationSession {
+        session: Option<ApplicationSession>,
+    },
+    StopAccepted {
+        session_id: String,
     },
     Error {
         code: BridgeErrorCode,
         message: String,
     },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ApplicationSession {
+    pub id: String,
+    pub source_id: String,
+    pub application_id: String,
+    pub state: ApplicationSessionState,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationSessionState {
+    Running,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -59,31 +83,40 @@ pub enum BridgeErrorCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{BridgeRequest, BridgeResponse};
+    use super::{ApplicationSession, ApplicationSessionState, BridgeRequest, BridgeResponse};
 
     #[test]
     fn request_serialization_has_no_command_field() {
         let request = BridgeRequest::LaunchApplication {
             source_id: "desktop-apps".to_owned(),
             application_id: "org.example.Launcher.desktop".to_owned(),
+            session_id: "session-1".to_owned(),
         };
         let serialized = serde_json::to_value(request).unwrap();
 
         assert_eq!(serialized["type"], "launch_application");
         assert_eq!(serialized["source_id"], "desktop-apps");
         assert_eq!(serialized["application_id"], "org.example.Launcher.desktop");
+        assert_eq!(serialized["session_id"], "session-1");
         assert!(serialized.get("command").is_none());
         assert!(serialized.get("args").is_none());
     }
 
     #[test]
     fn response_round_trips() {
-        let response = BridgeResponse::Health {
-            version: "0.1.0".to_owned(),
+        let response = BridgeResponse::LaunchAccepted {
+            session: ApplicationSession {
+                id: "session-1".to_owned(),
+                source_id: "desktop-apps".to_owned(),
+                application_id: "org.example.App.desktop".to_owned(),
+                state: ApplicationSessionState::Running,
+            },
         };
         let serialized = serde_json::to_string(&response).unwrap();
         let parsed: BridgeResponse = serde_json::from_str(&serialized).unwrap();
 
-        assert!(matches!(parsed, BridgeResponse::Health { version } if version == "0.1.0"));
+        assert!(
+            matches!(parsed, BridgeResponse::LaunchAccepted { session } if session.id == "session-1")
+        );
     }
 }

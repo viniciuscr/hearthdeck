@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     env,
+    ffi::OsString,
     path::{Path, PathBuf},
 };
 
@@ -9,7 +10,7 @@ use hearthdeck_protocol::DiscoveredApplication;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use super::DESKTOP_APPS_SOURCE;
+use super::{DESKTOP_APPS_SOURCE, LaunchedApplication};
 
 pub async fn discover_applications(source_id: &str) -> Result<Vec<DiscoveredApplication>> {
     if source_id != DESKTOP_APPS_SOURCE {
@@ -78,17 +79,122 @@ pub async fn discover_applications(source_id: &str) -> Result<Vec<DiscoveredAppl
     Ok(entries)
 }
 
-pub async fn launch_application(source_id: &str, application_id: &str) -> Result<()> {
-    let entry = discover_applications(source_id)
-        .await?
+pub async fn launch_application(
+    source_id: &str,
+    application_id: &str,
+    session_id: &str,
+) -> Result<LaunchedApplication> {
+    let path = desktop_entry_path(source_id, application_id).await?;
+    let command = command_for_desktop_entry(&path).await?;
+    let unit_name = format!("hearthdeck-app-{session_id}.scope");
+    let status = Command::new("systemd-run")
+        .args([
+            "--user",
+            "--scope",
+            "--collect",
+            "--no-block",
+            "--quiet",
+            "--unit",
+        ])
+        .arg(&unit_name)
+        .arg("--")
+        .args(command)
+        .status()
+        .await
+        .context("could not start supervised application launch")?;
+    if !status.success() {
+        anyhow::bail!("systemd user manager rejected application launch")
+    }
+    Ok(LaunchedApplication {
+        unit_name: Some(unit_name),
+    })
+}
+
+async fn desktop_entry_path(source_id: &str, application_id: &str) -> Result<PathBuf> {
+    if source_id != DESKTOP_APPS_SOURCE {
+        anyhow::bail!("unsupported application source")
+    }
+    for directory in desktop_entry_directories() {
+        let path = directory.join(application_id);
+        if path.is_file() && parse_desktop_entry(&path).await.is_ok() {
+            return Ok(path);
+        }
+    }
+    anyhow::bail!("desktop entry is not registered")
+}
+
+async fn command_for_desktop_entry(path: &Path) -> Result<Vec<OsString>> {
+    let content = tokio::fs::read_to_string(path).await?;
+    let values = desktop_entry_values(&content);
+    if values.get("Terminal") == Some(&"true") {
+        anyhow::bail!("terminal desktop entries are not supported in console mode")
+    }
+    let exec = values.get("Exec").context("desktop entry has no Exec")?;
+    let command = parse_exec(exec, path, values.get("Name").copied())?;
+    if command.is_empty() {
+        anyhow::bail!("desktop entry has an empty Exec command")
+    }
+    Ok(command.into_iter().map(OsString::from).collect())
+}
+
+fn parse_exec(
+    value: &str,
+    desktop_path: &Path,
+    application_name: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut arguments = Vec::new();
+    let mut argument = String::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    for character in value.chars() {
+        if escaped {
+            argument.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            quoted = !quoted;
+        } else if character.is_whitespace() && !quoted {
+            if !argument.is_empty() {
+                arguments.push(std::mem::take(&mut argument));
+            }
+        } else {
+            argument.push(character);
+        }
+    }
+    if escaped || quoted {
+        anyhow::bail!("desktop entry has an invalid Exec command")
+    }
+    if !argument.is_empty() {
+        arguments.push(argument);
+    }
+    Ok(arguments
         .into_iter()
-        .find(|entry| entry.application_id == application_id)
-        .context("desktop entry is not registered")?;
-    Command::new("gtk-launch")
-        .arg(&entry.application_id)
-        .spawn()
-        .context("could not start gtk-launch")?;
-    Ok(())
+        .filter_map(|argument| expand_field_codes(&argument, desktop_path, application_name))
+        .collect())
+}
+
+fn expand_field_codes(
+    argument: &str,
+    desktop_path: &Path,
+    application_name: Option<&str>,
+) -> Option<String> {
+    let mut expanded = String::new();
+    let mut characters = argument.chars();
+    while let Some(character) = characters.next() {
+        if character != '%' {
+            expanded.push(character);
+            continue;
+        }
+        match characters.next()? {
+            '%' => expanded.push('%'),
+            'c' => expanded.push_str(application_name.unwrap_or_default()),
+            'k' => expanded.push_str(&desktop_path.to_string_lossy()),
+            'f' | 'F' | 'u' | 'U' | 'i' => {}
+            _ => return None,
+        }
+    }
+    (!expanded.is_empty()).then_some(expanded)
 }
 
 fn desktop_entry_directories() -> Vec<PathBuf> {
@@ -145,23 +251,7 @@ fn push_unique(directories: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path
 
 async fn parse_desktop_entry(path: &Path) -> Result<DiscoveredApplication> {
     let content = tokio::fs::read_to_string(path).await?;
-    let mut values = HashMap::new();
-    let mut in_desktop_entry = false;
-    for line in content.lines().map(str::trim) {
-        if line.starts_with('[') {
-            if in_desktop_entry {
-                break;
-            }
-            in_desktop_entry = line == "[Desktop Entry]";
-            continue;
-        }
-        if in_desktop_entry
-            && !line.starts_with('#')
-            && let Some((key, value)) = line.split_once('=')
-        {
-            values.insert(key.trim(), value.trim());
-        }
-    }
+    let values = desktop_entry_values(&content);
     if values.get("Type") != Some(&"Application")
         || values.get("NoDisplay") == Some(&"true")
         || values.get("Hidden") == Some(&"true")
@@ -196,11 +286,32 @@ async fn parse_desktop_entry(path: &Path) -> Result<DiscoveredApplication> {
     })
 }
 
+fn desktop_entry_values(content: &str) -> HashMap<&str, &str> {
+    let mut values = HashMap::new();
+    let mut in_desktop_entry = false;
+    for line in content.lines().map(str::trim) {
+        if line.starts_with('[') {
+            if in_desktop_entry {
+                break;
+            }
+            in_desktop_entry = line == "[Desktop Entry]";
+            continue;
+        }
+        if in_desktop_entry
+            && !line.starts_with('#')
+            && let Some((key, value)) = line.split_once('=')
+        {
+            values.insert(key.trim(), value.trim());
+        }
+    }
+    values
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::{desktop_entry_directories_for, parse_desktop_entry};
+    use super::{desktop_entry_directories_for, parse_desktop_entry, parse_exec};
 
     #[tokio::test]
     async fn parses_only_the_desktop_entry_group() {
@@ -217,6 +328,18 @@ mod tests {
 
         assert_eq!(entry.name, "Example");
         assert_eq!(entry.categories, ["Utility"]);
+    }
+
+    #[test]
+    fn parses_exec_without_forwarding_runtime_file_arguments() {
+        let command = parse_exec(
+            "example --title %c %U",
+            std::path::Path::new("/tmp/example.desktop"),
+            Some("Example"),
+        )
+        .unwrap();
+
+        assert_eq!(command, ["example", "--title", "Example"]);
     }
 
     #[test]
