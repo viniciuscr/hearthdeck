@@ -32,9 +32,6 @@ async fn main() -> Result<()> {
         "hearthdeck-daemon",
         "hearthdeck_daemon=info,tower_http=info",
     );
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("the Rustls ring provider must be installed before loading TLS configuration");
 
     let config = Config::load()?;
     info!(
