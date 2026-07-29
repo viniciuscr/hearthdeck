@@ -117,6 +117,10 @@ impl CatalogStore {
                     r#"
                     INSERT INTO catalog_enrichments (provider_id, application_id, priority, payload_json, updated_at)
                     VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(provider_id, application_id) DO UPDATE SET
+                      priority = excluded.priority,
+                      payload_json = excluded.payload_json,
+                      updated_at = excluded.updated_at
                     "#,
                 )
                 .bind(provider_id)
@@ -179,4 +183,57 @@ pub struct CatalogItem {
     pub launch_id: Option<String>,
     pub icon: Option<String>,
     pub metadata: serde_json::Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::Row;
+    use tempfile::tempdir;
+
+    use super::{CatalogStore, EnrichmentRecord};
+    use crate::database::Database;
+
+    #[tokio::test]
+    async fn duplicate_metadata_aliases_replace_the_prior_record() {
+        let directory = tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let catalog = CatalogStore::new(database.pool().clone());
+
+        catalog
+            .replace_enrichment_source(
+                "appstream-local",
+                vec![
+                    EnrichmentRecord {
+                        application_ids: vec!["org.example.App.desktop".to_owned()],
+                        priority: 100,
+                        payload: serde_json::json!({"summary": "First"}),
+                        updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                    },
+                    EnrichmentRecord {
+                        application_ids: vec!["org.example.App.desktop".to_owned()],
+                        priority: 100,
+                        payload: serde_json::json!({"summary": "Second"}),
+                        updated_at: "2026-01-01T00:00:01Z".to_owned(),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT payload_json FROM catalog_enrichments WHERE provider_id = ? AND application_id = ?",
+        )
+        .bind("appstream-local")
+        .bind("org.example.App.desktop")
+        .fetch_one(database.pool())
+        .await
+        .unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(&row.get::<String, _>("payload_json")).unwrap();
+
+        assert_eq!(payload["summary"], "Second");
+    }
 }

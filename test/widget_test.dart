@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_gamepads/flutter_gamepads.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gamepads/gamepads.dart';
+import 'package:gamepads_platform_interface/gamepads_platform_interface.dart';
+import 'package:gamepads_platform_interface/method_channel_gamepads_platform_interface.dart';
 import 'package:hearthdeck/main.dart';
 import 'package:hearthdeck/tv_components.dart';
 import 'package:hearthdeck/content_details.dart';
@@ -282,6 +285,23 @@ void main() {
     expect(find.text('Discover something new'), findsOneWidget);
   });
 
+  testWidgets('the controller B button dismisses the details route', (
+    WidgetTester tester,
+  ) async {
+    Gamepads.normalizer = GamepadNormalizer.forPlatform(GamepadPlatform.linux);
+    addTearDown(() => Gamepads.normalizer = null);
+    await tester.pumpWidget(const HearthdeckApp());
+    await tester.tap(find.text('Orbit'));
+    await tester.pumpAndSettle();
+
+    await _sendLinuxGamepadButton('1', 1.0);
+    await _sendLinuxGamepadButton('1', 0.0);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ContentDetailsPage), findsNothing);
+    expect(find.text('Discover something new'), findsOneWidget);
+  });
+
   testWidgets('details route supports directional focus navigation', (
     WidgetTester tester,
   ) async {
@@ -381,9 +401,28 @@ void main() {
     );
     expect(
       TvGamepadBindings.shortcuts[const GamepadActivatorButton.b()],
-      isA<DismissIntent>(),
+      TvGamepadBindings.back,
+    );
+    expect(
+      TvGamepadBindings.shortcuts[const GamepadActivatorButton.back()],
+      TvGamepadBindings.back,
     );
   });
+}
+
+Future<void> _sendLinuxGamepadButton(String key, double value) {
+  final platform =
+      GamepadsPlatformInterface.instance
+          as MethodChannelGamepadsPlatformInterface;
+  return platform.platformCallHandler(
+    MethodCall('onGamepadEvent', <String, dynamic>{
+      'gamepadId': 'test-controller',
+      'time': DateTime.now().millisecondsSinceEpoch,
+      'type': 'button',
+      'key': key,
+      'value': value,
+    }),
+  );
 }
 
 class _EventFailingCatalogRepository implements CatalogRepository {

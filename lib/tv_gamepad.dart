@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_gamepads/flutter_gamepads.dart';
 
+/// Requests the same navigator behavior as a keyboard Escape press.
+class TvBackIntent extends Intent {
+  const TvBackIntent();
+}
+
 abstract final class TvGamepadBindings {
   static const DirectionalFocusIntent up = DirectionalFocusIntent(
     TraversalDirection.up,
@@ -14,6 +19,7 @@ abstract final class TvGamepadBindings {
   static const DirectionalFocusIntent right = DirectionalFocusIntent(
     TraversalDirection.right,
   );
+  static const TvBackIntent back = TvBackIntent();
 
   static const Map<GamepadActivator, Intent> shortcuts =
       <GamepadActivator, Intent>{
@@ -26,7 +32,8 @@ abstract final class TvGamepadBindings {
         GamepadActivatorAxis.leftStickLeft(): left,
         GamepadActivatorAxis.leftStickRight(): right,
         GamepadActivatorButton.a(): ActivateIntent(),
-        GamepadActivatorButton.b(): DismissIntent(),
+        GamepadActivatorButton.b(): back,
+        GamepadActivatorButton.back(): back,
         GamepadActivatorAxis.rightStickUp(): ScrollIntent(
           direction: AxisDirection.up,
         ),

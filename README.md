@@ -79,7 +79,7 @@ controllers normalized with SDL's controller database.
 | --- | --- |
 | D-pad / left stick | Move focus |
 | A | Activate focused control |
-| B | Dismiss transient UI |
+| B / Back | Go back or dismiss transient UI |
 | Right stick | Scroll the current shelf or page |
 
 Keyboard arrows, Enter, and Space remain supported as equivalent input.
