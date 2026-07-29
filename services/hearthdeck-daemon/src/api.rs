@@ -16,7 +16,10 @@ use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::state::{ProviderHealth, ServerEvent, SharedState};
+use crate::{
+    settings::{BackdropMode, SettingsChange, SettingsUpdate, ThemeMode, UserSettings},
+    state::{ProviderHealth, ServerEvent, SharedState},
+};
 
 pub fn router(state: SharedState) -> Router {
     Router::new()
@@ -24,6 +27,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/pairing/complete", post(complete_pairing))
         .route("/v1/library", get(list_library))
         .route("/v1/library/rescan", post(rescan_library))
+        .route("/v1/settings", get(get_settings).put(update_settings))
         .route("/v1/discovery/{source_id}/refresh", post(refresh_source))
         .route("/v1/metadata/{provider_id}/refresh", post(refresh_metadata))
         .route("/v1/apps/{id}/launch", post(launch_app))
@@ -121,6 +125,53 @@ async fn rescan_library(
     }
     info!("all discovery and metadata providers refresh requested");
     Ok(StatusCode::ACCEPTED)
+}
+
+async fn get_settings(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<UserSettings>, ApiError> {
+    authenticate(&state, &headers).await?;
+    state
+        .settings
+        .get()
+        .await
+        .map(Json)
+        .map_err(ApiError::internal)
+}
+
+async fn update_settings(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateSettingsRequest>,
+) -> Result<Json<UserSettings>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let theme_mode = request
+        .theme_mode
+        .as_deref()
+        .map(|mode| ThemeMode::parse(mode).ok_or_else(ApiError::invalid_theme_mode))
+        .transpose()?;
+    let backdrop_mode = request
+        .backdrop_mode
+        .as_deref()
+        .map(|mode| BackdropMode::parse(mode).ok_or_else(ApiError::invalid_backdrop_mode))
+        .transpose()?;
+    let change = SettingsChange {
+        theme_mode,
+        backdrop_mode,
+    };
+    if change.is_empty() {
+        return Err(ApiError::empty_settings_update());
+    }
+    match state
+        .settings
+        .update(change, request.revision)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        SettingsUpdate::Saved(settings) => Ok(Json(settings)),
+        SettingsUpdate::Conflict(settings) => Err(ApiError::settings_conflict(settings)),
+    }
 }
 
 async fn refresh_source(
@@ -285,9 +336,17 @@ struct PairingCompleteResponse {
     token: String,
 }
 
+#[derive(Deserialize)]
+struct UpdateSettingsRequest {
+    theme_mode: Option<String>,
+    backdrop_mode: Option<String>,
+    revision: Option<i64>,
+}
+
 struct ApiError {
     status: StatusCode,
     message: String,
+    settings: Option<UserSettings>,
 }
 
 impl ApiError {
@@ -295,6 +354,7 @@ impl ApiError {
         Self {
             status: StatusCode::UNAUTHORIZED,
             message: "authentication required".to_owned(),
+            settings: None,
         }
     }
 
@@ -302,6 +362,7 @@ impl ApiError {
         Self {
             status: StatusCode::NOT_FOUND,
             message: "resource not found".to_owned(),
+            settings: None,
         }
     }
 
@@ -309,6 +370,42 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: "client_name must contain 1 to 128 characters".to_owned(),
+            settings: None,
+        }
+    }
+
+    fn invalid_theme_mode() -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: "theme_mode must be system, aurora, ember, or indigo".to_owned(),
+            settings: None,
+        }
+    }
+
+    fn invalid_backdrop_mode() -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: "backdrop_mode must be solid, edge_wash, or quiet_grid".to_owned(),
+            settings: None,
+        }
+    }
+
+    fn empty_settings_update() -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: "at least one settings field is required".to_owned(),
+            settings: None,
+        }
+    }
+
+    fn settings_conflict(settings: UserSettings) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: format!(
+                "settings version conflict at revision {}",
+                settings.revision
+            ),
+            settings: Some(settings),
         }
     }
 
@@ -316,6 +413,7 @@ impl ApiError {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             message: "discovery service is unavailable".to_owned(),
+            settings: None,
         }
     }
 
@@ -323,6 +421,7 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_GATEWAY,
             message: error.to_string(),
+            settings: None,
         }
     }
 
@@ -330,17 +429,18 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: error.to_string(),
+            settings: None,
         }
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(serde_json::json!({ "error": self.message })),
-        )
-            .into_response()
+        let mut body = serde_json::json!({ "error": self.message });
+        if let Some(settings) = self.settings {
+            body["settings"] = serde_json::to_value(settings).unwrap_or_default();
+        }
+        (self.status, Json(body)).into_response()
     }
 }
 
@@ -454,6 +554,84 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let token = paired["token"].as_str().unwrap();
         let mut events = state.events.subscribe();
+
+        let unauthenticated_settings = router(state.clone())
+            .oneshot(Request::get("/v1/settings").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated_settings.status(), StatusCode::UNAUTHORIZED);
+
+        let (status, settings) = response_json(
+            router(state.clone()),
+            Request::get("/v1/settings")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(settings["theme_mode"], "system");
+        assert_eq!(settings["backdrop_mode"], "edge_wash");
+        assert_eq!(settings["revision"], 0);
+
+        let (status, settings) = response_json(
+            router(state.clone()),
+            Request::put("/v1/settings")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"theme_mode":"ember","backdrop_mode":"solid","revision":0}"#,
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(settings["theme_mode"], "ember");
+        assert_eq!(settings["backdrop_mode"], "solid");
+        assert_eq!(settings["revision"], 1);
+
+        let (status, persisted_settings) = response_json(
+            router(state.clone()),
+            Request::get("/v1/settings")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(persisted_settings["theme_mode"], "ember");
+        assert_eq!(persisted_settings["backdrop_mode"], "solid");
+        assert_eq!(persisted_settings["revision"], 1);
+
+        let (status, settings) = response_json(
+            router(state.clone()),
+            Request::put("/v1/settings")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"backdrop_mode":"quiet_grid","revision":1}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(settings["theme_mode"], "ember");
+        assert_eq!(settings["backdrop_mode"], "quiet_grid");
+        assert_eq!(settings["revision"], 2);
+
+        let (status, conflict) = response_json(
+            router(state.clone()),
+            Request::put("/v1/settings")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"theme_mode":"indigo","backdrop_mode":"solid","revision":0}"#,
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(conflict["settings"]["theme_mode"], "ember");
+        assert_eq!(conflict["settings"]["backdrop_mode"], "quiet_grid");
+        assert_eq!(conflict["settings"]["revision"], 2);
 
         let (status, health) = response_json(
             router(state.clone()),

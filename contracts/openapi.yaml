@@ -59,6 +59,37 @@ paths:
       responses:
         '202':
           description: Discovery jobs accepted
+  /v1/settings:
+    get:
+      operationId: getUserSettings
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current user settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSettings'
+    put:
+      operationId: updateUserSettings
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserSettingsUpdate'
+      responses:
+        '200':
+          description: Saved user settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSettings'
+        '409':
+          description: The supplied settings revision is stale
   /v1/discovery/{source_id}/refresh:
     post:
       operationId: refreshDiscoverySource
@@ -140,6 +171,21 @@ components:
       properties:
         client_id: { type: string }
         token: { type: string }
+    UserSettings:
+      type: object
+      required: [theme_mode, backdrop_mode, revision, updated_at]
+      properties:
+        theme_mode: { type: string, enum: [system, aurora, ember, indigo] }
+        backdrop_mode: { type: string, enum: [solid, edge_wash, quiet_grid] }
+        revision: { type: integer, minimum: 0 }
+        updated_at: { type: string, format: date-time }
+    UserSettingsUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        theme_mode: { type: string, enum: [system, aurora, ember, indigo] }
+        backdrop_mode: { type: string, enum: [solid, edge_wash, quiet_grid] }
+        revision: { type: integer, minimum: 0 }
     LibraryItem:
       type: object
       required: [id, source_id, title, kind, metadata]

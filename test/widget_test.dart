@@ -6,16 +6,17 @@ import 'package:gamepads/gamepads.dart';
 import 'package:gamepads_platform_interface/gamepads_platform_interface.dart';
 import 'package:gamepads_platform_interface/method_channel_gamepads_platform_interface.dart';
 import 'package:hearthdeck/backend/hearthdeck_api_client.dart';
-import 'package:hearthdeck/main.dart';
-import 'package:hearthdeck/tv_components.dart';
+import 'package:hearthdeck/catalog/catalog_repository.dart';
+import 'package:hearthdeck/catalog/mock_catalog_repository.dart';
 import 'package:hearthdeck/content_details.dart';
 import 'package:hearthdeck/dashboard_models.dart';
-import 'package:hearthdeck/catalog/mock_catalog_repository.dart';
-import 'package:hearthdeck/catalog/catalog_repository.dart';
 import 'package:hearthdeck/full_library.dart';
+import 'package:hearthdeck/main.dart';
 import 'package:hearthdeck/search.dart';
 import 'package:hearthdeck/settings.dart';
+import 'package:hearthdeck/settings/user_settings_repository.dart';
 import 'package:hearthdeck/system_health.dart';
+import 'package:hearthdeck/tv_components.dart';
 import 'package:hearthdeck/tv_gamepad.dart';
 import 'package:hearthdeck/tv_theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -128,7 +129,12 @@ void main() {
     addTearDown(
       () => SharedPreferences.setMockInitialValues(<String, Object>{}),
     );
-    await tester.pumpWidget(const HearthdeckApp());
+    final settingsRepository = await CachedUserSettingsRepository.load(
+      preferences: await SharedPreferences.getInstance(),
+    );
+    await tester.pumpWidget(
+      HearthdeckApp(settingsRepository: settingsRepository),
+    );
     await tester.tap(find.bySemanticsLabel('Settings'));
     await tester.pumpAndSettle();
 
@@ -136,7 +142,14 @@ void main() {
       find.byKey(const ValueKey<String>('settings-option-personalization')),
     );
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Ember'),
+      240,
+      scrollable: find.byType(GridView),
+    );
     await tester.tap(find.text('Ember'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.bySemanticsLabel('Quiet grid'));
     await tester.pumpAndSettle();
 
     final pageTitle = find.text('Appearance & color');
@@ -146,10 +159,8 @@ void main() {
       TvPalette.of(tester.element(pageTitle)).focus,
       TvTheme.colorsFor(TvThemeMode.ember, null).primary,
     );
-    expect(
-      (await SharedPreferences.getInstance()).getString('theme-mode'),
-      'ember',
-    );
+    expect(settingsRepository.settings.themeMode, TvThemeMode.ember);
+    expect(settingsRepository.settings.backdropMode, TvBackdropMode.quietGrid);
   });
 
   testWidgets('settings exposes a library rescan control', (

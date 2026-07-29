@@ -90,6 +90,52 @@ class HearthdeckApiClient {
     }
   }
 
+  Future<HearthdeckUserSettings> userSettings() async {
+    final response = await _client.get(
+      endpoint.api('settings'),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 200) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+    return HearthdeckUserSettings.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
+  }
+
+  Future<HearthdeckUserSettings> updateUserSettings({
+    required String themeMode,
+    required String backdropMode,
+    required int? revision,
+  }) async {
+    final response = await _client.put(
+      endpoint.api('settings'),
+      headers: <String, String>{
+        ..._authorizationHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(<String, Object?>{
+        'theme_mode': themeMode,
+        'backdrop_mode': backdropMode,
+        'revision': ?revision,
+      }),
+    );
+    if (response.statusCode == 409) {
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      if (body['settings'] case final Map<String, dynamic> settings) {
+        throw HearthdeckSettingsConflict(
+          HearthdeckUserSettings.fromJson(settings),
+        );
+      }
+    }
+    if (response.statusCode != 200) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+    return HearthdeckUserSettings.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
+  }
+
   Stream<HearthdeckServerEvent> watchEvents() async* {
     final socket = await WebSocket.connect(
       _webSocketUri().toString(),
@@ -200,6 +246,34 @@ class HearthdeckPairingCode {
       HearthdeckPairingCode(code: json['code'] as String);
 
   final String code;
+}
+
+class HearthdeckUserSettings {
+  const HearthdeckUserSettings({
+    required this.themeMode,
+    required this.backdropMode,
+    required this.revision,
+    required this.updatedAt,
+  });
+
+  factory HearthdeckUserSettings.fromJson(Map<String, dynamic> json) =>
+      HearthdeckUserSettings(
+        themeMode: json['theme_mode'] as String,
+        backdropMode: json['backdrop_mode'] as String,
+        revision: json['revision'] as int,
+        updatedAt: json['updated_at'] as String,
+      );
+
+  final String themeMode;
+  final String backdropMode;
+  final int revision;
+  final String updatedAt;
+}
+
+class HearthdeckSettingsConflict implements Exception {
+  const HearthdeckSettingsConflict(this.settings);
+
+  final HearthdeckUserSettings settings;
 }
 
 class HearthdeckLibraryItem {

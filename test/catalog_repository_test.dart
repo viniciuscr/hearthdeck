@@ -108,6 +108,50 @@ void main() {
     expect(event.sourceId, 'appstream-local');
     expect(event.recordCount, 120);
   });
+
+  test('API client saves settings with an authenticated revision', () async {
+    final client = HearthdeckApiClient(
+      endpoint: HearthdeckEndpoint.local(),
+      token: 'test-token',
+      client: _SettingsHttpClient(),
+    );
+
+    final settings = await client.updateUserSettings(
+      themeMode: 'ember',
+      backdropMode: 'solid',
+      revision: 4,
+    );
+
+    expect(settings.themeMode, 'ember');
+    expect(settings.backdropMode, 'solid');
+    expect(settings.revision, 5);
+  });
+
+  test(
+    'API client exposes the current settings on a revision conflict',
+    () async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.local(),
+        token: 'test-token',
+        client: _SettingsConflictHttpClient(),
+      );
+
+      expect(
+        () => client.updateUserSettings(
+          themeMode: 'ember',
+          backdropMode: 'solid',
+          revision: 2,
+        ),
+        throwsA(
+          isA<HearthdeckSettingsConflict>().having(
+            (HearthdeckSettingsConflict error) => error.settings.revision,
+            'revision',
+            3,
+          ),
+        ),
+      );
+    },
+  );
 }
 
 class _CatalogHttpClient extends http.BaseClient {
@@ -152,5 +196,31 @@ class _PairingHttpClient extends http.BaseClient {
       200,
       headers: const <String, String>{'content-type': 'application/json'},
     );
+  }
+}
+
+class _SettingsHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    expect(request.method, 'PUT');
+    expect(request.url.path, '/v1/settings');
+    expect(request.headers['authorization'], 'Bearer test-token');
+    expect(request.headers['content-type'], 'application/json');
+    expect(
+      (request as http.Request).body,
+      '{"theme_mode":"ember","backdrop_mode":"solid","revision":4}',
+    );
+    const body =
+        '{"theme_mode":"ember","backdrop_mode":"solid","revision":5,"updated_at":"2026-01-01T00:00:00Z"}';
+    return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
+  }
+}
+
+class _SettingsConflictHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    const body =
+        '{"error":"settings version conflict","settings":{"theme_mode":"indigo","backdrop_mode":"edge_wash","revision":3,"updated_at":"2026-01-01T00:00:00Z"}}';
+    return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 409);
   }
 }

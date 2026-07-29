@@ -2,12 +2,34 @@ import 'package:flutter/material.dart';
 
 enum TvThemeMode { system, aurora, ember, indigo }
 
+enum TvBackdropMode { solid, edgeWash, quietGrid }
+
 extension TvThemeModeLabel on TvThemeMode {
   String get label => switch (this) {
     TvThemeMode.system => 'System colors',
     TvThemeMode.aurora => 'Aurora',
     TvThemeMode.ember => 'Ember',
     TvThemeMode.indigo => 'Indigo',
+  };
+}
+
+extension TvBackdropModeLabel on TvBackdropMode {
+  String get label => switch (this) {
+    TvBackdropMode.solid => 'Solid',
+    TvBackdropMode.edgeWash => 'Edge wash',
+    TvBackdropMode.quietGrid => 'Quiet grid',
+  };
+
+  String get description => switch (this) {
+    TvBackdropMode.solid => 'Pure neutral canvas',
+    TvBackdropMode.edgeWash => 'A restrained color field',
+    TvBackdropMode.quietGrid => 'A subtle architectural grid',
+  };
+
+  String get wireName => switch (this) {
+    TvBackdropMode.solid => 'solid',
+    TvBackdropMode.edgeWash => 'edge_wash',
+    TvBackdropMode.quietGrid => 'quiet_grid',
   };
 }
 
@@ -22,19 +44,7 @@ abstract final class TvTheme {
   static const Duration focusDuration = Duration(milliseconds: 140);
   static const Curve focusCurve = Curves.easeOutCubic;
 
-  static ThemeData data(ColorScheme colors) {
-    final palette = TvPalette(
-      canvas: colors.surface,
-      surface: colors.surfaceContainerHigh,
-      surfaceMuted: colors.surfaceContainer,
-      focus: colors.primary,
-      primaryAction: colors.primary,
-      primaryText: colors.onSurface,
-      secondaryText: colors.onSurfaceVariant,
-      warning: colors.tertiary,
-      info: colors.secondary,
-      backdropGlow: Color.lerp(colors.primary, colors.surface, 0.62)!,
-    );
+  static ThemeData data(ColorScheme colors, TvPalette palette) {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
@@ -66,12 +76,65 @@ abstract final class TvTheme {
     if (mode == TvThemeMode.system && dynamicColors != null) {
       return dynamicColors;
     }
-    final seed = switch (mode) {
-      TvThemeMode.system || TvThemeMode.aurora => const Color(0xFF46C5A1),
-      TvThemeMode.ember => const Color(0xFFE47A4D),
-      TvThemeMode.indigo => const Color(0xFF9A8CFF),
+    final palette = paletteFor(mode, dynamicColors);
+    return ColorScheme.dark(
+      primary: palette.focus,
+      onPrimary: palette.canvas,
+      primaryContainer: palette.primaryAction,
+      onPrimaryContainer: palette.primaryText,
+      secondary: palette.info,
+      onSecondary: palette.canvas,
+      tertiary: palette.warning,
+      onTertiary: palette.canvas,
+      surface: palette.surface,
+      onSurface: palette.primaryText,
+      surfaceContainer: palette.surfaceMuted,
+      onSurfaceVariant: palette.secondaryText,
+    );
+  }
+
+  static TvPalette paletteFor(TvThemeMode mode, ColorScheme? dynamicColors) {
+    if (mode == TvThemeMode.system && dynamicColors != null) {
+      return TvPalette.fromDynamicColors(dynamicColors);
+    }
+    return switch (mode) {
+      TvThemeMode.system || TvThemeMode.aurora => const TvPalette(
+        canvas: Color(0xFF0B1416),
+        surface: Color(0xFF122023),
+        surfaceMuted: Color(0xFF1A2B2E),
+        focus: Color(0xFF87D9CA),
+        primaryAction: Color(0xFF327D71),
+        primaryText: Color(0xFFF1F7F5),
+        secondaryText: Color(0xFFB5C6C1),
+        warning: Color(0xFFF0B678),
+        info: Color(0xFF8CC5E7),
+        backdropGlow: Color(0xFF173B39),
+      ),
+      TvThemeMode.ember => const TvPalette(
+        canvas: Color(0xFF17110F),
+        surface: Color(0xFF241916),
+        surfaceMuted: Color(0xFF33231E),
+        focus: Color(0xFFEAAF7C),
+        primaryAction: Color(0xFF9E5036),
+        primaryText: Color(0xFFFFF6F1),
+        secondaryText: Color(0xFFD1BFB4),
+        warning: Color(0xFFF0C56B),
+        info: Color(0xFF92C7E6),
+        backdropGlow: Color(0xFF42251B),
+      ),
+      TvThemeMode.indigo => const TvPalette(
+        canvas: Color(0xFF10121D),
+        surface: Color(0xFF191C2B),
+        surfaceMuted: Color(0xFF252940),
+        focus: Color(0xFFB2B9FF),
+        primaryAction: Color(0xFF626EC4),
+        primaryText: Color(0xFFF4F3FF),
+        secondaryText: Color(0xFFC5C5D9),
+        warning: Color(0xFFEFC477),
+        info: Color(0xFF8AC4EB),
+        backdropGlow: Color(0xFF262A50),
+      ),
     };
-    return ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark);
   }
 }
 
@@ -111,6 +174,19 @@ class TvPalette extends ThemeExtension<TvPalette> {
     warning: Color(0xFFFFB36B),
     info: Color(0xFF7AC8FF),
     backdropGlow: Color(0xFF1B3A48),
+  );
+
+  factory TvPalette.fromDynamicColors(ColorScheme colors) => TvPalette(
+    canvas: colors.surface,
+    surface: colors.surfaceContainerHigh,
+    surfaceMuted: colors.surfaceContainer,
+    focus: colors.primary,
+    primaryAction: Color.lerp(colors.primary, colors.surface, 0.48)!,
+    primaryText: colors.onSurface,
+    secondaryText: colors.onSurfaceVariant,
+    warning: colors.tertiary,
+    info: colors.secondary,
+    backdropGlow: Color.lerp(colors.primary, colors.surface, 0.62)!,
   );
 
   static TvPalette of(BuildContext context) =>
@@ -165,16 +241,79 @@ class TvThemeScope extends InheritedWidget {
   const TvThemeScope({
     required this.mode,
     required this.onModeChanged,
+    required this.backdropMode,
+    required this.onBackdropModeChanged,
     required super.child,
     super.key,
   });
 
   final TvThemeMode mode;
   final ValueChanged<TvThemeMode> onModeChanged;
+  final TvBackdropMode backdropMode;
+  final ValueChanged<TvBackdropMode> onBackdropModeChanged;
 
   static TvThemeScope of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<TvThemeScope>()!;
 
+  static TvThemeScope? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<TvThemeScope>();
+
   @override
-  bool updateShouldNotify(TvThemeScope oldWidget) => mode != oldWidget.mode;
+  bool updateShouldNotify(TvThemeScope oldWidget) =>
+      mode != oldWidget.mode || backdropMode != oldWidget.backdropMode;
+}
+
+class TvBackdrop extends StatelessWidget {
+  const TvBackdrop({super.key, this.center = const Alignment(0.84, -0.58)});
+
+  final Alignment center;
+
+  @override
+  Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
+    final backdropMode =
+        TvThemeScope.maybeOf(context)?.backdropMode ?? TvBackdropMode.edgeWash;
+    return switch (backdropMode) {
+      TvBackdropMode.solid => ColoredBox(color: tv.canvas),
+      TvBackdropMode.edgeWash => DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: center,
+            radius: 1.32,
+            colors: <Color>[tv.backdropGlow, tv.canvas],
+            stops: const <double>[0, 0.74],
+          ),
+        ),
+      ),
+      TvBackdropMode.quietGrid => CustomPaint(
+        painter: _QuietGridPainter(canvas: tv.canvas, line: tv.primaryText),
+      ),
+    };
+  }
+}
+
+class _QuietGridPainter extends CustomPainter {
+  const _QuietGridPainter({required this.canvas, required this.line});
+
+  final Color canvas;
+  final Color line;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawColor(this.canvas, BlendMode.src);
+    final paint = Paint()
+      ..color = line.withValues(alpha: 0.035)
+      ..strokeWidth = 1;
+    const spacing = 96.0;
+    for (var x = 0.0; x < size.width; x += spacing) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    for (var y = 0.0; y < size.height; y += spacing) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_QuietGridPainter oldDelegate) =>
+      canvas != oldDelegate.canvas || line != oldDelegate.line;
 }

@@ -5,7 +5,7 @@ use tokio::sync::broadcast;
 
 use crate::{
     auth::AuthRepository, catalog::CatalogStore, config::Config, database::Database,
-    discovery::DiscoveryService, enrichment::EnrichmentService,
+    discovery::DiscoveryService, enrichment::EnrichmentService, settings::SettingsRepository,
 };
 
 #[derive(Clone)]
@@ -13,6 +13,7 @@ pub struct AppState {
     pub config: Config,
     pub auth: AuthRepository,
     pub catalog: CatalogStore,
+    pub settings: SettingsRepository,
     pub discovery: Option<DiscoveryService>,
     pub enrichment: Option<EnrichmentService>,
     pub events: broadcast::Sender<ServerEvent>,
@@ -89,6 +90,7 @@ impl AppState {
             config,
             auth: AuthRepository::new(database.pool().clone()),
             catalog: CatalogStore::new(database.pool().clone()),
+            settings: SettingsRepository::new(database.pool().clone()),
             discovery: None,
             enrichment: None,
             events,

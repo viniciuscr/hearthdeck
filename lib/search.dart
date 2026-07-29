@@ -309,17 +309,7 @@ class _SearchBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tv = TvPalette.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: RadialGradient(
-          center: const Alignment(0.45, -0.5),
-          radius: 1.25,
-          colors: <Color>[tv.backdropGlow, tv.canvas],
-          stops: const <double>[0, 0.74],
-        ),
-      ),
-    );
+    return const TvBackdrop(center: Alignment(0.45, -0.5));
   }
 }
 

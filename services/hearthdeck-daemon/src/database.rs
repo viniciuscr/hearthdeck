@@ -58,6 +58,13 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS catalog_enrichments_lookup
               ON catalog_enrichments (application_id, priority DESC, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS user_settings (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              theme_mode TEXT NOT NULL CHECK (theme_mode IN ('system', 'aurora', 'ember', 'indigo')),
+              backdrop_mode TEXT NOT NULL DEFAULT 'edge_wash' CHECK (backdrop_mode IN ('solid', 'edge_wash', 'quiet_grid')),
+              revision INTEGER NOT NULL DEFAULT 0,
+              updated_at TEXT NOT NULL
+            );
             "#,
         )
         .execute(&self.pool)
@@ -73,6 +80,16 @@ impl Database {
         let _ = sqlx::query("ALTER TABLE library_items ADD COLUMN launch_id TEXT")
             .execute(&self.pool)
             .await;
+        let _ = sqlx::query(
+            "ALTER TABLE user_settings ADD COLUMN backdrop_mode TEXT NOT NULL DEFAULT 'edge_wash' CHECK (backdrop_mode IN ('solid', 'edge_wash', 'quiet_grid'))",
+        )
+        .execute(&self.pool)
+        .await;
+        sqlx::query(
+            "INSERT OR IGNORE INTO user_settings (id, theme_mode, backdrop_mode, revision, updated_at) VALUES (1, 'system', 'edge_wash', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

@@ -1,5 +1,5 @@
 import '../backend/hearthdeck_api_client.dart';
-import '../backend/hearthdeck_endpoint.dart';
+import '../backend/local_hearthdeck_client.dart';
 import '../dashboard_models.dart';
 import 'api_catalog_repository.dart';
 import 'catalog_repository.dart';
@@ -58,28 +58,6 @@ class LocalCatalogRepository implements CatalogRepository {
   }
 
   static Future<ApiCatalogRepository> _pairWithLocalDaemon() async {
-    final adminClient = HearthdeckApiClient(
-      endpoint: HearthdeckEndpoint.localAdmin(),
-      token: null,
-    );
-    final pairingCode = await adminClient.createPairingCode();
-    adminClient.close();
-
-    final client = HearthdeckApiClient(
-      endpoint: HearthdeckEndpoint.local(),
-      token: null,
-    );
-    final pairing = await client.completePairing(
-      code: pairingCode.code,
-      clientName: 'hearthdeck-local-client',
-    );
-    client.close();
-
-    return ApiCatalogRepository(
-      HearthdeckApiClient(
-        endpoint: HearthdeckEndpoint.local(),
-        token: pairing.token,
-      ),
-    );
+    return ApiCatalogRepository(await createLocalHearthdeckClient());
   }
 }

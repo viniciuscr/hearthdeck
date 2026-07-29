@@ -848,17 +848,7 @@ class _LibraryBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tv = TvPalette.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: RadialGradient(
-          center: const Alignment(0.88, -0.6),
-          radius: 1.3,
-          colors: <Color>[tv.backdropGlow, tv.canvas],
-          stops: const <double>[0, 0.72],
-        ),
-      ),
-    );
+    return const TvBackdrop(center: Alignment(0.88, -0.6));
   }
 }
 

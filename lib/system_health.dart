@@ -416,16 +416,6 @@ class _SystemHealthBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tv = TvPalette.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: RadialGradient(
-          center: const Alignment(-0.35, -0.55),
-          radius: 1.2,
-          colors: <Color>[tv.backdropGlow, tv.canvas],
-          stops: const <double>[0, 0.72],
-        ),
-      ),
-    );
+    return const TvBackdrop(center: Alignment(-0.35, -0.55));
   }
 }

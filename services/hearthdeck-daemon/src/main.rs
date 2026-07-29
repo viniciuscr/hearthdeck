@@ -6,6 +6,7 @@ mod config;
 mod database;
 mod discovery;
 mod enrichment;
+mod settings;
 mod state;
 
 use std::{net::TcpListener as StdTcpListener, sync::Arc};
