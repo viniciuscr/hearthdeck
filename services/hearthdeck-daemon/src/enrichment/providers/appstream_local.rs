@@ -21,11 +21,6 @@ impl AppStreamLocalProvider {
             directories: appstream_directories(),
         }
     }
-
-    #[cfg(test)]
-    pub fn from_directories(directories: Vec<PathBuf>) -> Self {
-        Self { directories }
-    }
 }
 
 #[async_trait]
