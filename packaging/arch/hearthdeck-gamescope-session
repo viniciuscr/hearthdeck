@@ -3,11 +3,11 @@
 # installed Mesa, Vulkan, DRM, and kernel graphics stack.
 set -eu
 
-state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/hearthdeck"
-mkdir -p "$state_dir"
-exec >>"$state_dir/gamescope-session.log" 2>&1
+log_path="/tmp/hearthdeck-gamescope-session-${USER:-unknown}.log"
+exec >>"$log_path" 2>&1
 
 echo "$(date -Iseconds) starting Hearthdeck Console"
+echo "$(date -Iseconds) user=${USER:-unset} home=${HOME:-unset} runtime=${XDG_RUNTIME_DIR:-unset}"
 echo "$(date -Iseconds) gamescope: $(gamescope --version 2>&1 | tr '\n' ' ')"
 
 # Hearthdeck's current Flutter GTK runner is an X11 client. Do not expose
@@ -20,4 +20,7 @@ export XDG_CURRENT_DESKTOP=gamescope
 export XDG_SESSION_DESKTOP=hearthdeck
 export XDG_SESSION_TYPE=x11
 
-exec gamescope --backend drm --force-windows-fullscreen -- /usr/bin/hearthdeck
+gamescope --backend drm --force-windows-fullscreen -- /usr/bin/hearthdeck
+status=$?
+echo "$(date -Iseconds) Gamescope exited with status $status"
+exit "$status"

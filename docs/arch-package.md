@@ -50,8 +50,10 @@ recovery option; it is not started behind Hearthdeck Console.
 The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
 runner is migrated and tested as a Wayland client. If Console returns to the
-display manager, inspect `~/.local/state/hearthdeck/gamescope-session.log` for
-the Gamescope and GTK startup error.
+display manager, inspect `/tmp/hearthdeck-gamescope-session-<user>.log` for the
+Gamescope and GTK startup error. The log deliberately uses `/tmp` because
+display managers do not consistently set the selected user's `HOME` or XDG
+state directories before a graphical session starts.
 
 Exit Hearthdeck Console from its system menu to return to the display manager.
 Select the COSMIC session there to return to the desktop. If the console shell
