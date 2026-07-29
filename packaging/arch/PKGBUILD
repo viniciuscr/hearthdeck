@@ -1,11 +1,11 @@
 pkgname=hearthdeck
 pkgver=1.0.0
-pkgrel=3
+pkgrel=4
 pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
 license=('MIT')
-depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'sqlite' 'systemd')
+depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'sqlite' 'systemd' 'xorg-xwayland')
 makedepends=('clang' 'cmake' 'just' 'ninja' 'pkgconf' 'rust' 'sqlite')
 install="${pkgname}.install"
 options=('!strip' '!lto')

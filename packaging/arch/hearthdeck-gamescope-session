@@ -1,6 +1,23 @@
 #!/usr/bin/sh
 # Gamescope is supplied by the host distribution because it must match the
 # installed Mesa, Vulkan, DRM, and kernel graphics stack.
+set -eu
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/hearthdeck"
+mkdir -p "$state_dir"
+exec >>"$state_dir/gamescope-session.log" 2>&1
+
+echo "$(date -Iseconds) starting Hearthdeck Console"
+echo "$(date -Iseconds) gamescope: $(gamescope --version 2>&1 | tr '\n' ' ')"
+
+# Hearthdeck's current Flutter GTK runner is an X11 client. Do not expose
+# Gamescope's experimental Wayland client socket until the runner is migrated
+# and tested against it; use the compositor's XWayland display instead.
+unset WAYLAND_DISPLAY
+export GDK_BACKEND=x11
+export SDL_VIDEODRIVER=x11
 export XDG_CURRENT_DESKTOP=gamescope
 export XDG_SESSION_DESKTOP=hearthdeck
-exec gamescope --backend drm --expose-wayland --force-windows-fullscreen -- /usr/bin/hearthdeck
+export XDG_SESSION_TYPE=x11
+
+exec gamescope --backend drm --force-windows-fullscreen -- /usr/bin/hearthdeck
