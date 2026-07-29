@@ -54,6 +54,7 @@ class TvNavigationRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     final headerBuilder = this.headerBuilder;
     final footerBuilder = this.footerBuilder;
     final resolvedWidth = compact ? width.clamp(64.0, double.infinity) : width;
@@ -61,9 +62,9 @@ class TvNavigationRail extends StatelessWidget {
       width: resolvedWidth,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: TvTheme.canvas.withValues(alpha: 0.72),
+          color: tv.canvas.withValues(alpha: 0.72),
           border: Border(
-            right: BorderSide(color: Colors.white.withValues(alpha: 0.09)),
+            right: BorderSide(color: tv.primaryText.withValues(alpha: 0.09)),
           ),
         ),
         child: Padding(
@@ -121,17 +122,16 @@ class TvProfileRailHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
         Container(
           width: compact ? 36 : 42,
           height: compact ? 36 : 42,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             shape: BoxShape.circle,
-            gradient: LinearGradient(
-              colors: <Color>[Color(0xFFEC8B54), Color(0xFF277F9B)],
-            ),
+            gradient: LinearGradient(colors: <Color>[tv.focus, tv.info]),
           ),
           child: Icon(icon),
         ),
@@ -162,6 +162,7 @@ class TvOptionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return RepaintBoundary(
       child: TvFocusable(
         semanticLabel: label,
@@ -173,10 +174,10 @@ class TvOptionCard extends StatelessWidget {
             curve: TvTheme.focusCurve,
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: isFocused ? TvTheme.focus : TvTheme.surface,
+              color: isFocused ? tv.focus : tv.surface,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: isFocused ? TvTheme.primaryText : Colors.transparent,
+                color: isFocused ? tv.primaryText : Colors.transparent,
                 width: 2,
               ),
               boxShadow: isFocused
@@ -191,11 +192,7 @@ class TvOptionCard extends StatelessWidget {
             ),
             child: Row(
               children: <Widget>[
-                Icon(
-                  icon,
-                  size: 28,
-                  color: isFocused ? TvTheme.canvas : TvTheme.focus,
-                ),
+                Icon(icon, size: 28, color: isFocused ? tv.canvas : tv.focus),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -207,9 +204,7 @@ class TvOptionCard extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          color: isFocused
-                              ? TvTheme.canvas
-                              : TvTheme.primaryText,
+                          color: isFocused ? tv.canvas : tv.primaryText,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
@@ -222,8 +217,8 @@ class TvOptionCard extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: isFocused
-                                ? TvTheme.canvas.withValues(alpha: 0.76)
-                                : TvTheme.secondaryText,
+                                ? tv.canvas.withValues(alpha: 0.76)
+                                : tv.secondaryText,
                           ),
                         ),
                       ],
@@ -231,10 +226,7 @@ class TvOptionCard extends StatelessWidget {
                   ),
                 ),
                 if (isFocused)
-                  const Icon(
-                    Icons.arrow_forward_rounded,
-                    color: TvTheme.canvas,
-                  ),
+                  Icon(Icons.arrow_forward_rounded, color: tv.canvas),
               ],
             ),
           );
@@ -252,6 +244,7 @@ class _TvNavigationRailButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return TvFocusable(
       semanticLabel: item.label,
       autofocus: item.isSelected,
@@ -265,11 +258,13 @@ class _TvNavigationRailButton extends StatelessWidget {
           padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 14),
           decoration: BoxDecoration(
             color: highlighted
-                ? Colors.white.withValues(alpha: item.isSelected ? 0.13 : 0.08)
+                ? tv.primaryText.withValues(
+                    alpha: item.isSelected ? 0.13 : 0.08,
+                  )
                 : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: isFocused ? TvTheme.focus : Colors.transparent,
+              color: isFocused ? tv.focus : Colors.transparent,
               width: 2,
             ),
           ),
@@ -278,10 +273,7 @@ class _TvNavigationRailButton extends StatelessWidget {
                 ? MainAxisAlignment.center
                 : MainAxisAlignment.start,
             children: <Widget>[
-              Icon(
-                item.icon,
-                color: highlighted ? TvTheme.focus : TvTheme.primaryText,
-              ),
+              Icon(item.icon, color: highlighted ? tv.focus : tv.primaryText),
               if (!compact) ...<Widget>[
                 const SizedBox(width: 14),
                 Expanded(

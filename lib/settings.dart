@@ -8,6 +8,7 @@ import 'catalog/catalog_repository.dart';
 import 'catalog/catalog_repository_factory.dart';
 import 'settings_models.dart';
 import 'system_health.dart';
+import 'theme_settings.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
 import 'tv_two_pane.dart';
@@ -112,6 +113,15 @@ class _SettingsPageState extends State<SettingsPage> {
                           options: _options,
                           layout: layout,
                           onLibraryRescan: _requestLibraryRescan,
+                          onThemeSettings: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              settings: const RouteSettings(
+                                name: '/theme-settings',
+                              ),
+                              builder: (BuildContext context) =>
+                                  const ThemeSettingsPage(),
+                            ),
+                          ),
                           onServiceStatus: () => Navigator.of(context).push(
                             MaterialPageRoute<void>(
                               settings: const RouteSettings(
@@ -176,6 +186,7 @@ class _SettingsContent extends StatelessWidget {
     required this.options,
     required this.layout,
     required this.onLibraryRescan,
+    required this.onThemeSettings,
     required this.onServiceStatus,
   });
 
@@ -183,10 +194,12 @@ class _SettingsContent extends StatelessWidget {
   final List<SettingsOption> options;
   final _SettingsLayout layout;
   final VoidCallback onLibraryRescan;
+  final VoidCallback onThemeSettings;
   final VoidCallback onServiceStatus;
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return CustomScrollView(
       scrollCacheExtent: ScrollCacheExtent.viewport(2),
       slivers: <Widget>[
@@ -202,7 +215,7 @@ class _SettingsContent extends StatelessWidget {
               SliverToBoxAdapter(
                 child: Row(
                   children: <Widget>[
-                    Icon(definition.icon, size: 34, color: TvTheme.focus),
+                    Icon(definition.icon, size: 34, color: tv.focus),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Text(
@@ -233,6 +246,7 @@ class _SettingsContent extends StatelessWidget {
                     onActivate: switch (option.id) {
                       'rescan-library' => onLibraryRescan,
                       'service-status' => onServiceStatus,
+                      'personalization' => onThemeSettings,
                       _ => () => _showSettingsMessage(context, option),
                     },
                   );
@@ -251,13 +265,14 @@ class _SettingsBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const DecoratedBox(
+    final tv = TvPalette.of(context);
+    return DecoratedBox(
       decoration: BoxDecoration(
         gradient: RadialGradient(
-          center: Alignment(0.78, -0.55),
+          center: const Alignment(0.78, -0.55),
           radius: 1.3,
-          colors: <Color>[Color(0xFF252A32), TvTheme.canvas],
-          stops: <double>[0, 0.74],
+          colors: <Color>[tv.backdropGlow, tv.canvas],
+          stops: const <double>[0, 0.74],
         ),
       ),
     );

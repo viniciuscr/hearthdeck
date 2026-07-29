@@ -80,8 +80,8 @@ const Map<SettingsCategory, List<SettingsOption>> settingsOptions =
         ),
         SettingsOption(
           id: 'personalization',
-          label: 'Personalization',
-          description: 'Theme, home layout, and background',
+          label: 'Appearance & color',
+          description: 'System colors, palettes, and visual style',
           icon: Icons.palette_outlined,
         ),
         SettingsOption(

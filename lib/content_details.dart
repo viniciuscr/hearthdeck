@@ -279,6 +279,7 @@ class _DetailsInformation extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final tv = TvPalette.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -291,7 +292,7 @@ class _DetailsInformation extends StatelessWidget {
           child: Text(
             details.summary,
             style: theme.textTheme.titleMedium?.copyWith(
-              color: TvTheme.secondaryText,
+              color: tv.secondaryText,
               height: 1.35,
             ),
           ),
@@ -328,6 +329,7 @@ class _ContentKindLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     final label = switch (kind) {
       TvContentKind.game => 'Game',
       TvContentKind.media => 'Media',
@@ -336,8 +338,8 @@ class _ContentKindLabel extends StatelessWidget {
     };
     return Text(
       label.toUpperCase(),
-      style: const TextStyle(
-        color: TvTheme.focus,
+      style: TextStyle(
+        color: tv.focus,
         fontSize: 12,
         fontWeight: FontWeight.w700,
         letterSpacing: 1.2,
@@ -360,17 +362,18 @@ class TvDetailAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return TvFocusable(
       semanticLabel: action.label,
       autofocus: autofocus,
       onActivate: onActivate,
       builder: (BuildContext context, bool isFocused) {
         final background = isFocused
-            ? TvTheme.focus
+            ? tv.focus
             : action.isPrimary
-            ? TvTheme.primaryAction
-            : TvTheme.surface;
-        final foreground = isFocused ? TvTheme.canvas : TvTheme.primaryText;
+            ? tv.primaryAction
+            : tv.surface;
+        final foreground = isFocused ? tv.canvas : tv.primaryText;
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
@@ -381,9 +384,9 @@ class TvDetailAction extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: isFocused
-                  ? TvTheme.primaryText
+                  ? tv.primaryText
                   : action.isPrimary
-                  ? TvTheme.focus.withValues(alpha: 0.55)
+                  ? tv.focus.withValues(alpha: 0.55)
                   : Colors.transparent,
               width: isFocused ? 2 : 1,
             ),
@@ -480,26 +483,24 @@ class _FactPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: TvTheme.surface.withValues(alpha: 0.9),
+        color: tv.surface.withValues(alpha: 0.9),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
           children: <Widget>[
-            Icon(fact.icon, color: TvTheme.focus),
+            Icon(fact.icon, color: tv.focus),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(
-                    fact.label,
-                    style: const TextStyle(color: TvTheme.secondaryText),
-                  ),
+                  Text(fact.label, style: TextStyle(color: tv.secondaryText)),
                   const SizedBox(height: 4),
                   Text(
                     fact.value,
@@ -524,9 +525,10 @@ class _ProgressPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: TvTheme.surface.withValues(alpha: 0.9),
+        color: tv.surface.withValues(alpha: 0.9),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Padding(
@@ -535,10 +537,7 @@ class _ProgressPanel extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text(
-              progress.label,
-              style: const TextStyle(color: TvTheme.secondaryText),
-            ),
+            Text(progress.label, style: TextStyle(color: tv.secondaryText)),
             const SizedBox(height: 7),
             Row(
               children: <Widget>[
@@ -547,8 +546,8 @@ class _ProgressPanel extends StatelessWidget {
                     value: progress.value,
                     minHeight: 7,
                     borderRadius: BorderRadius.circular(8),
-                    backgroundColor: Colors.white.withValues(alpha: 0.12),
-                    color: TvTheme.focus,
+                    backgroundColor: tv.surfaceMuted,
+                    color: tv.focus,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -573,6 +572,7 @@ class _GalleryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return RepaintBoundary(
       child: TvFocusable(
         semanticLabel: item.label,
@@ -584,7 +584,7 @@ class _GalleryCard extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: isFocused ? TvTheme.focus : Colors.transparent,
+                color: isFocused ? tv.focus : Colors.transparent,
                 width: isFocused ? 3 : 0,
               ),
               gradient: LinearGradient(
@@ -627,11 +627,12 @@ class _NoDetailGallery extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
+    final tv = TvPalette.of(context);
+    return Padding(
       padding: EdgeInsets.symmetric(vertical: 28),
       child: Text(
         'No screenshots or media supplied by this metadata source.',
-        style: TextStyle(color: TvTheme.secondaryText),
+        style: TextStyle(color: tv.secondaryText),
       ),
     );
   }
@@ -644,6 +645,7 @@ class _DetailsBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return Positioned.fill(
       child: DecoratedBox(
         decoration: BoxDecoration(
@@ -652,7 +654,7 @@ class _DetailsBackdrop extends StatelessWidget {
             radius: 1.25,
             colors: <Color>[
               item.colors.first.withValues(alpha: 0.82),
-              TvTheme.canvas,
+              tv.canvas,
             ],
             stops: const <double>[0, 0.7],
           ),

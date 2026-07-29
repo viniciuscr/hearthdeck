@@ -1,18 +1,35 @@
 import 'dart:async';
 
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_gamepads/flutter_gamepads.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'tv_dashboard.dart';
 import 'tv_gamepad.dart';
 import 'tv_theme.dart';
 
-void main() {
-  runApp(const HearthdeckApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final preferences = await SharedPreferences.getInstance();
+  final storedTheme = preferences.getString('theme-mode');
+  final themeMode = TvThemeMode.values
+      .where((TvThemeMode mode) => mode.name == storedTheme)
+      .firstOrNull;
+  runApp(HearthdeckApp(initialThemeMode: themeMode ?? TvThemeMode.system));
 }
 
-class HearthdeckApp extends StatelessWidget {
-  const HearthdeckApp({super.key});
+class HearthdeckApp extends StatefulWidget {
+  const HearthdeckApp({super.key, this.initialThemeMode = TvThemeMode.system});
+
+  final TvThemeMode initialThemeMode;
+
+  @override
+  State<HearthdeckApp> createState() => _HearthdeckAppState();
+}
+
+class _HearthdeckAppState extends State<HearthdeckApp> {
+  late var _themeMode = widget.initialThemeMode;
 
   static final navigatorKey = GlobalKey<NavigatorState>();
   static final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -25,29 +42,48 @@ class HearthdeckApp extends StatelessWidget {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return GamepadControl(
-      shortcuts: TvGamepadBindings.shortcuts,
-      repeatIntents: TvGamepadBindings.repeatIntents,
-      child: Actions(
-        actions: <Type, Action<Intent>>{
-          TvBackIntent: CallbackAction<TvBackIntent>(
-            onInvoke: (TvBackIntent intent) {
-              unawaited(_handleBackIntent());
-              return null;
-            },
-          ),
-        },
-        child: MaterialApp(
-          navigatorKey: navigatorKey,
-          scaffoldMessengerKey: scaffoldMessengerKey,
-          debugShowCheckedModeBanner: false,
-          title: 'Hearthdeck',
-          theme: TvTheme.data,
-          home: const TvDashboard(),
-        ),
-      ),
-    );
+  void _setThemeMode(TvThemeMode mode) {
+    setState(() => _themeMode = mode);
+    unawaited(_persistThemeMode(mode));
   }
+
+  Future<void> _persistThemeMode(TvThemeMode mode) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString('theme-mode', mode.name);
+  }
+
+  @override
+  Widget build(BuildContext context) => DynamicColorBuilder(
+    builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
+      final colors = TvTheme.colorsFor(_themeMode, darkDynamic);
+      return GamepadControl(
+        shortcuts: TvGamepadBindings.shortcuts,
+        repeatIntents: TvGamepadBindings.repeatIntents,
+        child: Actions(
+          actions: <Type, Action<Intent>>{
+            TvBackIntent: CallbackAction<TvBackIntent>(
+              onInvoke: (TvBackIntent intent) {
+                unawaited(_handleBackIntent());
+                return null;
+              },
+            ),
+          },
+          child: TvThemeScope(
+            mode: _themeMode,
+            onModeChanged: _setThemeMode,
+            child: MaterialApp(
+              navigatorKey: navigatorKey,
+              scaffoldMessengerKey: scaffoldMessengerKey,
+              debugShowCheckedModeBanner: false,
+              title: 'Hearthdeck',
+              theme: TvTheme.data(colors),
+              themeAnimationDuration: TvTheme.focusDuration,
+              themeAnimationCurve: TvTheme.focusCurve,
+              home: const TvDashboard(),
+            ),
+          ),
+        ),
+      );
+    },
+  );
 }

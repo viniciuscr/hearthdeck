@@ -219,6 +219,7 @@ class _SearchHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -226,10 +227,10 @@ class _SearchHeader extends StatelessWidget {
         const SizedBox(height: 10),
         DecoratedBox(
           decoration: BoxDecoration(
-            color: TvTheme.surface,
+            color: tv.surface,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: TvTheme.focus.withValues(alpha: 0.7),
+              color: tv.focus.withValues(alpha: 0.7),
               width: 2,
             ),
           ),
@@ -237,7 +238,7 @@ class _SearchHeader extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: <Widget>[
-                const Icon(Icons.search_rounded, color: TvTheme.focus),
+                Icon(Icons.search_rounded, color: tv.focus),
                 const SizedBox(width: 12),
                 Expanded(
                   child: TextField(
@@ -248,11 +249,11 @@ class _SearchHeader extends StatelessWidget {
                     textInputAction: TextInputAction.search,
                     onSubmitted: (_) => FocusScope.of(context).nextFocus(),
                     style: Theme.of(context).textTheme.titleMedium,
-                    cursorColor: TvTheme.focus,
-                    decoration: const InputDecoration(
+                    cursorColor: tv.focus,
+                    decoration: InputDecoration(
                       border: InputBorder.none,
                       hintText: 'Search games, apps, and media',
-                      hintStyle: TextStyle(color: TvTheme.secondaryText),
+                      hintStyle: TextStyle(color: tv.secondaryText),
                     ),
                   ),
                 ),
@@ -262,7 +263,7 @@ class _SearchHeader extends StatelessWidget {
                     onActivate: onClear,
                     builder: (BuildContext context, bool isFocused) => Icon(
                       Icons.backspace_outlined,
-                      color: isFocused ? TvTheme.focus : TvTheme.secondaryText,
+                      color: isFocused ? tv.focus : tv.secondaryText,
                     ),
                   ),
               ],
@@ -279,25 +280,22 @@ class _NoSearchResults extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
+    final tv = TvPalette.of(context);
+    return Padding(
       padding: EdgeInsets.symmetric(vertical: 56),
       child: Center(
         child: Column(
           children: <Widget>[
-            Icon(
-              Icons.search_off_rounded,
-              size: 46,
-              color: TvTheme.secondaryText,
-            ),
-            SizedBox(height: 12),
-            Text(
+            Icon(Icons.search_off_rounded, size: 46, color: tv.secondaryText),
+            const SizedBox(height: 12),
+            const Text(
               'No matching content',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
-            SizedBox(height: 4),
+            const SizedBox(height: 4),
             Text(
               'Try another title or category.',
-              style: TextStyle(color: TvTheme.secondaryText),
+              style: TextStyle(color: tv.secondaryText),
             ),
           ],
         ),
@@ -311,13 +309,14 @@ class _SearchBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const DecoratedBox(
+    final tv = TvPalette.of(context);
+    return DecoratedBox(
       decoration: BoxDecoration(
         gradient: RadialGradient(
-          center: Alignment(0.45, -0.5),
+          center: const Alignment(0.45, -0.5),
           radius: 1.25,
-          colors: <Color>[Color(0xFF1F3A45), TvTheme.canvas],
-          stops: <double>[0, 0.74],
+          colors: <Color>[tv.backdropGlow, tv.canvas],
+          stops: const <double>[0, 0.74],
         ),
       ),
     );

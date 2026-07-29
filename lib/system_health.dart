@@ -159,6 +159,7 @@ class _HealthHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     final providerCount = health?.providers.length ?? 0;
     final degradedCount =
         health?.providers
@@ -167,14 +168,14 @@ class _HealthHeader extends StatelessWidget {
         0;
     return Row(
       children: <Widget>[
-        const DecoratedBox(
+        DecoratedBox(
           decoration: BoxDecoration(
-            color: Color(0x1A7BE443),
+            color: tv.focus.withValues(alpha: 0.12),
             shape: BoxShape.circle,
           ),
           child: Padding(
             padding: EdgeInsets.all(14),
-            child: Icon(Icons.monitor_heart_outlined, color: TvTheme.focus),
+            child: Icon(Icons.monitor_heart_outlined, color: tv.focus),
           ),
         ),
         const SizedBox(width: 18),
@@ -193,7 +194,7 @@ class _HealthHeader extends StatelessWidget {
                     : degradedCount == 0
                     ? '$providerCount providers reporting healthy state'
                     : '$degradedCount provider${degradedCount == 1 ? '' : 's'} needs attention',
-                style: const TextStyle(color: TvTheme.secondaryText),
+                style: TextStyle(color: tv.secondaryText),
               ),
             ],
           ),
@@ -206,12 +207,12 @@ class _HealthHeader extends StatelessWidget {
             curve: TvTheme.focusCurve,
             padding: const EdgeInsets.all(13),
             decoration: BoxDecoration(
-              color: isFocused ? TvTheme.focus : TvTheme.surface,
+              color: isFocused ? tv.focus : tv.surface,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(
               Icons.refresh_rounded,
-              color: isFocused ? TvTheme.canvas : TvTheme.focus,
+              color: isFocused ? tv.canvas : tv.focus,
             ),
           ),
         ),
@@ -228,7 +229,8 @@ class _ProviderHealthCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = _ProviderStatus.from(provider.status);
+    final tv = TvPalette.of(context);
+    final status = _ProviderStatus.from(provider.status, tv);
     return TvFocusable(
       semanticLabel: '${provider.id} ${status.label}',
       autofocus: autofocus,
@@ -237,14 +239,10 @@ class _ProviderHealthCard extends StatelessWidget {
         curve: TvTheme.focusCurve,
         padding: const EdgeInsets.all(22),
         decoration: BoxDecoration(
-          color: isFocused
-              ? TvTheme.surface.withValues(alpha: 0.96)
-              : TvTheme.surface,
+          color: isFocused ? tv.surface.withValues(alpha: 0.96) : tv.surface,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: isFocused
-                ? TvTheme.focus
-                : status.color.withValues(alpha: 0.38),
+            color: isFocused ? tv.focus : status.color.withValues(alpha: 0.38),
             width: isFocused ? 2 : 1,
           ),
         ),
@@ -271,7 +269,7 @@ class _ProviderHealthCard extends StatelessWidget {
               provider.kind == 'discovery'
                   ? '${provider.recordCount ?? 0} launchable items'
                   : '${provider.recordCount ?? 0} metadata records',
-              style: const TextStyle(color: TvTheme.secondaryText),
+              style: TextStyle(color: tv.secondaryText),
             ),
             const SizedBox(height: 7),
             Text(
@@ -282,9 +280,7 @@ class _ProviderHealthCard extends StatelessWidget {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: provider.lastError == null
-                    ? TvTheme.primaryText
-                    : const Color(0xFFFFB36B),
+                color: provider.lastError == null ? tv.primaryText : tv.warning,
               ),
             ),
           ],
@@ -337,22 +333,18 @@ class _StatusPill extends StatelessWidget {
 class _ProviderStatus {
   const _ProviderStatus(this.label, this.color, this.icon);
 
-  factory _ProviderStatus.from(String value) => switch (value) {
-    'ready' => const _ProviderStatus(
+  factory _ProviderStatus.from(String value, TvPalette tv) => switch (value) {
+    'ready' => _ProviderStatus(
       'Ready',
-      TvTheme.focus,
+      tv.focus,
       Icons.check_circle_outline_rounded,
     ),
-    'degraded' => const _ProviderStatus(
+    'degraded' => _ProviderStatus(
       'Attention',
-      Color(0xFFFFB36B),
+      tv.warning,
       Icons.error_outline_rounded,
     ),
-    _ => const _ProviderStatus(
-      'Starting',
-      Color(0xFF7AC8FF),
-      Icons.hourglass_top_rounded,
-    ),
+    _ => _ProviderStatus('Starting', tv.info, Icons.hourglass_top_rounded),
   };
 
   final String label;
@@ -367,22 +359,23 @@ class _HealthError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0x24FF7043),
+        color: tv.warning.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0x88FF7043)),
+        border: Border.all(color: tv.warning.withValues(alpha: 0.55)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Row(
           children: <Widget>[
-            const Icon(Icons.cloud_off_rounded, color: Color(0xFFFFB36B)),
+            Icon(Icons.cloud_off_rounded, color: tv.warning),
             const SizedBox(width: 14),
             Expanded(
               child: Text(
                 'Could not read system health: $error',
-                style: const TextStyle(color: TvTheme.primaryText),
+                style: TextStyle(color: tv.primaryText),
               ),
             ),
           ],
@@ -397,22 +390,19 @@ class _NoProviderHealth extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    final tv = TvPalette.of(context);
+    return Center(
       child: Padding(
         padding: EdgeInsets.all(42),
         child: Column(
           children: <Widget>[
-            Icon(
-              Icons.info_outline_rounded,
-              size: 42,
-              color: TvTheme.secondaryText,
-            ),
-            SizedBox(height: 12),
-            Text('No live provider data'),
-            SizedBox(height: 4),
+            Icon(Icons.info_outline_rounded, size: 42, color: tv.secondaryText),
+            const SizedBox(height: 12),
+            const Text('No live provider data'),
+            const SizedBox(height: 4),
             Text(
               'Service health is available when connected to a Hearthdeck daemon.',
-              style: TextStyle(color: TvTheme.secondaryText),
+              style: TextStyle(color: tv.secondaryText),
             ),
           ],
         ),
@@ -426,13 +416,14 @@ class _SystemHealthBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const DecoratedBox(
+    final tv = TvPalette.of(context);
+    return DecoratedBox(
       decoration: BoxDecoration(
         gradient: RadialGradient(
-          center: Alignment(-0.35, -0.55),
+          center: const Alignment(-0.35, -0.55),
           radius: 1.2,
-          colors: <Color>[Color(0xFF163842), TvTheme.canvas],
-          stops: <double>[0, 0.72],
+          colors: <Color>[tv.backdropGlow, tv.canvas],
+          stops: const <double>[0, 0.72],
         ),
       ),
     );

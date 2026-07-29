@@ -128,16 +128,17 @@ class _DashboardBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const DecoratedBox(
+    final tv = TvPalette.of(context);
+    return DecoratedBox(
       decoration: BoxDecoration(
         gradient: RadialGradient(
-          center: Alignment(0.12, -0.22),
+          center: const Alignment(0.12, -0.22),
           radius: 1.15,
-          colors: <Color>[Color(0xFF1B3A48), TvTheme.canvas],
-          stops: <double>[0, 0.72],
+          colors: <Color>[tv.backdropGlow, tv.canvas],
+          stops: const <double>[0, 0.72],
         ),
       ),
-      child: ColoredBox(color: Color(0x12000000)),
+      child: const ColoredBox(color: Color(0x12000000)),
     );
   }
 }

@@ -17,6 +17,8 @@ import 'package:hearthdeck/search.dart';
 import 'package:hearthdeck/settings.dart';
 import 'package:hearthdeck/system_health.dart';
 import 'package:hearthdeck/tv_gamepad.dart';
+import 'package:hearthdeck/tv_theme.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   testWidgets('dashboard renders reusable shelves and pinned applications', (
@@ -112,6 +114,41 @@ void main() {
     expect(
       find.byKey(const ValueKey<String>('settings-option-controllers')),
       findsOneWidget,
+    );
+  });
+
+  testWidgets('settings selects and persists a curated color palette', (
+    WidgetTester tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    tester.view
+      ..devicePixelRatio = 1
+      ..physicalSize = const Size(1280, 900);
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    addTearDown(
+      () => SharedPreferences.setMockInitialValues(<String, Object>{}),
+    );
+    await tester.pumpWidget(const HearthdeckApp());
+    await tester.tap(find.bySemanticsLabel('Settings'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('settings-option-personalization')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Ember'));
+    await tester.pumpAndSettle();
+
+    final pageTitle = find.text('Appearance & color');
+    expect(pageTitle, findsOneWidget);
+    expect(TvThemeScope.of(tester.element(pageTitle)).mode, TvThemeMode.ember);
+    expect(
+      TvPalette.of(tester.element(pageTitle)).focus,
+      TvTheme.colorsFor(TvThemeMode.ember, null).primary,
+    );
+    expect(
+      (await SharedPreferences.getInstance()).getString('theme-mode'),
+      'ember',
     );
   });
 

@@ -189,6 +189,7 @@ class _LibraryFilterOption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return TvFocusable(
       semanticLabel: definition.label,
       autofocus: autofocus,
@@ -200,14 +201,10 @@ class _LibraryFilterOption extends StatelessWidget {
           constraints: const BoxConstraints(minHeight: 50),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            color: isFocused
-                ? TvTheme.focus
-                : Colors.white.withValues(alpha: 0.08),
+            color: isFocused ? tv.focus : tv.surfaceMuted,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: isSelected && !isFocused
-                  ? TvTheme.focus
-                  : Colors.transparent,
+              color: isSelected && !isFocused ? tv.focus : Colors.transparent,
               width: 2,
             ),
           ),
@@ -215,14 +212,14 @@ class _LibraryFilterOption extends StatelessWidget {
             children: <Widget>[
               Icon(
                 definition.icon,
-                color: isFocused ? TvTheme.canvas : TvTheme.primaryText,
+                color: isFocused ? tv.canvas : tv.primaryText,
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   definition.label,
                   style: TextStyle(
-                    color: isFocused ? TvTheme.canvas : TvTheme.primaryText,
+                    color: isFocused ? tv.canvas : tv.primaryText,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -232,8 +229,8 @@ class _LibraryFilterOption extends StatelessWidget {
                     ? Icons.check_circle_rounded
                     : Icons.add_circle_outline_rounded,
                 color: isFocused
-                    ? TvTheme.canvas
-                    : (isSelected ? TvTheme.focus : TvTheme.secondaryText),
+                    ? tv.canvas
+                    : (isSelected ? tv.focus : tv.secondaryText),
               ),
             ],
           ),

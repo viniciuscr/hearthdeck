@@ -22,11 +22,12 @@ class TvSideSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     final screenWidth = MediaQuery.sizeOf(context).width;
     final width = (screenWidth * widthFactor).clamp(300.0, 480.0);
     return Drawer(
       width: width,
-      backgroundColor: TvTheme.surface,
+      backgroundColor: tv.surface,
       surfaceTintColor: Colors.transparent,
       elevation: 18,
       semanticLabel: title,
@@ -73,16 +74,12 @@ class TvSideSheet extends StatelessWidget {
                               width: 38,
                               height: 38,
                               decoration: BoxDecoration(
-                                color: isFocused
-                                    ? TvTheme.focus
-                                    : Colors.white.withValues(alpha: 0.08),
+                                color: isFocused ? tv.focus : tv.surfaceMuted,
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Icon(
                                 Icons.close_rounded,
-                                color: isFocused
-                                    ? TvTheme.canvas
-                                    : TvTheme.primaryText,
+                                color: isFocused ? tv.canvas : tv.primaryText,
                               ),
                             );
                           },
@@ -90,7 +87,10 @@ class TvSideSheet extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const Divider(height: 1, color: Color(0x1FFFFFFF)),
+                  Divider(
+                    height: 1,
+                    color: tv.primaryText.withValues(alpha: 0.12),
+                  ),
                   Expanded(child: child),
                 ],
               ),
@@ -123,16 +123,17 @@ class TvSideSheetAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return TvFocusable(
       semanticLabel: label,
       onActivate: onActivate,
       builder: (BuildContext context, bool isFocused) {
         final background = isFocused
-            ? TvTheme.focus
+            ? tv.focus
             : isPrimary
-            ? TvTheme.primaryAction
-            : Colors.white.withValues(alpha: 0.08);
-        final foreground = isFocused ? TvTheme.canvas : TvTheme.primaryText;
+            ? tv.primaryAction
+            : tv.surfaceMuted;
+        final foreground = isFocused ? tv.canvas : tv.primaryText;
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
@@ -142,7 +143,7 @@ class TvSideSheetAction extends StatelessWidget {
             color: background,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: isFocused ? TvTheme.primaryText : Colors.transparent,
+              color: isFocused ? tv.primaryText : Colors.transparent,
               width: 2,
             ),
           ),

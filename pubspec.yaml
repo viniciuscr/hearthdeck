@@ -30,8 +30,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  dynamic_color: ^1.8.1
   flutter_gamepads: ^0.1.11+4
   http: ^1.6.0
+  shared_preferences: ^2.5.3
 
 
 dev_dependencies:

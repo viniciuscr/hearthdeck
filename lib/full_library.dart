@@ -338,24 +338,29 @@ class _StorageStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
+        color: tv.surfaceMuted,
         borderRadius: BorderRadius.circular(10),
       ),
-      child: const Padding(
-        padding: EdgeInsets.all(14),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text('Storage', style: TextStyle(fontWeight: FontWeight.w700)),
-            SizedBox(height: 5),
-            Text(
-              '156.6 GB free',
-              style: TextStyle(color: TvTheme.secondaryText),
+            const Text(
+              'Storage',
+              style: TextStyle(fontWeight: FontWeight.w700),
             ),
-            SizedBox(height: 9),
-            LinearProgressIndicator(value: 0.46, color: TvTheme.focus),
+            const SizedBox(height: 5),
+            Text('156.6 GB free', style: TextStyle(color: tv.secondaryText)),
+            const SizedBox(height: 9),
+            LinearProgressIndicator(
+              value: 0.46,
+              color: tv.focus,
+              backgroundColor: tv.canvas,
+            ),
           ],
         ),
       ),
@@ -542,25 +547,22 @@ class _LibraryErrorState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 80),
       child: Center(
         child: Column(
           children: <Widget>[
-            const Icon(
-              Icons.cloud_off_rounded,
-              size: 46,
-              color: TvTheme.secondaryText,
-            ),
+            Icon(Icons.cloud_off_rounded, size: 46, color: tv.secondaryText),
             const SizedBox(height: 14),
             Text(
               'Library unavailable',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               'Check the Hearthdeck service connection and try again.',
-              style: TextStyle(color: TvTheme.secondaryText),
+              style: TextStyle(color: tv.secondaryText),
             ),
             const SizedBox(height: 18),
             TvLibraryControl(
@@ -621,6 +623,7 @@ class _SourceTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return TvFocusable(
       semanticLabel: source.label,
       onActivate: onActivate,
@@ -630,12 +633,10 @@ class _SourceTab extends StatelessWidget {
           curve: TvTheme.focusCurve,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
           decoration: BoxDecoration(
-            color: isSelected
-                ? TvTheme.primaryAction
-                : Colors.white.withValues(alpha: 0.06),
+            color: isSelected ? tv.primaryAction : tv.surfaceMuted,
             borderRadius: BorderRadius.circular(22),
             border: Border.all(
-              color: isFocused ? TvTheme.focus : Colors.transparent,
+              color: isFocused ? tv.focus : Colors.transparent,
               width: 2,
             ),
           ),
@@ -666,6 +667,7 @@ class _LibraryControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return Row(
       children: <Widget>[
         TvLibraryControl(
@@ -674,10 +676,7 @@ class _LibraryControls extends StatelessWidget {
           onActivate: onSortChanged,
         ),
         const Spacer(),
-        Text(
-          '$count items',
-          style: const TextStyle(color: TvTheme.secondaryText),
-        ),
+        Text('$count items', style: TextStyle(color: tv.secondaryText)),
         const SizedBox(width: 16),
         TvLibraryControl(
           label: activeFilterCount == 0
@@ -705,6 +704,7 @@ class TvLibraryControl extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return TvFocusable(
       semanticLabel: label,
       onActivate: onActivate,
@@ -715,23 +715,18 @@ class TvLibraryControl extends StatelessWidget {
           constraints: const BoxConstraints(minHeight: 46),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            color: isFocused
-                ? TvTheme.focus
-                : Colors.white.withValues(alpha: 0.08),
+            color: isFocused ? tv.focus : tv.surfaceMuted,
             borderRadius: BorderRadius.circular(8),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Icon(
-                icon,
-                color: isFocused ? TvTheme.canvas : TvTheme.primaryText,
-              ),
+              Icon(icon, color: isFocused ? tv.canvas : tv.primaryText),
               const SizedBox(width: 9),
               Text(
                 label,
                 style: TextStyle(
-                  color: isFocused ? TvTheme.canvas : TvTheme.primaryText,
+                  color: isFocused ? tv.canvas : tv.primaryText,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -751,6 +746,7 @@ class _FeatureShelf extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return SizedBox(
       height: 126,
       child: ListView.separated(
@@ -774,7 +770,7 @@ class _FeatureShelf extends StatelessWidget {
                     gradient: LinearGradient(colors: feature.colors),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: isFocused ? TvTheme.focus : Colors.transparent,
+                      color: isFocused ? tv.focus : Colors.transparent,
                       width: 3,
                     ),
                   ),
@@ -798,9 +794,9 @@ class _FeatureShelf extends StatelessWidget {
                               feature.subtitle,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 12,
-                                color: TvTheme.secondaryText,
+                                color: tv.secondaryText,
                               ),
                             ),
                           ],
@@ -823,25 +819,22 @@ class _EmptyLibraryState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 80),
         child: Column(
           children: <Widget>[
-            const Icon(
-              Icons.library_add_outlined,
-              size: 46,
-              color: TvTheme.secondaryText,
-            ),
+            Icon(Icons.library_add_outlined, size: 46, color: tv.secondaryText),
             const SizedBox(height: 16),
             Text(
               'Nothing here yet',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               'This collection will appear as content is added.',
-              style: TextStyle(color: TvTheme.secondaryText),
+              style: TextStyle(color: tv.secondaryText),
             ),
           ],
         ),
@@ -855,13 +848,14 @@ class _LibraryBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const DecoratedBox(
+    final tv = TvPalette.of(context);
+    return DecoratedBox(
       decoration: BoxDecoration(
         gradient: RadialGradient(
-          center: Alignment(0.88, -0.6),
+          center: const Alignment(0.88, -0.6),
           radius: 1.3,
-          colors: <Color>[Color(0xFF1B303E), TvTheme.canvas],
-          stops: <double>[0, 0.72],
+          colors: <Color>[tv.backdropGlow, tv.canvas],
+          stops: const <double>[0, 0.72],
         ),
       ),
     );

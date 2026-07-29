@@ -273,6 +273,7 @@ class _ProfileSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
@@ -292,7 +293,7 @@ class _ProfileSummary extends StatelessWidget {
         ),
         if (!compact) ...<Widget>[
           const SizedBox(width: 10),
-          const Column(
+          Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
@@ -303,7 +304,7 @@ class _ProfileSummary extends StatelessWidget {
               SizedBox(height: 2),
               Text(
                 '12,480 points',
-                style: TextStyle(fontSize: 12, color: TvTheme.secondaryText),
+                style: TextStyle(fontSize: 12, color: tv.secondaryText),
               ),
             ],
           ),
@@ -358,6 +359,7 @@ class TvIconAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return TvFocusable(
       semanticLabel: label,
       onActivate: onActivate ?? () => _showUnavailableMessage(context, label),
@@ -368,7 +370,7 @@ class TvIconAction extends StatelessWidget {
           width: iconSize + 18,
           height: iconSize + 18,
           decoration: BoxDecoration(
-            color: isFocused ? Colors.white : Colors.transparent,
+            color: isFocused ? tv.primaryText : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
           ),
           child: Stack(
@@ -377,15 +379,15 @@ class TvIconAction extends StatelessWidget {
               Icon(
                 icon,
                 size: iconSize,
-                color: isFocused ? TvTheme.canvas : Colors.white,
+                color: isFocused ? tv.canvas : tv.primaryText,
               ),
               if (hasNotification)
-                const Positioned(
+                Positioned(
                   top: 5,
                   right: 5,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: TvTheme.focus,
+                      color: tv.focus,
                       shape: BoxShape.circle,
                     ),
                     child: SizedBox(width: 7, height: 7),
@@ -482,6 +484,7 @@ class TvContentTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return RepaintBoundary(
       child: TvFocusable(
         semanticLabel: item.title,
@@ -498,7 +501,7 @@ class TvContentTile extends StatelessWidget {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                  color: isFocused ? TvTheme.focus : Colors.transparent,
+                  color: isFocused ? tv.focus : Colors.transparent,
                   width: isFocused ? 3 : 0,
                 ),
                 boxShadow: isFocused
@@ -566,6 +569,7 @@ class TvArtworkVisual extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     final iconSize = shape == TvTileShape.square ? 42.0 : 48.0;
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -594,7 +598,7 @@ class TvArtworkVisual extends StatelessWidget {
               left: 10,
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: TvTheme.canvas.withValues(alpha: 0.72),
+                  color: tv.canvas.withValues(alpha: 0.72),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Padding(
@@ -632,9 +636,10 @@ class _ArtworkCaption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: TvTheme.canvas.withValues(
+        color: tv.canvas.withValues(
           alpha: shape == TvTileShape.square ? 0.78 : 0.66,
         ),
         borderRadius: const BorderRadius.vertical(bottom: Radius.circular(6)),
@@ -661,10 +666,7 @@ class _ArtworkCaption extends StatelessWidget {
                       item.description!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: TvTheme.secondaryText,
-                      ),
+                      style: TextStyle(fontSize: 12, color: tv.secondaryText),
                     ),
                   ],
                 ],
