@@ -90,6 +90,7 @@ ci-check:
 
 # Build the Arch Linux package from the current source checkout.
 ci-package-arch:
+  cargo clean --manifest-path services/Cargo.toml
   cd packaging/arch && makepkg --cleanbuild --noconfirm --nodeps
 
 # Install Linux systemd user units and enable the local services.
