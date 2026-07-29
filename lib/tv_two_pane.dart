@@ -64,7 +64,7 @@ class TvNavigationRail extends StatelessWidget {
         decoration: BoxDecoration(
           color: tv.canvas.withValues(alpha: 0.72),
           border: Border(
-            right: BorderSide(color: tv.primaryText.withValues(alpha: 0.09)),
+            right: BorderSide(color: tv.borderSubtle),
           ),
         ),
         child: Padding(

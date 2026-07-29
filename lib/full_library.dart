@@ -633,7 +633,7 @@ class _SourceTab extends StatelessWidget {
           curve: TvTheme.focusCurve,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
           decoration: BoxDecoration(
-            color: isSelected ? tv.primaryAction : tv.surfaceMuted,
+            color: isSelected ? tv.actionMuted : tv.surfaceMuted,
             borderRadius: BorderRadius.circular(22),
             border: Border.all(
               color: isFocused ? tv.focus : Colors.transparent,

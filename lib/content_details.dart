@@ -371,9 +371,13 @@ class TvDetailAction extends StatelessWidget {
         final background = isFocused
             ? tv.focus
             : action.isPrimary
-            ? tv.primaryAction
+            ? tv.action
             : tv.surface;
-        final foreground = isFocused ? tv.canvas : tv.primaryText;
+        final foreground = isFocused
+            ? tv.canvas
+            : action.isPrimary
+            ? tv.onAction
+            : tv.primaryText;
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
@@ -386,7 +390,7 @@ class TvDetailAction extends StatelessWidget {
               color: isFocused
                   ? tv.primaryText
                   : action.isPrimary
-                  ? tv.focus.withValues(alpha: 0.55)
+                  ? tv.actionMuted
                   : Colors.transparent,
               width: isFocused ? 2 : 1,
             ),

@@ -60,10 +60,13 @@ impl Database {
               ON catalog_enrichments (application_id, priority DESC, updated_at DESC);
             CREATE TABLE IF NOT EXISTS user_settings (
               id INTEGER PRIMARY KEY CHECK (id = 1),
-              theme_mode TEXT NOT NULL CHECK (theme_mode IN ('system', 'aurora', 'ember', 'indigo')),
-              backdrop_mode TEXT NOT NULL DEFAULT 'edge_wash' CHECK (backdrop_mode IN ('solid', 'edge_wash', 'quiet_grid')),
+              theme_mode TEXT NOT NULL,
+              backdrop_mode TEXT NOT NULL DEFAULT 'edge_wash',
               revision INTEGER NOT NULL DEFAULT 0,
               updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS hearthdeck_schema_migrations (
+              version INTEGER PRIMARY KEY
             );
             "#,
         )
@@ -85,6 +88,31 @@ impl Database {
         )
         .execute(&self.pool)
         .await;
+        let migration = sqlx::query(
+            "INSERT OR IGNORE INTO hearthdeck_schema_migrations (version) VALUES (1)",
+        )
+        .execute(&self.pool)
+        .await?;
+        if migration.rows_affected() == 1 {
+            let mut transaction = self.pool.begin().await?;
+            sqlx::query(
+                "CREATE TABLE user_settings_rebuilt (id INTEGER PRIMARY KEY CHECK (id = 1), theme_mode TEXT NOT NULL, backdrop_mode TEXT NOT NULL DEFAULT 'edge_wash', revision INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)",
+            )
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query(
+                "INSERT INTO user_settings_rebuilt (id, theme_mode, backdrop_mode, revision, updated_at) SELECT id, theme_mode, backdrop_mode, revision, updated_at FROM user_settings",
+            )
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query("DROP TABLE user_settings")
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query("ALTER TABLE user_settings_rebuilt RENAME TO user_settings")
+                .execute(&mut *transaction)
+                .await?;
+            transaction.commit().await?;
+        }
         sqlx::query(
             "INSERT OR IGNORE INTO user_settings (id, theme_mode, backdrop_mode, revision, updated_at) VALUES (1, 'system', 'edge_wash', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         )

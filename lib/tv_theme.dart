@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-enum TvThemeMode { system, aurora, ember, indigo }
+enum TvThemeMode { system, aurora, ember, indigo, noir }
 
 enum TvBackdropMode { solid, edgeWash, quietGrid }
 
@@ -10,6 +10,7 @@ extension TvThemeModeLabel on TvThemeMode {
     TvThemeMode.aurora => 'Aurora',
     TvThemeMode.ember => 'Ember',
     TvThemeMode.indigo => 'Indigo',
+    TvThemeMode.noir => 'Noir',
   };
 }
 
@@ -78,9 +79,9 @@ abstract final class TvTheme {
     }
     final palette = paletteFor(mode, dynamicColors);
     return ColorScheme.dark(
-      primary: palette.focus,
-      onPrimary: palette.canvas,
-      primaryContainer: palette.primaryAction,
+      primary: palette.action,
+      onPrimary: palette.onAction,
+      primaryContainer: palette.actionMuted,
       onPrimaryContainer: palette.primaryText,
       secondary: palette.info,
       onSecondary: palette.canvas,
@@ -102,10 +103,16 @@ abstract final class TvTheme {
         canvas: Color(0xFF0B1416),
         surface: Color(0xFF122023),
         surfaceMuted: Color(0xFF1A2B2E),
-        focus: Color(0xFF87D9CA),
-        primaryAction: Color(0xFF327D71),
+        surfaceRaised: Color(0xFF263B40),
+        borderSubtle: Color(0xFF344F55),
+        borderStrong: Color(0xFF66858D),
+        focus: Color(0xFFEAF7F4),
+        action: Color(0xFF28756A),
+        actionMuted: Color(0xFF1A4B44),
+        onAction: Color(0xFFFFFFFF),
         primaryText: Color(0xFFF1F7F5),
         secondaryText: Color(0xFFB5C6C1),
+        success: Color(0xFF65C58B),
         warning: Color(0xFFF0B678),
         info: Color(0xFF8CC5E7),
         backdropGlow: Color(0xFF173B39),
@@ -114,10 +121,16 @@ abstract final class TvTheme {
         canvas: Color(0xFF17110F),
         surface: Color(0xFF241916),
         surfaceMuted: Color(0xFF33231E),
-        focus: Color(0xFFEAAF7C),
-        primaryAction: Color(0xFF9E5036),
+        surfaceRaised: Color(0xFF443028),
+        borderSubtle: Color(0xFF5B4035),
+        borderStrong: Color(0xFF7A5949),
+        focus: Color(0xFFFFF1E9),
+        action: Color(0xFF9B4B32),
+        actionMuted: Color(0xFF65301F),
+        onAction: Color(0xFFFFFFFF),
         primaryText: Color(0xFFFFF6F1),
         secondaryText: Color(0xFFD1BFB4),
+        success: Color(0xFF6BC58D),
         warning: Color(0xFFF0C56B),
         info: Color(0xFF92C7E6),
         backdropGlow: Color(0xFF42251B),
@@ -126,13 +139,37 @@ abstract final class TvTheme {
         canvas: Color(0xFF10121D),
         surface: Color(0xFF191C2B),
         surfaceMuted: Color(0xFF252940),
-        focus: Color(0xFFB2B9FF),
-        primaryAction: Color(0xFF626EC4),
+        surfaceRaised: Color(0xFF303653),
+        borderSubtle: Color(0xFF444B70),
+        borderStrong: Color(0xFF626C9C),
+        focus: Color(0xFFF0F0FF),
+        action: Color(0xFF5E67C9),
+        actionMuted: Color(0xFF383F78),
+        onAction: Color(0xFFFFFFFF),
         primaryText: Color(0xFFF4F3FF),
         secondaryText: Color(0xFFC5C5D9),
+        success: Color(0xFF6CC691),
         warning: Color(0xFFEFC477),
         info: Color(0xFF8AC4EB),
         backdropGlow: Color(0xFF262A50),
+      ),
+      TvThemeMode.noir => const TvPalette(
+        canvas: Color(0xFF08080A),
+        surface: Color(0xFF111116),
+        surfaceMuted: Color(0xFF19191F),
+        surfaceRaised: Color(0xFF24242D),
+        borderSubtle: Color(0xFF343440),
+        borderStrong: Color(0xFF7D7D8C),
+        focus: Color(0xFFE4E4ED),
+        action: Color(0xFF6F5BCE),
+        actionMuted: Color(0xFF2E2853),
+        onAction: Color(0xFFFFFFFF),
+        primaryText: Color(0xFFF5F5F7),
+        secondaryText: Color(0xFFB9B9C5),
+        success: Color(0xFF5DBD87),
+        warning: Color(0xFFEAB664),
+        info: Color(0xFF72B8EF),
+        backdropGlow: Color(0xFF1A1827),
       ),
     };
   }
@@ -143,10 +180,16 @@ class TvPalette extends ThemeExtension<TvPalette> {
     required this.canvas,
     required this.surface,
     required this.surfaceMuted,
+    required this.surfaceRaised,
+    required this.borderSubtle,
+    required this.borderStrong,
     required this.focus,
-    required this.primaryAction,
+    required this.action,
+    required this.actionMuted,
+    required this.onAction,
     required this.primaryText,
     required this.secondaryText,
+    required this.success,
     required this.warning,
     required this.info,
     required this.backdropGlow,
@@ -155,10 +198,16 @@ class TvPalette extends ThemeExtension<TvPalette> {
   final Color canvas;
   final Color surface;
   final Color surfaceMuted;
+  final Color surfaceRaised;
+  final Color borderSubtle;
+  final Color borderStrong;
   final Color focus;
-  final Color primaryAction;
+  final Color action;
+  final Color actionMuted;
+  final Color onAction;
   final Color primaryText;
   final Color secondaryText;
+  final Color success;
   final Color warning;
   final Color info;
   final Color backdropGlow;
@@ -167,10 +216,16 @@ class TvPalette extends ThemeExtension<TvPalette> {
     canvas: TvTheme.canvas,
     surface: TvTheme.surface,
     surfaceMuted: Color(0xFF172832),
+    surfaceRaised: Color(0xFF243942),
+    borderSubtle: Color(0xFF39555F),
+    borderStrong: Color(0xFF6C8993),
     focus: TvTheme.focus,
-    primaryAction: TvTheme.primaryAction,
+    action: TvTheme.primaryAction,
+    actionMuted: Color(0xFF1F4E1C),
+    onAction: TvTheme.canvas,
     primaryText: TvTheme.primaryText,
     secondaryText: TvTheme.secondaryText,
+    success: Color(0xFF6BC58D),
     warning: Color(0xFFFFB36B),
     info: Color(0xFF7AC8FF),
     backdropGlow: Color(0xFF1B3A48),
@@ -180,10 +235,16 @@ class TvPalette extends ThemeExtension<TvPalette> {
     canvas: colors.surface,
     surface: colors.surfaceContainerHigh,
     surfaceMuted: colors.surfaceContainer,
-    focus: colors.primary,
-    primaryAction: Color.lerp(colors.primary, colors.surface, 0.48)!,
+    surfaceRaised: colors.surfaceContainerHighest,
+    borderSubtle: colors.outlineVariant,
+    borderStrong: colors.outline,
+    focus: colors.onSurface,
+    action: colors.primary,
+    actionMuted: colors.primaryContainer,
+    onAction: colors.onPrimary,
     primaryText: colors.onSurface,
     secondaryText: colors.onSurfaceVariant,
+    success: colors.tertiary,
     warning: colors.tertiary,
     info: colors.secondary,
     backdropGlow: Color.lerp(colors.primary, colors.surface, 0.62)!,
@@ -197,10 +258,16 @@ class TvPalette extends ThemeExtension<TvPalette> {
     Color? canvas,
     Color? surface,
     Color? surfaceMuted,
+    Color? surfaceRaised,
+    Color? borderSubtle,
+    Color? borderStrong,
     Color? focus,
-    Color? primaryAction,
+    Color? action,
+    Color? actionMuted,
+    Color? onAction,
     Color? primaryText,
     Color? secondaryText,
+    Color? success,
     Color? warning,
     Color? info,
     Color? backdropGlow,
@@ -208,10 +275,16 @@ class TvPalette extends ThemeExtension<TvPalette> {
     canvas: canvas ?? this.canvas,
     surface: surface ?? this.surface,
     surfaceMuted: surfaceMuted ?? this.surfaceMuted,
+    surfaceRaised: surfaceRaised ?? this.surfaceRaised,
+    borderSubtle: borderSubtle ?? this.borderSubtle,
+    borderStrong: borderStrong ?? this.borderStrong,
     focus: focus ?? this.focus,
-    primaryAction: primaryAction ?? this.primaryAction,
+    action: action ?? this.action,
+    actionMuted: actionMuted ?? this.actionMuted,
+    onAction: onAction ?? this.onAction,
     primaryText: primaryText ?? this.primaryText,
     secondaryText: secondaryText ?? this.secondaryText,
+    success: success ?? this.success,
     warning: warning ?? this.warning,
     info: info ?? this.info,
     backdropGlow: backdropGlow ?? this.backdropGlow,
@@ -226,10 +299,16 @@ class TvPalette extends ThemeExtension<TvPalette> {
       canvas: Color.lerp(canvas, other.canvas, t)!,
       surface: Color.lerp(surface, other.surface, t)!,
       surfaceMuted: Color.lerp(surfaceMuted, other.surfaceMuted, t)!,
+      surfaceRaised: Color.lerp(surfaceRaised, other.surfaceRaised, t)!,
+      borderSubtle: Color.lerp(borderSubtle, other.borderSubtle, t)!,
+      borderStrong: Color.lerp(borderStrong, other.borderStrong, t)!,
       focus: Color.lerp(focus, other.focus, t)!,
-      primaryAction: Color.lerp(primaryAction, other.primaryAction, t)!,
+      action: Color.lerp(action, other.action, t)!,
+      actionMuted: Color.lerp(actionMuted, other.actionMuted, t)!,
+      onAction: Color.lerp(onAction, other.onAction, t)!,
       primaryText: Color.lerp(primaryText, other.primaryText, t)!,
       secondaryText: Color.lerp(secondaryText, other.secondaryText, t)!,
+      success: Color.lerp(success, other.success, t)!,
       warning: Color.lerp(warning, other.warning, t)!,
       info: Color.lerp(info, other.info, t)!,
       backdropGlow: Color.lerp(backdropGlow, other.backdropGlow, t)!,

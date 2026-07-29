@@ -377,7 +377,7 @@ impl ApiError {
     fn invalid_theme_mode() -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            message: "theme_mode must be system, aurora, ember, or indigo".to_owned(),
+            message: "theme_mode must be system, aurora, ember, indigo, or noir".to_owned(),
             settings: None,
         }
     }

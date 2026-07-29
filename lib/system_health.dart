@@ -336,7 +336,7 @@ class _ProviderStatus {
   factory _ProviderStatus.from(String value, TvPalette tv) => switch (value) {
     'ready' => _ProviderStatus(
       'Ready',
-      tv.focus,
+      tv.success,
       Icons.check_circle_outline_rounded,
     ),
     'degraded' => _ProviderStatus(

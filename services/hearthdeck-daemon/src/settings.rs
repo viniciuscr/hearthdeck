@@ -15,6 +15,7 @@ pub enum ThemeMode {
     Aurora,
     Ember,
     Indigo,
+    Noir,
 }
 
 impl ThemeMode {
@@ -24,6 +25,7 @@ impl ThemeMode {
             "aurora" => Some(Self::Aurora),
             "ember" => Some(Self::Ember),
             "indigo" => Some(Self::Indigo),
+            "noir" => Some(Self::Noir),
             _ => None,
         }
     }
@@ -34,6 +36,7 @@ impl ThemeMode {
             Self::Aurora => "aurora",
             Self::Ember => "ember",
             Self::Indigo => "indigo",
+            Self::Noir => "noir",
         }
     }
 }

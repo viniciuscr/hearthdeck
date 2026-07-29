@@ -6,19 +6,25 @@ the meaning of status, focus, or actions.
 
 ## Tokens
 
-`TvPalette` provides semantic roles rather than page-specific color values:
+`TvPalette` provides semantic roles rather than page-specific color values. It
+uses a fixed role scale inspired by Radix-style step allocation, not Material
+seed generation:
 
-- `canvas`, `surface`, and `surfaceMuted` form a three-step neutral surface
-  ladder.
+- `canvas`, `surface`, `surfaceMuted`, and `surfaceRaised` form the neutral
+  elevation ladder. Surfaces always get lighter as they stack on a dark canvas.
+- `borderSubtle` and `borderStrong` are separate from text opacity so dividers,
+  control boundaries, and focus-adjacent edges remain intentional.
 - `primaryText` and `secondaryText` carry readable content.
-- `focus` is reserved for remote focus and high-attention controls.
-- `primaryAction` is intentionally deeper than `focus`, so an action remains
-  distinct from the current remote target.
-- `warning` and `info` retain semantic meaning across every palette.
+- `focus` is reserved only for remote focus rings and focused fills.
+- `action`, `actionMuted`, and `onAction` are for primary actions and selected
+  states. They are never reused as focus or success colors.
+- `success`, `warning`, and `info` retain semantic meaning across every
+  palette and are never decorative accents.
 
-Curated palettes are tuned dark families: Aurora, Ember, and Indigo. System
-colors adapt platform-provided colors into the same roles. Artwork gradients
-are content data and do not use the application palette.
+Curated palettes are tuned dark families: Aurora, Ember, Indigo, and Noir.
+Noir uses near-black neutrals, cool-silver focus, and restrained violet actions.
+System colors adapt platform-provided colors into the same roles. Artwork
+gradients are content data and do not use the application palette.
 
 ## Backdrops
 
@@ -37,9 +43,9 @@ pages may continue to use item artwork as a separate, content-led treatment.
 
 ## Accessibility
 
-Text and controls must remain readable without relying on hue. Target at least
-4.5:1 for normal text and 3:1 for large text and meaningful control outlines.
-Focus has both a high-contrast border and a surface change.
+Text and controls must remain readable without relying on hue. Curated palettes
+are tested at 4.5:1 for primary and secondary text, and 3:1 for focus/action
+indicators. Focus has both a high-contrast border and a surface change.
 
 ## Persistence And Sync
 
@@ -64,5 +70,6 @@ hardware does not repeatedly pair, read, or repaint while idle.
 
 - W3C WCAG 2.2 contrast minimum: <https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html>
 - Refactoring UI, palette scales and neutral-first construction: <https://www.refactoringui.com/previews/building-your-color-palette>
-- Carbon color layering: <https://carbondesignsystem.com/elements/color/usage/>
-- Atlassian color roles and emphasis: <https://atlassian.design/foundations/color/>
+- Radix Colors, step-to-role allocation: <https://www.radix-ui.com/colors/docs/palette-composition/understanding-the-scale>
+- Fluent 2, neutral, brand, and semantic palette separation: <https://fluent2.microsoft.design/color>
+- Open Color, fixed UI-oriented scales: <https://yeun.github.io/open-color/>

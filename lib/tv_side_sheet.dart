@@ -89,7 +89,7 @@ class TvSideSheet extends StatelessWidget {
                   ),
                   Divider(
                     height: 1,
-                    color: tv.primaryText.withValues(alpha: 0.12),
+                    color: tv.borderSubtle,
                   ),
                   Expanded(child: child),
                 ],
@@ -131,9 +131,13 @@ class TvSideSheetAction extends StatelessWidget {
         final background = isFocused
             ? tv.focus
             : isPrimary
-            ? tv.primaryAction
+            ? tv.action
             : tv.surfaceMuted;
-        final foreground = isFocused ? tv.canvas : tv.primaryText;
+        final foreground = isFocused
+            ? tv.canvas
+            : isPrimary
+            ? tv.onAction
+            : tv.primaryText;
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,

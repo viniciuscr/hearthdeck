@@ -175,7 +175,7 @@ components:
       type: object
       required: [theme_mode, backdrop_mode, revision, updated_at]
       properties:
-        theme_mode: { type: string, enum: [system, aurora, ember, indigo] }
+        theme_mode: { type: string, enum: [system, aurora, ember, indigo, noir] }
         backdrop_mode: { type: string, enum: [solid, edge_wash, quiet_grid] }
         revision: { type: integer, minimum: 0 }
         updated_at: { type: string, format: date-time }
@@ -183,7 +183,7 @@ components:
       type: object
       minProperties: 1
       properties:
-        theme_mode: { type: string, enum: [system, aurora, ember, indigo] }
+        theme_mode: { type: string, enum: [system, aurora, ember, indigo, noir] }
         backdrop_mode: { type: string, enum: [solid, edge_wash, quiet_grid] }
         revision: { type: integer, minimum: 0 }
     LibraryItem:
