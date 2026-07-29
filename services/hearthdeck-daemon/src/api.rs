@@ -721,8 +721,8 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(settings["theme_mode"], "system");
-        assert_eq!(settings["backdrop_mode"], "edge_wash");
+        assert_eq!(settings["theme_mode"], "noir");
+        assert_eq!(settings["backdrop_mode"], "solid");
         assert_eq!(settings["revision"], 0);
 
         let (status, settings) = response_json(

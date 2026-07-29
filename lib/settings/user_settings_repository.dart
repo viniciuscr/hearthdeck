@@ -14,12 +14,14 @@ class UserSettings {
     required this.themeMode,
     required this.backdropMode,
     required this.revision,
+    this.lastSyncedAt,
     this.isPending = false,
   });
 
   final TvThemeMode themeMode;
   final TvBackdropMode backdropMode;
   final int? revision;
+  final DateTime? lastSyncedAt;
   final bool isPending;
 
   bool get hasPendingSync => isPending;
@@ -28,11 +30,13 @@ class UserSettings {
     TvThemeMode? themeMode,
     TvBackdropMode? backdropMode,
     int? revision,
+    DateTime? lastSyncedAt,
     bool? isPending,
   }) => UserSettings(
     themeMode: themeMode ?? this.themeMode,
     backdropMode: backdropMode ?? this.backdropMode,
     revision: revision ?? this.revision,
+    lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
     isPending: isPending ?? this.isPending,
   );
 }
@@ -51,10 +55,10 @@ abstract interface class UserSettingsRepository {
 }
 
 class InMemoryUserSettingsRepository implements UserSettingsRepository {
-  InMemoryUserSettingsRepository([TvThemeMode mode = TvThemeMode.system])
+  InMemoryUserSettingsRepository([TvThemeMode mode = TvThemeMode.noir])
     : _settings = UserSettings(
         themeMode: mode,
-        backdropMode: TvBackdropMode.edgeWash,
+        backdropMode: TvBackdropMode.solid,
         revision: null,
       );
 
@@ -88,6 +92,8 @@ class CachedUserSettingsRepository implements UserSettingsRepository {
 
   static const _cacheKey = 'user-settings-v1';
   static const _legacyThemeKey = 'theme-mode';
+  static const _maxCacheAge = Duration(hours: 24);
+  static const _initialReconcileTimeout = Duration(milliseconds: 350);
 
   final SharedPreferences _preferences;
   final Future<HearthdeckApiClient> Function()? createClient;
@@ -102,30 +108,26 @@ class CachedUserSettingsRepository implements UserSettingsRepository {
     Future<HearthdeckApiClient> Function()? createClient,
   }) async {
     final cached = _readCached(preferences.getString(_cacheKey));
-    if (cached != null) {
-      return CachedUserSettingsRepository._(
-        preferences: preferences,
-        settings: cached,
-        createClient: createClient,
-      );
-    }
-
     final legacyMode = _modeFromName(preferences.getString(_legacyThemeKey));
-    final settings = UserSettings(
-      themeMode: legacyMode ?? TvThemeMode.system,
-      backdropMode: TvBackdropMode.edgeWash,
-      revision: null,
-      isPending: legacyMode != null && createClient != null,
-    );
-    if (legacyMode != null) {
+    final settings =
+        cached ??
+        UserSettings(
+          themeMode: legacyMode ?? TvThemeMode.noir,
+          backdropMode: TvBackdropMode.solid,
+          revision: null,
+          isPending: legacyMode != null && createClient != null,
+        );
+    if (cached == null && legacyMode != null) {
       await _write(preferences, settings);
       await preferences.remove(_legacyThemeKey);
     }
-    return CachedUserSettingsRepository._(
+    final repository = CachedUserSettingsRepository._(
       preferences: preferences,
       settings: settings,
       createClient: createClient,
     );
+    await repository._reconcileInitial();
+    return repository;
   }
 
   @override
@@ -150,6 +152,7 @@ class CachedUserSettingsRepository implements UserSettingsRepository {
         themeMode: themeMode ?? _settings.themeMode,
         backdropMode: backdropMode ?? _settings.backdropMode,
         revision: _settings.revision,
+        lastSyncedAt: _settings.lastSyncedAt,
         isPending: createClient != null,
       );
       await _write(_preferences, next);
@@ -162,6 +165,31 @@ class CachedUserSettingsRepository implements UserSettingsRepository {
 
   @override
   void retryPending() => _scheduleSync();
+
+  Future<void> _reconcileInitial() async {
+    if (createClient == null || _settings.isPending || !_isStale(_settings)) {
+      return;
+    }
+    HearthdeckApiClient? client;
+    try {
+      final remote = await (() async {
+        client = await createClient!();
+        return client!.userSettings();
+      })().timeout(_initialReconcileTimeout);
+      final settings = _fromRemote(remote);
+      if (settings == null) {
+        return;
+      }
+      _settings = settings;
+      _client = client;
+      client = null;
+      await _write(_preferences, _settings);
+    } on Object {
+      // A cached snapshot is still valid when the local daemon is unavailable.
+    } finally {
+      client?.close();
+    }
+  }
 
   void _scheduleSync() {
     if (createClient == null || !_settings.hasPendingSync) {
@@ -254,8 +282,13 @@ class CachedUserSettingsRepository implements UserSettingsRepository {
             themeMode: serverMode,
             backdropMode: serverBackdrop,
             revision: saved.revision,
+            lastSyncedAt: DateTime.now(),
           )
-        : _settings.copyWith(revision: saved.revision, isPending: true);
+        : _settings.copyWith(
+            revision: saved.revision,
+            lastSyncedAt: DateTime.now(),
+            isPending: true,
+          );
     await _write(_preferences, next);
     _settings = next;
   });
@@ -282,6 +315,10 @@ class CachedUserSettingsRepository implements UserSettingsRepository {
             _backdropFromName(json['backdrop_mode'] as String?) ??
             TvBackdropMode.edgeWash,
         revision: json['revision'] as int?,
+        lastSyncedAt: switch (json['synced_at']) {
+          int timestamp => DateTime.fromMillisecondsSinceEpoch(timestamp),
+          _ => null,
+        },
         isPending: json['pending'] as bool? ?? false,
       );
     } on FormatException {
@@ -314,6 +351,26 @@ class CachedUserSettingsRepository implements UserSettingsRepository {
       left.backdropMode == right.backdropMode &&
       left.revision == right.revision;
 
+  static bool _isStale(UserSettings settings) {
+    final lastSyncedAt = settings.lastSyncedAt;
+    return lastSyncedAt == null ||
+        DateTime.now().difference(lastSyncedAt) >= _maxCacheAge;
+  }
+
+  static UserSettings? _fromRemote(HearthdeckUserSettings settings) {
+    final themeMode = _modeFromName(settings.themeMode);
+    final backdropMode = _backdropFromName(settings.backdropMode);
+    if (themeMode == null || backdropMode == null) {
+      return null;
+    }
+    return UserSettings(
+      themeMode: themeMode,
+      backdropMode: backdropMode,
+      revision: settings.revision,
+      lastSyncedAt: DateTime.now(),
+    );
+  }
+
   static Future<void> _write(
     SharedPreferences preferences,
     UserSettings settings,
@@ -323,6 +380,7 @@ class CachedUserSettingsRepository implements UserSettingsRepository {
       'theme_mode': settings.themeMode.name,
       'backdrop_mode': settings.backdropMode.wireName,
       'revision': settings.revision,
+      'synced_at': settings.lastSyncedAt?.millisecondsSinceEpoch,
       'pending': settings.isPending,
     }),
   );

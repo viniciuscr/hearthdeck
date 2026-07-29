@@ -195,31 +195,31 @@ class _LibraryFilterOption extends StatelessWidget {
       autofocus: autofocus,
       onActivate: onActivate,
       builder: (BuildContext context, bool isFocused) {
+        final style = TvControlStyle.resolve(
+          tv,
+          variant: TvControlVariant.selectable,
+          isFocused: isFocused,
+          isSelected: isSelected,
+        );
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
           constraints: const BoxConstraints(minHeight: 50),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            color: isFocused ? tv.focus : tv.surfaceMuted,
+            color: style.background,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isSelected && !isFocused ? tv.focus : Colors.transparent,
-              width: 2,
-            ),
+            border: Border.all(color: style.border, width: 2),
           ),
           child: Row(
             children: <Widget>[
-              Icon(
-                definition.icon,
-                color: isFocused ? tv.canvas : tv.primaryText,
-              ),
+              Icon(definition.icon, color: style.foreground),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   definition.label,
                   style: TextStyle(
-                    color: isFocused ? tv.canvas : tv.primaryText,
+                    color: style.foreground,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -229,8 +229,8 @@ class _LibraryFilterOption extends StatelessWidget {
                     ? Icons.check_circle_rounded
                     : Icons.add_circle_outline_rounded,
                 color: isFocused
-                    ? tv.canvas
-                    : (isSelected ? tv.focus : tv.secondaryText),
+                    ? style.foreground
+                    : (isSelected ? tv.accent : tv.secondaryText),
               ),
             ],
           ),

@@ -215,7 +215,7 @@ class _SettingsContent extends StatelessWidget {
               SliverToBoxAdapter(
                 child: Row(
                   children: <Widget>[
-                    Icon(definition.icon, size: 34, color: tv.focus),
+                    Icon(definition.icon, size: 34, color: tv.accent),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Text(

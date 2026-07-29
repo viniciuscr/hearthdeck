@@ -63,9 +63,7 @@ class TvNavigationRail extends StatelessWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: tv.canvas.withValues(alpha: 0.72),
-          border: Border(
-            right: BorderSide(color: tv.borderSubtle),
-          ),
+          border: Border(right: BorderSide(color: tv.borderSubtle)),
         ),
         child: Padding(
           padding: EdgeInsets.symmetric(
@@ -131,7 +129,7 @@ class TvProfileRailHeader extends StatelessWidget {
           height: compact ? 36 : 42,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            gradient: LinearGradient(colors: <Color>[tv.focus, tv.info]),
+            gradient: LinearGradient(colors: <Color>[tv.accent, tv.info]),
           ),
           child: Icon(icon),
         ),
@@ -169,17 +167,19 @@ class TvOptionCard extends StatelessWidget {
         autofocus: autofocus,
         onActivate: onActivate,
         builder: (BuildContext context, bool isFocused) {
+          final style = TvControlStyle.resolve(
+            tv,
+            variant: TvControlVariant.secondary,
+            isFocused: isFocused,
+          );
           return AnimatedContainer(
             duration: TvTheme.focusDuration,
             curve: TvTheme.focusCurve,
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: isFocused ? tv.focus : tv.surface,
+              color: isFocused ? style.background : tv.surface,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: isFocused ? tv.primaryText : Colors.transparent,
-                width: 2,
-              ),
+              border: Border.all(color: style.border, width: 2),
               boxShadow: isFocused
                   ? const <BoxShadow>[
                       BoxShadow(
@@ -192,7 +192,11 @@ class TvOptionCard extends StatelessWidget {
             ),
             child: Row(
               children: <Widget>[
-                Icon(icon, size: 28, color: isFocused ? tv.canvas : tv.focus),
+                Icon(
+                  icon,
+                  size: 28,
+                  color: isFocused ? style.foreground : tv.accent,
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -204,7 +208,7 @@ class TvOptionCard extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          color: isFocused ? tv.canvas : tv.primaryText,
+                          color: isFocused ? style.foreground : tv.primaryText,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
@@ -217,7 +221,7 @@ class TvOptionCard extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: isFocused
-                                ? tv.canvas.withValues(alpha: 0.76)
+                                ? style.foreground.withValues(alpha: 0.76)
                                 : tv.secondaryText,
                           ),
                         ),
@@ -226,7 +230,7 @@ class TvOptionCard extends StatelessWidget {
                   ),
                 ),
                 if (isFocused)
-                  Icon(Icons.arrow_forward_rounded, color: tv.canvas),
+                  Icon(Icons.arrow_forward_rounded, color: style.foreground),
               ],
             ),
           );
@@ -250,30 +254,28 @@ class _TvNavigationRailButton extends StatelessWidget {
       autofocus: item.isSelected,
       onActivate: item.onActivate,
       builder: (BuildContext context, bool isFocused) {
-        final highlighted = item.isSelected || isFocused;
+        final style = TvControlStyle.resolve(
+          tv,
+          variant: TvControlVariant.selectable,
+          isFocused: isFocused,
+          isSelected: item.isSelected,
+        );
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
           height: 52,
           padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 14),
           decoration: BoxDecoration(
-            color: highlighted
-                ? tv.primaryText.withValues(
-                    alpha: item.isSelected ? 0.13 : 0.08,
-                  )
-                : Colors.transparent,
+            color: style.background,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isFocused ? tv.focus : Colors.transparent,
-              width: 2,
-            ),
+            border: Border.all(color: style.border, width: 2),
           ),
           child: Row(
             mainAxisAlignment: compact
                 ? MainAxisAlignment.center
                 : MainAxisAlignment.start,
             children: <Widget>[
-              Icon(item.icon, color: highlighted ? tv.focus : tv.primaryText),
+              Icon(item.icon, color: style.foreground),
               if (!compact) ...<Widget>[
                 const SizedBox(width: 14),
                 Expanded(

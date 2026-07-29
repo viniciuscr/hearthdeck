@@ -261,10 +261,30 @@ class _SearchHeader extends StatelessWidget {
                   TvFocusable(
                     semanticLabel: 'Clear search',
                     onActivate: onClear,
-                    builder: (BuildContext context, bool isFocused) => Icon(
-                      Icons.backspace_outlined,
-                      color: isFocused ? tv.focus : tv.secondaryText,
-                    ),
+                    builder: (BuildContext context, bool isFocused) {
+                      final style = TvControlStyle.resolve(
+                        tv,
+                        variant: TvControlVariant.icon,
+                        isFocused: isFocused,
+                      );
+                      return AnimatedContainer(
+                        duration: TvTheme.focusDuration,
+                        curve: TvTheme.focusCurve,
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: style.background,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: style.border, width: 2),
+                        ),
+                        child: Icon(
+                          Icons.backspace_outlined,
+                          color: isFocused
+                              ? style.foreground
+                              : tv.secondaryText,
+                        ),
+                      );
+                    },
                   ),
               ],
             ),

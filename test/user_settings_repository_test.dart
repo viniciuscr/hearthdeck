@@ -11,12 +11,24 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('uses Noir and a solid backdrop when no settings are cached', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+
+    final repository = await CachedUserSettingsRepository.load(
+      preferences: await SharedPreferences.getInstance(),
+    );
+
+    expect(repository.settings.themeMode, TvThemeMode.noir);
+    expect(repository.settings.backdropMode, TvBackdropMode.solid);
+  });
+
   test('loads the versioned cache without opening a daemon client', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{
       'user-settings-v1': jsonEncode(<String, Object?>{
         'theme_mode': 'indigo',
         'backdrop_mode': 'quiet_grid',
         'revision': 7,
+        'synced_at': DateTime.now().millisecondsSinceEpoch,
       }),
     });
     var clientCreated = false;
@@ -34,6 +46,28 @@ void main() {
     expect(repository.settings.revision, 7);
     expect(clientCreated, isFalse);
   });
+
+  test(
+    'hydrates an uncached appearance from the daemon before first render',
+    () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final client = _RemoteSettingsClient();
+
+      final repository = await CachedUserSettingsRepository.load(
+        preferences: await SharedPreferences.getInstance(),
+        createClient: () async => HearthdeckApiClient(
+          endpoint: HearthdeckEndpoint.local(),
+          token: 'token',
+          client: client,
+        ),
+      );
+
+      expect(client.requests, 1);
+      expect(repository.settings.themeMode, TvThemeMode.ember);
+      expect(repository.settings.backdropMode, TvBackdropMode.quietGrid);
+      expect(repository.settings.revision, 12);
+    },
+  );
 
   test('migrates the legacy theme cache without a daemon read', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{
@@ -93,6 +127,7 @@ void main() {
           'theme_mode': 'aurora',
           'backdrop_mode': 'edge_wash',
           'revision': 1,
+          'synced_at': DateTime.now().millisecondsSinceEpoch,
         }),
       });
       final client = _SettingsClient(conflictFirst: true);
@@ -181,6 +216,19 @@ class _SettingsClient extends http.BaseClient {
     if (!_written.isCompleted) {
       _written.complete();
     }
+    return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
+  }
+}
+
+class _RemoteSettingsClient extends http.BaseClient {
+  int requests = 0;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    requests += 1;
+    expect(request.method, 'GET');
+    const body =
+        '{"theme_mode":"ember","backdrop_mode":"quiet_grid","revision":12,"updated_at":"2026-01-01T00:00:00Z"}';
     return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
   }
 }

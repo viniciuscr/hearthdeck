@@ -142,21 +142,29 @@ void main() {
       find.byKey(const ValueKey<String>('settings-option-personalization')),
     );
     await tester.pumpAndSettle();
+    expect(find.text('Live role preview'), findsOneWidget);
+    expect(find.text('Primary action'), findsOneWidget);
+    expect(find.text('Ready'), findsOneWidget);
+    await tester.tap(find.text('Quiet grid'));
+    await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.text('Ember'),
       240,
-      scrollable: find.byType(GridView),
+      scrollable: find.byWidgetPredicate(
+        (Widget widget) =>
+            widget is Scrollable && widget.axisDirection == AxisDirection.down,
+      ),
     );
-    await tester.tap(find.text('Ember'));
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -160));
     await tester.pumpAndSettle();
-    await tester.tap(find.bySemanticsLabel('Quiet grid'));
+    await tester.tap(find.text('Ember'));
     await tester.pumpAndSettle();
 
     final pageTitle = find.text('Appearance & color');
     expect(pageTitle, findsOneWidget);
     expect(TvThemeScope.of(tester.element(pageTitle)).mode, TvThemeMode.ember);
     expect(
-      TvPalette.of(tester.element(pageTitle)).focus,
+      TvPalette.of(tester.element(pageTitle)).action,
       TvTheme.colorsFor(TvThemeMode.ember, null).primary,
     );
     expect(settingsRepository.settings.themeMode, TvThemeMode.ember);

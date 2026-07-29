@@ -21,7 +21,7 @@ class HearthdeckApp extends StatefulWidget {
   const HearthdeckApp({
     super.key,
     this.settingsRepository,
-    this.initialThemeMode = TvThemeMode.system,
+    this.initialThemeMode = TvThemeMode.noir,
   });
 
   final UserSettingsRepository? settingsRepository;

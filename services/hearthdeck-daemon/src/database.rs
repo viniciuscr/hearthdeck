@@ -61,7 +61,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS user_settings (
               id INTEGER PRIMARY KEY CHECK (id = 1),
               theme_mode TEXT NOT NULL,
-              backdrop_mode TEXT NOT NULL DEFAULT 'edge_wash',
+              backdrop_mode TEXT NOT NULL DEFAULT 'solid',
               revision INTEGER NOT NULL DEFAULT 0,
               updated_at TEXT NOT NULL
             );
@@ -84,19 +84,42 @@ impl Database {
             .execute(&self.pool)
             .await;
         let _ = sqlx::query(
-            "ALTER TABLE user_settings ADD COLUMN backdrop_mode TEXT NOT NULL DEFAULT 'edge_wash' CHECK (backdrop_mode IN ('solid', 'edge_wash', 'quiet_grid'))",
+            "ALTER TABLE user_settings ADD COLUMN backdrop_mode TEXT NOT NULL DEFAULT 'solid' CHECK (backdrop_mode IN ('solid', 'edge_wash', 'quiet_grid'))",
         )
         .execute(&self.pool)
         .await;
-        let migration = sqlx::query(
-            "INSERT OR IGNORE INTO hearthdeck_schema_migrations (version) VALUES (1)",
-        )
-        .execute(&self.pool)
-        .await?;
+        let migration =
+            sqlx::query("INSERT OR IGNORE INTO hearthdeck_schema_migrations (version) VALUES (1)")
+                .execute(&self.pool)
+                .await?;
         if migration.rows_affected() == 1 {
             let mut transaction = self.pool.begin().await?;
             sqlx::query(
-                "CREATE TABLE user_settings_rebuilt (id INTEGER PRIMARY KEY CHECK (id = 1), theme_mode TEXT NOT NULL, backdrop_mode TEXT NOT NULL DEFAULT 'edge_wash', revision INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)",
+                "CREATE TABLE user_settings_rebuilt (id INTEGER PRIMARY KEY CHECK (id = 1), theme_mode TEXT NOT NULL, backdrop_mode TEXT NOT NULL DEFAULT 'solid', revision INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)",
+            )
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query(
+                "INSERT INTO user_settings_rebuilt (id, theme_mode, backdrop_mode, revision, updated_at) SELECT id, theme_mode, backdrop_mode, revision, updated_at FROM user_settings",
+            )
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query("DROP TABLE user_settings")
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query("ALTER TABLE user_settings_rebuilt RENAME TO user_settings")
+                .execute(&mut *transaction)
+                .await?;
+            transaction.commit().await?;
+        }
+        let migration =
+            sqlx::query("INSERT OR IGNORE INTO hearthdeck_schema_migrations (version) VALUES (2)")
+                .execute(&self.pool)
+                .await?;
+        if migration.rows_affected() == 1 {
+            let mut transaction = self.pool.begin().await?;
+            sqlx::query(
+                "CREATE TABLE user_settings_rebuilt (id INTEGER PRIMARY KEY CHECK (id = 1), theme_mode TEXT NOT NULL, backdrop_mode TEXT NOT NULL DEFAULT 'solid', revision INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)",
             )
             .execute(&mut *transaction)
             .await?;
@@ -114,7 +137,7 @@ impl Database {
             transaction.commit().await?;
         }
         sqlx::query(
-            "INSERT OR IGNORE INTO user_settings (id, theme_mode, backdrop_mode, revision, updated_at) VALUES (1, 'system', 'edge_wash', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            "INSERT OR IGNORE INTO user_settings (id, theme_mode, backdrop_mode, revision, updated_at) VALUES (1, 'noir', 'solid', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         )
         .execute(&self.pool)
         .await?;

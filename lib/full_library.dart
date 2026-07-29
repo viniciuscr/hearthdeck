@@ -628,21 +628,27 @@ class _SourceTab extends StatelessWidget {
       semanticLabel: source.label,
       onActivate: onActivate,
       builder: (BuildContext context, bool isFocused) {
+        final style = TvControlStyle.resolve(
+          tv,
+          variant: TvControlVariant.selectable,
+          isFocused: isFocused,
+          isSelected: isSelected,
+        );
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
           decoration: BoxDecoration(
-            color: isSelected ? tv.actionMuted : tv.surfaceMuted,
+            color: style.background,
             borderRadius: BorderRadius.circular(22),
-            border: Border.all(
-              color: isFocused ? tv.focus : Colors.transparent,
-              width: 2,
-            ),
+            border: Border.all(color: style.border, width: 2),
           ),
           child: Text(
             source.label,
-            style: const TextStyle(fontWeight: FontWeight.w700),
+            style: TextStyle(
+              color: style.foreground,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         );
       },
@@ -709,24 +715,29 @@ class TvLibraryControl extends StatelessWidget {
       semanticLabel: label,
       onActivate: onActivate,
       builder: (BuildContext context, bool isFocused) {
+        final style = TvControlStyle.resolve(
+          tv,
+          variant: TvControlVariant.secondary,
+          isFocused: isFocused,
+        );
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
           constraints: const BoxConstraints(minHeight: 46),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            color: isFocused ? tv.focus : tv.surfaceMuted,
+            color: style.background,
             borderRadius: BorderRadius.circular(8),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Icon(icon, color: isFocused ? tv.canvas : tv.primaryText),
+              Icon(icon, color: style.foreground),
               const SizedBox(width: 9),
               Text(
                 label,
                 style: TextStyle(
-                  color: isFocused ? tv.canvas : tv.primaryText,
+                  color: style.foreground,
                   fontWeight: FontWeight.w700,
                 ),
               ),

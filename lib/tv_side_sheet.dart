@@ -69,17 +69,24 @@ class TvSideSheet extends StatelessWidget {
                           semanticLabel: 'Close $title',
                           onActivate: () => _close(context),
                           builder: (BuildContext context, bool isFocused) {
+                            final style = TvControlStyle.resolve(
+                              tv,
+                              variant: TvControlVariant.icon,
+                              isFocused: isFocused,
+                            );
                             return AnimatedContainer(
                               duration: TvTheme.focusDuration,
                               width: 38,
                               height: 38,
                               decoration: BoxDecoration(
-                                color: isFocused ? tv.focus : tv.surfaceMuted,
+                                color: isFocused
+                                    ? style.background
+                                    : tv.surfaceMuted,
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Icon(
                                 Icons.close_rounded,
-                                color: isFocused ? tv.canvas : tv.primaryText,
+                                color: style.foreground,
                               ),
                             );
                           },
@@ -87,10 +94,7 @@ class TvSideSheet extends StatelessWidget {
                       ],
                     ),
                   ),
-                  Divider(
-                    height: 1,
-                    color: tv.borderSubtle,
-                  ),
+                  Divider(height: 1, color: tv.borderSubtle),
                   Expanded(child: child),
                 ],
               ),
@@ -128,40 +132,34 @@ class TvSideSheetAction extends StatelessWidget {
       semanticLabel: label,
       onActivate: onActivate,
       builder: (BuildContext context, bool isFocused) {
-        final background = isFocused
-            ? tv.focus
-            : isPrimary
-            ? tv.action
-            : tv.surfaceMuted;
-        final foreground = isFocused
-            ? tv.canvas
-            : isPrimary
-            ? tv.onAction
-            : tv.primaryText;
+        final style = TvControlStyle.resolve(
+          tv,
+          variant: isPrimary
+              ? TvControlVariant.primary
+              : TvControlVariant.secondary,
+          isFocused: isFocused,
+        );
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
           constraints: const BoxConstraints(minHeight: 46),
           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
           decoration: BoxDecoration(
-            color: background,
+            color: style.background,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isFocused ? tv.primaryText : Colors.transparent,
-              width: 2,
-            ),
+            border: Border.all(color: style.border, width: 2),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
-              Icon(icon, color: foreground, size: 20),
+              Icon(icon, color: style.foreground, size: 20),
               const SizedBox(width: 9),
               Flexible(
                 child: Text(
                   label,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: foreground,
+                    color: style.foreground,
                     fontWeight: FontWeight.w700,
                   ),
                 ),

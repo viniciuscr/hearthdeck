@@ -128,7 +128,6 @@ class _SystemHealthPageState extends State<SystemHealthPage> {
                                     (BuildContext context, int index) =>
                                         _ProviderHealthCard(
                                           provider: _health!.providers[index],
-                                          autofocus: index == 0,
                                         ),
                               ),
                           ],
@@ -170,12 +169,12 @@ class _HealthHeader extends StatelessWidget {
       children: <Widget>[
         DecoratedBox(
           decoration: BoxDecoration(
-            color: tv.focus.withValues(alpha: 0.12),
+            color: tv.accent.withValues(alpha: 0.12),
             shape: BoxShape.circle,
           ),
           child: Padding(
             padding: EdgeInsets.all(14),
-            child: Icon(Icons.monitor_heart_outlined, color: tv.focus),
+            child: Icon(Icons.monitor_heart_outlined, color: tv.accent),
           ),
         ),
         const SizedBox(width: 18),
@@ -202,19 +201,24 @@ class _HealthHeader extends StatelessWidget {
         TvFocusable(
           semanticLabel: 'Refresh system health',
           onActivate: isLoading ? null : () => onRefresh(),
-          builder: (BuildContext context, bool isFocused) => AnimatedContainer(
-            duration: TvTheme.focusDuration,
-            curve: TvTheme.focusCurve,
-            padding: const EdgeInsets.all(13),
-            decoration: BoxDecoration(
-              color: isFocused ? tv.focus : tv.surface,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              Icons.refresh_rounded,
-              color: isFocused ? tv.canvas : tv.focus,
-            ),
-          ),
+          builder: (BuildContext context, bool isFocused) {
+            final style = TvControlStyle.resolve(
+              tv,
+              variant: TvControlVariant.icon,
+              isFocused: isFocused,
+            );
+            return AnimatedContainer(
+              duration: TvTheme.focusDuration,
+              curve: TvTheme.focusCurve,
+              padding: const EdgeInsets.all(13),
+              decoration: BoxDecoration(
+                color: style.background,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: style.border, width: 2),
+              ),
+              child: Icon(Icons.refresh_rounded, color: style.foreground),
+            );
+          },
         ),
       ],
     );
@@ -222,69 +226,61 @@ class _HealthHeader extends StatelessWidget {
 }
 
 class _ProviderHealthCard extends StatelessWidget {
-  const _ProviderHealthCard({required this.provider, required this.autofocus});
+  const _ProviderHealthCard({required this.provider});
 
   final HearthdeckProviderHealth provider;
-  final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
     final tv = TvPalette.of(context);
     final status = _ProviderStatus.from(provider.status, tv);
-    return TvFocusable(
-      semanticLabel: '${provider.id} ${status.label}',
-      autofocus: autofocus,
-      builder: (BuildContext context, bool isFocused) => AnimatedContainer(
-        duration: TvTheme.focusDuration,
-        curve: TvTheme.focusCurve,
-        padding: const EdgeInsets.all(22),
-        decoration: BoxDecoration(
-          color: isFocused ? tv.surface.withValues(alpha: 0.96) : tv.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: isFocused ? tv.focus : status.color.withValues(alpha: 0.38),
-            width: isFocused ? 2 : 1,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Icon(status.icon, color: status.color),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    _labelFor(provider.id),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
+    return AnimatedContainer(
+      duration: TvTheme.focusDuration,
+      curve: TvTheme.focusCurve,
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: tv.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: status.color.withValues(alpha: 0.38)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(status.icon, color: status.color),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _labelFor(provider.id),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleLarge,
                 ),
-                _StatusPill(status: status),
-              ],
-            ),
-            const Spacer(),
-            Text(
-              provider.kind == 'discovery'
-                  ? '${provider.recordCount ?? 0} launchable items'
-                  : '${provider.recordCount ?? 0} metadata records',
-              style: TextStyle(color: tv.secondaryText),
-            ),
-            const SizedBox(height: 7),
-            Text(
-              provider.lastError ??
-                  (provider.lastSuccessAt == null
-                      ? 'Awaiting first refresh'
-                      : 'Last refresh ${_formatTimestamp(provider.lastSuccessAt!)}'),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: provider.lastError == null ? tv.primaryText : tv.warning,
               ),
+              _StatusPill(status: status),
+            ],
+          ),
+          const Spacer(),
+          Text(
+            provider.kind == 'discovery'
+                ? '${provider.recordCount ?? 0} launchable items'
+                : '${provider.recordCount ?? 0} metadata records',
+            style: TextStyle(color: tv.secondaryText),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            provider.lastError ??
+                (provider.lastSuccessAt == null
+                    ? 'Awaiting first refresh'
+                    : 'Last refresh ${_formatTimestamp(provider.lastSuccessAt!)}'),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: provider.lastError == null ? tv.primaryText : tv.warning,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

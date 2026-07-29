@@ -63,7 +63,7 @@ class TvFocusable extends StatefulWidget {
     required this.builder,
     super.key,
     this.autofocus = false,
-    this.onActivate,
+    required this.onActivate,
   });
 
   final String semanticLabel;
@@ -132,7 +132,7 @@ class _TvFocusableState extends State<TvFocusable> {
         event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.select ||
         event.logicalKey == LogicalKeyboardKey.space;
-    if (event is KeyDownEvent && isActivationKey) {
+    if (widget.onActivate != null && event is KeyDownEvent && isActivationKey) {
       widget.onActivate?.call();
       return KeyEventResult.handled;
     }
@@ -169,28 +169,88 @@ class _TvFocusableState extends State<TvFocusable> {
         ),
       },
       child: Focus(
-        autofocus: widget.autofocus,
+        canRequestFocus: widget.onActivate != null,
+        autofocus: widget.onActivate != null && widget.autofocus,
         focusNode: _focusNode,
         onFocusChange: _handleFocusChange,
         onKeyEvent: _onKeyEvent,
         child: Semantics(
-          button: true,
+          button: widget.onActivate != null,
+          enabled: widget.onActivate != null,
           focused: _isFocused,
           label: widget.semanticLabel,
           child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            onEnter: (_) => _focusNode.requestFocus(),
+            cursor: widget.onActivate == null
+                ? MouseCursor.defer
+                : SystemMouseCursors.click,
+            onEnter: widget.onActivate == null
+                ? null
+                : (_) => _focusNode.requestFocus(),
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTap: () {
-                _focusNode.requestFocus();
-                widget.onActivate?.call();
-              },
+              onTap: widget.onActivate == null
+                  ? null
+                  : () {
+                      _focusNode.requestFocus();
+                      widget.onActivate?.call();
+                    },
               child: widget.builder(context, _isFocused),
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+enum TvControlVariant { secondary, primary, selectable, icon }
+
+class TvControlStyle {
+  const TvControlStyle({
+    required this.background,
+    required this.foreground,
+    required this.border,
+  });
+
+  final Color background;
+  final Color foreground;
+  final Color border;
+
+  static TvControlStyle resolve(
+    TvPalette tv, {
+    required TvControlVariant variant,
+    required bool isFocused,
+    bool isSelected = false,
+  }) {
+    if (isFocused) {
+      return TvControlStyle(
+        background: tv.focusFill,
+        foreground: tv.onFocus,
+        border: tv.focus,
+      );
+    }
+    if (variant == TvControlVariant.primary) {
+      return TvControlStyle(
+        background: tv.action,
+        foreground: tv.onAction,
+        border: tv.action,
+      );
+    }
+    if (isSelected) {
+      return TvControlStyle(
+        background: tv.selected,
+        foreground: tv.onSelected,
+        border: tv.accent,
+      );
+    }
+    return TvControlStyle(
+      background: variant == TvControlVariant.icon
+          ? Colors.transparent
+          : tv.surfaceMuted,
+      foreground: variant == TvControlVariant.selectable
+          ? tv.accent
+          : tv.primaryText,
+      border: Colors.transparent,
     );
   }
 }
@@ -364,30 +424,32 @@ class TvIconAction extends StatelessWidget {
       semanticLabel: label,
       onActivate: onActivate ?? () => _showUnavailableMessage(context, label),
       builder: (BuildContext context, bool isFocused) {
+        final style = TvControlStyle.resolve(
+          tv,
+          variant: TvControlVariant.icon,
+          isFocused: isFocused,
+        );
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
           width: iconSize + 18,
           height: iconSize + 18,
           decoration: BoxDecoration(
-            color: isFocused ? tv.primaryText : Colors.transparent,
+            color: style.background,
+            border: Border.all(color: style.border, width: 2),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Stack(
             alignment: Alignment.center,
             children: <Widget>[
-              Icon(
-                icon,
-                size: iconSize,
-                color: isFocused ? tv.canvas : tv.primaryText,
-              ),
+              Icon(icon, size: iconSize, color: style.foreground),
               if (hasNotification)
                 Positioned(
                   top: 5,
                   right: 5,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: tv.focus,
+                      color: tv.accent,
                       shape: BoxShape.circle,
                     ),
                     child: SizedBox(width: 7, height: 7),

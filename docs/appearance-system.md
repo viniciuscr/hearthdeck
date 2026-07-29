@@ -26,6 +26,9 @@ Noir uses near-black neutrals, cool-silver focus, and restrained violet actions.
 System colors adapt platform-provided colors into the same roles. Artwork
 gradients are content data and do not use the application palette.
 
+Fresh installations begin with `Noir` and the `Solid` backdrop. Existing
+appearance selections are preserved.
+
 ## Backdrops
 
 Every application route uses `TvBackdrop`, with a route-specific origin only

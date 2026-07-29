@@ -38,74 +38,268 @@ class ThemeSettingsPage extends StatelessWidget {
                   const Positioned.fill(
                     child: TvBackdrop(center: Alignment(-0.5, -0.6)),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(48, 40, 48, 56),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Row(
-                          children: <Widget>[
-                            Icon(
-                              Icons.palette_outlined,
-                              color: tv.focus,
-                              size: 34,
+                  CustomScrollView(
+                    slivers: <Widget>[
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(48, 40, 48, 56),
+                        sliver: SliverMainAxisGroup(
+                          slivers: <Widget>[
+                            SliverToBoxAdapter(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Row(
+                                    children: <Widget>[
+                                      Icon(
+                                        Icons.palette_outlined,
+                                        color: tv.focus,
+                                        size: 34,
+                                      ),
+                                      const SizedBox(width: 14),
+                                      Text(
+                                        'Appearance & color',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.displaySmall,
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    'System Colors follows your GTK theme accent on Linux and wallpaper colors on Android.',
+                                    style: TextStyle(color: tv.secondaryText),
+                                  ),
+                                  const SizedBox(height: 34),
+                                  Text(
+                                    'Backdrop treatment',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleLarge,
+                                  ),
+                                  const SizedBox(height: 14),
+                                  _BackdropChoices(
+                                    selected: scope.backdropMode,
+                                    onActivate: scope.onBackdropModeChanged,
+                                  ),
+                                  const SizedBox(height: 34),
+                                  Text(
+                                    'Theme palette',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleLarge,
+                                  ),
+                                  const SizedBox(height: 14),
+                                  const SizedBox(height: 18),
+                                  const _AppearanceRolePreview(),
+                                  const SizedBox(height: 34),
+                                ],
+                              ),
                             ),
-                            const SizedBox(width: 14),
-                            Text(
-                              'Appearance & color',
-                              style: Theme.of(context).textTheme.displaySmall,
+                            SliverGrid.builder(
+                              itemCount: TvThemeMode.values.length,
+                              gridDelegate:
+                                  const SliverGridDelegateWithMaxCrossAxisExtent(
+                                    maxCrossAxisExtent: 430,
+                                    mainAxisSpacing: 18,
+                                    crossAxisSpacing: 18,
+                                    childAspectRatio: 1.42,
+                                  ),
+                              itemBuilder: (BuildContext context, int index) {
+                                final mode = TvThemeMode.values[index];
+                                return _ThemeChoiceCard(
+                                  mode: mode,
+                                  isSelected: mode == scope.mode,
+                                  onActivate: () => scope.onModeChanged(mode),
+                                );
+                              },
                             ),
                           ],
                         ),
-                        const SizedBox(height: 10),
-                        Text(
-                          'System Colors follows your GTK theme accent on Linux and wallpaper colors on Android.',
-                          style: TextStyle(color: tv.secondaryText),
-                        ),
-                        const SizedBox(height: 34),
-                        Text(
-                          'Backdrop treatment',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 14),
-                        _BackdropChoices(
-                          selected: scope.backdropMode,
-                          onActivate: scope.onBackdropModeChanged,
-                        ),
-                        const SizedBox(height: 34),
-                        Text(
-                          'Theme palette',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 14),
-                        Expanded(
-                          child: GridView.builder(
-                            gridDelegate:
-                                const SliverGridDelegateWithMaxCrossAxisExtent(
-                                  maxCrossAxisExtent: 430,
-                                  mainAxisSpacing: 18,
-                                  crossAxisSpacing: 18,
-                                  childAspectRatio: 1.42,
-                                ),
-                            itemCount: TvThemeMode.values.length,
-                            itemBuilder: (BuildContext context, int index) {
-                              final mode = TvThemeMode.values[index];
-                              return _ThemeChoiceCard(
-                                mode: mode,
-                                isSelected: mode == scope.mode,
-                                autofocus: mode == scope.mode,
-                                onActivate: () => scope.onModeChanged(mode),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AppearanceRolePreview extends StatelessWidget {
+  const _AppearanceRolePreview();
+
+  @override
+  Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
+    final theme = Theme.of(context);
+    return Semantics(
+      label: 'Appearance role preview',
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: tv.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: tv.borderSubtle),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text('Live role preview', style: theme.textTheme.titleLarge),
+              const SizedBox(height: 5),
+              Text(
+                'Check hierarchy, focus, action, and status before choosing a palette.',
+                style: TextStyle(color: tv.secondaryText),
+              ),
+              const SizedBox(height: 18),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: <Widget>[
+                  _PreviewSurface(
+                    label: 'Canvas',
+                    color: tv.canvas,
+                    foreground: tv.primaryText,
+                    border: tv.borderSubtle,
+                  ),
+                  _PreviewSurface(
+                    label: 'Base surface',
+                    color: tv.surfaceMuted,
+                    foreground: tv.primaryText,
+                    border: tv.borderSubtle,
+                  ),
+                  _PreviewSurface(
+                    label: 'Raised surface',
+                    color: tv.surfaceRaised,
+                    foreground: tv.primaryText,
+                    border: tv.borderStrong,
+                  ),
+                  _PreviewSurface(
+                    label: 'Selected',
+                    color: tv.selected,
+                    foreground: tv.onSelected,
+                    border: tv.action,
+                  ),
+                  _PreviewSurface(
+                    label: 'Primary action',
+                    color: tv.action,
+                    foreground: tv.onAction,
+                    border: tv.action,
+                  ),
+                  _PreviewSurface(
+                    label: 'Focused',
+                    color: tv.focusFill,
+                    foreground: tv.onFocus,
+                    border: tv.focus,
+                    borderWidth: 3,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                children: <Widget>[
+                  _StatusChip(
+                    label: 'Ready',
+                    color: tv.success,
+                    icon: Icons.check_circle_outline_rounded,
+                  ),
+                  _StatusChip(
+                    label: 'Attention',
+                    color: tv.warning,
+                    icon: Icons.error_outline_rounded,
+                  ),
+                  _StatusChip(
+                    label: 'Starting',
+                    color: tv.info,
+                    icon: Icons.hourglass_top_rounded,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PreviewSurface extends StatelessWidget {
+  const _PreviewSurface({
+    required this.label,
+    required this.color,
+    required this.foreground,
+    required this.border,
+    this.borderWidth = 1,
+  });
+
+  final String label;
+  final Color color;
+  final Color foreground;
+  final Color border;
+  final double borderWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 144,
+      height: 74,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: border, width: borderWidth),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Align(
+            alignment: Alignment.bottomLeft,
+            child: Text(
+              label,
+              style: TextStyle(color: foreground, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({
+    required this.label,
+    required this.color,
+    required this.icon,
+  });
+
+  final String label;
+  final Color color;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(icon, size: 17, color: color),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(color: color, fontWeight: FontWeight.w700),
+            ),
+          ],
         ),
       ),
     );
@@ -121,7 +315,7 @@ class _BackdropChoices extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 116,
+      height: 148,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: TvBackdropMode.values.length,
@@ -156,46 +350,72 @@ class _BackdropChoiceCard extends StatelessWidget {
     final tv = TvPalette.of(context);
     return SizedBox(
       width: 220,
+      height: 148,
       child: TvFocusable(
         semanticLabel: mode.label,
+        autofocus: isSelected,
         onActivate: onActivate,
-        builder: (BuildContext context, bool isFocused) => AnimatedContainer(
-          duration: TvTheme.focusDuration,
-          curve: TvTheme.focusCurve,
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: tv.surface,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isFocused || isSelected ? tv.focus : tv.surfaceMuted,
-              width: isFocused ? 3 : 1,
-            ),
-          ),
-          child: Row(
-            children: <Widget>[
-              _BackdropSwatch(mode: mode),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      mode.label,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      mode.description,
-                      style: TextStyle(fontSize: 12, color: tv.secondaryText),
-                    ),
-                  ],
-                ),
+        builder: (BuildContext context, bool isFocused) {
+          final style = TvControlStyle.resolve(
+            tv,
+            variant: TvControlVariant.selectable,
+            isFocused: isFocused,
+            isSelected: isSelected,
+          );
+          return AnimatedContainer(
+            duration: TvTheme.focusDuration,
+            curve: TvTheme.focusCurve,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isSelected || isFocused ? style.background : tv.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isSelected || isFocused ? style.border : tv.borderSubtle,
+                width: isFocused ? 3 : 1,
               ),
-              if (isSelected) Icon(Icons.check_rounded, color: tv.focus),
-            ],
-          ),
-        ),
+            ),
+            child: Row(
+              children: <Widget>[
+                _BackdropSwatch(mode: mode),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        mode.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: isSelected || isFocused
+                              ? style.foreground
+                              : tv.primaryText,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        mode.description,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isSelected || isFocused
+                              ? style.foreground.withValues(alpha: 0.78)
+                              : tv.secondaryText,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (isSelected)
+                  Icon(Icons.check_rounded, color: style.foreground),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -262,34 +482,30 @@ class _ThemeChoiceCard extends StatelessWidget {
   const _ThemeChoiceCard({
     required this.mode,
     required this.isSelected,
-    required this.autofocus,
     required this.onActivate,
   });
 
   final TvThemeMode mode;
   final bool isSelected;
-  final bool autofocus;
   final VoidCallback onActivate;
 
   @override
   Widget build(BuildContext context) {
-    final tv = TvPalette.of(context);
     final preview = TvTheme.paletteFor(mode, null);
     return TvFocusable(
       semanticLabel: mode.label,
-      autofocus: autofocus,
       onActivate: onActivate,
       builder: (BuildContext context, bool isFocused) => AnimatedContainer(
         duration: TvTheme.focusDuration,
         curve: TvTheme.focusCurve,
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: tv.surface,
+          color: preview.surface,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: isFocused || isSelected
-                ? tv.focus
-                : preview.focus.withValues(alpha: 0.45),
+                ? preview.focus
+                : preview.borderStrong,
             width: isFocused ? 3 : 1,
           ),
         ),
@@ -297,18 +513,34 @@ class _ThemeChoiceCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Expanded(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(9),
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                      colors: <Color>[
-                      preview.focus,
-                      preview.info,
-                      preview.canvas,
-                    ],
-                  ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(9),
+                child: Column(
+                  children: <Widget>[
+                    Expanded(flex: 3, child: ColoredBox(color: preview.canvas)),
+                    Expanded(
+                      flex: 2,
+                      child: Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: ColoredBox(color: preview.surfaceMuted),
+                          ),
+                          Expanded(
+                            child: ColoredBox(color: preview.surfaceRaised),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: Row(
+                        children: <Widget>[
+                          Expanded(child: ColoredBox(color: preview.focusFill)),
+                          Expanded(child: ColoredBox(color: preview.action)),
+                          Expanded(child: ColoredBox(color: preview.selected)),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -322,7 +554,7 @@ class _ThemeChoiceCard extends StatelessWidget {
                   ),
                 ),
                 if (isSelected)
-                  Icon(Icons.check_circle_rounded, color: tv.focus),
+                  Icon(Icons.check_circle_rounded, color: preview.focus),
               ],
             ),
           ],

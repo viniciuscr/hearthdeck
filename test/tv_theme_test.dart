@@ -13,11 +13,30 @@ void main() {
     },
   );
 
-  test('curated theme modes produce distinct primary colors', () {
-    final ember = TvTheme.colorsFor(TvThemeMode.ember, null);
-    final indigo = TvTheme.colorsFor(TvThemeMode.indigo, null);
+  test('curated theme modes have distinct visual identities', () {
+    final palettes = <TvPalette>[
+      TvTheme.paletteFor(TvThemeMode.aurora, null),
+      TvTheme.paletteFor(TvThemeMode.ember, null),
+      TvTheme.paletteFor(TvThemeMode.indigo, null),
+      TvTheme.paletteFor(TvThemeMode.noir, null),
+    ];
 
-    expect(ember.primary, isNot(indigo.primary));
+    expect(
+      palettes.map((TvPalette palette) => palette.canvas).toSet(),
+      hasLength(4),
+    );
+    expect(
+      palettes.map((TvPalette palette) => palette.focusFill).toSet(),
+      hasLength(4),
+    );
+    expect(
+      palettes.map((TvPalette palette) => palette.action).toSet(),
+      hasLength(4),
+    );
+    expect(
+      palettes.map((TvPalette palette) => palette.selected).toSet(),
+      hasLength(4),
+    );
   });
 
   test('Noir is a black-forward palette with a separate violet action', () {
@@ -48,6 +67,11 @@ void main() {
         _contrastRatio(palette.focus, palette.surface),
         greaterThanOrEqualTo(3),
         reason: '${mode.name} focus ring on surface',
+      );
+      expect(
+        _contrastRatio(palette.onFocus, palette.focusFill),
+        greaterThanOrEqualTo(4.5),
+        reason: '${mode.name} focused control text',
       );
       expect(
         _contrastRatio(palette.action, palette.canvas),

@@ -339,7 +339,7 @@ class _ContentKindLabel extends StatelessWidget {
     return Text(
       label.toUpperCase(),
       style: TextStyle(
-        color: tv.focus,
+        color: tv.accent,
         fontSize: 12,
         fontWeight: FontWeight.w700,
         letterSpacing: 1.2,
@@ -368,32 +368,22 @@ class TvDetailAction extends StatelessWidget {
       autofocus: autofocus,
       onActivate: onActivate,
       builder: (BuildContext context, bool isFocused) {
-        final background = isFocused
-            ? tv.focus
-            : action.isPrimary
-            ? tv.action
-            : tv.surface;
-        final foreground = isFocused
-            ? tv.canvas
-            : action.isPrimary
-            ? tv.onAction
-            : tv.primaryText;
+        final style = TvControlStyle.resolve(
+          tv,
+          variant: action.isPrimary
+              ? TvControlVariant.primary
+              : TvControlVariant.secondary,
+          isFocused: isFocused,
+        );
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
           constraints: const BoxConstraints(minHeight: 52, minWidth: 148),
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
           decoration: BoxDecoration(
-            color: background,
+            color: style.background,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isFocused
-                  ? tv.primaryText
-                  : action.isPrimary
-                  ? tv.actionMuted
-                  : Colors.transparent,
-              width: isFocused ? 2 : 1,
-            ),
+            border: Border.all(color: style.border, width: isFocused ? 2 : 1),
             boxShadow: isFocused
                 ? const <BoxShadow>[
                     BoxShadow(
@@ -407,14 +397,14 @@ class TvDetailAction extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Icon(action.icon, color: foreground, size: 21),
+              Icon(action.icon, color: style.foreground, size: 21),
               const SizedBox(width: 10),
               Flexible(
                 child: Text(
                   action.label,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: foreground,
+                    color: style.foreground,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -497,7 +487,7 @@ class _FactPanel extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Row(
           children: <Widget>[
-            Icon(fact.icon, color: tv.focus),
+            Icon(fact.icon, color: tv.accent),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -551,7 +541,7 @@ class _ProgressPanel extends StatelessWidget {
                     minHeight: 7,
                     borderRadius: BorderRadius.circular(8),
                     backgroundColor: tv.surfaceMuted,
-                    color: tv.focus,
+                    color: tv.accent,
                   ),
                 ),
                 const SizedBox(width: 10),
