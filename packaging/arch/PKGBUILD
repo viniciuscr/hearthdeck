@@ -5,8 +5,8 @@ pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
 license=('MIT')
-depends=('gcc-libs' 'glibc' 'gtk3' 'hicolor-icon-theme' 'systemd')
-makedepends=('clang' 'cmake' 'just' 'ninja' 'pkgconf' 'rust')
+depends=('gcc-libs' 'glibc' 'gtk3' 'hicolor-icon-theme' 'sqlite' 'systemd')
+makedepends=('clang' 'cmake' 'just' 'ninja' 'pkgconf' 'rust' 'sqlite')
 install="${pkgname}.install"
 options=('!strip')
 
