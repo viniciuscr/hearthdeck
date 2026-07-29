@@ -140,7 +140,7 @@ class HearthdeckHealth {
         version: json['version'] as String,
         lanEnabled: json['lan_enabled'] as bool,
         transport: json['transport'] as String,
-        providers: (json['providers'] as List<dynamic>)
+        providers: (json['providers'] as List<dynamic>? ?? const <dynamic>[])
             .cast<Map<String, dynamic>>()
             .map(HearthdeckProviderHealth.fromJson)
             .toList(growable: false),

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gamepads/gamepads.dart';
 import 'package:gamepads_platform_interface/gamepads_platform_interface.dart';
 import 'package:gamepads_platform_interface/method_channel_gamepads_platform_interface.dart';
+import 'package:hearthdeck/backend/hearthdeck_api_client.dart';
 import 'package:hearthdeck/main.dart';
 import 'package:hearthdeck/tv_components.dart';
 import 'package:hearthdeck/content_details.dart';
@@ -14,6 +15,7 @@ import 'package:hearthdeck/catalog/catalog_repository.dart';
 import 'package:hearthdeck/full_library.dart';
 import 'package:hearthdeck/search.dart';
 import 'package:hearthdeck/settings.dart';
+import 'package:hearthdeck/system_health.dart';
 import 'package:hearthdeck/tv_gamepad.dart';
 
 void main() {
@@ -129,6 +131,34 @@ void main() {
       find.byKey(const ValueKey<String>('settings-option-rescan-library')),
       findsOneWidget,
     );
+  });
+
+  testWidgets('settings opens live provider health', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SettingsPage(catalogRepository: const _HealthCatalogRepository()),
+      ),
+    );
+
+    await tester.tap(find.bySemanticsLabel('System'));
+    await tester.pumpAndSettle();
+    final serviceStatus = find.byKey(
+      const ValueKey<String>('settings-option-service-status'),
+    );
+    await tester.scrollUntilVisible(
+      serviceStatus,
+      240,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(serviceStatus);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SystemHealthPage), findsOneWidget);
+    expect(find.text('Desktop Apps'), findsOneWidget);
+    expect(find.text('Attention'), findsOneWidget);
+    expect(find.text('bridge unavailable'), findsOneWidget);
   });
 
   testWidgets('dashboard search opens a focused native text field', (
@@ -427,6 +457,9 @@ Future<void> _sendLinuxGamepadButton(String key, double value) {
 
 class _EventFailingCatalogRepository implements CatalogRepository {
   @override
+  Future<HearthdeckHealth> health() => const MockCatalogRepository().health();
+
+  @override
   Future<CatalogData> load() async {
     return const CatalogData(
       gameSources: <CatalogSource>[
@@ -445,4 +478,25 @@ class _EventFailingCatalogRepository implements CatalogRepository {
   @override
   Stream<CatalogEvent> watch() =>
       Stream<CatalogEvent>.error(StateError('event feed unavailable'));
+}
+
+class _HealthCatalogRepository extends MockCatalogRepository {
+  const _HealthCatalogRepository();
+
+  @override
+  Future<HearthdeckHealth> health() async => const HearthdeckHealth(
+    version: '0.1.0',
+    lanEnabled: false,
+    transport: 'http',
+    providers: <HearthdeckProviderHealth>[
+      HearthdeckProviderHealth(
+        id: 'desktop-apps',
+        kind: 'discovery',
+        status: 'degraded',
+        recordCount: null,
+        lastSuccessAt: null,
+        lastError: 'bridge unavailable',
+      ),
+    ],
+  );
 }

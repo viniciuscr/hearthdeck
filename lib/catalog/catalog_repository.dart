@@ -1,6 +1,9 @@
+import '../backend/hearthdeck_api_client.dart';
 import '../dashboard_models.dart';
 
 abstract interface class CatalogRepository {
+  Future<HearthdeckHealth> health();
+
   Future<CatalogData> load();
 
   Future<void> launch(DashboardItem item);

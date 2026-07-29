@@ -15,6 +15,10 @@ class LocalCatalogRepository implements CatalogRepository {
   Future<ApiCatalogRepository> _getRepository() => _repository ??= _create();
 
   @override
+  Future<HearthdeckHealth> health() =>
+      _request((ApiCatalogRepository repository) => repository.health());
+
+  @override
   Future<CatalogData> load() =>
       _request((ApiCatalogRepository repository) => repository.load());
 

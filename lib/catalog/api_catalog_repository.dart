@@ -11,6 +11,9 @@ class ApiCatalogRepository implements CatalogRepository {
   final Stream<HearthdeckServerEvent>? eventStream;
 
   @override
+  Future<HearthdeckHealth> health() => _apiClient.health();
+
+  @override
   Future<CatalogData> load() async {
     final items = await _apiClient.library();
     final sourcesById = <String, List<HearthdeckLibraryItem>>{};

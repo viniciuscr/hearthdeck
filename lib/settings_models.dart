@@ -137,6 +137,12 @@ const Map<SettingsCategory, List<SettingsOption>> settingsOptions =
       ],
       SettingsCategory.system: <SettingsOption>[
         SettingsOption(
+          id: 'service-status',
+          label: 'Service status',
+          description: 'Provider health, errors, and last refreshes',
+          icon: Icons.monitor_heart_outlined,
+        ),
+        SettingsOption(
           id: 'rescan-library',
           label: 'Rescan library',
           description: 'Refresh games, apps, and provider sources',

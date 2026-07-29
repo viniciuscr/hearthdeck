@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'catalog/catalog_repository.dart';
 import 'catalog/catalog_repository_factory.dart';
 import 'settings_models.dart';
+import 'system_health.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
 import 'tv_two_pane.dart';
@@ -111,6 +112,17 @@ class _SettingsPageState extends State<SettingsPage> {
                           options: _options,
                           layout: layout,
                           onLibraryRescan: _requestLibraryRescan,
+                          onServiceStatus: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              settings: const RouteSettings(
+                                name: '/system-health',
+                              ),
+                              builder: (BuildContext context) =>
+                                  SystemHealthPage(
+                                    catalogRepository: _catalogRepository,
+                                  ),
+                            ),
+                          ),
                         ),
                       ),
                     ],
@@ -164,12 +176,14 @@ class _SettingsContent extends StatelessWidget {
     required this.options,
     required this.layout,
     required this.onLibraryRescan,
+    required this.onServiceStatus,
   });
 
   final SettingsCategoryDefinition definition;
   final List<SettingsOption> options;
   final _SettingsLayout layout;
   final VoidCallback onLibraryRescan;
+  final VoidCallback onServiceStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -216,9 +230,11 @@ class _SettingsContent extends StatelessWidget {
                     description: option.description,
                     icon: option.icon,
                     autofocus: index == 0,
-                    onActivate: option.id == 'rescan-library'
-                        ? onLibraryRescan
-                        : () => _showSettingsMessage(context, option),
+                    onActivate: switch (option.id) {
+                      'rescan-library' => onLibraryRescan,
+                      'service-status' => onServiceStatus,
+                      _ => () => _showSettingsMessage(context, option),
+                    },
                   );
                 },
               ),

@@ -1,9 +1,18 @@
+import '../backend/hearthdeck_api_client.dart';
 import '../dashboard_models.dart';
 import '../library_models.dart';
 import 'catalog_repository.dart';
 
 class MockCatalogRepository implements CatalogRepository {
   const MockCatalogRepository();
+
+  @override
+  Future<HearthdeckHealth> health() async => const HearthdeckHealth(
+    version: 'Mock catalog',
+    lanEnabled: false,
+    transport: 'mock',
+    providers: <HearthdeckProviderHealth>[],
+  );
 
   @override
   Future<CatalogData> load() async {
