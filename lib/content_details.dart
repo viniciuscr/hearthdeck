@@ -334,7 +334,9 @@ class _DetailsInformation extends StatelessWidget {
                       } on Object catch (error) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Could not open link: $error')),
+                            SnackBar(
+                              content: Text('Could not open link: $error'),
+                            ),
                           );
                         }
                       }

@@ -104,7 +104,10 @@ void main() {
       ),
     );
 
-    await tester.tap(find.bySemanticsLabel('Website'));
+    await tester.pumpAndSettle();
+    final website = find.text('Website', skipOffstage: false);
+    await tester.ensureVisible(website);
+    await tester.tap(find.text('Website'));
     await tester.pumpAndSettle();
 
     expect(externalLink.openedUrl, 'https://example.org');

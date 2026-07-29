@@ -25,7 +25,10 @@ class ApiCatalogRepository implements CatalogRepository {
         games.add(item);
       } else {
         appsByCategory
-            .putIfAbsent(_primaryCategoryFor(item), () => <HearthdeckLibraryItem>[])
+            .putIfAbsent(
+              _primaryCategoryFor(item),
+              () => <HearthdeckLibraryItem>[],
+            )
             .add(item);
       }
     }
@@ -38,15 +41,19 @@ class ApiCatalogRepository implements CatalogRepository {
               items: games.map(_toDashboardItem).toList(growable: false),
             ),
           ];
-    final appSources = SplayTreeMap<String, List<HearthdeckLibraryItem>>.from(
-      appsByCategory,
-    ).entries.map((MapEntry<String, List<HearthdeckLibraryItem>> entry) {
-      return CatalogSource(
-        id: 'category-${entry.key.toLowerCase().replaceAll(' ', '-')}',
-        label: entry.key,
-        items: entry.value.map(_toDashboardItem).toList(growable: false),
-      );
-    }).toList(growable: false);
+    final appSources =
+        SplayTreeMap<String, List<HearthdeckLibraryItem>>.from(appsByCategory)
+            .entries
+            .map((MapEntry<String, List<HearthdeckLibraryItem>> entry) {
+              return CatalogSource(
+                id: 'category-${entry.key.toLowerCase().replaceAll(' ', '-')}',
+                label: entry.key,
+                items: entry.value
+                    .map(_toDashboardItem)
+                    .toList(growable: false),
+              );
+            })
+            .toList(growable: false);
     return CatalogData(gameSources: gameSources, appSources: appSources);
   }
 
@@ -99,18 +106,18 @@ class ApiCatalogRepository implements CatalogRepository {
         (metadata['categories'] as List<dynamic>? ?? const <dynamic>[])
             .whereType<String>()
             .toList(growable: false);
-    final urls = (metadata['urls'] as Map<String, dynamic>? ??
-            const <String, dynamic>{})
-        .entries
-        .where(
-          (MapEntry<String, dynamic> entry) =>
-              entry.value is String && _isHttpUrl(entry.value as String),
-        )
-        .map(
-          (MapEntry<String, dynamic> entry) =>
-              MapEntry(entry.key, entry.value as String),
-        )
-        .toList(growable: false);
+    final urls =
+        (metadata['urls'] as Map<String, dynamic>? ?? const <String, dynamic>{})
+            .entries
+            .where(
+              (MapEntry<String, dynamic> entry) =>
+                  entry.value is String && _isHttpUrl(entry.value as String),
+            )
+            .map(
+              (MapEntry<String, dynamic> entry) =>
+                  MapEntry(entry.key, entry.value as String),
+            )
+            .toList(growable: false);
 
     return ContentDetails(
       summary: description ?? summary ?? item.title,
@@ -177,9 +184,9 @@ class ApiCatalogRepository implements CatalogRepository {
   }
 
   String _primaryCategoryFor(HearthdeckLibraryItem item) {
-    final categories = (item.metadata['categories'] as List<dynamic>? ??
-            const <dynamic>[])
-        .whereType<String>();
+    final categories =
+        (item.metadata['categories'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<String>();
     for (final category in categories) {
       final mapped = _libraryCategory(category);
       if (mapped != null) {

@@ -20,31 +20,34 @@ void main() {
     },
   );
 
-  test('API catalog groups records by content category and exposes metadata', () async {
-    final client = HearthdeckApiClient(
-      endpoint: HearthdeckEndpoint.local(),
-      token: 'test-token',
-      client: _CatalogHttpClient(),
-    );
-    final catalog = await ApiCatalogRepository(client).load();
+  test(
+    'API catalog groups records by content category and exposes metadata',
+    () async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.local(),
+        token: 'test-token',
+        client: _CatalogHttpClient(),
+      );
+      final catalog = await ApiCatalogRepository(client).load();
 
-    expect(catalog.gameSources.single.label, 'All games');
-    expect(catalog.appSources.single.label, 'Graphics');
-    expect(catalog.gameSources.single.items.single.title, 'Orbit');
-    expect(catalog.appSources.single.items.single.title, 'Gallery');
-    expect(
-      catalog.appSources.single.items.single.details?.facts.any(
-        (ContentFact fact) => fact.label == 'Metadata',
-      ),
-      isTrue,
-    );
-    expect(
-      catalog.appSources.single.items.single.details?.actions.any(
-        (ContentAction action) => action.label == 'Website',
-      ),
-      isTrue,
-    );
-  });
+      expect(catalog.gameSources.single.label, 'All games');
+      expect(catalog.appSources.single.label, 'Graphics');
+      expect(catalog.gameSources.single.items.single.title, 'Orbit');
+      expect(catalog.appSources.single.items.single.title, 'Gallery');
+      expect(
+        catalog.appSources.single.items.single.details?.facts.any(
+          (ContentFact fact) => fact.label == 'Metadata',
+        ),
+        isTrue,
+      );
+      expect(
+        catalog.appSources.single.items.single.details?.actions.any(
+          (ContentAction action) => action.label == 'Website',
+        ),
+        isTrue,
+      );
+    },
+  );
 
   test('a provider kind the client does not recognize falls back to '
       'application instead of throwing', () async {
