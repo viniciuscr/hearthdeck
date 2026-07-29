@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use hearthdeck_protocol::DiscoveredApplication;
 use tokio::process::Command;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::DESKTOP_APPS_SOURCE;
 
@@ -19,15 +19,17 @@ pub async fn discover_applications(source_id: &str) -> Result<Vec<DiscoveredAppl
     info!(directories = ?directories, "application discovery scanning desktop-entry directories");
 
     let mut entries = HashMap::new();
-    for directory in directories {
-        let mut directory = match tokio::fs::read_dir(&directory).await {
+    for source_directory in directories {
+        let mut directory = match tokio::fs::read_dir(&source_directory).await {
             Ok(directory) => directory,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
-                warn!(directory = %directory.display(), %error, "application discovery could not read desktop-entry directory");
+                warn!(directory = %source_directory.display(), %error, "application discovery could not read desktop-entry directory");
                 continue;
             }
         };
+        let mut desktop_entry_count = 0;
+        let mut accepted_entry_count = 0;
         loop {
             let file = match directory.next_entry().await {
                 Ok(Some(file)) => file,
@@ -41,11 +43,35 @@ pub async fn discover_applications(source_id: &str) -> Result<Vec<DiscoveredAppl
             if path
                 .extension()
                 .is_some_and(|extension| extension == "desktop")
-                && let Ok(entry) = parse_desktop_entry(&path).await
             {
-                entries.entry(entry.application_id.clone()).or_insert(entry);
+                desktop_entry_count += 1;
+                match parse_desktop_entry(&path).await {
+                    Ok(entry) => {
+                        accepted_entry_count += 1;
+                        debug!(
+                            directory = %source_directory.display(),
+                            application_id = %entry.application_id,
+                            title = %entry.name,
+                            "application discovery accepted desktop entry"
+                        );
+                        entries.entry(entry.application_id.clone()).or_insert(entry);
+                    }
+                    Err(error) => {
+                        debug!(
+                            desktop_entry = %path.display(),
+                            %error,
+                            "application discovery skipped desktop entry"
+                        );
+                    }
+                }
             }
         }
+        info!(
+            directory = %source_directory.display(),
+            desktop_entry_count,
+            accepted_entry_count,
+            "application discovery scanned desktop-entry directory"
+        );
     }
     let mut entries: Vec<_> = entries.into_values().collect();
     entries.sort_by(|left, right| left.name.cmp(&right.name));

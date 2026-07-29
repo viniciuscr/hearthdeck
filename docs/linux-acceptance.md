@@ -41,6 +41,12 @@ directories. Check its structured scan-directory log if the catalog is empty:
 journalctl --user -u hearthdeck-bridge.service --since '10 minutes ago' -o cat
 ```
 
+At the default log level, each scanned directory reports `desktop_entry_count`
+and `accepted_entry_count`. A count of zero from every directory means the
+desktop session has no exported Freedesktop launchers in those locations;
+installed packages without a `.desktop` entry are intentionally not listed as
+launchable applications.
+
 ## Launch
 
 Call `POST /v1/apps/{id}/launch` with an ID returned by the library endpoint.

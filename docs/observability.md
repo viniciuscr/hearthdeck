@@ -72,6 +72,30 @@ For a bounded incident window on Linux:
 journalctl --user -u hearthdeck-daemon.service --since '15 minutes ago' -o json-pretty
 ```
 
+## Desktop Discovery
+
+Every bridge scan logs each directory, the number of `.desktop` candidates,
+and the number of accepted application entries at the default `info` level.
+This identifies whether a host has no desktop entries in a scanned location or
+whether entries are rejected by the visibility/application checks:
+
+```sh
+journalctl --user -u hearthdeck-bridge.service --since '10 minutes ago' -o cat
+```
+
+For a temporary list of accepted application IDs and titles, add a user-unit
+drop-in, reload, and restart the bridge:
+
+```sh
+systemctl --user edit hearthdeck-bridge.service
+# Add: [Service]\nEnvironment=RUST_LOG=hearthdeck_bridge=debug
+systemctl --user daemon-reload
+systemctl --user restart hearthdeck-bridge.service hearthdeck-daemon.service
+journalctl --user -u hearthdeck-bridge.service -f -o cat
+```
+
+The bridge never logs desktop-entry `Exec` values.
+
 ## Investigation Order
 
 1. Filter daemon logs by `request_id` or `item_id`.
