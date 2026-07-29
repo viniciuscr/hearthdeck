@@ -1,0 +1,7 @@
+[Unit]
+Description=Hearthdeck local session
+After=graphical-session.target hearthdeck-bridge.socket
+Wants=hearthdeck-bridge.socket hearthdeck-daemon.service
+
+[Install]
+WantedBy=default.target

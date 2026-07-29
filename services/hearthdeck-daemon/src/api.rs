@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::state::{ServerEvent, SharedState};
+use crate::state::{ProviderHealth, ServerEvent, SharedState};
 
 pub fn router(state: SharedState) -> Router {
     Router::new()
@@ -48,6 +48,7 @@ async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
         } else {
             "http"
         },
+        providers: state.provider_health().await,
     })
 }
 
@@ -263,6 +264,7 @@ struct HealthResponse {
     version: &'static str,
     lan_enabled: bool,
     transport: &'static str,
+    providers: Vec<ProviderHealth>,
 }
 
 #[derive(Serialize)]
@@ -453,6 +455,15 @@ mod tests {
         let token = paired["token"].as_str().unwrap();
         let mut events = state.events.subscribe();
 
+        let (status, health) = response_json(
+            router(state.clone()),
+            Request::get("/v1/health").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(health["providers"][0]["id"], "test-apps");
+        assert_eq!(health["providers"][0]["status"], "starting");
+
         let rescan = router(state.clone())
             .oneshot(
                 Request::post("/v1/library/rescan")
@@ -467,6 +478,15 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+
+        let (status, health) = response_json(
+            router(state.clone()),
+            Request::get("/v1/health").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(health["providers"][0]["status"], "ready");
+        assert_eq!(health["providers"][0]["record_count"], 1);
 
         let (status, library) = response_json(
             router(state),

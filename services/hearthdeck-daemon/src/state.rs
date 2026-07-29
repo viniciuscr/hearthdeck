@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::Utc;
 use tokio::sync::broadcast;
 
 use crate::{
@@ -15,6 +16,70 @@ pub struct AppState {
     pub discovery: Option<DiscoveryService>,
     pub enrichment: Option<EnrichmentService>,
     pub events: broadcast::Sender<ServerEvent>,
+}
+
+impl AppState {
+    pub async fn provider_health(&self) -> Vec<ProviderHealth> {
+        let mut providers = Vec::new();
+        if let Some(discovery) = &self.discovery {
+            providers.extend(discovery.provider_health().await);
+        }
+        if let Some(enrichment) = &self.enrichment {
+            providers.extend(enrichment.provider_health().await);
+        }
+        providers.sort_by(|left, right| left.id.cmp(&right.id));
+        providers
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    Discovery,
+    Metadata,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderStatus {
+    Starting,
+    Ready,
+    Degraded,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ProviderHealth {
+    pub id: String,
+    pub kind: ProviderKind,
+    pub status: ProviderStatus,
+    pub record_count: Option<usize>,
+    pub last_success_at: Option<String>,
+    pub last_error: Option<String>,
+}
+
+impl ProviderHealth {
+    pub fn starting(id: &str, kind: ProviderKind) -> Self {
+        Self {
+            id: id.to_owned(),
+            kind,
+            status: ProviderStatus::Starting,
+            record_count: None,
+            last_success_at: None,
+            last_error: None,
+        }
+    }
+
+    pub fn record_success(&mut self, record_count: usize) {
+        self.status = ProviderStatus::Ready;
+        self.record_count = Some(record_count);
+        self.last_success_at = Some(Utc::now().to_rfc3339());
+        self.last_error = None;
+    }
+
+    pub fn record_failure(&mut self, error: &anyhow::Error) {
+        self.status = ProviderStatus::Degraded;
+        self.last_error = Some(error.to_string());
+    }
 }
 
 impl AppState {

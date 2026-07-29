@@ -8,8 +8,8 @@ workspace test suite.
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user enable --now hearthdeck-bridge.service hearthdeck-daemon.service
-systemctl --user status hearthdeck-bridge.service hearthdeck-daemon.service
+systemctl --user enable --now hearthdeck.target
+systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-daemon.service
 ```
 
 For local-only development, verify health:
@@ -18,6 +18,10 @@ For local-only development, verify health:
 curl http://127.0.0.1:38400/v1/health
 curl -X POST http://127.0.0.1:38401/v1/pairing
 ```
+
+The health response reports each discovery and metadata provider as `starting`,
+`ready`, or `degraded`, including its last success, record count, and a safe
+error summary. A degraded provider leaves other catalog sources available.
 
 ## Library Scan
 

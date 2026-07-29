@@ -1,6 +1,10 @@
 mod platform;
 
-use std::{env, os::unix::fs::PermissionsExt, path::PathBuf};
+use std::{
+    env,
+    os::unix::{fs::PermissionsExt, io::FromRawFd, net::UnixListener as StdUnixListener},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
@@ -15,15 +19,8 @@ use tracing::{Instrument, error, info, info_span, warn};
 async fn main() -> Result<()> {
     hearthdeck_observability::init("hearthdeck-bridge", "hearthdeck_bridge=info");
     let socket_path = bridge_socket_path()?;
-    if let Some(parent) = socket_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    if socket_path.exists() {
-        tokio::fs::remove_file(&socket_path).await?;
-    }
-    let listener = UnixListener::bind(&socket_path)?;
-    tokio::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600)).await?;
-    info!(socket = %socket_path.display(), socket_mode = "0600", "bridge listening");
+    let (listener, socket_activated) = bridge_listener(&socket_path).await?;
+    info!(socket = %socket_path.display(), socket_activated, "bridge listening");
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
@@ -39,6 +36,36 @@ async fn main() -> Result<()> {
             Err(error) => error!(%error, "bridge accept failed"),
         }
     }
+}
+
+async fn bridge_listener(socket_path: &Path) -> Result<(UnixListener, bool)> {
+    if let Some(listener) = inherited_listener()? {
+        return Ok((listener, true));
+    }
+
+    if let Some(parent) = socket_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    if socket_path.exists() {
+        tokio::fs::remove_file(socket_path).await?;
+    }
+    let listener = UnixListener::bind(socket_path)?;
+    tokio::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600)).await?;
+    Ok((listener, false))
+}
+
+fn inherited_listener() -> Result<Option<UnixListener>> {
+    let mut listen_fds = sd_notify::listen_fds()?;
+    let Some(file_descriptor) = listen_fds.next() else {
+        return Ok(None);
+    };
+    if listen_fds.next().is_some() {
+        anyhow::bail!("hearthdeck-bridge requires exactly one activated socket")
+    }
+
+    let listener = unsafe { StdUnixListener::from_raw_fd(file_descriptor) };
+    listener.set_nonblocking(true)?;
+    Ok(Some(UnixListener::from_std(listener)?))
 }
 
 async fn handle_connection(stream: UnixStream) -> Result<()> {

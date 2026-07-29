@@ -21,6 +21,16 @@ newline-delimited JSON defined in `hearthdeck-protocol`. The protocol has typed 
 and launch requests only. Arbitrary command execution is deliberately absent,
 and desktop-entry `Exec` text never crosses the bridge boundary.
 
+On Linux, `hearthdeck.target` is the systemd user-session root. It starts the
+API daemon and owns `hearthdeck-bridge.socket`; the bridge process starts only
+when a typed daemon request arrives. Future NetworkManager and BlueZ adapters
+will receive their own socket/service pair under the same target rather than
+being folded into the daemon.
+
+`GET /v1/health` reports every discovery and metadata provider as `starting`,
+`ready`, or `degraded`, with the last successful record count and safe error
+summary. A provider failure cannot erase another source's catalog records.
+
 ## Development
 
 ```sh

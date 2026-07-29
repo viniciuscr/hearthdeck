@@ -132,6 +132,7 @@ class HearthdeckHealth {
     required this.version,
     required this.lanEnabled,
     required this.transport,
+    required this.providers,
   });
 
   factory HearthdeckHealth.fromJson(Map<String, dynamic> json) =>
@@ -139,11 +140,44 @@ class HearthdeckHealth {
         version: json['version'] as String,
         lanEnabled: json['lan_enabled'] as bool,
         transport: json['transport'] as String,
+        providers: (json['providers'] as List<dynamic>)
+            .cast<Map<String, dynamic>>()
+            .map(HearthdeckProviderHealth.fromJson)
+            .toList(growable: false),
       );
 
   final String version;
   final bool lanEnabled;
   final String transport;
+  final List<HearthdeckProviderHealth> providers;
+}
+
+class HearthdeckProviderHealth {
+  const HearthdeckProviderHealth({
+    required this.id,
+    required this.kind,
+    required this.status,
+    required this.recordCount,
+    required this.lastSuccessAt,
+    required this.lastError,
+  });
+
+  factory HearthdeckProviderHealth.fromJson(Map<String, dynamic> json) =>
+      HearthdeckProviderHealth(
+        id: json['id'] as String,
+        kind: json['kind'] as String,
+        status: json['status'] as String,
+        recordCount: json['record_count'] as int?,
+        lastSuccessAt: json['last_success_at'] as String?,
+        lastError: json['last_error'] as String?,
+      );
+
+  final String id;
+  final String kind;
+  final String status;
+  final int? recordCount;
+  final String? lastSuccessAt;
+  final String? lastError;
 }
 
 class HearthdeckPairing {

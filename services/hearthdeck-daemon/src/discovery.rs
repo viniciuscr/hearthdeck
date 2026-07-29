@@ -9,7 +9,7 @@ use tracing::{Instrument, error, info, info_span, warn};
 
 use crate::{
     catalog::{CatalogRecord, CatalogStore},
-    state::ServerEvent,
+    state::{ProviderHealth, ProviderKind, ServerEvent},
 };
 
 #[async_trait]
@@ -32,6 +32,7 @@ pub struct DiscoveryService {
 struct ProviderWorker {
     sender: mpsc::Sender<()>,
     state: Arc<Mutex<RefreshState>>,
+    health: Arc<Mutex<ProviderHealth>>,
 }
 
 #[derive(Default)]
@@ -58,9 +59,14 @@ impl DiscoveryService {
             let source_id = provider.source_id();
             let (sender, mut receiver) = mpsc::channel(1);
             let state = Arc::new(Mutex::new(RefreshState::default()));
+            let health = Arc::new(Mutex::new(ProviderHealth::starting(
+                source_id,
+                ProviderKind::Discovery,
+            )));
             let worker = ProviderWorker {
                 sender: sender.clone(),
                 state: state.clone(),
+                health: health.clone(),
             };
             workers.insert(source_id, worker);
             info!(
@@ -73,6 +79,7 @@ impl DiscoveryService {
             let worker_catalog = catalog.clone();
             let worker_provider = provider.clone();
             let worker_state = state.clone();
+            let worker_health = health.clone();
             tokio::spawn(async move {
                 while receiver.recv().await.is_some() {
                     {
@@ -93,12 +100,17 @@ impl DiscoveryService {
                     .catch_unwind()
                     .await
                     {
-                        Ok(Ok(())) => {}
+                        Ok(Ok(record_count)) => {
+                            worker_health.lock().await.record_success(record_count);
+                        }
                         Ok(Err(error)) => {
+                            worker_health.lock().await.record_failure(&error);
                             error!(source_id, %error, "discovery provider failed");
                         }
                         Err(panic) => {
-                            error!(source_id, panic = %panic_message(&panic), "discovery provider panicked");
+                            let error = anyhow::anyhow!(panic_message(&panic).to_owned());
+                            worker_health.lock().await.record_failure(&error);
+                            error!(source_id, %error, "discovery provider panicked");
                         }
                     }
                     worker_state.lock().await.running = false;
@@ -126,6 +138,15 @@ impl DiscoveryService {
         for source_id in self.workers.keys() {
             self.request(source_id).await;
         }
+    }
+
+    pub async fn provider_health(&self) -> Vec<ProviderHealth> {
+        let mut health = Vec::with_capacity(self.workers.len());
+        for worker in self.workers.values() {
+            health.push(worker.health.lock().await.clone());
+        }
+        health.sort_by(|left, right| left.id.cmp(&right.id));
+        health
     }
 
     pub async fn request(&self, source_id: &str) -> RefreshRequest {
@@ -156,7 +177,7 @@ async fn discover_source(
     provider: &dyn DiscoveryProvider,
     catalog: &CatalogStore,
     events: &tokio::sync::broadcast::Sender<ServerEvent>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     let started_at = std::time::Instant::now();
     info!(source_id = provider.source_id(), "discovery started");
     let records = provider.discover().await?;
@@ -174,7 +195,7 @@ async fn discover_source(
         duration_ms = started_at.elapsed().as_millis() as u64,
         "discovery completed"
     );
-    Ok(())
+    Ok(record_count)
 }
 
 fn panic_message(panic: &(dyn Any + Send)) -> &str {

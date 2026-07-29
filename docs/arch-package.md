@@ -6,7 +6,8 @@ CachyOS. It installs:
 - `/opt/hearthdeck/`: the Flutter Linux client bundle.
 - `/usr/bin/hearthdeck`: the desktop launcher command.
 - `/usr/lib/hearthdeck/`: the local bridge and daemon binaries.
-- `/usr/lib/systemd/user/`: packaged user units for the bridge and daemon.
+- `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
+  API daemon user units.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 
 ## Install
@@ -16,7 +17,8 @@ Download `hearthdeck-*.pkg.tar.zst` from the GitHub Actions artifact and run:
 ```sh
 sudo pacman -U hearthdeck-*.pkg.tar.zst
 systemctl --user daemon-reload
-systemctl --user enable --now hearthdeck-bridge.service hearthdeck-daemon.service
+systemctl --user disable --now hearthdeck-bridge.service hearthdeck-daemon.service
+systemctl --user enable --now hearthdeck.target
 ```
 
 Pacman deliberately does not enable a per-user service during a root package
@@ -24,6 +26,17 @@ transaction. Enable it as the desktop user that will launch applications.
 The units retain `NoNewPrivileges`, but do not use mount-namespace sandboxing:
 Arch systemd user units cannot reliably support directives such as
 `ProtectSystem`, `ReadWritePaths`, or `PrivateTmp`.
+
+`hearthdeck.target` is the only unit users enable. It starts the API daemon and
+owns the `hearthdeck-bridge.socket`; the bridge process is socket-activated on
+its first typed request. Future network and Bluetooth bridges will follow this
+same target-plus-socket lifecycle.
+
+If you previously used `just install-services`, its copies in
+`~/.config/systemd/user/` override the package units. Move
+`hearthdeck-bridge.service` and `hearthdeck-daemon.service` aside before
+enabling the packaged target, then preserve any local customization in a
+systemd drop-in.
 
 The bridge scans the target machine's Freedesktop entries and invokes
 `gtk-launch` only for a desktop ID returned by that scan. The daemon maintains
@@ -43,7 +56,7 @@ remain sample content.
 ## Verify
 
 ```sh
-systemctl --user status hearthdeck-bridge.service hearthdeck-daemon.service
+systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-daemon.service
 curl http://127.0.0.1:38400/v1/health
 hearthdeck
 ```

@@ -109,11 +109,25 @@ components:
   schemas:
     Health:
       type: object
-      required: [version, lan_enabled, transport]
+      required: [version, lan_enabled, transport, providers]
       properties:
         version: { type: string }
         lan_enabled: { type: boolean }
         transport: { type: string, enum: [http, https] }
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderHealth'
+    ProviderHealth:
+      type: object
+      required: [id, kind, status, record_count, last_success_at, last_error]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [discovery, metadata] }
+        status: { type: string, enum: [starting, ready, degraded] }
+        record_count: { type: [integer, 'null'], minimum: 0 }
+        last_success_at: { type: [string, 'null'], format: date-time }
+        last_error: { type: [string, 'null'] }
     PairingRequest:
       type: object
       required: [code, client_name]

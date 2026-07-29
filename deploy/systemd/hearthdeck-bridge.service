@@ -1,11 +1,11 @@
 [Unit]
 Description=Hearthdeck Linux integration bridge
-After=graphical-session.target
-PartOf=graphical-session.target
+After=hearthdeck-bridge.socket
+Requires=hearthdeck-bridge.socket
+PartOf=hearthdeck.target
 
 [Service]
 Type=exec
-RuntimeDirectory=hearthdeck
 Environment=HEARTHDECK_LOG_FORMAT=json
 Environment=RUST_LOG=hearthdeck_bridge=info
 ExecStart=%h/.local/bin/hearthdeck-bridge
@@ -15,6 +15,3 @@ NoNewPrivileges=yes
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hearthdeck-bridge
-
-[Install]
-WantedBy=default.target

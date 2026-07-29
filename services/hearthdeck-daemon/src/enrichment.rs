@@ -8,7 +8,7 @@ use tracing::{Instrument, error, info, info_span, warn};
 
 use crate::{
     catalog::{CatalogStore, EnrichmentRecord},
-    state::ServerEvent,
+    state::{ProviderHealth, ProviderKind, ServerEvent},
 };
 
 #[async_trait]
@@ -28,6 +28,7 @@ pub struct EnrichmentService {
 struct ProviderWorker {
     sender: mpsc::Sender<()>,
     state: Arc<Mutex<RefreshState>>,
+    health: Arc<Mutex<ProviderHealth>>,
 }
 
 #[derive(Default)]
@@ -54,11 +55,16 @@ impl EnrichmentService {
             let provider_id = provider.provider_id();
             let (sender, mut receiver) = mpsc::channel(1);
             let state = Arc::new(Mutex::new(RefreshState::default()));
+            let health = Arc::new(Mutex::new(ProviderHealth::starting(
+                provider_id,
+                ProviderKind::Metadata,
+            )));
             workers.insert(
                 provider_id,
                 ProviderWorker {
                     sender: sender.clone(),
                     state: state.clone(),
+                    health: health.clone(),
                 },
             );
             info!(
@@ -71,6 +77,7 @@ impl EnrichmentService {
             let worker_events = events.clone();
             let worker_provider = provider.clone();
             let worker_state = state.clone();
+            let worker_health = health.clone();
             tokio::spawn(async move {
                 while receiver.recv().await.is_some() {
                     {
@@ -79,12 +86,17 @@ impl EnrichmentService {
                         state.running = true;
                     }
                     let span = info_span!("metadata.enrich", provider_id);
-                    if let Err(error) =
-                        enrich_source(worker_provider.as_ref(), &worker_catalog, &worker_events)
-                            .instrument(span)
-                            .await
+                    match enrich_source(worker_provider.as_ref(), &worker_catalog, &worker_events)
+                        .instrument(span)
+                        .await
                     {
-                        error!(provider_id, %error, "metadata provider failed");
+                        Ok(record_count) => {
+                            worker_health.lock().await.record_success(record_count);
+                        }
+                        Err(error) => {
+                            worker_health.lock().await.record_failure(&error);
+                            error!(provider_id, %error, "metadata provider failed");
+                        }
                     }
                     worker_state.lock().await.running = false;
                 }
@@ -110,6 +122,15 @@ impl EnrichmentService {
         for provider_id in self.workers.keys() {
             self.request(provider_id).await;
         }
+    }
+
+    pub async fn provider_health(&self) -> Vec<ProviderHealth> {
+        let mut health = Vec::with_capacity(self.workers.len());
+        for worker in self.workers.values() {
+            health.push(worker.health.lock().await.clone());
+        }
+        health.sort_by(|left, right| left.id.cmp(&right.id));
+        health
     }
 
     pub async fn request(&self, provider_id: &str) -> EnrichmentRequest {
@@ -139,7 +160,7 @@ async fn enrich_source(
     provider: &dyn MetadataProvider,
     catalog: &CatalogStore,
     events: &tokio::sync::broadcast::Sender<ServerEvent>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     let started_at = std::time::Instant::now();
     info!(
         provider_id = provider.provider_id(),
@@ -160,5 +181,5 @@ async fn enrich_source(
         duration_ms = started_at.elapsed().as_millis() as u64,
         "metadata enrichment completed"
     );
-    Ok(())
+    Ok(record_count)
 }

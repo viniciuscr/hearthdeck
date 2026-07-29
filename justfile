@@ -97,20 +97,23 @@ ci-package-arch:
 install-services:
   mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/bin"
   systemctl --user disable --now ltv-bridge.service ltv-daemon.service 2>/dev/null || true
+  systemctl --user disable --now hearthdeck.target hearthdeck-bridge.socket hearthdeck-bridge.service hearthdeck-daemon.service 2>/dev/null || true
   if [[ -d "$HOME/.config/ltv" && ! -e "$HOME/.config/hearthdeck" ]]; then mv "$HOME/.config/ltv" "$HOME/.config/hearthdeck"; fi
   if [[ -d "$HOME/.local/share/ltv" && ! -e "$HOME/.local/share/hearthdeck" ]]; then mv "$HOME/.local/share/ltv" "$HOME/.local/share/hearthdeck"; fi
   if [[ -f "$HOME/.config/hearthdeck/daemon.env" ]]; then perl -pi -e 's/LTV_/HEARTHDECK_/g; s#/.config/ltv/#/.config/hearthdeck/#g' "$HOME/.config/hearthdeck/daemon.env"; fi
   rm -f "$HOME/.config/systemd/user/ltv-bridge.service" "$HOME/.config/systemd/user/ltv-daemon.service"
   cp deploy/systemd/hearthdeck-bridge.service "$HOME/.config/systemd/user/"
   cp deploy/systemd/hearthdeck-daemon.service "$HOME/.config/systemd/user/"
+  cp deploy/systemd/hearthdeck-bridge.socket "$HOME/.config/systemd/user/"
+  cp deploy/systemd/hearthdeck.target "$HOME/.config/systemd/user/"
   cp services/target/release/hearthdeck-bridge "$HOME/.local/bin/"
   cp services/target/release/hearthdeck-daemon "$HOME/.local/bin/"
   systemctl --user daemon-reload
-  systemctl --user enable --now hearthdeck-bridge.service hearthdeck-daemon.service
+  systemctl --user enable --now hearthdeck.target
 
 # Show Linux service status.
 services-status:
-  systemctl --user status hearthdeck-bridge.service hearthdeck-daemon.service
+  systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-bridge.service hearthdeck-daemon.service
 
 # Follow Linux service logs.
 services-logs:

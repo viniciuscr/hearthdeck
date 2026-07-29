@@ -8,7 +8,7 @@ mod discovery;
 mod enrichment;
 mod state;
 
-use std::sync::Arc;
+use std::{net::TcpListener as StdTcpListener, sync::Arc};
 
 use anyhow::Result;
 use axum::extract::DefaultBodyLimit;
@@ -96,16 +96,34 @@ async fn main() -> Result<()> {
 
     if let Some(tls) = config.tls {
         let tls = RustlsConfig::from_pem_file(tls.certificate_path, tls.private_key_path).await?;
+        let listener = StdTcpListener::bind(config.bind_address)?;
+        listener.set_nonblocking(true)?;
         info!(address = %config.bind_address, version = VERSION, transport = "https", "daemon listening");
+        notify_ready()?;
         tokio::try_join!(
             local_server,
-            axum_server::bind_rustls(config.bind_address, tls).serve(router.into_make_service()),
+            axum_server::from_tcp_rustls(listener, tls)?.serve(router.into_make_service()),
         )?;
     } else {
         let listener = TcpListener::bind(config.bind_address).await?;
         info!(address = %config.bind_address, version = VERSION, transport = "http", "daemon listening");
+        notify_ready()?;
         tokio::try_join!(local_server, axum::serve(listener, router))?;
     }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn notify_ready() -> Result<()> {
+    sd_notify::notify(&[
+        sd_notify::NotifyState::Status("Hearthdeck API listeners ready"),
+        sd_notify::NotifyState::Ready,
+    ])?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn notify_ready() -> Result<()> {
     Ok(())
 }
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=Hearthdeck Linux integration bridge socket
+PartOf=hearthdeck.target
+
+[Socket]
+ListenStream=%t/hearthdeck/bridge.sock
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=true
+Service=hearthdeck-bridge.service
+
+[Install]
+WantedBy=hearthdeck.target

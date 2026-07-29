@@ -25,6 +25,7 @@ impl Config {
             .context("could not determine Hearthdeck data directories")?;
         let data_dir = project_dirs.data_local_dir();
         let runtime_dir = env::var_os("XDG_RUNTIME_DIR")
+            .filter(|path| !path.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| data_dir.join("runtime"));
 
@@ -73,6 +74,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| data_dir.join("hearthdeck.db")),
             bridge_socket_path: env::var_os("HEARTHDECK_BRIDGE_SOCKET")
+                .filter(|path| !path.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| runtime_dir.join("hearthdeck/bridge.sock")),
             lan_enabled,

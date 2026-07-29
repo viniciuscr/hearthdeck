@@ -760,6 +760,7 @@ dependencies = [
  "directories",
  "hearthdeck-observability",
  "hearthdeck-protocol",
+ "sd-notify",
  "serde_json",
  "tempfile",
  "tokio",
@@ -782,6 +783,7 @@ dependencies = [
  "hearthdeck-protocol",
  "rand 0.10.2",
  "roxmltree",
+ "sd-notify",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1552,6 +1554,15 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "sd-notify"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e4ef7359e694bfaf1dd27a30f9d760b54c00dfae9f19bd0c05a39bc9128fe76"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "serde"

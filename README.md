@@ -62,11 +62,13 @@ Download `hearthdeck-*.pkg.tar.zst` from the workflow run, then install it:
 ```sh
 sudo pacman -U hearthdeck-*.pkg.tar.zst
 systemctl --user daemon-reload
-systemctl --user enable --now hearthdeck-bridge.service hearthdeck-daemon.service
+systemctl --user disable --now hearthdeck-bridge.service hearthdeck-daemon.service
+systemctl --user enable --now hearthdeck.target
 ```
 
-The services discover applications on the target machine's graphical session.
-The package's client pairs with its loopback daemon automatically. See
+The target owns the API daemon and bridge socket; the bridge process starts on
+demand for host requests. The package's client pairs with its loopback daemon
+automatically. See
 `docs/arch-package.md` for package contents and troubleshooting.
 
 ## Controller support

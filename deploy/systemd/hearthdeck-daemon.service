@@ -1,14 +1,15 @@
 [Unit]
 Description=Hearthdeck local API daemon
-After=hearthdeck-bridge.service
-Requires=hearthdeck-bridge.service
+After=hearthdeck-bridge.socket
+Requires=hearthdeck-bridge.socket
+PartOf=hearthdeck.target
 
 [Service]
-Type=exec
+Type=notify
+NotifyAccess=main
 EnvironmentFile=-%h/.config/hearthdeck/daemon.env
 Environment=HEARTHDECK_LOG_FORMAT=json
 Environment=RUST_LOG=hearthdeck_daemon=info,tower_http=info
-RuntimeDirectory=hearthdeck
 ExecStart=%h/.local/bin/hearthdeck-daemon
 Restart=on-failure
 RestartSec=2
@@ -16,6 +17,3 @@ NoNewPrivileges=yes
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=hearthdeck-daemon
-
-[Install]
-WantedBy=default.target

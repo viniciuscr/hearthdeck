@@ -28,6 +28,10 @@ authorization headers, request bodies, desktop `Exec` strings, or media paths.
 The request trace intentionally excludes headers and bodies. It correlates API
 logs with the `x-request-id` response header.
 
+`GET /v1/health` is the current provider-health snapshot. It is the source of
+truth for whether a catalog source is `starting`, `ready`, or `degraded`; use
+logs for the associated operation detail.
+
 For catalog synchronization, expect this lifecycle in order:
 
 1. `all discovery providers refresh requested` or a source refresh event.
@@ -106,3 +110,10 @@ The bridge never logs desktop-entry `Exec` values.
 Absence of a discovery completion event means the provider failed before
 catalog persistence. A catalog completion event with zero records means the
 provider completed successfully but found no source content.
+
+With the Linux service graph, inspect the target and socket before restarting a
+bridge process manually:
+
+```sh
+systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-daemon.service
+```

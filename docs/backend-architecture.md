@@ -11,7 +11,7 @@ hearthdeck-daemon
     |
     | user-only Unix socket, typed newline-delimited JSON
     v
-hearthdeck-bridge
+hearthdeck-bridge.socket -> hearthdeck-bridge (socket activated)
     |
     v
 Freedesktop desktop entries and registered host operations
@@ -20,6 +20,12 @@ Freedesktop desktop entries and registered host operations
 `hearthdeck-daemon` owns the versioned client API, pairing records, SQLite state, and
 background work scheduling. `hearthdeck-bridge` is Linux-only and owns desktop-entry
 discovery plus allowlisted launches inside the active graphical session.
+
+`hearthdeck.target` is the systemd user-session root. It owns the API daemon
+and bridge socket. The bridge is socket-activated, so daemon startup depends on
+the socket existing rather than on a race-prone bridge process startup. Future
+host capabilities receive their own typed socket/service pair under the same
+target.
 
 ## Platform Adaptation Rules
 
@@ -101,14 +107,25 @@ provider name. Implementations are:
   source tab without a frontend provider-specific branch.
 
 `FullLibraryPage` accepts a repository by injection. The default factory uses
-the mock unless both `HEARTHDECK_BACKEND_URL` and `HEARTHDECK_PAIRING_TOKEN` are supplied as
-Dart defines. Selecting a tile opens shared details; the primary action
-delegates launch to the repository.
+an explicit API repository when both `HEARTHDECK_BACKEND_URL` and
+`HEARTHDECK_PAIRING_TOKEN` are supplied as Dart defines. Packaged Linux builds
+use a local repository that pairs with the loopback daemon at runtime; macOS UI
+development and tests retain mock catalog content. Selecting a tile opens shared
+details; the primary action delegates launch to the repository.
 
 `just dev` creates a temporary loopback pairing after daemon startup and starts
 Flutter through `app-live`, so Full Library uses real discovered catalog data
 in development. The dashboard and search remain static fixture surfaces until
 their own catalog repositories are introduced.
+
+## Provider Health
+
+`GET /v1/health` includes each discovery and metadata provider's stable ID,
+kind, status, record count, last successful refresh, and safe error summary.
+`starting` means no source snapshot has completed, `ready` means the last run
+committed a snapshot, and `degraded` means the last run failed while prior
+catalog rows remain untouched. Clients must distinguish `ready` with zero
+records from `degraded`; an empty catalog is not a bridge health signal.
 
 ## macOS Integration
 
@@ -154,9 +171,9 @@ flows. It is not included in the public API contract.
 
 ## Deployment
 
-Install the systemd **user** units from `deploy/systemd/`. A user service is
-required because graphical application launches must inherit the active
-KDE/Wayland session. Configure LAN TLS through
+Install and enable `hearthdeck.target` from the systemd **user** units in
+`deploy/systemd/`. A user service is required because graphical application
+launches must inherit the active KDE/Wayland session. Configure LAN TLS through
 `~/.config/hearthdeck/daemon.env`; see `deploy/systemd/daemon.env.example`.
 
 ## Next Slice
