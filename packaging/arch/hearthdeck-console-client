@@ -1,8 +1,0 @@
-#!/usr/bin/sh
-# Keep the compositor's primary client alive and restart Hearthdeck after a
-# crash so the console session does not strand the user at a blank display.
-while :; do
-  dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE
-  /usr/bin/hearthdeck
-  sleep 1
-done

@@ -3,4 +3,4 @@
 # installed Mesa, Vulkan, DRM, and kernel graphics stack.
 export XDG_CURRENT_DESKTOP=gamescope
 export XDG_SESSION_DESKTOP=hearthdeck
-exec gamescope --backend drm --expose-wayland --force-windows-fullscreen -- /usr/lib/hearthdeck/hearthdeck-console-client
+exec gamescope --backend drm --expose-wayland --force-windows-fullscreen -- /usr/bin/hearthdeck

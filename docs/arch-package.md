@@ -11,8 +11,6 @@ CachyOS. It installs:
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck-gamescope.desktop`: the direct DRM
   console session shown by compatible display managers.
-- `/usr/lib/hearthdeck/hearthdeck-console-client`: restarts the Flutter shell
-  if it exits so the console session remains recoverable.
 
 ## Install
 
@@ -48,6 +46,11 @@ Vulkan, DRM, and kernel graphics stack. Select **Hearthdeck Console** in the
 display manager, or configure it as the autologin session, for the minimal
 direct-to-display experience. A normal desktop session remains a separate
 recovery option; it is not started behind Hearthdeck Console.
+
+Exit Hearthdeck Console from its system menu to return to the display manager.
+Select the COSMIC session there to return to the desktop. If the console shell
+crashes, Gamescope exits as well and the display manager remains available for
+recovery.
 
 The bridge scans the target machine's Freedesktop entries and launches only a
 re-discovered desktop entry. Linux launches are placed in a transient systemd
