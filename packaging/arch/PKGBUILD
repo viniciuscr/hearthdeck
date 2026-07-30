@@ -1,6 +1,6 @@
 pkgname=hearthdeck
 pkgver=1.0.0
-pkgrel=4
+pkgrel=5
 pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'

@@ -31,8 +31,10 @@ Arch systemd user units cannot reliably support directives such as
 
 `hearthdeck.target` is the only unit users enable. It starts the API daemon and
 owns the `hearthdeck-bridge.socket`; the bridge process is socket-activated on
-its first typed request. Future network and Bluetooth bridges will follow this
-same target-plus-socket lifecycle.
+its first typed request. In Console, the session wrapper starts Gamescope,
+waits for its private Xwayland display, then restarts the bridge with only that
+display environment. Future network and Bluetooth bridges will follow this same
+target-plus-socket lifecycle.
 
 If you previously used `just install-services`, its copies in
 `~/.config/systemd/user/` override the package units. Move
@@ -49,11 +51,11 @@ recovery option; it is not started behind Hearthdeck Console.
 
 The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
-runner is migrated and tested as a Wayland client. If Console returns to the
-display manager, inspect `/tmp/hearthdeck-gamescope-session-<user>.log` for the
-Gamescope and GTK startup error. The log deliberately uses `/tmp` because
-display managers do not consistently set the selected user's `HOME` or XDG
-state directories before a graphical session starts.
+runner is migrated and tested as a Wayland client. The console session waits up
+to ten seconds for Gamescope to publish that private display before launching
+Hearthdeck and managed desktop applications. If Console returns to the display
+manager, inspect `$XDG_RUNTIME_DIR/hearthdeck/gamescope-session.log` from the
+affected graphical login for the Gamescope and GTK startup error.
 
 Exit Hearthdeck Console from its system menu to return to the display manager.
 Select the COSMIC session there to return to the desktop. If the console shell
@@ -64,8 +66,11 @@ Use **Settings > General > Exit to desktop** inside Hearthdeck Console. Confirm
 the prompt to close the console session and return to the display manager.
 
 The bridge scans the target machine's Freedesktop entries and launches only a
-re-discovered desktop entry. Linux launches are placed in a transient systemd
-user scope, allowing Hearthdeck to query and stop the active managed session.
+re-discovered desktop entry. It honors desktop visibility constraints, `Path`,
+and `TryExec`, and rejects terminal and D-Bus-activated entries because those
+cannot be managed safely in the console. Linux launches are placed in transient
+systemd user services, allowing Hearthdeck to query and stop the active managed
+session even if the bridge restarts.
 The daemon maintains the SQLite catalog at `~/.local/share/hearthdeck/hearthdeck.db`
 and exposes a loopback API at `127.0.0.1:38400`.
 

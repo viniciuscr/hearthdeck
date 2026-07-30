@@ -6,6 +6,7 @@ PartOf=hearthdeck.target
 
 [Service]
 Type=exec
+EnvironmentFile=-%t/hearthdeck/console.env
 Environment=HEARTHDECK_LOG_FORMAT=json
 Environment=RUST_LOG=hearthdeck_bridge=info
 ExecStart=/usr/lib/hearthdeck/hearthdeck-bridge

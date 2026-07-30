@@ -35,7 +35,7 @@ curl http://127.0.0.1:38400/v1/library \
 ```
 
 Confirm entries are discovered from KDE/Freedesktop `.desktop` files and that
-hidden/non-application entries do not appear.
+hidden, non-application, and desktop-incompatible entries do not appear.
 
 The bridge follows the XDG data-directory defaults even when a systemd user
 environment leaves them empty. It also scans Flatpak's user and system export
@@ -57,9 +57,14 @@ Call `POST /v1/apps/{id}/launch` with an ID returned by the library endpoint.
 Confirm the registered desktop app opens in the active graphical session.
 
 The bridge intentionally re-discovers the desktop ID locally and creates a
-transient systemd user scope; an API client cannot supply an `Exec` command or
+transient systemd user service; an API client cannot supply an `Exec` command or
 arguments. Query `GET /v1/sessions/active` after launch, then use
 `POST /v1/sessions/{id}/stop` to confirm the managed process exits.
+
+In **Hearthdeck Console**, launch a graphical application and confirm it opens
+inside Gamescope rather than on another desktop. Exit Hearthdeck Console and
+confirm its managed application services are stopped before the display manager
+returns.
 
 ## LAN Mode
 

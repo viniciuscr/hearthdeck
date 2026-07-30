@@ -2,26 +2,26 @@ use anyhow::Result;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 use hearthdeck_protocol::DiscoveredApplication;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 pub const DESKTOP_APPS_SOURCE: &str = "desktop-apps";
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 pub const MACOS_APPS_SOURCE: &str = "macos-apps";
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 mod linux;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 pub use linux::{discover_applications, launch_application};
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 mod macos;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 pub use macos::{discover_applications, launch_application};
 
 pub struct LaunchedApplication {
     pub unit_name: Option<String>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 pub async fn stop_application(unit_name: Option<&str>) -> Result<()> {
     let Some(unit_name) = unit_name else {
         anyhow::bail!("application session cannot be stopped on this platform")
@@ -36,12 +36,12 @@ pub async fn stop_application(unit_name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(test)))]
 pub async fn stop_application(_unit_name: Option<&str>) -> Result<()> {
     anyhow::bail!("application session cannot be stopped on this platform")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 pub async fn application_is_running(unit_name: Option<&str>) -> Result<bool> {
     let Some(unit_name) = unit_name else {
         return Ok(false);
@@ -53,17 +53,17 @@ pub async fn application_is_running(unit_name: Option<&str>) -> Result<bool> {
         .success())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(test)))]
 pub async fn application_is_running(_unit_name: Option<&str>) -> Result<bool> {
     Ok(false)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(all(not(any(target_os = "linux", target_os = "macos")), not(test)))]
 pub async fn discover_applications(_source_id: &str) -> Result<Vec<DiscoveredApplication>> {
     anyhow::bail!("application discovery is unsupported on this platform")
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(all(not(any(target_os = "linux", target_os = "macos")), not(test)))]
 pub async fn launch_application(
     _source_id: &str,
     _application_id: &str,

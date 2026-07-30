@@ -22,7 +22,9 @@ newline-delimited JSON defined in `hearthdeck-protocol`. The protocol has typed 
 launch, active-session, and stop requests only. Arbitrary command execution is
 deliberately absent. The daemon supplies a discovered desktop ID, while the
 bridge resolves and validates the local launch specification before placing it
-in a transient systemd user scope.
+in a transient systemd user service. Session records live under the user's
+runtime directory, so the bridge can resume tracking a managed service after a
+restart.
 
 `GET /v1/health` exposes host capabilities. Remote clients, including Android,
 may browse the library and send install requests when supported, but must not

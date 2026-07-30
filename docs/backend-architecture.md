@@ -148,7 +148,7 @@ just macos-discovery-check
 - The bridge protocol has typed health, discovery, launch, active-session, and
   stop-session requests. It has no command or argument field.
 - The bridge re-discovers the requested desktop ID locally and validates its
-  launch specification before creating a transient systemd user scope; it does
+  launch specification before creating a transient systemd user service; it does
   not accept `Exec` strings from the daemon.
 - The bridge socket is created with mode `0600` under the active user's runtime
   directory.
@@ -174,8 +174,10 @@ flows. It is not included in the public API contract.
 ## Deployment
 
 Install and enable `hearthdeck.target` from the systemd **user** units in
-`deploy/systemd/`. A user service is required because graphical application
-launches must inherit the active KDE/Wayland session. Configure LAN TLS through
+`deploy/systemd/`. A user service owns graphical application launches. The
+Gamescope console session writes its private Xwayland endpoint before restarting
+the bridge, which then passes that endpoint only to managed applications.
+Configure LAN TLS through
 `~/.config/hearthdeck/daemon.env`; see `deploy/systemd/daemon.env.example`.
 
 ## Next Slice

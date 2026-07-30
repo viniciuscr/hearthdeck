@@ -1,7 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
     env,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
+    fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
@@ -85,20 +87,46 @@ pub async fn launch_application(
     session_id: &str,
 ) -> Result<LaunchedApplication> {
     let path = desktop_entry_path(source_id, application_id).await?;
-    let command = command_for_desktop_entry(&path).await?;
-    let unit_name = format!("hearthdeck-app-{session_id}.scope");
-    let status = Command::new("systemd-run")
+    let launch = command_for_desktop_entry(&path).await?;
+    let unit_name = format!("hearthdeck-app-{session_id}.service");
+    let mut command = Command::new("systemd-run");
+    command
         .args([
             "--user",
-            "--scope",
             "--collect",
-            "--no-block",
             "--quiet",
+            "--service-type=exec",
             "--unit",
         ])
         .arg(&unit_name)
+        .arg("--working-directory")
+        .arg(
+            launch
+                .working_directory
+                .unwrap_or_else(|| PathBuf::from("/")),
+        );
+    if env::var_os("HEARTHDECK_CONSOLE").as_deref() == Some(OsStr::new("1")) {
+        command.arg("--slice=hearthdeck-console.slice");
+    }
+    for name in [
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "GDK_BACKEND",
+        "SDL_VIDEODRIVER",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "XDG_SESSION_TYPE",
+    ] {
+        if let Some(value) = env::var_os(name) {
+            command
+                .arg("--setenv")
+                .arg(format!("{name}={}", value.to_string_lossy()));
+        }
+    }
+    let status = command
         .arg("--")
-        .args(command)
+        .args(launch.command)
         .status()
         .await
         .context("could not start supervised application launch")?;
@@ -108,6 +136,11 @@ pub async fn launch_application(
     Ok(LaunchedApplication {
         unit_name: Some(unit_name),
     })
+}
+
+struct DesktopLaunch {
+    command: Vec<OsString>,
+    working_directory: Option<PathBuf>,
 }
 
 async fn desktop_entry_path(source_id: &str, application_id: &str) -> Result<PathBuf> {
@@ -123,62 +156,127 @@ async fn desktop_entry_path(source_id: &str, application_id: &str) -> Result<Pat
     anyhow::bail!("desktop entry is not registered")
 }
 
-async fn command_for_desktop_entry(path: &Path) -> Result<Vec<OsString>> {
+async fn command_for_desktop_entry(path: &Path) -> Result<DesktopLaunch> {
     let content = tokio::fs::read_to_string(path).await?;
     let values = desktop_entry_values(&content);
-    if values.get("Terminal") == Some(&"true") {
+    validate_desktop_entry(&values)?;
+    if desktop_entry_boolean(&values, "Terminal") {
         anyhow::bail!("terminal desktop entries are not supported in console mode")
     }
+    if desktop_entry_boolean(&values, "DBusActivatable") {
+        anyhow::bail!("D-Bus-activated desktop entries are not supported in a managed session")
+    }
     let exec = values.get("Exec").context("desktop entry has no Exec")?;
-    let command = parse_exec(exec, path, values.get("Name").copied())?;
+    let command = parse_exec(
+        exec,
+        path,
+        values.get("Name").copied(),
+        values.get("Icon").copied(),
+    )?;
     if command.is_empty() {
         anyhow::bail!("desktop entry has an empty Exec command")
     }
-    Ok(command.into_iter().map(OsString::from).collect())
+    if let Some(try_exec) = values.get("TryExec")
+        && !executable_exists(try_exec)
+    {
+        anyhow::bail!("desktop entry TryExec is not executable")
+    }
+    Ok(DesktopLaunch {
+        command: command.into_iter().map(OsString::from).collect(),
+        working_directory: values
+            .get("Path")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from),
+    })
 }
 
 fn parse_exec(
     value: &str,
     desktop_path: &Path,
     application_name: Option<&str>,
+    icon: Option<&str>,
 ) -> Result<Vec<String>> {
     let mut arguments = Vec::new();
     let mut argument = String::new();
     let mut quoted = false;
-    let mut escaped = false;
-    for character in value.chars() {
-        if escaped {
-            argument.push(character);
-            escaped = false;
+    let mut argument_was_quoted = false;
+    let mut characters = value.chars().peekable();
+    while let Some(character) = characters.next() {
+        if quoted {
+            if character == '"' {
+                quoted = false;
+            } else if character == '\\' {
+                let escaped = characters
+                    .next()
+                    .context("desktop entry has an invalid quoted Exec command")?;
+                if !matches!(escaped, '"' | '`' | '$' | '\\') {
+                    anyhow::bail!("desktop entry has an invalid quoted Exec escape")
+                }
+                argument.push(escaped);
+            } else {
+                argument.push(character);
+            }
         } else if character == '\\' {
-            escaped = true;
+            let escaped = characters
+                .next()
+                .context("desktop entry has an invalid Exec command")?;
+            argument.push(escaped);
         } else if character == '"' {
-            quoted = !quoted;
+            quoted = true;
+            argument_was_quoted = true;
         } else if character.is_whitespace() && !quoted {
             if !argument.is_empty() {
-                arguments.push(std::mem::take(&mut argument));
+                arguments.push((std::mem::take(&mut argument), argument_was_quoted));
+                argument_was_quoted = false;
             }
         } else {
             argument.push(character);
         }
     }
-    if escaped || quoted {
+    if quoted {
         anyhow::bail!("desktop entry has an invalid Exec command")
     }
     if !argument.is_empty() {
-        arguments.push(argument);
+        arguments.push((argument, argument_was_quoted));
     }
-    Ok(arguments
-        .into_iter()
-        .filter_map(|argument| expand_field_codes(&argument, desktop_path, application_name))
-        .collect())
+    let mut expanded = Vec::new();
+    for (argument, was_quoted) in arguments {
+        expand_field_codes(
+            &mut expanded,
+            &argument,
+            was_quoted,
+            desktop_path,
+            application_name,
+            icon,
+        )?;
+    }
+    Ok(expanded)
 }
 
 fn expand_field_codes(
+    arguments: &mut Vec<String>,
     argument: &str,
+    was_quoted: bool,
     desktop_path: &Path,
     application_name: Option<&str>,
-) -> Option<String> {
+    icon: Option<&str>,
+) -> Result<()> {
+    if matches!(argument, "%f" | "%F" | "%u" | "%U") {
+        if was_quoted {
+            anyhow::bail!("desktop entry has a quoted file field code")
+        }
+        return Ok(());
+    }
+    if argument == "%i" {
+        if was_quoted {
+            anyhow::bail!("desktop entry has a quoted icon field code")
+        }
+        if let Some(icon) = icon {
+            arguments.push("--icon".to_owned());
+            arguments.push(icon.to_owned());
+        }
+        return Ok(());
+    }
     let mut expanded = String::new();
     let mut characters = argument.chars();
     while let Some(character) = characters.next() {
@@ -186,15 +284,84 @@ fn expand_field_codes(
             expanded.push(character);
             continue;
         }
-        match characters.next()? {
+        if was_quoted {
+            anyhow::bail!("desktop entry has a field code inside quoted text")
+        }
+        match characters
+            .next()
+            .context("desktop entry has an incomplete field code")?
+        {
             '%' => expanded.push('%'),
             'c' => expanded.push_str(application_name.unwrap_or_default()),
             'k' => expanded.push_str(&desktop_path.to_string_lossy()),
-            'f' | 'F' | 'u' | 'U' | 'i' => {}
-            _ => return None,
+            'f' | 'F' | 'u' | 'U' | 'i' => {
+                anyhow::bail!("desktop entry has a field code in an invalid position")
+            }
+            _ => anyhow::bail!("desktop entry has an unknown field code"),
         }
     }
-    (!expanded.is_empty()).then_some(expanded)
+    if !expanded.is_empty() {
+        arguments.push(expanded);
+    }
+    Ok(())
+}
+
+fn executable_exists(command: &str) -> bool {
+    let path = Path::new(command);
+    if path.is_absolute() || command.contains('/') {
+        return path.is_file()
+            && fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0);
+    }
+    env::var_os("PATH")
+        .as_deref()
+        .map(env::split_paths)
+        .into_iter()
+        .flatten()
+        .map(|directory| directory.join(command))
+        .any(|candidate| {
+            candidate.is_file()
+                && fs::metadata(candidate)
+                    .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+        })
+}
+
+fn validate_desktop_entry(values: &HashMap<&str, &str>) -> Result<()> {
+    if values.get("Type") != Some(&"Application") {
+        anyhow::bail!("not an application desktop entry")
+    }
+    if desktop_entry_boolean(values, "NoDisplay") || desktop_entry_boolean(values, "Hidden") {
+        anyhow::bail!("not a visible application entry")
+    }
+    let desktops = current_desktops();
+    if let Some(only_show_in) = values.get("OnlyShowIn")
+        && !visible_in_desktop(only_show_in, &desktops)
+    {
+        anyhow::bail!("desktop entry is hidden in the current desktop")
+    }
+    if let Some(not_show_in) = values.get("NotShowIn")
+        && visible_in_desktop(not_show_in, &desktops)
+    {
+        anyhow::bail!("desktop entry is hidden in the current desktop")
+    }
+    Ok(())
+}
+
+fn current_desktops() -> Vec<String> {
+    env::var("XDG_CURRENT_DESKTOP")
+        .ok()
+        .map(|desktop| desktop.split(':').map(ToOwned::to_owned).collect())
+        .unwrap_or_default()
+}
+
+fn visible_in_desktop(desktops: &str, current_desktops: &[String]) -> bool {
+    desktops
+        .split(';')
+        .filter(|desktop| !desktop.is_empty())
+        .any(|desktop| current_desktops.iter().any(|current| current == desktop))
+}
+
+fn desktop_entry_boolean(values: &HashMap<&str, &str>, key: &str) -> bool {
+    values.get(key).is_some_and(|value| *value == "true")
 }
 
 fn desktop_entry_directories() -> Vec<PathBuf> {
@@ -252,17 +419,12 @@ fn push_unique(directories: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path
 async fn parse_desktop_entry(path: &Path) -> Result<DiscoveredApplication> {
     let content = tokio::fs::read_to_string(path).await?;
     let values = desktop_entry_values(&content);
-    if values.get("Type") != Some(&"Application")
-        || values.get("NoDisplay") == Some(&"true")
-        || values.get("Hidden") == Some(&"true")
-    {
-        anyhow::bail!("not a visible application entry")
-    }
+    validate_desktop_entry(&values)?;
+    command_for_desktop_entry(path).await?;
     let name = values
         .get("Name")
         .context("desktop entry has no Name")?
         .to_string();
-    values.get("Exec").context("desktop entry has no Exec")?;
     let application_id = path
         .file_name()
         .context("desktop entry has no file name")?
@@ -311,7 +473,9 @@ fn desktop_entry_values(content: &str) -> HashMap<&str, &str> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{desktop_entry_directories_for, parse_desktop_entry, parse_exec};
+    use super::{
+        desktop_entry_directories_for, parse_desktop_entry, parse_exec, visible_in_desktop,
+    };
 
     #[tokio::test]
     async fn parses_only_the_desktop_entry_group() {
@@ -336,10 +500,45 @@ mod tests {
             "example --title %c %U",
             std::path::Path::new("/tmp/example.desktop"),
             Some("Example"),
+            None,
         )
         .unwrap();
 
         assert_eq!(command, ["example", "--title", "Example"]);
+    }
+
+    #[test]
+    fn expands_icon_field_code_as_two_arguments() {
+        let command = parse_exec(
+            "example %i",
+            std::path::Path::new("/tmp/example.desktop"),
+            Some("Example"),
+            Some("example-icon"),
+        )
+        .unwrap();
+
+        assert_eq!(command, ["example", "--icon", "example-icon"]);
+    }
+
+    #[test]
+    fn rejects_field_codes_inside_quoted_arguments() {
+        let result = parse_exec(
+            "example \"%c\"",
+            std::path::Path::new("/tmp/example.desktop"),
+            Some("Example"),
+            None,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn recognizes_all_console_desktop_names() {
+        let current_desktops = vec!["gamescope".to_owned(), "hearthdeck".to_owned()];
+
+        assert!(visible_in_desktop("hearthdeck;", &current_desktops));
+        assert!(visible_in_desktop("gamescope;", &current_desktops));
+        assert!(!visible_in_desktop("KDE;", &current_desktops));
     }
 
     #[test]
