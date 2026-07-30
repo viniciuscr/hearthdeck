@@ -21,6 +21,7 @@ import 'package:hearthdeck/system_health.dart';
 import 'package:hearthdeck/tv_components.dart';
 import 'package:hearthdeck/tv_gamepad.dart';
 import 'package:hearthdeck/tv_theme.dart';
+import 'package:hearthdeck/virtual_keyboard.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -305,6 +306,32 @@ void main() {
     expect(find.byType(TvSearchPage), findsOneWidget);
     expect(find.byKey(const ValueKey<String>('search-input')), findsOneWidget);
     expect(FocusManager.instance.primaryFocus?.debugLabel, 'Search input');
+  });
+
+  testWidgets('virtual keyboard follows every editable text focus', (
+    WidgetTester tester,
+  ) async {
+    final keyboard = _FakeVirtualKeyboard();
+    final focusNode = FocusNode();
+    await tester.pumpWidget(
+      VirtualKeyboardFocusObserver(
+        virtualKeyboard: keyboard,
+        child: MaterialApp(
+          home: Scaffold(body: TextField(focusNode: focusNode)),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    focusNode.requestFocus();
+    await tester.pump();
+    expect(keyboard.showRequests, 1);
+
+    focusNode.unfocus();
+    await tester.pump();
+
+    expect(keyboard.hideRequests, 1);
+    focusNode.dispose();
   });
 
   testWidgets('native text input updates search results', (
@@ -622,6 +649,21 @@ class _FakePlatformSession implements PlatformSession {
   @override
   Future<void> exitToDesktop() async {
     exitRequested = true;
+  }
+}
+
+class _FakeVirtualKeyboard implements VirtualKeyboard {
+  var showRequests = 0;
+  var hideRequests = 0;
+
+  @override
+  Future<void> show() async {
+    showRequests += 1;
+  }
+
+  @override
+  Future<void> hide() async {
+    hideRequests += 1;
   }
 }
 

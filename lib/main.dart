@@ -9,6 +9,7 @@ import 'settings/user_settings_repository.dart';
 import 'tv_dashboard.dart';
 import 'tv_gamepad.dart';
 import 'tv_theme.dart';
+import 'virtual_keyboard.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,10 +23,12 @@ class HearthdeckApp extends StatefulWidget {
     super.key,
     this.settingsRepository,
     this.initialThemeMode = TvThemeMode.noir,
+    this.virtualKeyboard,
   });
 
   final UserSettingsRepository? settingsRepository;
   final TvThemeMode initialThemeMode;
+  final VirtualKeyboard? virtualKeyboard;
 
   @override
   State<HearthdeckApp> createState() => _HearthdeckAppState();
@@ -122,15 +125,18 @@ class _HearthdeckAppState extends State<HearthdeckApp> {
             onModeChanged: _setThemeMode,
             backdropMode: _backdropMode,
             onBackdropModeChanged: _setBackdropMode,
-            child: MaterialApp(
-              navigatorKey: navigatorKey,
-              scaffoldMessengerKey: scaffoldMessengerKey,
-              debugShowCheckedModeBanner: false,
-              title: 'Hearthdeck',
-              theme: TvTheme.data(colors, palette),
-              themeAnimationDuration: TvTheme.focusDuration,
-              themeAnimationCurve: TvTheme.focusCurve,
-              home: const TvDashboard(),
+            child: VirtualKeyboardFocusObserver(
+              virtualKeyboard: widget.virtualKeyboard,
+              child: MaterialApp(
+                navigatorKey: navigatorKey,
+                scaffoldMessengerKey: scaffoldMessengerKey,
+                debugShowCheckedModeBanner: false,
+                title: 'Hearthdeck',
+                theme: TvTheme.data(colors, palette),
+                themeAnimationDuration: TvTheme.focusDuration,
+                themeAnimationCurve: TvTheme.focusCurve,
+                home: const TvDashboard(),
+              ),
             ),
           ),
         ),
