@@ -53,6 +53,11 @@ launchable applications.
 
 ## Launch
 
+Before testing Hearthdeck Console, select **Hearthdeck Gamescope Xterm Test**
+from the display manager. It must open an xterm window. Run `exit` to return to
+the display manager. This verifies direct DRM Gamescope and Xwayland without
+Hearthdeck or systemd Console services.
+
 Call `POST /v1/apps/{id}/launch` with an ID returned by the library endpoint.
 Confirm the registered desktop app opens in the active graphical session.
 
@@ -63,7 +68,7 @@ arguments. Query `GET /v1/sessions/active` after launch, then use
 
 In **Hearthdeck Console**, launch a graphical application and confirm it opens
 inside Gamescope rather than on another desktop. Exit Hearthdeck Console and
-confirm its managed application services are stopped before the display manager
+confirm its managed application services stop before the display manager
 returns.
 
 While Console is open, verify that its services received the private Xwayland

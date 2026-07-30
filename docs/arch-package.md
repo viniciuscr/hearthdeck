@@ -76,8 +76,10 @@ Gamescope's Wayland client socket. This is intentional until the shell's native
 runner is migrated and tested as a Wayland client. Gamescope provides that
 private display after Xwayland reports readiness, then launches Hearthdeck. The
 Console uses the normal Gamescope window policy, allowing Hearthdeck and
-managed desktop applications to be admitted as ordinary Xwayland windows. If
-Console returns to the display manager, inspect
+managed desktop applications to be admitted as ordinary Xwayland windows. The
+client and every managed Console application are bound to the Console target, so
+they are stopped before the display manager returns. If Console returns to the
+display manager, inspect
 `~/.local/state/hearthdeck/gamescope-session.log` and
 `~/.local/state/hearthdeck/console-client.log` after signing into a normal
 desktop session. If the user state directory is unavailable, the logs fall back
@@ -93,6 +95,11 @@ From a normal desktop session, inspect a failed supervised Console startup with:
 ```sh
 journalctl --user -u hearthdeck-gamescope.service -u hearthdeck-console-client.service -b -o cat
 ```
+
+To isolate Gamescope and the display manager from Hearthdeck itself, select
+**Hearthdeck Gamescope Xterm Test** at login. It opens only `xterm` through
+direct DRM Gamescope. Run `exit` in that terminal to return to the display
+manager. If it fails, inspect `~/.local/state/hearthdeck/gamescope-xterm.log`.
 
 Exit Hearthdeck Console from its system menu to return to the display manager.
 Select the COSMIC session there to return to the desktop. If the console shell

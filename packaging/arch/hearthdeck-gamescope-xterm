@@ -1,0 +1,15 @@
+#!/usr/bin/bash
+# Minimal diagnostic session: no Hearthdeck services, D-Bus, or session units.
+set -Euo pipefail
+
+log_directory="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
+if [[ -n "$log_directory" ]] && mkdir -p -- "$log_directory/hearthdeck"; then
+  exec >>"$log_directory/hearthdeck/gamescope-xterm.log" 2>&1
+elif [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+  mkdir -p -- "$XDG_RUNTIME_DIR/hearthdeck"
+  exec >>"$XDG_RUNTIME_DIR/hearthdeck/gamescope-xterm.log" 2>&1
+fi
+
+echo "$(date -Iseconds) starting minimal Gamescope Xterm session"
+echo "$(date -Iseconds) runtime=${XDG_RUNTIME_DIR:-unset} dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
+exec gamescope --backend drm --force-windows-fullscreen -- /usr/bin/xterm -fa Monospace -fs 16

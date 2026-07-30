@@ -47,6 +47,25 @@ jobs:
           cp -a "$HOME/.cargo" "$HOME/.rustup" /home/builder/
           chown -R builder:builder "$flutter_root" /home/builder "$GITHUB_WORKSPACE"
 
+      - name: Restore Rust and Flutter build cache
+        id: build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/builder/.cargo/git
+            /home/builder/.cargo/registry
+            /home/builder/.pub-cache
+            services/target
+            .dart_tool
+            build/linux
+          key: arch-package-${{ runner.arch }}-rust-1.97.1-flutter-3.44.8-${{ hashFiles('services/Cargo.lock', 'pubspec.lock') }}-${{ github.sha }}
+          restore-keys: |
+            arch-package-${{ runner.arch }}-rust-1.97.1-flutter-3.44.8-${{ hashFiles('services/Cargo.lock', 'pubspec.lock') }}-
+
+      - name: Make restored cache writable
+        run: |
+          chown -R builder:builder /home/builder/.cargo /home/builder/.pub-cache "$GITHUB_WORKSPACE/services/target" "$GITHUB_WORKSPACE/.dart_tool" "$GITHUB_WORKSPACE/build" 2>/dev/null || true
+
       - name: Build pacman package
         run: |
           flutter_bin=$(dirname "$(command -v flutter)")
@@ -65,6 +84,19 @@ jobs:
           repo-add --nocolor "$repository/hearthdeck.db.tar.gz" "$package_path"
           ln -sf hearthdeck.db.tar.gz "$repository/hearthdeck.db"
           test -s "$repository/hearthdeck.db.tar.gz"
+
+      - name: Save Rust and Flutter build cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /home/builder/.cargo/git
+            /home/builder/.cargo/registry
+            /home/builder/.pub-cache
+            services/target
+            .dart_tool
+            build/linux
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}
 
       - name: Archive pacman package
         uses: actions/upload-artifact@v4

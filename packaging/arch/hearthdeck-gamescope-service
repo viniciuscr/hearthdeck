@@ -47,4 +47,4 @@ EOF
 }
 
 publish_environment &
-exec gamescope --backend drm --force-windows-fullscreen --ready-fd "$ready_pipe"
+exec gamescope --backend drm --ready-fd "$ready_pipe"

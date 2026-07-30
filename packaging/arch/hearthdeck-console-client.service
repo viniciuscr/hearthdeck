@@ -8,4 +8,5 @@ PartOf=hearthdeck-console.target
 Type=exec
 EnvironmentFile=%t/hearthdeck/gamescope-environment
 ExecStart=/usr/lib/hearthdeck/hearthdeck-console-client
+ExecStopPost=/usr/bin/systemctl --user stop hearthdeck-bridge.service
 KillMode=mixed

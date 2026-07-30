@@ -8,4 +8,6 @@ Wants=hearthdeck.target
 After=hearthdeck.target
 Requires=hearthdeck-gamescope.service
 BindsTo=hearthdeck-gamescope.service
-Upholds=hearthdeck-console-client.service
+Requires=hearthdeck-console-client.service
+BindsTo=hearthdeck-console-client.service
+After=hearthdeck-console-client.service
