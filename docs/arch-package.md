@@ -51,11 +51,8 @@ Arch systemd user units cannot reliably support directives such as
 
 `hearthdeck.target` is the only unit users enable. It starts the API daemon and
 owns the `hearthdeck-bridge.socket`; the bridge process is socket-activated on
-its first typed request. In Console, Gamescope directly starts Hearthdeck as
-its primary Xwayland client. The client publishes that live display to the user
-manager before restarting the bridge, so managed applications use the same
-compositor. Future network and Bluetooth bridges will follow this same
-target-plus-socket lifecycle.
+its first typed request. Future network and Bluetooth bridges will follow this
+same target-plus-socket lifecycle.
 
 If you previously used `just install-services`, its copies in
 `~/.config/systemd/user/` override the package units. Move
@@ -72,13 +69,14 @@ recovery option; it is not started behind Hearthdeck Console.
 
 The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
-runner is migrated and tested as a Wayland client. Gamescope directly starts
-the packaged `hearthdeck` executable as its primary client, so it provides its
-private Xwayland display without an additional session supervisor. The Console
-uses the normal Gamescope window policy, allowing Hearthdeck and managed desktop
-applications to be admitted as ordinary Xwayland windows. Managed Console
-applications run in a dedicated user slice and are stopped before the display
-manager returns. If Console returns to the display manager, inspect
+runner is migrated and tested as a Wayland client. Gamescope starts an internal
+Xterm bootstrap before launching the packaged `hearthdeck` executable. This
+reproduces the working Xwayland client topology while Hearthdeck's fullscreen
+window covers the bootstrap terminal. The Console uses the normal Gamescope
+window policy, allowing Hearthdeck and managed desktop applications to be
+admitted as ordinary Xwayland windows. Managed Console applications run in a
+dedicated user slice and are stopped before the display manager returns. If
+Console returns to the display manager, inspect
 `~/.local/state/hearthdeck/gamescope-session.log` after signing into a normal
 desktop session. If the user state directory is unavailable, the log falls back
 to `$XDG_RUNTIME_DIR/hearthdeck/`. To reproduce the session from a terminal and
@@ -87,6 +85,9 @@ stream its output, run:
 ```sh
 /usr/lib/hearthdeck/hearthdeck-gamescope-session
 ```
+
+If Hearthdeck exits with an error, the bootstrap terminal remains visible with
+the exit status instead of immediately returning to the display manager.
 
 Exit Hearthdeck Console from its system menu to return to the display manager.
 Select the COSMIC session there to return to the desktop. If the console shell

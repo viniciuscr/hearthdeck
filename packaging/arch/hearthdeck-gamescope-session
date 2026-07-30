@@ -1,5 +1,6 @@
 #!/usr/bin/bash
-# Gamescope directly owns the packaged Hearthdeck executable.
+# Xterm is the initial Xwayland client. Hearthdeck launches from it after the
+# display has settled, matching the topology that works from the diagnostic.
 set -Euo pipefail
 
 log_directory="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
@@ -10,7 +11,15 @@ elif [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
   exec >>"$XDG_RUNTIME_DIR/hearthdeck/gamescope-session.log" 2>&1
 fi
 
-echo "$(date -Iseconds) starting direct Hearthdeck Gamescope session"
+echo "$(date -Iseconds) starting Hearthdeck Gamescope session"
 echo "$(date -Iseconds) runtime=${XDG_RUNTIME_DIR:-unset} dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
 exec gamescope --backend drm --force-windows-fullscreen -- \
-  /usr/bin/hearthdeck
+  /usr/bin/xterm -fa Monospace -fs 16 -e /bin/sh -lc \
+  'sleep 2
+   /usr/bin/hearthdeck
+   status=$?
+   if [ "$status" -ne 0 ]; then
+     printf "Hearthdeck exited with status %s. The terminal remains open for diagnosis.\n" "$status"
+     exec /bin/sh
+   fi
+   exit "$status"'
