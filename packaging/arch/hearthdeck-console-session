@@ -3,7 +3,10 @@
 set -Euo pipefail
 
 umask 077
-exec >>"/tmp/hearthdeck-console-session-${UID:-unknown}.log" 2>&1
+log_directory="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
+if [[ -n "$log_directory" ]] && mkdir -p -- "$log_directory/hearthdeck"; then
+  exec >>"$log_directory/hearthdeck/console-session.log" 2>&1
+fi
 
 echo "$(date -Iseconds) starting Hearthdeck Console session"
 echo "$(date -Iseconds) user=${USER:-unset} home=${HOME:-unset} runtime=${XDG_RUNTIME_DIR:-unset}"
@@ -16,7 +19,6 @@ echo "$(date -Iseconds) dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
 
 systemctl --user daemon-reload
 systemctl --user stop hearthdeck-gamescope.target 2>/dev/null || true
-systemctl --user stop graphical-session-pre.target 2>/dev/null || true
 systemctl --user reset-failed
 dbus-update-activation-environment --systemd \
   DESKTOP_SESSION $(env | grep '^XDG_' | cut -d= -f1)
@@ -27,4 +29,3 @@ if ! systemctl --user --wait start hearthdeck-gamescope.target; then
     hearthdeck-gamescope.service hearthdeck-console-client.service || true
   exit 1
 fi
-systemctl --user stop graphical-session-pre.target

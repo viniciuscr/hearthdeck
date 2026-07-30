@@ -70,9 +70,9 @@ If the session returns to the display manager, inspect:
 
 ```sh
 journalctl --user -u hearthdeck-gamescope.service -u hearthdeck-console-client.service -b
-cat /tmp/hearthdeck-console-session-$(id -u).log
-cat /tmp/hearthdeck-gamescope-service-$(id -u).log
-cat /tmp/hearthdeck-console-client-$(id -u).log
+cat ~/.local/state/hearthdeck/console-session.log
+cat ~/.local/state/hearthdeck/gamescope-service.log
+cat ~/.local/state/hearthdeck/console-client.log
 ```
 
 Select **Hearthdeck Gamescope Xterm Test** to verify the direct DRM Gamescope

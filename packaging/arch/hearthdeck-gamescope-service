@@ -3,7 +3,10 @@
 set -Euo pipefail
 
 umask 077
-exec >>"/tmp/hearthdeck-gamescope-service-${UID:-unknown}.log" 2>&1
+log_directory="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
+if [[ -n "$log_directory" ]] && mkdir -p -- "$log_directory/hearthdeck"; then
+  exec >>"$log_directory/hearthdeck/gamescope-service.log" 2>&1
+fi
 
 : "${XDG_RUNTIME_DIR:?Hearthdeck Console requires XDG_RUNTIME_DIR}"
 runtime_directory="$XDG_RUNTIME_DIR/hearthdeck"
