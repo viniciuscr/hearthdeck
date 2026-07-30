@@ -28,7 +28,7 @@ jobs:
           pacman-key --init
           pacman-key --populate archlinux
           pacman --sync --refresh --sysupgrade --noconfirm
-          pacman --sync --noconfirm clang cmake curl git gtk3 jq just ninja pkgconf sqlite unzip xz zsh
+          pacman --sync --noconfirm clang cmake curl git gtk3 jq just ninja pacman-contrib pkgconf sqlite unzip xz zsh
 
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
