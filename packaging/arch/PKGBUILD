@@ -2,7 +2,7 @@ pkgname=hearthdeck
 # CI supplies a monotonically increasing version for the GitHub Pages pacman
 # repository. Local builds retain the current release version.
 pkgver="${HEARTHDECK_PKGVER:-1.0.0}"
-pkgrel="${HEARTHDECK_PKGREL:-7}"
+pkgrel="${HEARTHDECK_PKGREL:-8}"
 pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'

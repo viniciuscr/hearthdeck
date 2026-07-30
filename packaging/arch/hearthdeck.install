@@ -1,11 +1,15 @@
 post_install() {
+  systemctl --global enable hearthdeck.target
+
   cat <<'EOF'
 Hearthdeck installs a systemd user target, API daemon, and host bridge socket.
 
-Enable the Hearthdeck session for the logged-in desktop user:
+The target is enabled globally and starts for users on their next login. The
+Hearthdeck launcher also starts it for the current user. To start it immediately
+without launching Hearthdeck, run as that user:
+
   systemctl --user daemon-reload
-  systemctl --user disable --now hearthdeck-bridge.service hearthdeck-daemon.service
-  systemctl --user enable --now hearthdeck.target
+  systemctl --user start hearthdeck.target
 
 The launcher pairs with the loopback daemon automatically. Optional LAN/TLS
 configuration belongs in ~/.config/hearthdeck/daemon.env; see
@@ -26,6 +30,8 @@ post_upgrade() {
 }
 
 post_remove() {
+  systemctl --global disable hearthdeck.target
+
   cat <<'EOF'
 If this was the final Hearthdeck package removal, disable its user services:
   systemctl --user disable --now hearthdeck.target hearthdeck-bridge.socket

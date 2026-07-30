@@ -63,10 +63,11 @@ the repository setup in `docs/arch-package.md` to receive future updates through
 
 ```sh
 sudo pacman -U hearthdeck-*.pkg.tar.zst
-systemctl --user daemon-reload
-systemctl --user disable --now hearthdeck-bridge.service hearthdeck-daemon.service
-systemctl --user enable --now hearthdeck.target
 ```
+
+The package starts local services automatically at the next user login and when
+Hearthdeck launches. To start them immediately without opening the client, run
+`systemctl --user daemon-reload && systemctl --user start hearthdeck.target`.
 
 The target owns the API daemon and bridge socket; the bridge process starts on
 demand for host requests. The package's client pairs with its loopback daemon
