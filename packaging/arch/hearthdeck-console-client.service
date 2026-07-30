@@ -1,0 +1,11 @@
+[Unit]
+Description=Hearthdeck Console client
+Requires=hearthdeck-gamescope.service
+After=hearthdeck-gamescope.service
+PartOf=hearthdeck-console.target
+
+[Service]
+Type=exec
+EnvironmentFile=%t/hearthdeck/gamescope-environment
+ExecStart=/usr/lib/hearthdeck/hearthdeck-console-client
+KillMode=mixed

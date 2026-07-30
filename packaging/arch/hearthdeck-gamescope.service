@@ -1,0 +1,16 @@
+[Unit]
+Description=Hearthdeck Gamescope compositor
+PartOf=hearthdeck-console.target
+
+[Service]
+Type=notify
+NotifyAccess=all
+TimeoutStartSec=15
+TimeoutStopSec=10
+Environment=XDG_SESSION_TYPE=x11
+Environment=HEARTHDECK_CONSOLE=1
+UnsetEnvironment=DISPLAY XAUTHORITY WAYLAND_DISPLAY
+ExecStart=/usr/lib/hearthdeck/hearthdeck-gamescope-service
+ExecStopPost=/usr/bin/rm -rf %t/hearthdeck/gamescope.*
+ExecStopPost=/usr/bin/rm -f %t/hearthdeck/gamescope-environment
+Slice=session.slice

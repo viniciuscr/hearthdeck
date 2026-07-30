@@ -7,7 +7,7 @@ CachyOS. It installs:
 - `/usr/bin/hearthdeck`: the desktop launcher command.
 - `/usr/lib/hearthdeck/`: the local bridge and daemon binaries.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
-  API daemon user units.
+  API daemon user units, plus the supervised Console compositor and client.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck-gamescope.desktop`: the direct DRM
   console session shown by compatible display managers.
@@ -51,11 +51,12 @@ Arch systemd user units cannot reliably support directives such as
 
 `hearthdeck.target` is the only unit users enable. It starts the API daemon and
 owns the `hearthdeck-bridge.socket`; the bridge process is socket-activated on
-its first typed request. In Console, Gamescope starts a small primary client
-which inherits its private Xwayland display and passes it to the user manager
-before restarting the bridge. A user-manager integration failure is logged but
-does not prevent the Console shell from opening. Future network and Bluetooth
-bridges will follow this same target-plus-socket lifecycle.
+its first typed request. In Console, the display-manager entrypoint starts
+`hearthdeck-console.target`. Its `Type=notify` Gamescope service waits for
+Xwayland readiness, writes its private displays to the user runtime directory,
+then starts the client service with that environment. The bridge restarts only
+after the client environment is ready. Future network and Bluetooth bridges
+will follow this same target-plus-socket lifecycle.
 
 If you previously used `just install-services`, its copies in
 `~/.config/systemd/user/` override the package units. Move
@@ -85,6 +86,12 @@ stream its output, run:
 
 ```sh
 /usr/lib/hearthdeck/hearthdeck-gamescope-session
+```
+
+From a normal desktop session, inspect a failed supervised Console startup with:
+
+```sh
+journalctl --user -u hearthdeck-gamescope.service -u hearthdeck-console-client.service -b -o cat
 ```
 
 Exit Hearthdeck Console from its system menu to return to the display manager.

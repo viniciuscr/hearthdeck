@@ -1,0 +1,6 @@
+[Unit]
+Description=Hearthdeck Console session
+Wants=hearthdeck.target
+After=hearthdeck.target
+Requires=hearthdeck-gamescope.service hearthdeck-console-client.service
+BindsTo=hearthdeck-gamescope.service hearthdeck-console-client.service

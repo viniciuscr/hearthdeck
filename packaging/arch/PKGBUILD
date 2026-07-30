@@ -2,7 +2,7 @@ pkgname=hearthdeck
 # CI supplies a monotonically increasing version for the GitHub Pages pacman
 # repository. Local builds retain the current release version.
 pkgver="${HEARTHDECK_PKGVER:-1.0.0}"
-pkgrel="${HEARTHDECK_PKGREL:-12}"
+pkgrel="${HEARTHDECK_PKGREL:-13}"
 pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
@@ -37,6 +37,9 @@ package() {
   install -Dm644 packaging/arch/hearthdeck-bridge.socket "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.socket"
   install -Dm644 packaging/arch/hearthdeck-bridge.service "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.service"
   install -Dm644 packaging/arch/hearthdeck-daemon.service "$pkgdir/usr/lib/systemd/user/hearthdeck-daemon.service"
+  install -Dm644 packaging/arch/hearthdeck-console.target "$pkgdir/usr/lib/systemd/user/hearthdeck-console.target"
+  install -Dm644 packaging/arch/hearthdeck-gamescope.service "$pkgdir/usr/lib/systemd/user/hearthdeck-gamescope.service"
+  install -Dm644 packaging/arch/hearthdeck-console-client.service "$pkgdir/usr/lib/systemd/user/hearthdeck-console-client.service"
   install -Dm644 deploy/systemd/daemon.env.example "$pkgdir/usr/share/doc/hearthdeck/daemon.env.example"
   install -Dm644 packaging/arch/hearthdeck-pacman-repo.conf "$pkgdir/etc/pacman.d/hearthdeck.conf"
   install -Dm644 docs/arch-package.md "$pkgdir/usr/share/doc/hearthdeck/README.md"
@@ -44,6 +47,8 @@ package() {
   install -Dm644 packaging/arch/hearthdeck.desktop "$pkgdir/usr/share/applications/io.github.viniciuscr.hearthdeck.desktop"
   install -Dm644 packaging/arch/hearthdeck-gamescope.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck-gamescope.desktop"
   install -Dm755 packaging/arch/hearthdeck-gamescope-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-gamescope-session"
+  install -Dm755 packaging/arch/hearthdeck-console-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-console-session"
+  install -Dm755 packaging/arch/hearthdeck-gamescope-service "$pkgdir/usr/lib/hearthdeck/hearthdeck-gamescope-service"
   install -Dm755 packaging/arch/hearthdeck-console-client "$pkgdir/usr/lib/hearthdeck/hearthdeck-console-client"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
