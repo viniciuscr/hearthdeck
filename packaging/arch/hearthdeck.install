@@ -11,6 +11,10 @@ The launcher pairs with the loopback daemon automatically. Optional LAN/TLS
 configuration belongs in ~/.config/hearthdeck/daemon.env; see
 /usr/share/doc/hearthdeck/daemon.env.example.
 
+To receive future packages through pacman, follow the repository setup in
+/usr/share/doc/hearthdeck/README.md. The current GitHub Pages repository is
+unsigned and should not be enabled on systems that require signed packages.
+
 If Hearthdeck was previously installed from a source checkout, move its copied
 unit files out of ~/.config/systemd/user/ first. Those files override the
 package units in /usr/lib/systemd/user. Preserve customizations as drop-ins.

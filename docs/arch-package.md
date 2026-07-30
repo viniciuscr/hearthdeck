@@ -14,7 +14,7 @@ CachyOS. It installs:
 
 ## Install
 
-Download `hearthdeck-*.pkg.tar.zst` from the GitHub Actions artifact and run:
+Install the initial `hearthdeck-*.pkg.tar.zst` from the GitHub Actions artifact:
 
 ```sh
 sudo pacman -U hearthdeck-*.pkg.tar.zst
@@ -22,6 +22,21 @@ systemctl --user daemon-reload
 systemctl --user disable --now hearthdeck-bridge.service hearthdeck-daemon.service
 systemctl --user enable --now hearthdeck.target
 ```
+
+Then configure the Hearthdeck repository to receive future package updates with
+the normal system update:
+
+```sh
+sudo install -Dm644 /usr/share/doc/hearthdeck/pacman-repo.conf /etc/pacman.d/hearthdeck.conf
+grep -qxF 'Include = /etc/pacman.d/hearthdeck.conf' /etc/pacman.conf || \
+  printf '\nInclude = /etc/pacman.d/hearthdeck.conf\n' | sudo tee -a /etc/pacman.conf
+sudo pacman -Syu
+```
+
+The repository is published to GitHub Pages after each successful `main` build.
+It is currently unsigned, so its configuration uses `SigLevel = Optional
+TrustAll`. Enable it only if you accept GitHub Pages over HTTPS as the package
+trust boundary; package signing can replace this setting later.
 
 Pacman deliberately does not enable a per-user service during a root package
 transaction. Enable it as the desktop user that will launch applications.

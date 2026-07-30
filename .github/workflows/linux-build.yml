@@ -8,6 +8,12 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
 
 jobs:
   package:
@@ -22,7 +28,7 @@ jobs:
           pacman-key --init
           pacman-key --populate archlinux
           pacman --sync --refresh --sysupgrade --noconfirm
-          pacman --sync --noconfirm clang cmake curl git gtk3 jq just ninja pkgconf sqlite unzip xz zsh
+          pacman --sync --noconfirm clang cmake curl git gtk3 jq just ninja pacman-contrib pkgconf sqlite unzip xz zsh
 
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
@@ -44,7 +50,16 @@ jobs:
       - name: Build pacman package
         run: |
           flutter_bin=$(dirname "$(command -v flutter)")
-          su --login builder --command "cd '$GITHUB_WORKSPACE' && PATH='$flutter_bin:/home/builder/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/bin' just ci-package-arch"
+          package_version="1.0.0.r${GITHUB_RUN_NUMBER}"
+          su --login builder --command "cd '$GITHUB_WORKSPACE' && HEARTHDECK_PKGVER='$package_version' HEARTHDECK_PKGREL=1 PATH='$flutter_bin:/home/builder/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/bin' just ci-package-arch"
+
+      - name: Build pacman repository database
+        run: |
+          repository="$GITHUB_WORKSPACE/repository/arch/x86_64"
+          mkdir -p "$repository"
+          cp packaging/arch/hearthdeck-*.pkg.tar.zst "$repository/"
+          repo-add "$repository/hearthdeck.db.tar.gz" "$repository"/hearthdeck-*.pkg.tar.zst
+          cp "$repository/hearthdeck.db.tar.gz" "$repository/hearthdeck.db"
 
       - name: Archive pacman package
         uses: actions/upload-artifact@v4
@@ -53,3 +68,38 @@ jobs:
           path: packaging/arch/hearthdeck-*.pkg.tar.zst
           if-no-files-found: error
           retention-days: 7
+
+      - name: Archive pacman repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthdeck-pacman-repository
+          path: repository
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-repository:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Download pacman repository
+        uses: actions/download-artifact@v5
+        with:
+          name: hearthdeck-pacman-repository
+          path: repository
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: repository
+
+      - name: Deploy GitHub Pages repository
+        id: deployment
+        uses: actions/deploy-pages@v4
