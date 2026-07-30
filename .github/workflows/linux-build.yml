@@ -28,7 +28,7 @@ jobs:
           pacman-key --init
           pacman-key --populate archlinux
           pacman --sync --refresh --sysupgrade --noconfirm
-          pacman --sync --noconfirm clang cmake curl git gtk3 jq just ninja pacman-contrib pkgconf sqlite unzip xz zsh
+          pacman --sync --noconfirm clang cmake curl git gtk3 jq just ninja pkgconf sqlite unzip xz zsh
 
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
@@ -57,9 +57,14 @@ jobs:
         run: |
           repository="$GITHUB_WORKSPACE/repository/arch/x86_64"
           mkdir -p "$repository"
-          cp packaging/arch/hearthdeck-*.pkg.tar.zst "$repository/"
-          repo-add "$repository/hearthdeck.db.tar.gz" "$repository"/hearthdeck-*.pkg.tar.zst
-          cp "$repository/hearthdeck.db.tar.gz" "$repository/hearthdeck.db"
+          package_path=$(printf '%s\n' packaging/arch/hearthdeck-*.pkg.tar.zst)
+          test -f "$package_path"
+          cp "$package_path" "$repository/"
+          package_path="$repository/$(basename "$package_path")"
+          command -v repo-add
+          repo-add --nocolor "$repository/hearthdeck.db.tar.gz" "$package_path"
+          ln -sf hearthdeck.db.tar.gz "$repository/hearthdeck.db"
+          test -s "$repository/hearthdeck.db.tar.gz"
 
       - name: Archive pacman package
         uses: actions/upload-artifact@v4
