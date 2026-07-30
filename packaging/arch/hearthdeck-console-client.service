@@ -1,0 +1,15 @@
+[Unit]
+Description=Hearthdeck Console client
+Requires=hearthdeck-gamescope.service
+Requires=hearthdeck.target
+After=graphical-session.target hearthdeck-gamescope.service hearthdeck.target
+BindsTo=hearthdeck-gamescope.service
+PartOf=hearthdeck-gamescope.target
+
+[Service]
+Type=exec
+EnvironmentFile=%t/hearthdeck/gamescope-environment
+ExecStart=/usr/lib/hearthdeck/hearthdeck-console-client
+ExecStopPost=/usr/bin/systemctl --user stop hearthdeck-bridge.service
+ExecStopPost=-/usr/bin/systemctl --user stop hearthdeck-console.slice
+KillMode=mixed

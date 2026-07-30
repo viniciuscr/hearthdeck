@@ -1,0 +1,8 @@
+#!/usr/bin/bash
+# The compositor service has already published the Xwayland environment.
+set -Euo pipefail
+
+if ! systemctl --user restart hearthdeck-bridge.service; then
+  echo 'Could not restart the Hearthdeck bridge for Gamescope.' >&2
+fi
+exec /usr/bin/hearthdeck

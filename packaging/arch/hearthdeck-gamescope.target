@@ -1,0 +1,9 @@
+[Unit]
+Description=Hearthdeck Gamescope session
+Requires=graphical-session.target
+BindsTo=graphical-session.target
+After=graphical-session.target
+PropagatesStopTo=graphical-session.target
+Requires=hearthdeck-gamescope.service hearthdeck-console-client.service
+BindsTo=hearthdeck-gamescope.service hearthdeck-console-client.service
+Wants=hearthdeck.target

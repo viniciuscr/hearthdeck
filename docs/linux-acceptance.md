@@ -61,10 +61,16 @@ transient systemd user service; an API client cannot supply an `Exec` command or
 arguments. Query `GET /v1/sessions/active` after launch, then use
 `POST /v1/sessions/{id}/stop` to confirm the managed process exits.
 
-In **Hearthdeck Direct**, launch a graphical application and confirm it opens
-inside Gamescope rather than on another desktop. Exit Hearthdeck Direct and
-confirm its managed application services stop before the display manager
-returns.
+Select **Hearthdeck Console** in the display manager. Confirm Hearthdeck opens,
+then launch a graphical application and verify it opens inside Gamescope. Exit
+Hearthdeck Console and confirm its managed application services stop before the
+display manager returns.
+
+If the session returns to the display manager, inspect:
+
+```sh
+journalctl --user -u hearthdeck-gamescope.service -u hearthdeck-console-client.service -b
+```
 
 ## LAN Mode
 

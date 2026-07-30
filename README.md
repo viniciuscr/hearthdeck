@@ -76,17 +76,17 @@ automatically. See
 ## Console Session
 
 The Arch package depends on the distribution `gamescope` package and installs a
-**Hearthdeck Direct** Wayland session. Select it from a display manager or set
-it as the autologin session to boot directly into Hearthdeck without KDE or
-another desktop shell. Gamescope is not bundled because its GPU/DRM components
-must match the host graphics stack.
+**Hearthdeck Console** Wayland session. Select it from a display manager or set
+it as the autologin session to boot directly into Hearthdeck without another
+desktop shell. Gamescope is not bundled because its GPU/DRM components must
+match the host graphics stack.
 
 Hearthdeck launches approved Linux desktop entries in transient systemd user
 services, so the host can identify and stop the active managed application. Remote
 clients can inspect host capabilities and request an installation for host-side
 approval, but cannot execute a package manager or arbitrary host command.
 
-Choose **Settings > General > Exit to desktop** to leave Hearthdeck Direct and
+Choose **Settings > General > Exit to desktop** to leave Hearthdeck Console and
 return to the display manager, then select COSMIC.
 
 ## Controller support

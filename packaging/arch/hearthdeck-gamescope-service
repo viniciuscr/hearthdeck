@@ -1,0 +1,51 @@
+#!/usr/bin/bash
+# Publish Gamescope's private Xwayland display before the client service starts.
+set -Euo pipefail
+
+: "${XDG_RUNTIME_DIR:?Hearthdeck Console requires XDG_RUNTIME_DIR}"
+runtime_directory="$XDG_RUNTIME_DIR/hearthdeck"
+mkdir -p -- "$runtime_directory"
+chmod 700 -- "$runtime_directory"
+environment_file="$runtime_directory/gamescope-environment"
+rm -f -- "$environment_file"
+session_directory="$(mktemp -d "$runtime_directory/gamescope.XXXXXX")"
+ready_socket="$session_directory/ready"
+mkfifo --mode=600 "$ready_socket"
+
+cleanup() {
+  rm -f -- "$environment_file"
+  rm -rf -- "$session_directory"
+}
+trap cleanup EXIT
+
+publish_environment() {
+  local display gamescope_wayland_display
+  if ! read -r -t 15 display gamescope_wayland_display <>"$ready_socket"; then
+    systemd-notify --status='Gamescope did not publish client displays'
+    kill -TERM "$$"
+    return
+  fi
+  if [[ "$display" != :* ]] || [[ -z "$gamescope_wayland_display" ]]; then
+    systemd-notify --status='Gamescope published invalid client displays'
+    kill -TERM "$$"
+    return
+  fi
+
+  cat >"$environment_file" <<EOF
+DISPLAY=$display
+GAMESCOPE_WAYLAND_DISPLAY=$gamescope_wayland_display
+WAYLAND_DISPLAY=
+GDK_BACKEND=x11
+SDL_VIDEODRIVER=x11
+XDG_CURRENT_DESKTOP=gamescope:hearthdeck
+XDG_SESSION_DESKTOP=hearthdeck
+XDG_SESSION_TYPE=x11
+HEARTHDECK_CONSOLE=1
+DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
+EOF
+  chmod 600 -- "$environment_file"
+  systemd-notify --ready --status="Gamescope ready on $display"
+}
+
+publish_environment &
+exec /usr/bin/gamescope --backend drm --force-windows-fullscreen -e -R "$ready_socket"
