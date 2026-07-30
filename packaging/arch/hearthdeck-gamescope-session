@@ -1,5 +1,17 @@
-#!/usr/bin/sh
+#!/usr/bin/bash
 # Gamescope is supplied by the host distribution because it must match the
 # installed Mesa, Vulkan, DRM, and kernel graphics stack.
+set -Euo pipefail
+
+: "${HOME:?Hearthdeck Console requires HOME}"
+state_directory="${XDG_STATE_HOME:-$HOME/.local/state}/hearthdeck"
+mkdir -p -- "$state_directory"
+chmod 700 -- "$state_directory"
+exec >>"$state_directory/gamescope-session.log" 2>&1
+
+echo "$(date -Iseconds) starting Hearthdeck Console"
+echo "$(date -Iseconds) user=${USER:-unset} home=$HOME runtime=${XDG_RUNTIME_DIR:-unset}"
+echo "$(date -Iseconds) gamescope: $(gamescope --version 2>&1 | tr '\n' ' ')"
+
 exec gamescope --backend drm --force-windows-fullscreen -- \
   /usr/lib/hearthdeck/hearthdeck-console-client

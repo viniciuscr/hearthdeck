@@ -55,8 +55,10 @@ Gamescope's Wayland client socket. This is intentional until the shell's native
 runner is migrated and tested as a Wayland client. Gamescope provides that
 private display directly to the console client, which launches Hearthdeck. If
 Console returns to the display manager, inspect
-`$XDG_RUNTIME_DIR/hearthdeck/console-client.log` from the affected graphical
-login. To reproduce the session from a terminal and stream its output, run:
+`~/.local/state/hearthdeck/gamescope-session.log` and
+`~/.local/state/hearthdeck/console-client.log` after signing into a normal
+desktop session. To reproduce the session from a terminal and stream its output,
+run:
 
 ```sh
 /usr/lib/hearthdeck/hearthdeck-gamescope-session

@@ -3,11 +3,11 @@
 # lifetime while the bridge can launch additional applications on the same Xwayland.
 set -Euo pipefail
 
-: "${XDG_RUNTIME_DIR:?Hearthdeck Console requires XDG_RUNTIME_DIR}"
-log_directory="$XDG_RUNTIME_DIR/hearthdeck"
-mkdir -p -- "$log_directory"
-chmod 700 -- "$log_directory"
-exec >>"$log_directory/console-client.log" 2>&1
+: "${HOME:?Hearthdeck Console requires HOME}"
+state_directory="${XDG_STATE_HOME:-$HOME/.local/state}/hearthdeck"
+mkdir -p -- "$state_directory"
+chmod 700 -- "$state_directory"
+exec >>"$state_directory/console-client.log" 2>&1
 
 export WAYLAND_DISPLAY=""
 export GDK_BACKEND=x11
@@ -32,7 +32,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 echo "$(date -Iseconds) starting Hearthdeck Console client"
-echo "$(date -Iseconds) display=${DISPLAY:-unset} runtime=$XDG_RUNTIME_DIR"
+echo "$(date -Iseconds) display=${DISPLAY:-unset} runtime=${XDG_RUNTIME_DIR:-unset}"
 
 # Propagate Gamescope's Xwayland endpoint to the user manager before restarting
 # the bridge. A failure here must not prevent the console shell itself from opening.
