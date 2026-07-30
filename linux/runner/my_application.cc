@@ -3,8 +3,6 @@
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
-#include <X11/Xatom.h>
-#include <X11/Xlib.h>
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
@@ -46,15 +44,12 @@ static void mark_gamescope_primary_window(GtkWindow* window) {
     return;
   }
 
-  Display* display =
-      gdk_x11_display_get_xdisplay(gdk_window_get_display(gdk_window));
-  Atom steam_game = XInternAtom(display, "STEAM_GAME", False);
   // Steam-policy Gamescope only presents primary windows with a nonzero app ID.
-  unsigned long primary_window = 769;
-  XChangeProperty(display, gdk_x11_window_get_xid(gdk_window), steam_game,
-                  XA_CARDINAL, 32, PropModeReplace,
-                  reinterpret_cast<unsigned char*>(&primary_window), 1);
-  XFlush(display);
+  const guint32 primary_window = 769;
+  gdk_property_change(
+      gdk_window, gdk_atom_intern_static_string("STEAM_GAME"),
+      gdk_atom_intern_static_string("CARDINAL"), 32, GDK_PROP_MODE_REPLACE,
+      reinterpret_cast<const guchar*>(&primary_window), 1);
 #else
   (void)window;
 #endif
