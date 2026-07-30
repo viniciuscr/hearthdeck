@@ -5,7 +5,9 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import 'dashboard_models.dart';
+import 'tv_gamepad.dart';
 import 'tv_theme.dart';
+import 'virtual_keyboard.dart';
 
 class TvLayoutMetrics {
   const TvLayoutMetrics._({
@@ -104,6 +106,20 @@ class TvDirectionalFocusNavigation extends StatelessWidget {
               FocusManager.instance.primaryFocus?.focusInDirection(
                 intent.direction,
               );
+              return null;
+            },
+          ),
+          TvDirectionalFocusIntent: CallbackAction<TvDirectionalFocusIntent>(
+            onInvoke: (TvDirectionalFocusIntent intent) {
+              final focusedNode = FocusManager.instance.primaryFocus;
+              final dismissedTextInput =
+                  VirtualKeyboardFocusScope.dismissFocusedEditableForNavigationOf(
+                    context,
+                  );
+              (dismissedTextInput
+                      ? focusedNode
+                      : FocusManager.instance.primaryFocus)
+                  ?.focusInDirection(intent.direction);
               return null;
             },
           ),

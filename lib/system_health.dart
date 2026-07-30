@@ -7,6 +7,7 @@ import 'catalog/catalog_repository.dart';
 import 'catalog/catalog_repository_factory.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
+import 'virtual_keyboard.dart';
 
 class SystemHealthPage extends StatefulWidget {
   const SystemHealthPage({super.key, this.catalogRepository});
@@ -59,7 +60,7 @@ class _SystemHealthPageState extends State<SystemHealthPage> {
       actions: <Type, Action<Intent>>{
         DismissIntent: CallbackAction<DismissIntent>(
           onInvoke: (DismissIntent intent) {
-            Navigator.of(context).maybePop();
+            dismissTextInputOrPop(context);
             return null;
           },
         ),
@@ -70,7 +71,7 @@ class _SystemHealthPageState extends State<SystemHealthPage> {
           onKeyEvent: (FocusNode node, KeyEvent event) {
             if (event is KeyDownEvent &&
                 event.logicalKey == LogicalKeyboardKey.escape) {
-              Navigator.of(context).maybePop();
+              dismissTextInputOrPop(context);
               return KeyEventResult.handled;
             }
             return KeyEventResult.ignored;

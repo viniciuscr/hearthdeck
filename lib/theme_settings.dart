@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'tv_components.dart';
 import 'tv_theme.dart';
+import 'virtual_keyboard.dart';
 
 class ThemeSettingsPage extends StatelessWidget {
   const ThemeSettingsPage({super.key});
@@ -15,7 +16,7 @@ class ThemeSettingsPage extends StatelessWidget {
       actions: <Type, Action<Intent>>{
         DismissIntent: CallbackAction<DismissIntent>(
           onInvoke: (DismissIntent intent) {
-            Navigator.of(context).maybePop();
+            dismissTextInputOrPop(context);
             return null;
           },
         ),
@@ -26,7 +27,7 @@ class ThemeSettingsPage extends StatelessWidget {
           onKeyEvent: (FocusNode node, KeyEvent event) {
             if (event is KeyDownEvent &&
                 event.logicalKey == LogicalKeyboardKey.escape) {
-              Navigator.of(context).maybePop();
+              dismissTextInputOrPop(context);
               return KeyEventResult.handled;
             }
             return KeyEventResult.ignored;

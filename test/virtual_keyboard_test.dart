@@ -35,4 +35,21 @@ void main() {
 
     expect(invoked, isFalse);
   });
+
+  test('does not toggle again after an external dismissal', () async {
+    var toggles = 0;
+    final keyboard = GamepadOskVirtualKeyboard(
+      enabled: true,
+      command: () async {
+        toggles += 1;
+        return ProcessResult(0, 0, '', '');
+      },
+    );
+
+    await keyboard.show();
+    keyboard.didDismissExternally();
+    await keyboard.hide();
+
+    expect(toggles, 1);
+  });
 }

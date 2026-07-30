@@ -15,6 +15,7 @@ import 'search.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
 import 'tv_two_pane.dart';
+import 'virtual_keyboard.dart';
 
 class FullLibraryPage extends StatefulWidget {
   const FullLibraryPage({super.key, this.catalogRepository});
@@ -191,7 +192,7 @@ class _FullLibraryPageState extends State<FullLibraryPage> {
           actions: <Type, Action<Intent>>{
             DismissIntent: CallbackAction<DismissIntent>(
               onInvoke: (DismissIntent intent) {
-                Navigator.of(context).maybePop();
+                dismissTextInputOrPop(context);
                 return null;
               },
             ),
@@ -202,7 +203,7 @@ class _FullLibraryPageState extends State<FullLibraryPage> {
               onKeyEvent: (FocusNode node, KeyEvent event) {
                 if (event is KeyDownEvent &&
                     event.logicalKey == LogicalKeyboardKey.escape) {
-                  Navigator.of(context).maybePop();
+                  dismissTextInputOrPop(context);
                   return KeyEventResult.handled;
                 }
                 return KeyEventResult.ignored;

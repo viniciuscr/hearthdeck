@@ -8,6 +8,7 @@ import 'tv_theme.dart';
 import 'full_library.dart';
 import 'search.dart';
 import 'settings.dart';
+import 'virtual_keyboard.dart';
 
 class TvDashboard extends StatelessWidget {
   const TvDashboard({super.key});
@@ -22,7 +23,9 @@ class TvDashboard extends StatelessWidget {
             actions: <Type, Action<Intent>>{
               DismissIntent: CallbackAction<DismissIntent>(
                 onInvoke: (DismissIntent intent) {
-                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                  if (!unfocusWritableEditableText()) {
+                    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                  }
                   return null;
                 },
               ),

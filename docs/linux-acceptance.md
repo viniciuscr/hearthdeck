@@ -53,11 +53,6 @@ launchable applications.
 
 ## Launch
 
-Before testing Hearthdeck Console, select **Hearthdeck Gamescope Xterm Test**
-from the display manager. It must open an xterm window. Run `exit` to return to
-the display manager. This verifies direct DRM Gamescope and Xwayland without
-Hearthdeck or systemd Console services.
-
 Call `POST /v1/apps/{id}/launch` with an ID returned by the library endpoint.
 Confirm the registered desktop app opens in the active graphical session.
 

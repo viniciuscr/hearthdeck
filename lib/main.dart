@@ -53,6 +53,9 @@ class _HearthdeckAppState extends State<HearthdeckApp> {
   }
 
   static Future<void> _handleBackIntent() async {
+    if (unfocusWritableEditableText()) {
+      return;
+    }
     final navigator = navigatorKey.currentState;
     final didPop = navigator != null && await navigator.maybePop();
     if (!didPop) {
@@ -111,32 +114,63 @@ class _HearthdeckAppState extends State<HearthdeckApp> {
       return GamepadControl(
         shortcuts: TvGamepadBindings.shortcuts,
         repeatIntents: TvGamepadBindings.repeatIntents,
-        child: Actions(
-          actions: <Type, Action<Intent>>{
-            TvBackIntent: CallbackAction<TvBackIntent>(
-              onInvoke: (TvBackIntent intent) {
-                unawaited(_handleBackIntent());
-                return null;
-              },
-            ),
-          },
-          child: TvThemeScope(
-            mode: _themeMode,
-            onModeChanged: _setThemeMode,
-            backdropMode: _backdropMode,
-            onBackdropModeChanged: _setBackdropMode,
-            child: VirtualKeyboardFocusObserver(
-              virtualKeyboard: widget.virtualKeyboard,
-              child: MaterialApp(
-                navigatorKey: navigatorKey,
-                scaffoldMessengerKey: scaffoldMessengerKey,
-                debugShowCheckedModeBanner: false,
-                title: 'Hearthdeck',
-                theme: TvTheme.data(colors, palette),
-                themeAnimationDuration: TvTheme.focusDuration,
-                themeAnimationCurve: TvTheme.focusCurve,
-                home: const TvDashboard(),
+        child: TvThemeScope(
+          mode: _themeMode,
+          onModeChanged: _setThemeMode,
+          backdropMode: _backdropMode,
+          onBackdropModeChanged: _setBackdropMode,
+          child: VirtualKeyboardFocusObserver(
+            virtualKeyboard: widget.virtualKeyboard,
+            child: MaterialApp(
+              navigatorKey: navigatorKey,
+              scaffoldMessengerKey: scaffoldMessengerKey,
+              debugShowCheckedModeBanner: false,
+              title: 'Hearthdeck',
+              theme: TvTheme.data(colors, palette),
+              themeAnimationDuration: TvTheme.focusDuration,
+              themeAnimationCurve: TvTheme.focusCurve,
+              builder: (BuildContext context, Widget? child) => Actions(
+                actions: <Type, Action<Intent>>{
+                  DismissIntent: CallbackAction<DismissIntent>(
+                    onInvoke: (DismissIntent intent) {
+                      if (!VirtualKeyboardFocusScope.dismissFocusedEditableForBackOf(
+                        context,
+                      )) {
+                        unawaited(_handleBackIntent());
+                      }
+                      return null;
+                    },
+                  ),
+                  TvBackIntent: CallbackAction<TvBackIntent>(
+                    onInvoke: (TvBackIntent intent) {
+                      if (!VirtualKeyboardFocusScope.dismissFocusedEditableForBackOf(
+                        context,
+                      )) {
+                        unawaited(_handleBackIntent());
+                      }
+                      return null;
+                    },
+                  ),
+                  TvDirectionalFocusIntent:
+                      CallbackAction<TvDirectionalFocusIntent>(
+                        onInvoke: (TvDirectionalFocusIntent intent) {
+                          final focusedNode =
+                              FocusManager.instance.primaryFocus;
+                          final dismissedTextInput =
+                              VirtualKeyboardFocusScope.dismissFocusedEditableForNavigationOf(
+                                context,
+                              );
+                          (dismissedTextInput
+                                  ? focusedNode
+                                  : FocusManager.instance.primaryFocus)
+                              ?.focusInDirection(intent.direction);
+                          return null;
+                        },
+                      ),
+                },
+                child: child ?? const SizedBox.shrink(),
               ),
+              home: const TvDashboard(),
             ),
           ),
         ),

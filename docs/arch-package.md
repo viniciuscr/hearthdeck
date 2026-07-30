@@ -88,11 +88,6 @@ stream its output, run:
 /usr/lib/hearthdeck/hearthdeck-gamescope-session
 ```
 
-To isolate Gamescope and the display manager from Hearthdeck itself, select
-**Hearthdeck Gamescope Xterm Test** at login. It opens only `xterm` through
-direct DRM Gamescope. Run `exit` in that terminal to return to the display
-manager. If it fails, inspect `~/.local/state/hearthdeck/gamescope-xterm.log`.
-
 Exit Hearthdeck Console from its system menu to return to the display manager.
 Select the COSMIC session there to return to the desktop. If the console shell
 crashes, Gamescope exits as well and the display manager remains available for

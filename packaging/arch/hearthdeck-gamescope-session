@@ -1,5 +1,4 @@
 #!/usr/bin/bash
-# Keep the display-manager session identical to the working Xterm diagnostic:
 # Gamescope directly owns the packaged Hearthdeck executable.
 set -Euo pipefail
 

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import 'tv_components.dart';
 import 'tv_theme.dart';
+import 'virtual_keyboard.dart';
 
 class TvSideSheet extends StatelessWidget {
   const TvSideSheet({
@@ -37,7 +38,9 @@ class TvSideSheet extends StatelessWidget {
           actions: <Type, Action<Intent>>{
             DismissIntent: CallbackAction<DismissIntent>(
               onInvoke: (DismissIntent intent) {
-                _close(context);
+                if (!unfocusWritableEditableText()) {
+                  _close(context);
+                }
                 return null;
               },
             ),
@@ -48,7 +51,9 @@ class TvSideSheet extends StatelessWidget {
               onKeyEvent: (FocusNode node, KeyEvent event) {
                 if (event is KeyDownEvent &&
                     event.logicalKey == LogicalKeyboardKey.escape) {
-                  _close(context);
+                  if (!unfocusWritableEditableText()) {
+                    _close(context);
+                  }
                   return KeyEventResult.handled;
                 }
                 return KeyEventResult.ignored;

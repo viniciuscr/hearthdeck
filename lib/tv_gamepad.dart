@@ -6,17 +6,24 @@ class TvBackIntent extends Intent {
   const TvBackIntent();
 }
 
+/// Moves focus between TV controls without invoking native text editing.
+class TvDirectionalFocusIntent extends Intent {
+  const TvDirectionalFocusIntent(this.direction);
+
+  final TraversalDirection direction;
+}
+
 abstract final class TvGamepadBindings {
-  static const DirectionalFocusIntent up = DirectionalFocusIntent(
+  static const TvDirectionalFocusIntent up = TvDirectionalFocusIntent(
     TraversalDirection.up,
   );
-  static const DirectionalFocusIntent down = DirectionalFocusIntent(
+  static const TvDirectionalFocusIntent down = TvDirectionalFocusIntent(
     TraversalDirection.down,
   );
-  static const DirectionalFocusIntent left = DirectionalFocusIntent(
+  static const TvDirectionalFocusIntent left = TvDirectionalFocusIntent(
     TraversalDirection.left,
   );
-  static const DirectionalFocusIntent right = DirectionalFocusIntent(
+  static const TvDirectionalFocusIntent right = TvDirectionalFocusIntent(
     TraversalDirection.right,
   );
   static const TvBackIntent back = TvBackIntent();

@@ -13,6 +13,7 @@ import 'theme_settings.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
 import 'tv_two_pane.dart';
+import 'virtual_keyboard.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, this.catalogRepository, this.platformSession});
@@ -93,7 +94,7 @@ class _SettingsPageState extends State<SettingsPage> {
           actions: <Type, Action<Intent>>{
             DismissIntent: CallbackAction<DismissIntent>(
               onInvoke: (DismissIntent intent) {
-                Navigator.of(context).maybePop();
+                dismissTextInputOrPop(context);
                 return null;
               },
             ),
@@ -104,7 +105,7 @@ class _SettingsPageState extends State<SettingsPage> {
               onKeyEvent: (FocusNode node, KeyEvent event) {
                 if (event is KeyDownEvent &&
                     event.logicalKey == LogicalKeyboardKey.escape) {
-                  Navigator.of(context).maybePop();
+                  dismissTextInputOrPop(context);
                   return KeyEventResult.handled;
                 }
                 return KeyEventResult.ignored;

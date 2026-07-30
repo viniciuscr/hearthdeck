@@ -334,6 +334,53 @@ void main() {
     focusNode.dispose();
   });
 
+  testWidgets(
+    'controller back dismisses a focused text input before its route',
+    (WidgetTester tester) async {
+      Gamepads.normalizer = GamepadNormalizer.forPlatform(
+        GamepadPlatform.linux,
+      );
+      addTearDown(() => Gamepads.normalizer = null);
+      final keyboard = _FakeVirtualKeyboard();
+      await tester.pumpWidget(HearthdeckApp(virtualKeyboard: keyboard));
+      await tester.tap(find.bySemanticsLabel('Search'));
+      await tester.pumpAndSettle();
+
+      await _sendLinuxGamepadButton('1', 1.0);
+      await _sendLinuxGamepadButton('1', 0.0);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TvSearchPage), findsOneWidget);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        isNot('Search input'),
+      );
+      expect(keyboard.hideRequests, 1);
+    },
+  );
+
+  testWidgets('directional focus leaves text input after an OSK dismissal', (
+    WidgetTester tester,
+  ) async {
+    final keyboard = _FakeVirtualKeyboard();
+    await tester.pumpWidget(HearthdeckApp(virtualKeyboard: keyboard));
+    await tester.tap(find.bySemanticsLabel('Search'));
+    await tester.pumpAndSettle();
+
+    Actions.invoke(
+      tester.element(find.byKey(const ValueKey<String>('search-input'))),
+      TvGamepadBindings.down,
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      isNot('Search input'),
+    );
+    expect(keyboard.externalDismissRequests, 1);
+    expect(keyboard.hideRequests, 0);
+  });
+
   testWidgets('native text input updates search results', (
     WidgetTester tester,
   ) async {
@@ -655,6 +702,7 @@ class _FakePlatformSession implements PlatformSession {
 class _FakeVirtualKeyboard implements VirtualKeyboard {
   var showRequests = 0;
   var hideRequests = 0;
+  var externalDismissRequests = 0;
 
   @override
   Future<void> show() async {
@@ -664,6 +712,11 @@ class _FakeVirtualKeyboard implements VirtualKeyboard {
   @override
   Future<void> hide() async {
     hideRequests += 1;
+  }
+
+  @override
+  void didDismissExternally() {
+    externalDismissRequests += 1;
   }
 }
 
