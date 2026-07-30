@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Hearthdeck Direct
+Comment=Minimal direct DRM Gamescope session
+Exec=/usr/bin/gamescope --backend drm --force-windows-fullscreen -- /usr/bin/xterm -fa Monospace -fs 16 -e /bin/sh -c "sleep 3; exec /usr/bin/hearthdeck"
+Type=Application
+DesktopNames=gamescope;hearthdeck

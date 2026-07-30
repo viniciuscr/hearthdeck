@@ -9,7 +9,7 @@ CachyOS. It installs:
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
   API daemon user units.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
-- `/usr/share/wayland-sessions/hearthdeck-gamescope.desktop`: the direct DRM
+- `/usr/share/wayland-sessions/hearthdeck-direct.desktop`: the direct DRM
   console session shown by compatible display managers.
 
 ## Install
@@ -62,39 +62,27 @@ systemd drop-in.
 
 `gamescope` is a runtime dependency, installed by pacman with Hearthdeck. It
 is intentionally not bundled: Gamescope needs to match the host's Mesa,
-Vulkan, DRM, and kernel graphics stack. Select **Hearthdeck Console** in the
+Vulkan, DRM, and kernel graphics stack. Select **Hearthdeck Direct** in the
 display manager, or configure it as the autologin session, for the minimal
 direct-to-display experience. A normal desktop session remains a separate
-recovery option; it is not started behind Hearthdeck Console.
+recovery option; it is not started behind Hearthdeck Direct.
 
 The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
-runner is migrated and tested as a Wayland client. Gamescope starts an internal
-Xterm bootstrap before launching the packaged `hearthdeck` executable. This
-reproduces the working Xwayland client topology while Hearthdeck's fullscreen
-window covers the bootstrap terminal. The Console uses the normal Gamescope
-window policy, allowing Hearthdeck and managed desktop applications to be
-admitted as ordinary Xwayland windows. Managed Console applications run in a
-dedicated user slice and are stopped before the display manager returns. If
-Console returns to the display manager, inspect
-`~/.local/state/hearthdeck/gamescope-session.log` after signing into a normal
-desktop session. If the user state directory is unavailable, the log falls back
-to `$XDG_RUNTIME_DIR/hearthdeck/`. To reproduce the session from a terminal and
-stream its output, run:
+runner is migrated and tested as a Wayland client. The new session has no
+Hearthdeck launcher script: the display manager starts Gamescope directly,
+Gamescope starts Xterm, and Xterm launches `/usr/bin/hearthdeck` after a short
+Xwayland startup delay. This reproduces the successful diagnostic command while
+Hearthdeck's fullscreen window covers the bootstrap terminal. The session uses
+the normal Gamescope window policy, allowing Hearthdeck to be admitted as an
+ordinary Xwayland window.
 
-```sh
-/usr/lib/hearthdeck/hearthdeck-gamescope-session
-```
-
-If Hearthdeck exits with an error, the bootstrap terminal remains visible with
-the exit status instead of immediately returning to the display manager.
-
-Exit Hearthdeck Console from its system menu to return to the display manager.
-Select the COSMIC session there to return to the desktop. If the console shell
+Exit Hearthdeck Direct from its system menu to return to the display manager.
+Select the COSMIC session there to return to the desktop. If the Direct shell
 crashes, Gamescope exits as well and the display manager remains available for
 recovery.
 
-Use **Settings > General > Exit to desktop** inside Hearthdeck Console. Confirm
+Use **Settings > General > Exit to desktop** inside Hearthdeck Direct. Confirm
 the prompt to close the console session and return to the display manager.
 
 The bridge scans the target machine's Freedesktop entries and launches only a
