@@ -1,5 +1,13 @@
 post_install() {
   systemctl --global enable hearthdeck.target
+  if ! grep -qxF 'Include = /etc/pacman.d/hearthdeck.conf' /etc/pacman.conf; then
+    cat >>/etc/pacman.conf <<'EOF'
+
+# BEGIN HEARTHDECK PACMAN REPOSITORY
+Include = /etc/pacman.d/hearthdeck.conf
+# END HEARTHDECK PACMAN REPOSITORY
+EOF
+  fi
 
   cat <<'EOF'
 Hearthdeck installs a systemd user target, API daemon, and host bridge socket.
@@ -15,9 +23,9 @@ The launcher pairs with the loopback daemon automatically. Optional LAN/TLS
 configuration belongs in ~/.config/hearthdeck/daemon.env; see
 /usr/share/doc/hearthdeck/daemon.env.example.
 
-To receive future packages through pacman, follow the repository setup in
-/usr/share/doc/hearthdeck/README.md. The current GitHub Pages repository is
-unsigned and should not be enabled on systems that require signed packages.
+Future Hearthdeck package updates arrive through `pacman -Syu`. The GitHub
+Pages repository is unsigned and should not be enabled on systems that require
+signed packages.
 
 If Hearthdeck was previously installed from a source checkout, move its copied
 unit files out of ~/.config/systemd/user/ first. Those files override the
@@ -27,6 +35,10 @@ EOF
 
 post_upgrade() {
   post_install
+}
+
+pre_remove() {
+  sed -i '/^# BEGIN HEARTHDECK PACMAN REPOSITORY$/,/^# END HEARTHDECK PACMAN REPOSITORY$/d' /etc/pacman.conf
 }
 
 post_remove() {

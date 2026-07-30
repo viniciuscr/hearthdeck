@@ -3,10 +3,22 @@
 # lifetime while the bridge can launch additional applications on the same Xwayland.
 set -Euo pipefail
 
-: "${HOME:?Hearthdeck Console requires HOME}"
-state_directory="${XDG_STATE_HOME:-$HOME/.local/state}/hearthdeck"
-mkdir -p -- "$state_directory"
-chmod 700 -- "$state_directory"
+log_directory() {
+  if [[ -n "${XDG_STATE_HOME:-}" ]]; then
+    printf '%s/hearthdeck\n' "$XDG_STATE_HOME"
+  elif [[ -n "${HOME:-}" ]]; then
+    printf '%s/.local/state/hearthdeck\n' "$HOME"
+  else
+    printf '%s/hearthdeck\n' "${XDG_RUNTIME_DIR:?Hearthdeck Console requires XDG_RUNTIME_DIR}"
+  fi
+}
+
+state_directory="$(log_directory)"
+if ! mkdir -p -- "$state_directory" || ! chmod 700 -- "$state_directory"; then
+  state_directory="${XDG_RUNTIME_DIR:?Hearthdeck Console requires XDG_RUNTIME_DIR}/hearthdeck"
+  mkdir -p -- "$state_directory"
+  chmod 700 -- "$state_directory"
+fi
 exec >>"$state_directory/console-client.log" 2>&1
 
 export WAYLAND_DISPLAY=""
@@ -16,6 +28,9 @@ export XDG_CURRENT_DESKTOP=gamescope:hearthdeck
 export XDG_SESSION_DESKTOP=hearthdeck
 export XDG_SESSION_TYPE=x11
 export HEARTHDECK_CONSOLE=1
+if [[ -S "${XDG_RUNTIME_DIR:-}/bus" ]]; then
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+fi
 
 cleanup() {
   local status=$?
@@ -33,6 +48,7 @@ trap cleanup EXIT HUP INT TERM
 
 echo "$(date -Iseconds) starting Hearthdeck Console client"
 echo "$(date -Iseconds) display=${DISPLAY:-unset} runtime=${XDG_RUNTIME_DIR:-unset}"
+echo "$(date -Iseconds) dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
 
 # Propagate Gamescope's Xwayland endpoint to the user manager before restarting
 # the bridge. A failure here must not prevent the console shell itself from opening.

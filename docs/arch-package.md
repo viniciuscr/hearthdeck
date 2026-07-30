@@ -29,20 +29,18 @@ systemctl --user daemon-reload
 systemctl --user start hearthdeck.target
 ```
 
-Then configure the Hearthdeck repository to receive future package updates with
-the normal system update:
+Installation adds the managed `/etc/pacman.d/hearthdeck.conf` and an include in
+`/etc/pacman.conf`. Future Hearthdeck packages therefore arrive with the normal
+system update:
 
 ```sh
-sudo install -Dm644 /usr/share/doc/hearthdeck/pacman-repo.conf /etc/pacman.d/hearthdeck.conf
-grep -qxF 'Include = /etc/pacman.d/hearthdeck.conf' /etc/pacman.conf || \
-  printf '\nInclude = /etc/pacman.d/hearthdeck.conf\n' | sudo tee -a /etc/pacman.conf
 sudo pacman -Syu
 ```
 
 The repository is published to GitHub Pages after each successful `main` build.
-It is currently unsigned, so its configuration uses `SigLevel = Optional
-TrustAll`. Enable it only if you accept GitHub Pages over HTTPS as the package
-trust boundary; package signing can replace this setting later.
+It is currently unsigned and uses `SigLevel = Optional TrustAll`. Installing
+the initial package accepts GitHub Pages over HTTPS as the package trust
+boundary; package signing can replace this later.
 
 Pacman enables the target globally for future user sessions but cannot safely
 start a currently logged-in user's manager during a root package transaction.
@@ -75,12 +73,15 @@ recovery option; it is not started behind Hearthdeck Console.
 The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
 runner is migrated and tested as a Wayland client. Gamescope provides that
-private display directly to the console client, which launches Hearthdeck. If
-Console returns to the display manager, inspect
+private display after Xwayland reports readiness, then launches Hearthdeck. The
+GTK runner marks its primary Xwayland window for Gamescope's Steam session
+policy so it is visible outside the normal desktop. If Console returns to the
+display manager, inspect
 `~/.local/state/hearthdeck/gamescope-session.log` and
 `~/.local/state/hearthdeck/console-client.log` after signing into a normal
-desktop session. To reproduce the session from a terminal and stream its output,
-run:
+desktop session. If the user state directory is unavailable, the logs fall back
+to `$XDG_RUNTIME_DIR/hearthdeck/`. To reproduce the session from a terminal and
+stream its output, run:
 
 ```sh
 /usr/lib/hearthdeck/hearthdeck-gamescope-session

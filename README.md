@@ -57,9 +57,8 @@ just install-services
 
 GitHub Actions produces an `x86_64` pacman package containing the Flutter
 client, the local bridge and daemon, a desktop entry, and systemd user units.
-Install the initial `hearthdeck-*.pkg.tar.zst` from a workflow run, then follow
-the repository setup in `docs/arch-package.md` to receive future updates through
-`pacman -Syu`:
+Install the initial `hearthdeck-*.pkg.tar.zst` from a workflow run; it configures
+the Hearthdeck repository so future updates arrive through `pacman -Syu`:
 
 ```sh
 sudo pacman -U hearthdeck-*.pkg.tar.zst
