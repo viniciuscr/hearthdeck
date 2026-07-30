@@ -89,6 +89,10 @@ approval, but cannot execute a package manager or arbitrary host command.
 Choose **Settings > General > Exit to desktop** to leave Hearthdeck Console and
 return to the display manager, then select COSMIC.
 
+**Hearthdeck Gamescope Xterm Test** is a separate recovery session that runs
+only Gamescope and Xterm, without starting Hearthdeck or its services. Run
+`exit` in Xterm to return to the display manager.
+
 ## Controller support
 
 The dashboard uses `flutter_gamepads`, backed by Flame Engine's cross-platform

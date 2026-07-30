@@ -2,15 +2,10 @@
 # Publish Gamescope's private Xwayland display before the client service starts.
 set -Euo pipefail
 
-: "${XDG_RUNTIME_DIR:?Hearthdeck Console requires XDG_RUNTIME_DIR}"
-log_directory="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
-if [[ -n "$log_directory" ]] && mkdir -p -- "$log_directory/hearthdeck"; then
-  exec >>"$log_directory/hearthdeck/gamescope-service.log" 2>&1
-elif [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
-  mkdir -p -- "$XDG_RUNTIME_DIR/hearthdeck"
-  exec >>"$XDG_RUNTIME_DIR/hearthdeck/gamescope-service.log" 2>&1
-fi
+umask 077
+exec >>"/tmp/hearthdeck-gamescope-service-${UID:-unknown}.log" 2>&1
 
+: "${XDG_RUNTIME_DIR:?Hearthdeck Console requires XDG_RUNTIME_DIR}"
 runtime_directory="$XDG_RUNTIME_DIR/hearthdeck"
 mkdir -p -- "$runtime_directory"
 chmod 700 -- "$runtime_directory"
@@ -21,7 +16,8 @@ ready_socket="$session_directory/ready"
 mkfifo --mode=600 "$ready_socket"
 
 echo "$(date -Iseconds) starting Gamescope service"
-echo "$(date -Iseconds) runtime=$XDG_RUNTIME_DIR dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
+echo "$(date -Iseconds) user=${USER:-unset} home=${HOME:-unset} runtime=$XDG_RUNTIME_DIR"
+echo "$(date -Iseconds) dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
 
 cleanup() {
   rm -f -- "$environment_file"

@@ -2,21 +2,17 @@
 # Mirror CachyOS's session lifecycle so failed units remain inspectable.
 set -Euo pipefail
 
+umask 077
+exec >>"/tmp/hearthdeck-console-session-${UID:-unknown}.log" 2>&1
+
+echo "$(date -Iseconds) starting Hearthdeck Console session"
+echo "$(date -Iseconds) user=${USER:-unset} home=${HOME:-unset} runtime=${XDG_RUNTIME_DIR:-unset}"
+
 : "${XDG_RUNTIME_DIR:?Hearthdeck Console requires XDG_RUNTIME_DIR}"
 if [[ -S "$XDG_RUNTIME_DIR/bus" ]]; then
   export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 fi
-
-log_directory="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
-if [[ -n "$log_directory" ]] && mkdir -p -- "$log_directory/hearthdeck"; then
-  exec >>"$log_directory/hearthdeck/console-session.log" 2>&1
-elif [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
-  mkdir -p -- "$XDG_RUNTIME_DIR/hearthdeck"
-  exec >>"$XDG_RUNTIME_DIR/hearthdeck/console-session.log" 2>&1
-fi
-
-echo "$(date -Iseconds) starting Hearthdeck Console session"
-echo "$(date -Iseconds) runtime=$XDG_RUNTIME_DIR dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
+echo "$(date -Iseconds) dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
 
 systemctl --user daemon-reload
 systemctl --user stop hearthdeck-gamescope.target 2>/dev/null || true

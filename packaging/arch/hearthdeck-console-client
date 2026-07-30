@@ -2,6 +2,11 @@
 # The compositor service has already published the Xwayland environment.
 set -Euo pipefail
 
+umask 077
+exec >>"/tmp/hearthdeck-console-client-${UID:-unknown}.log" 2>&1
+echo "$(date -Iseconds) starting Hearthdeck Console client"
+echo "$(date -Iseconds) display=${DISPLAY:-unset} runtime=${XDG_RUNTIME_DIR:-unset}"
+
 if ! systemctl --user restart hearthdeck-bridge.service; then
   echo 'Could not restart the Hearthdeck bridge for Gamescope.' >&2
 fi

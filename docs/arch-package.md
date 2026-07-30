@@ -11,6 +11,8 @@ CachyOS. It installs:
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck-gamescope.desktop`: the supervised DRM
   console session shown by compatible display managers.
+- `/usr/share/wayland-sessions/hearthdeck-gamescope-xterm.desktop`: the isolated
+  DRM Gamescope and Xterm recovery session.
 
 ## Install
 
@@ -82,12 +84,21 @@ If Console returns to the display manager, inspect:
 
 ```sh
 journalctl --user -u hearthdeck-gamescope.service -u hearthdeck-console-client.service -b
-cat ~/.local/state/hearthdeck/console-session.log
-cat ~/.local/state/hearthdeck/gamescope-service.log
+cat /tmp/hearthdeck-console-session-$(id -u).log
+cat /tmp/hearthdeck-gamescope-service-$(id -u).log
+cat /tmp/hearthdeck-console-client-$(id -u).log
 ```
 
 Use **Settings > General > Exit to desktop** inside Hearthdeck Console. Confirm
 the prompt to close the console session and return to the display manager.
+
+**Hearthdeck Gamescope Xterm Test** starts only direct DRM Gamescope and Xterm.
+It does not launch Hearthdeck, systemd services, or a session supervisor. Run
+`exit` in Xterm to return to the display manager. Its output is retained at:
+
+```sh
+cat /tmp/hearthdeck-gamescope-xterm-$(id -u).log
+```
 
 The bridge scans the target machine's Freedesktop entries and launches only a
 re-discovered desktop entry. It honors desktop visibility constraints, `Path`,
