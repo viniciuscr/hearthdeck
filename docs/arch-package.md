@@ -73,15 +73,14 @@ recovery option; it is not started behind Hearthdeck Console.
 The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
 runner is migrated and tested as a Wayland client. Gamescope directly starts
-Hearthdeck as its primary client, so it provides its private Xwayland display
-without an additional session supervisor. The Console uses the normal Gamescope
-window policy, allowing Hearthdeck and managed desktop applications to be
-admitted as ordinary Xwayland windows. Managed Console applications run in a
-dedicated user slice and are stopped before the display manager returns. If
-Console returns to the display manager, inspect
-`~/.local/state/hearthdeck/gamescope-session.log` and
-`~/.local/state/hearthdeck/console-client.log` after signing into a normal
-desktop session. If the user state directory is unavailable, the logs fall back
+the packaged `hearthdeck` executable as its primary client, so it provides its
+private Xwayland display without an additional session supervisor. The Console
+uses the normal Gamescope window policy, allowing Hearthdeck and managed desktop
+applications to be admitted as ordinary Xwayland windows. Managed Console
+applications run in a dedicated user slice and are stopped before the display
+manager returns. If Console returns to the display manager, inspect
+`~/.local/state/hearthdeck/gamescope-session.log` after signing into a normal
+desktop session. If the user state directory is unavailable, the log falls back
 to `$XDG_RUNTIME_DIR/hearthdeck/`. To reproduce the session from a terminal and
 stream its output, run:
 

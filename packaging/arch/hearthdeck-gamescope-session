@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 # Keep the display-manager session identical to the working Xterm diagnostic:
-# Gamescope directly owns the primary console client and its Xwayland display.
+# Gamescope directly owns the packaged Hearthdeck executable.
 set -Euo pipefail
 
 log_directory="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
@@ -14,4 +14,4 @@ fi
 echo "$(date -Iseconds) starting direct Hearthdeck Gamescope session"
 echo "$(date -Iseconds) runtime=${XDG_RUNTIME_DIR:-unset} dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
 exec gamescope --backend drm --force-windows-fullscreen -- \
-  /usr/lib/hearthdeck/hearthdeck-console-client
+  /usr/bin/hearthdeck

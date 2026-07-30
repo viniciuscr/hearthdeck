@@ -71,14 +71,6 @@ inside Gamescope rather than on another desktop. Exit Hearthdeck Console and
 confirm its managed application services stop before the display manager
 returns.
 
-While Console is open, verify that the bridge received the private Xwayland
-display:
-
-```sh
-systemctl --user show-environment | grep '^DISPLAY='
-systemctl --user status hearthdeck-bridge.service
-```
-
 If the Console shell itself returns to the display manager, run
 `/usr/lib/hearthdeck/hearthdeck-gamescope-session` from a terminal and retain
 its Gamescope and GTK output for diagnosis.
