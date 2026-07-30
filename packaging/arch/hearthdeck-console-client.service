@@ -1,7 +1,7 @@
 [Unit]
 Description=Hearthdeck Console client
 Requires=hearthdeck-gamescope.service
-After=hearthdeck-gamescope.service
+After=graphical-session.target hearthdeck-gamescope.service
 PartOf=hearthdeck-console.target
 
 [Service]

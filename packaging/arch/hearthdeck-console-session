@@ -22,7 +22,10 @@ echo "$(date -Iseconds) runtime=$XDG_RUNTIME_DIR dbus=${DBUS_SESSION_BUS_ADDRESS
 
 systemctl --user daemon-reload
 systemctl --user stop hearthdeck-console.target 2>/dev/null || true
+systemctl --user stop graphical-session-pre.target 2>/dev/null || true
 systemctl --user reset-failed hearthdeck-gamescope.service hearthdeck-console-client.service
+dbus-update-activation-environment --systemd \
+  DESKTOP_SESSION $(env | grep '^XDG_' | cut -d= -f1)
 trap 'systemctl --user stop hearthdeck-console.target; systemctl --user unset-environment DBUS_SESSION_BUS_ADDRESS' HUP INT TERM EXIT
 
 systemctl --user start hearthdeck-console.target

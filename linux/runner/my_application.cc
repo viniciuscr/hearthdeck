@@ -1,9 +1,6 @@
 #include "my_application.h"
 
 #include <flutter_linux/flutter_linux.h>
-#ifdef GDK_WINDOWING_X11
-#include <gdk/gdkx.h>
-#endif
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -35,24 +32,6 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
-}
-
-static void mark_gamescope_primary_window(GtkWindow* window) {
-#ifdef GDK_WINDOWING_X11
-  GdkWindow* gdk_window = gtk_widget_get_window(GTK_WIDGET(window));
-  if (!GDK_IS_X11_WINDOW(gdk_window)) {
-    return;
-  }
-
-  // Steam-policy Gamescope only presents primary windows with a nonzero app ID.
-  const guint32 primary_window = 769;
-  gdk_property_change(
-      gdk_window, gdk_atom_intern_static_string("STEAM_GAME"),
-      gdk_atom_intern_static_string("CARDINAL"), 32, GDK_PROP_MODE_REPLACE,
-      reinterpret_cast<const guchar*>(&primary_window), 1);
-#else
-  (void)window;
-#endif
 }
 
 // Implements GApplication::activate.
@@ -88,11 +67,7 @@ static void my_application_activate(GApplication* application) {
   // Requires the view to be realized so we can start rendering.
   g_signal_connect_swapped(view, "first-frame", G_CALLBACK(first_frame_cb),
                            self);
-  gtk_widget_realize(GTK_WIDGET(window));
   gtk_widget_realize(GTK_WIDGET(view));
-  if (g_getenv("HEARTHDECK_CONSOLE") != nullptr) {
-    mark_gamescope_primary_window(window);
-  }
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 

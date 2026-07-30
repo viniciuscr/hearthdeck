@@ -1,6 +1,11 @@
 [Unit]
 Description=Hearthdeck Gamescope compositor
-PartOf=hearthdeck-console.target
+Before=graphical-session.target
+PartOf=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target
+RefuseManualStart=yes
+Before=xdg-desktop-portal.service
 
 [Service]
 Type=notify

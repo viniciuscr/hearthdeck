@@ -75,9 +75,9 @@ The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
 runner is migrated and tested as a Wayland client. Gamescope provides that
 private display after Xwayland reports readiness, then launches Hearthdeck. The
-GTK runner marks its primary Xwayland window for Gamescope's Steam session
-policy so it is visible outside the normal desktop. If Console returns to the
-display manager, inspect
+Console uses the normal Gamescope window policy, allowing Hearthdeck and
+managed desktop applications to be admitted as ordinary Xwayland windows. If
+Console returns to the display manager, inspect
 `~/.local/state/hearthdeck/gamescope-session.log` and
 `~/.local/state/hearthdeck/console-client.log` after signing into a normal
 desktop session. If the user state directory is unavailable, the logs fall back
