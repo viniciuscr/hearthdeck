@@ -66,6 +66,10 @@ inside Gamescope rather than on another desktop. Exit Hearthdeck Console and
 confirm its managed application services are stopped before the display manager
 returns.
 
+If the Console shell itself returns to the display manager, run
+`/usr/lib/hearthdeck/hearthdeck-gamescope-session` from a terminal and retain
+its Gamescope and GTK output for diagnosis.
+
 ## LAN Mode
 
 Configure `~/.config/hearthdeck/daemon.env` from

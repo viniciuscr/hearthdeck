@@ -1,6 +1,6 @@
 pkgname=hearthdeck
 pkgver=1.0.0
-pkgrel=5
+pkgrel=6
 pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
@@ -40,6 +40,7 @@ package() {
   install -Dm644 packaging/arch/hearthdeck.desktop "$pkgdir/usr/share/applications/io.github.viniciuscr.hearthdeck.desktop"
   install -Dm644 packaging/arch/hearthdeck-gamescope.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck-gamescope.desktop"
   install -Dm755 packaging/arch/hearthdeck-gamescope-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-gamescope-session"
+  install -Dm755 packaging/arch/hearthdeck-console-client "$pkgdir/usr/lib/hearthdeck/hearthdeck-console-client"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

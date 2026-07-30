@@ -31,10 +31,11 @@ Arch systemd user units cannot reliably support directives such as
 
 `hearthdeck.target` is the only unit users enable. It starts the API daemon and
 owns the `hearthdeck-bridge.socket`; the bridge process is socket-activated on
-its first typed request. In Console, the session wrapper starts Gamescope,
-waits for its private Xwayland display, then restarts the bridge with only that
-display environment. Future network and Bluetooth bridges will follow this same
-target-plus-socket lifecycle.
+its first typed request. In Console, Gamescope starts a small primary client
+which inherits its private Xwayland display and passes it to the user manager
+before restarting the bridge. A user-manager integration failure is logged but
+does not prevent the Console shell from opening. Future network and Bluetooth
+bridges will follow this same target-plus-socket lifecycle.
 
 If you previously used `just install-services`, its copies in
 `~/.config/systemd/user/` override the package units. Move
@@ -51,11 +52,15 @@ recovery option; it is not started behind Hearthdeck Console.
 
 The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
-runner is migrated and tested as a Wayland client. The console session waits up
-to ten seconds for Gamescope to publish that private display before launching
-Hearthdeck and managed desktop applications. If Console returns to the display
-manager, inspect `$XDG_RUNTIME_DIR/hearthdeck/gamescope-session.log` from the
-affected graphical login for the Gamescope and GTK startup error.
+runner is migrated and tested as a Wayland client. Gamescope provides that
+private display directly to the console client, which launches Hearthdeck. If
+Console returns to the display manager, inspect
+`$XDG_RUNTIME_DIR/hearthdeck/console-client.log` from the affected graphical
+login. To reproduce the session from a terminal and stream its output, run:
+
+```sh
+/usr/lib/hearthdeck/hearthdeck-gamescope-session
+```
 
 Exit Hearthdeck Console from its system menu to return to the display manager.
 Select the COSMIC session there to return to the desktop. If the console shell
