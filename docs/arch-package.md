@@ -69,13 +69,14 @@ recovery option; it is not started behind Hearthdeck Direct.
 
 The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
-runner is migrated and tested as a Wayland client. The new session has no
-Hearthdeck launcher script: the display manager starts Gamescope directly,
-Gamescope starts Xterm, and Xterm launches `/usr/bin/hearthdeck` after a short
-Xwayland startup delay. This reproduces the successful diagnostic command while
+runner is migrated and tested as a Wayland client. The new session executable
+starts Gamescope, Gamescope starts Xterm, and Xterm waits until its window is
+mapped before launching `/usr/bin/hearthdeck` from the user's interactive shell.
+This reproduces the successful diagnostic command and shell environment while
 Hearthdeck's fullscreen window covers the bootstrap terminal. The session uses
 the normal Gamescope window policy, allowing Hearthdeck to be admitted as an
-ordinary Xwayland window.
+ordinary Xwayland window. If the client exits, Xterm remains open so its output
+is visible instead of returning immediately to the display manager.
 
 Exit Hearthdeck Direct from its system menu to return to the display manager.
 Select the COSMIC session there to return to the desktop. If the Direct shell
