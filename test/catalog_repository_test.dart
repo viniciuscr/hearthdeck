@@ -97,6 +97,24 @@ void main() {
     },
   );
 
+  test(
+    'API client lists authenticated RomM consoles through Hearthdeck',
+    () async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.local(),
+        token: 'test-token',
+        client: _RetroHttpClient(),
+      );
+
+      final consoles = await client.retroConsoles();
+
+      expect(consoles, hasLength(2));
+      expect(consoles.first.displayName, 'Nintendo Entertainment System');
+      expect(consoles.first.romCount, 341);
+      expect(consoles.last.filesystemSlug, 'snes');
+    },
+  );
+
   test('API catalog reloads on metadata provider events', () async {
     final client = HearthdeckApiClient(
       endpoint: HearthdeckEndpoint.local(),
@@ -205,6 +223,20 @@ class _PairingHttpClient extends http.BaseClient {
       200,
       headers: const <String, String>{'content-type': 'application/json'},
     );
+  }
+}
+
+class _RetroHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    expect(request.method, 'GET');
+    expect(request.url.path, '/v1/retro/consoles');
+    expect(request.headers['authorization'], 'Bearer test-token');
+    const body = '''[
+      {"id":1,"name":"Nintendo Entertainment System","display_name":null,"rom_count":341,"slug":"nes","fs_slug":"nes"},
+      {"id":2,"name":"Super Nintendo Entertainment System","display_name":"Super Nintendo","rom_count":187,"slug":"snes","fs_slug":"snes"}
+    ]''';
+    return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
   }
 }
 

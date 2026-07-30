@@ -12,6 +12,7 @@ axum-server.workspace = true
 chrono.workspace = true
 directories.workspace = true
 futures-util.workspace = true
+reqwest.workspace = true
 rand.workspace = true
 roxmltree.workspace = true
 sd-notify.workspace = true

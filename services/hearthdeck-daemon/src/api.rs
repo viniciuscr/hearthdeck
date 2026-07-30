@@ -26,6 +26,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/health", get(health))
         .route("/v1/pairing/complete", post(complete_pairing))
         .route("/v1/library", get(list_library))
+        .route("/v1/retro/consoles", get(list_retro_consoles))
         .route("/v1/library/rescan", post(rescan_library))
         .route("/v1/settings", get(get_settings).put(update_settings))
         .route("/v1/discovery/{source_id}/refresh", post(refresh_source))
@@ -138,6 +139,41 @@ async fn list_library(
     let items = state.catalog.list().await.map_err(ApiError::internal)?;
     info!(item_count = items.len(), "catalog listed");
     Ok(Json(items))
+}
+
+async fn list_retro_consoles(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<RommPlatform>>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let romm = state
+        .config
+        .romm
+        .as_ref()
+        .ok_or_else(ApiError::romm_unavailable)?;
+    let response = reqwest::Client::new()
+        .get(format!("{}/api/platforms", romm.base_url))
+        .header(reqwest::header::ACCEPT, "application/json")
+        .bearer_auth(&romm.token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(ApiError::bad_gateway(format!("RomM returned {status}")));
+    }
+    let mut platforms = response
+        .json::<Vec<RommPlatform>>()
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    platforms.sort_by(|left, right| {
+        left.display_name
+            .as_deref()
+            .unwrap_or(&left.name)
+            .cmp(right.display_name.as_deref().unwrap_or(&right.name))
+    });
+    Ok(Json(platforms))
 }
 
 async fn rescan_library(
@@ -470,6 +506,20 @@ struct UpdateSettingsRequest {
     revision: Option<i64>,
 }
 
+#[derive(Deserialize, Serialize)]
+struct RommPlatform {
+    id: i64,
+    name: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    rom_count: u64,
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    fs_slug: Option<String>,
+}
+
 struct ApiError {
     status: StatusCode,
     message: String,
@@ -556,6 +606,14 @@ impl ApiError {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             message: "discovery service is unavailable".to_owned(),
+            settings: None,
+        }
+    }
+
+    fn romm_unavailable() -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: "RomM is not configured".to_owned(),
             settings: None,
         }
     }
@@ -665,6 +723,7 @@ mod tests {
                 local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
                 database_path: temporary.path().join("hearthdeck.db"),
                 bridge_socket_path: temporary.path().join("bridge.sock"),
+                romm: None,
                 lan_enabled: false,
                 tls: None,
             },
@@ -711,6 +770,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unauthenticated_settings.status(), StatusCode::UNAUTHORIZED);
+
+        let retro_without_romm = router(state.clone())
+            .oneshot(
+                Request::get("/v1/retro/consoles")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retro_without_romm.status(), StatusCode::SERVICE_UNAVAILABLE);
 
         let (status, settings) = response_json(
             router(state.clone()),

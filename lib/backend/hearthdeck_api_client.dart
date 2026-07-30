@@ -70,6 +70,20 @@ class HearthdeckApiClient {
         .toList(growable: false);
   }
 
+  Future<List<HearthdeckRetroConsole>> retroConsoles() async {
+    final response = await _client.get(
+      endpoint.api('retro/consoles'),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 200) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+    return (jsonDecode(response.body) as List<dynamic>)
+        .cast<Map<String, dynamic>>()
+        .map(HearthdeckRetroConsole.fromJson)
+        .toList(growable: false);
+  }
+
   Future<void> launch(String itemId) async {
     final response = await _client.post(
       endpoint.api('apps/$itemId/launch'),
@@ -396,6 +410,34 @@ class HearthdeckLibraryItem {
   final String? launchId;
   final String? icon;
   final Map<String, dynamic> metadata;
+}
+
+class HearthdeckRetroConsole {
+  const HearthdeckRetroConsole({
+    required this.id,
+    required this.name,
+    required this.displayName,
+    required this.romCount,
+    this.slug,
+    this.filesystemSlug,
+  });
+
+  factory HearthdeckRetroConsole.fromJson(Map<String, dynamic> json) =>
+      HearthdeckRetroConsole(
+        id: json['id'] as int,
+        name: json['name'] as String,
+        displayName: json['display_name'] as String? ?? json['name'] as String,
+        romCount: json['rom_count'] as int,
+        slug: json['slug'] as String?,
+        filesystemSlug: json['fs_slug'] as String?,
+      );
+
+  final int id;
+  final String name;
+  final String displayName;
+  final int romCount;
+  final String? slug;
+  final String? filesystemSlug;
 }
 
 sealed class HearthdeckServerEvent {

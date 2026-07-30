@@ -119,6 +119,21 @@ actions, facts, optional progress, and gallery content. Items without one use
 the default layout for their `TvContentKind` (`game`, `media`, `application`,
 or `system`), keeping future content sources independent from the UI layout.
 
+## RomM
+
+Hearthdeck can list consoles from a local RomM instance in the **Retro**
+section. Add these values to `~/.config/hearthdeck/daemon.env`, then restart
+`hearthdeck-daemon`:
+
+```sh
+HEARTHDECK_ROMM_URL=http://127.0.0.1:8080
+HEARTHDECK_ROMM_TOKEN=rmm_your_romm_client_token
+```
+
+The RomM client token must grant `platforms.read`. Its secret stays in the
+Hearthdeck daemon; clients only receive the console data through the paired
+local API. Game listing and launch integration will follow in a later step.
+
 ## Shared Screens
 
 Library and Settings share `TvTwoPaneLayout`, `TvNavigationRail`, and

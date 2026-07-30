@@ -7,6 +7,7 @@ import 'tv_components.dart';
 import 'tv_theme.dart';
 import 'full_library.dart';
 import 'search.dart';
+import 'retro.dart';
 import 'settings.dart';
 import 'virtual_keyboard.dart';
 
@@ -100,10 +101,12 @@ class TvDashboard extends StatelessWidget {
                                                 name: '/details/${item.id}',
                                               ),
                                               builder: (BuildContext context) =>
-                                                  ContentDetailsPage(
-                                                    item: item,
-                                                    sourceShape: sourceShape,
-                                                  ),
+                                                  item.id == 'retro'
+                                                  ? const RetroPage()
+                                                  : ContentDetailsPage(
+                                                      item: item,
+                                                      sourceShape: sourceShape,
+                                                    ),
                                             ),
                                           ),
                                     ),

@@ -17,6 +17,11 @@ requires `HEARTHDECK_LAN_ENABLED=true`, a certificate path, and a private key pa
 the daemon then serves HTTPS through Rustls. Pairing code creation is exposed
 only on the loopback admin listener at `127.0.0.1:38401`.
 
+Set `HEARTHDECK_ROMM_URL` and `HEARTHDECK_ROMM_TOKEN` together to connect a
+local RomM instance. The token requires the RomM `platforms.read` permission.
+Hearthdeck exposes the resulting console list at `GET /v1/retro/consoles`; the
+RomM credential remains on the host and is never sent to paired clients.
+
 The processes communicate through `$XDG_RUNTIME_DIR/hearthdeck/bridge.sock` using
 newline-delimited JSON defined in `hearthdeck-protocol`. The protocol has typed scan
 launch, active-session, and stop requests only. Arbitrary command execution is

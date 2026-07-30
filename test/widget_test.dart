@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_gamepads/flutter_gamepads.dart';
+import 'package:http/http.dart' as http;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gamepads/gamepads.dart';
 import 'package:gamepads_platform_interface/gamepads_platform_interface.dart';
 import 'package:gamepads_platform_interface/method_channel_gamepads_platform_interface.dart';
 import 'package:hearthdeck/backend/hearthdeck_api_client.dart';
+import 'package:hearthdeck/backend/hearthdeck_endpoint.dart';
 import 'package:hearthdeck/catalog/catalog_repository.dart';
 import 'package:hearthdeck/catalog/mock_catalog_repository.dart';
 import 'package:hearthdeck/content_details.dart';
@@ -14,6 +16,7 @@ import 'package:hearthdeck/external_link.dart';
 import 'package:hearthdeck/full_library.dart';
 import 'package:hearthdeck/main.dart';
 import 'package:hearthdeck/platform_session.dart';
+import 'package:hearthdeck/retro.dart';
 import 'package:hearthdeck/search.dart';
 import 'package:hearthdeck/settings.dart';
 import 'package:hearthdeck/settings/user_settings_repository.dart';
@@ -46,6 +49,21 @@ void main() {
     expect(find.byType(FullLibraryPage), findsOneWidget);
     expect(find.text('Games library'), findsOneWidget);
     expect(find.text('All games'), findsOneWidget);
+  });
+
+  testWidgets('Retro opens the configured RomM console browser', (
+    WidgetTester tester,
+  ) async {
+    final client = HearthdeckApiClient(
+      endpoint: HearthdeckEndpoint.local(),
+      token: 'test-token',
+      client: _RetroHttpClient(),
+    );
+    await tester.pumpWidget(MaterialApp(home: RetroPage(apiClient: client)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Nintendo Entertainment System'), findsOneWidget);
+    expect(find.text('341 games'), findsOneWidget);
   });
 
   testWidgets('library opens details before dispatching a catalog launch', (
@@ -748,4 +766,14 @@ class _HealthCatalogRepository extends MockCatalogRepository {
       ),
     ],
   );
+}
+
+class _RetroHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    const body = '''[
+      {"id":1,"name":"Nintendo Entertainment System","display_name":null,"rom_count":341,"slug":"nes","fs_slug":"nes"}
+    ]''';
+    return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
+  }
 }
