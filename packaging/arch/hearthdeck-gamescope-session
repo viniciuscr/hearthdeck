@@ -1,4 +1,17 @@
 #!/usr/bin/bash
-# Compatibility entrypoint for manual launches. Display managers use
-# hearthdeck-console-session, which supervises Gamescope through systemd.
-exec /usr/lib/hearthdeck/hearthdeck-console-session
+# Keep the display-manager session identical to the working Xterm diagnostic:
+# Gamescope directly owns the primary console client and its Xwayland display.
+set -Euo pipefail
+
+log_directory="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
+if [[ -n "$log_directory" ]] && mkdir -p -- "$log_directory/hearthdeck"; then
+  exec >>"$log_directory/hearthdeck/gamescope-session.log" 2>&1
+elif [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+  mkdir -p -- "$XDG_RUNTIME_DIR/hearthdeck"
+  exec >>"$XDG_RUNTIME_DIR/hearthdeck/gamescope-session.log" 2>&1
+fi
+
+echo "$(date -Iseconds) starting direct Hearthdeck Gamescope session"
+echo "$(date -Iseconds) runtime=${XDG_RUNTIME_DIR:-unset} dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
+exec gamescope --backend drm --force-windows-fullscreen -- \
+  /usr/lib/hearthdeck/hearthdeck-console-client

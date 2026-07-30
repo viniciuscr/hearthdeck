@@ -71,12 +71,12 @@ inside Gamescope rather than on another desktop. Exit Hearthdeck Console and
 confirm its managed application services stop before the display manager
 returns.
 
-While Console is open, verify that its services received the private Xwayland
-display only after Gamescope was ready:
+While Console is open, verify that the bridge received the private Xwayland
+display:
 
 ```sh
-systemctl --user status hearthdeck-console.target hearthdeck-gamescope.service hearthdeck-console-client.service
-cat "$XDG_RUNTIME_DIR/hearthdeck/gamescope-environment"
+systemctl --user show-environment | grep '^DISPLAY='
+systemctl --user status hearthdeck-bridge.service
 ```
 
 If the Console shell itself returns to the display manager, run

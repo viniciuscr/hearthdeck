@@ -7,7 +7,7 @@ CachyOS. It installs:
 - `/usr/bin/hearthdeck`: the desktop launcher command.
 - `/usr/lib/hearthdeck/`: the local bridge and daemon binaries.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
-  API daemon user units, plus the supervised Console compositor and client.
+  API daemon user units.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck-gamescope.desktop`: the direct DRM
   console session shown by compatible display managers.
@@ -51,12 +51,11 @@ Arch systemd user units cannot reliably support directives such as
 
 `hearthdeck.target` is the only unit users enable. It starts the API daemon and
 owns the `hearthdeck-bridge.socket`; the bridge process is socket-activated on
-its first typed request. In Console, the display-manager entrypoint starts
-`hearthdeck-console.target`. Its `Type=notify` Gamescope service waits for
-Xwayland readiness, writes its private displays to the user runtime directory,
-then starts the client service with that environment. The bridge restarts only
-after the client environment is ready. Future network and Bluetooth bridges
-will follow this same target-plus-socket lifecycle.
+its first typed request. In Console, Gamescope directly starts Hearthdeck as
+its primary Xwayland client. The client publishes that live display to the user
+manager before restarting the bridge, so managed applications use the same
+compositor. Future network and Bluetooth bridges will follow this same
+target-plus-socket lifecycle.
 
 If you previously used `just install-services`, its copies in
 `~/.config/systemd/user/` override the package units. Move
@@ -73,13 +72,13 @@ recovery option; it is not started behind Hearthdeck Console.
 
 The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
-runner is migrated and tested as a Wayland client. Gamescope provides that
-private display after Xwayland reports readiness, then launches Hearthdeck. The
-Console uses the normal Gamescope window policy, allowing Hearthdeck and
-managed desktop applications to be admitted as ordinary Xwayland windows. The
-client and every managed Console application are bound to the Console target, so
-they are stopped before the display manager returns. If Console returns to the
-display manager, inspect
+runner is migrated and tested as a Wayland client. Gamescope directly starts
+Hearthdeck as its primary client, so it provides its private Xwayland display
+without an additional session supervisor. The Console uses the normal Gamescope
+window policy, allowing Hearthdeck and managed desktop applications to be
+admitted as ordinary Xwayland windows. Managed Console applications run in a
+dedicated user slice and are stopped before the display manager returns. If
+Console returns to the display manager, inspect
 `~/.local/state/hearthdeck/gamescope-session.log` and
 `~/.local/state/hearthdeck/console-client.log` after signing into a normal
 desktop session. If the user state directory is unavailable, the logs fall back
@@ -88,12 +87,6 @@ stream its output, run:
 
 ```sh
 /usr/lib/hearthdeck/hearthdeck-gamescope-session
-```
-
-From a normal desktop session, inspect a failed supervised Console startup with:
-
-```sh
-journalctl --user -u hearthdeck-gamescope.service -u hearthdeck-console-client.service -b -o cat
 ```
 
 To isolate Gamescope and the display manager from Hearthdeck itself, select

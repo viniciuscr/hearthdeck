@@ -36,7 +36,12 @@ cleanup() {
   local status=$?
   trap - EXIT HUP INT TERM
 
+  systemctl --user stop hearthdeck-console.slice 2>&1 || true
   systemctl --user stop hearthdeck-bridge.service 2>&1 || true
+  systemctl --user unset-environment \
+    DISPLAY WAYLAND_DISPLAY GAMESCOPE_WAYLAND_DISPLAY GDK_BACKEND SDL_VIDEODRIVER \
+    XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE HEARTHDECK_CONSOLE \
+    2>&1 || true
   exit "$status"
 }
 trap cleanup EXIT HUP INT TERM
@@ -45,8 +50,20 @@ echo "$(date -Iseconds) starting Hearthdeck Console client"
 echo "$(date -Iseconds) display=${DISPLAY:-unset} runtime=${XDG_RUNTIME_DIR:-unset}"
 echo "$(date -Iseconds) dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
 
-# The bridge reads the compositor service's generated environment file.
-if ! systemctl --user restart hearthdeck-bridge.service; then
+# The direct Gamescope child owns the correct Xwayland environment. Publish it
+# to the user manager before restarting the bridge that launches managed apps.
+if ! systemctl --user set-environment \
+  "DISPLAY=$DISPLAY" \
+  "WAYLAND_DISPLAY=$WAYLAND_DISPLAY" \
+  "GAMESCOPE_WAYLAND_DISPLAY=${GAMESCOPE_WAYLAND_DISPLAY:-}" \
+  "GDK_BACKEND=$GDK_BACKEND" \
+  "SDL_VIDEODRIVER=$SDL_VIDEODRIVER" \
+  "XDG_CURRENT_DESKTOP=$XDG_CURRENT_DESKTOP" \
+  "XDG_SESSION_DESKTOP=$XDG_SESSION_DESKTOP" \
+  "XDG_SESSION_TYPE=$XDG_SESSION_TYPE" \
+  "HEARTHDECK_CONSOLE=$HEARTHDECK_CONSOLE"; then
+  echo "could not update the bridge environment" >&2
+elif ! systemctl --user restart hearthdeck-bridge.service; then
   echo "could not restart the bridge with the console environment" >&2
 fi
 

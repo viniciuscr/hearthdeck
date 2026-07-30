@@ -6,7 +6,6 @@ PartOf=hearthdeck.target
 
 [Service]
 Type=exec
-EnvironmentFile=-%t/hearthdeck/gamescope-environment
 Environment=HEARTHDECK_LOG_FORMAT=json
 Environment=RUST_LOG=hearthdeck_bridge=info
 ExecStart=%h/.local/bin/hearthdeck-bridge

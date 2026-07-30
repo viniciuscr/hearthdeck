@@ -106,11 +106,7 @@ pub async fn launch_application(
                 .unwrap_or_else(|| PathBuf::from("/")),
         );
     if env::var_os("HEARTHDECK_CONSOLE").as_deref() == Some(OsStr::new("1")) {
-        command.args([
-            "--property=PartOf=hearthdeck-console.target",
-            "--property=Requisite=hearthdeck-console.target",
-            "--property=After=hearthdeck-console.target",
-        ]);
+        command.arg("--slice=hearthdeck-console.slice");
     }
     for name in [
         "DISPLAY",

@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Hearthdeck Console
-Comment=Supervised Gamescope console session
-Exec=/usr/lib/hearthdeck/hearthdeck-console-session
+Comment=Direct DRM Gamescope console session
+Exec=/usr/lib/hearthdeck/hearthdeck-gamescope-session
 Type=Application
 DesktopNames=gamescope;hearthdeck
