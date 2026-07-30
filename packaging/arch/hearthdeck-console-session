@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-# Start the user-service session and keep the display manager attached to it.
+# Mirror CachyOS's session lifecycle so failed units remain inspectable.
 set -Euo pipefail
 
 : "${XDG_RUNTIME_DIR:?Hearthdeck Console requires XDG_RUNTIME_DIR}"
@@ -7,35 +7,28 @@ if [[ -S "$XDG_RUNTIME_DIR/bus" ]]; then
   export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 fi
 
+log_directory="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
+if [[ -n "$log_directory" ]] && mkdir -p -- "$log_directory/hearthdeck"; then
+  exec >>"$log_directory/hearthdeck/console-session.log" 2>&1
+elif [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+  mkdir -p -- "$XDG_RUNTIME_DIR/hearthdeck"
+  exec >>"$XDG_RUNTIME_DIR/hearthdeck/console-session.log" 2>&1
+fi
+
+echo "$(date -Iseconds) starting Hearthdeck Console session"
+echo "$(date -Iseconds) runtime=$XDG_RUNTIME_DIR dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
+
 systemctl --user daemon-reload
 systemctl --user stop hearthdeck-gamescope.target 2>/dev/null || true
 systemctl --user stop graphical-session-pre.target 2>/dev/null || true
 systemctl --user reset-failed
 dbus-update-activation-environment --systemd \
   DESKTOP_SESSION $(env | grep '^XDG_' | cut -d= -f1)
-trap 'systemctl --user stop hearthdeck-gamescope.target || true' HUP INT TERM EXIT
+trap 'systemctl --user stop hearthdeck-gamescope.target' HUP INT TERM
 
-if ! systemctl --user start hearthdeck-gamescope.target; then
+if ! systemctl --user --wait start hearthdeck-gamescope.target; then
   systemctl --user status --no-pager \
     hearthdeck-gamescope.service hearthdeck-console-client.service || true
   exit 1
 fi
-deadline=$((SECONDS + 20))
-until systemctl --user is-active --quiet hearthdeck-console-client.service; do
-  if systemctl --user is-failed --quiet hearthdeck-gamescope.service \
-    || systemctl --user is-failed --quiet hearthdeck-console-client.service; then
-    systemctl --user status --no-pager \
-      hearthdeck-gamescope.service hearthdeck-console-client.service || true
-    exit 1
-  fi
-  if ((SECONDS >= deadline)); then
-    systemctl --user status --no-pager \
-      hearthdeck-gamescope.service hearthdeck-console-client.service || true
-    exit 1
-  fi
-  sleep 1
-done
-
-while systemctl --user is-active --quiet hearthdeck-console-client.service; do
-  sleep 1
-done
+systemctl --user stop graphical-session-pre.target

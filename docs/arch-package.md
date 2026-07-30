@@ -82,6 +82,8 @@ If Console returns to the display manager, inspect:
 
 ```sh
 journalctl --user -u hearthdeck-gamescope.service -u hearthdeck-console-client.service -b
+cat ~/.local/state/hearthdeck/console-session.log
+cat ~/.local/state/hearthdeck/gamescope-service.log
 ```
 
 Use **Settings > General > Exit to desktop** inside Hearthdeck Console. Confirm
