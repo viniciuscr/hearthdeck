@@ -7,9 +7,10 @@ set -Euo pipefail
 runtime_directory="$XDG_RUNTIME_DIR/hearthdeck"
 mkdir -p -- "$runtime_directory"
 session_directory="$(mktemp -d "$runtime_directory/console.XXXXXX")"
-ready_socket="$session_directory/ready"
+ready_pipe="$session_directory/ready"
 client_log="$runtime_directory/console-client.log"
-mkfifo --mode=600 "$ready_socket"
+mkfifo --mode=600 "$ready_pipe"
+exec {ready_fd}<>"$ready_pipe"
 
 gamescope_pid=""
 client_pid=""
@@ -23,14 +24,16 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-/usr/bin/gamescope --backend drm --force-windows-fullscreen -R "$ready_socket" -- \
+# -R expects an inherited file-descriptor number, not a FIFO pathname.
+/usr/bin/gamescope --backend drm --force-windows-fullscreen -R "$ready_fd" -- \
   /usr/bin/xterm -fa Monospace -fs 16 &
 gamescope_pid=$!
 
-if ! read -r -t 15 display gamescope_wayland_display <>"$ready_socket"; then
+if ! read -r -t 15 display gamescope_wayland_display <&"$ready_fd"; then
   echo 'Gamescope did not publish an Xwayland display.' >&2
   exit 1
 fi
+exec {ready_fd}>&-
 if [[ "$display" != :* ]] || [[ -z "$gamescope_wayland_display" ]]; then
   echo 'Gamescope published invalid client display information.' >&2
   exit 1
