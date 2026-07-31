@@ -73,29 +73,13 @@ demand for host requests. The package's client pairs with its loopback daemon
 automatically. See
 `docs/arch-package.md` for package contents and troubleshooting.
 
-## Kiosk Session
+## Console Session
 
-See `docs/kiosk-session.md` for the full architecture, startup-ordering
-guarantees, and a "do not" list before changing anything about how the
-session starts.
-
-The Arch package installs a **Hearthdeck Kiosk** Wayland session with no
-desktop shell. Its session script runs Gamescope directly on the DRM/KMS seat
-with Hearthdeck as its only child, for the lowest possible memory and CPU
-footprint. There is no panel, launcher, wallpaper, or other desktop component
-running underneath; Gamescope is the entire compositor for the session.
-
-Hearthdeck launches a separate, on-demand nested Gamescope instance only when
-it starts a managed desktop application or game. That instance is unrelated to
-the outer Kiosk session compositor: it uses no DRM or memory until a launch is
-requested and is torn down when the launch ends.
-
-The native in-game overlay (a small Wayland layer-shell client showing a
-resume/close menu) is not started automatically yet; it must never be
-launched by Hearthdeck's own runner as a client of this outer session — doing
-so once broke Hearthdeck's own fullscreen sizing (see
-`docs/kiosk-session.md`). Run it manually with `just overlay` for
-development until it is wired into a nested game launch.
+The Arch package depends on the distribution `gamescope` package and installs a
+**Hearthdeck Console** Wayland session. It starts direct DRM Gamescope with
+Xterm as its primary client, then launches Hearthdeck as a second Xwayland
+client. Gamescope is not bundled because its GPU/DRM components must match the
+host graphics stack.
 
 Hearthdeck launches approved Linux desktop entries in transient systemd user
 services, so the host can identify and stop the active managed application. Remote
@@ -107,8 +91,12 @@ Audio stays on the existing PipeWire/WirePlumber services; Wi-Fi and Bluetooth
 stay on NetworkManager and BlueZ system services. Those services remain active,
 but their configuration UIs are not yet implemented in Hearthdeck.
 
-Choose **Settings > General > Exit to desktop** to leave Hearthdeck Kiosk and
-return to the display manager's login screen.
+Choose **Settings > General > Exit to desktop** to leave Hearthdeck Console and
+return to the display manager.
+
+**Hearthdeck Gamescope Xterm Test** is a separate recovery session that runs
+only Gamescope and Xterm, without starting Hearthdeck or its services. Run
+`exit` in Xterm to return to the display manager.
 
 ## Controller support
 

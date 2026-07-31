@@ -1,0 +1,55 @@
+#!/usr/bin/bash
+# Keep the known-good Xterm as Gamescope's primary client and launch
+# Hearthdeck separately once Gamescope publishes its private Xwayland display.
+set -Euo pipefail
+
+: "${XDG_RUNTIME_DIR:?Hearthdeck Console requires XDG_RUNTIME_DIR}"
+runtime_directory="$XDG_RUNTIME_DIR/hearthdeck"
+mkdir -p -- "$runtime_directory"
+session_directory="$(mktemp -d "$runtime_directory/console.XXXXXX")"
+ready_pipe="$session_directory/ready"
+client_log="$runtime_directory/console-client.log"
+mkfifo --mode=600 "$ready_pipe"
+exec {ready_fd}<>"$ready_pipe"
+
+gamescope_pid=""
+client_pid=""
+cleanup() {
+  local status=$?
+  trap - EXIT HUP INT TERM
+  [[ -n "$client_pid" ]] && kill "$client_pid" 2>/dev/null || true
+  [[ -n "$gamescope_pid" ]] && kill "$gamescope_pid" 2>/dev/null || true
+  rm -rf -- "$session_directory"
+  exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+
+# -R expects an inherited file-descriptor number, not a FIFO pathname.
+/usr/bin/gamescope --backend drm --force-windows-fullscreen -R "$ready_fd" -- \
+  /usr/bin/xterm -fa Monospace -fs 16 &
+gamescope_pid=$!
+
+if ! read -r -t 15 display gamescope_wayland_display <&"$ready_fd"; then
+  echo 'Gamescope did not publish an Xwayland display.' >&2
+  exit 1
+fi
+exec {ready_fd}>&-
+if [[ "$display" != :* ]] || [[ -z "$gamescope_wayland_display" ]]; then
+  echo 'Gamescope published invalid client display information.' >&2
+  exit 1
+fi
+
+# Let Xterm map before the Flutter window takes the foreground.
+sleep 1
+env -u WAYLAND_DISPLAY \
+  DISPLAY="$display" \
+  GAMESCOPE_WAYLAND_DISPLAY="$gamescope_wayland_display" \
+  XDG_CURRENT_DESKTOP=gamescope \
+  XDG_SESSION_TYPE=x11 \
+  vk_xwayland_wait_ready=false \
+  XWAYLAND_FORCE_ENABLE_EXTRA_MODES=1 \
+  SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0 \
+  "${SHELL:-/bin/sh}" -ic '/usr/bin/hearthdeck' >>"$client_log" 2>&1 &
+client_pid=$!
+
+wait "$gamescope_pid"

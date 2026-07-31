@@ -43,16 +43,12 @@ when a typed daemon request arrives. Future NetworkManager and BlueZ adapters
 will receive their own socket/service pair under the same target rather than
 being folded into the daemon.
 
-In the Hearthdeck Kiosk session, the session script starts Gamescope directly
-on the DRM/KMS seat as the sole compositor, with Hearthdeck as its only child;
-there is no separate desktop compositor to publish the socket first. The
-bridge wraps registered desktop applications in a separate, on-demand nested
-Gamescope instance, so each app receives its own Gamescope Xwayland and
-Wayland environment without competing with the outer Kiosk session for the
-seat. PipeWire/WirePlumber audio, NetworkManager networking, and BlueZ
-Bluetooth remain host services outside the Hearthdeck process tree.
+In the Hearthdeck Console session, direct DRM Gamescope owns the display and
+launches Hearthdeck through its Xwayland display. PipeWire/WirePlumber audio,
+NetworkManager networking, and BlueZ Bluetooth remain host services outside the
+Hearthdeck process tree.
 
-Heroic game URI launches are rejected in Kiosk mode because the running Heroic
+Heroic game URI launches are rejected in Console mode because the running Heroic
 process can detach a game from the transient service that Hearthdeck tracks.
 
 `GET /v1/health` reports every discovery and metadata provider as `starting`,

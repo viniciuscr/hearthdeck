@@ -61,28 +61,27 @@ transient systemd user service; an API client cannot supply an `Exec` command or
 arguments. Query `GET /v1/sessions/active` after launch, then use
 `POST /v1/sessions/{id}/stop` to confirm the managed process exits.
 
-Select **Hearthdeck Kiosk** in the display manager. Confirm Hearthdeck opens
-fullscreen with no desktop shell behind it (no panel, wallpaper, or other
-window ever appears), then launch a graphical application and verify it opens
-inside a separate nested Gamescope instance. Exit Hearthdeck Kiosk and confirm
-its managed application services stop and the session returns to the display
-manager's login screen.
+Select **Hearthdeck Console** in the display manager. Confirm Hearthdeck opens
+fullscreen, then launch a graphical application and verify it opens in the
+active Gamescope session. Exit Hearthdeck Console and confirm its managed
+application services stop before the display manager returns.
 
-While a managed application is open, run `just overlay-toggle` (the overlay
-has no automatic startup wired up yet — see `docs/kiosk-session.md`). Confirm
-the native overlay appears above the game, D-pad changes its selection,
-A activates it, B hides it, and selecting **Close game** stops the managed
-session. Confirm the gamepad returns to the game after hiding the overlay.
-Confirm Hearthdeck's own screen is unaffected by the overlay running: it
-must never shrink or letterbox, before, during, or after the overlay is
-shown.
+If Hearthdeck does not appear, read:
+
+```sh
+cat "$XDG_RUNTIME_DIR/hearthdeck/console-client.log"
+```
+
+Select **Hearthdeck Gamescope Xterm Test** to verify the direct DRM Gamescope
+baseline independently. It must open Xterm; run `exit` to return to the display
+manager. Inspect `/tmp/hearthdeck-gamescope-xterm-$(id -u).log` if it fails.
 
 Confirm gamepad D-pad, A, B, and sticks navigate Hearthdeck. Confirm existing
 audio works through PipeWire/WirePlumber. Confirm preconfigured NetworkManager
 and BlueZ connections remain available. Wi-Fi, Bluetooth, and audio-routing
-configuration screens are not part of the current Kiosk session.
+configuration screens are not part of the current Console session.
 
-Heroic game URI launches are intentionally unavailable in Kiosk mode. If
+Heroic game URI launches are intentionally unavailable in Console mode. If
 `gamepad-osk` is installed, confirm it is running in daemon mode with access to
 the controller input and `/dev/uinput`. Its evdev grab cannot reliably suppress
 Hearthdeck's direct joystick reader, so OSK input isolation is not guaranteed.

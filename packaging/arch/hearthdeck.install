@@ -11,13 +11,13 @@ EOF
 
   cat <<'EOF'
 Hearthdeck installs systemd user units for its API daemon and host bridge, and
-a minimal "Hearthdeck Kiosk" Wayland session with no desktop shell.
+a direct DRM "Hearthdeck Console" Gamescope session.
 
 The local-service target starts for users at their next login. Select
-Hearthdeck Kiosk in the display manager to run Gamescope with Hearthdeck as
-its only child. The Hearthdeck launcher also starts local services for the
-current user. To start them immediately without launching Hearthdeck, run as
-that user:
+Hearthdeck Console in the display manager to run direct DRM Gamescope with an
+Xterm bootstrap and Hearthdeck as a second Xwayland client. The Hearthdeck
+launcher also starts local services for the current user. To start them
+immediately without launching Hearthdeck, run as that user:
 
   systemctl --user daemon-reload
   systemctl --user start hearthdeck.target

@@ -1,0 +1,12 @@
+#!/usr/bin/bash
+# Known-good direct DRM Gamescope session with no Hearthdeck services.
+set -Euo pipefail
+
+umask 077
+exec >>"/tmp/hearthdeck-gamescope-xterm-${UID:-unknown}.log" 2>&1
+
+echo "$(date -Iseconds) starting minimal Gamescope Xterm session"
+echo "$(date -Iseconds) user=${USER:-unset} home=${HOME:-unset} runtime=${XDG_RUNTIME_DIR:-unset}"
+echo "$(date -Iseconds) dbus=${DBUS_SESSION_BUS_ADDRESS:-unset}"
+exec /usr/bin/gamescope --backend drm --force-windows-fullscreen -- \
+  /usr/bin/xterm -fa Monospace -fs 16

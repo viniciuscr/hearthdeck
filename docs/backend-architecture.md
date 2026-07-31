@@ -175,12 +175,10 @@ flows. It is not included in the public API contract.
 
 Install and enable `hearthdeck.target` from the systemd **user** units in
 `deploy/systemd/`. A user service owns graphical application launches. The
-Hearthdeck Kiosk session's script execs Gamescope directly on the DRM/KMS seat
-with the Flutter client as its only child; there is no separate desktop
-compositor in front of it. The bridge launches registered desktop applications
-in a separate, on-demand nested Gamescope instance so they remain isolated
-from Hearthdeck without the outer session ever sharing DRM ownership with
-another compositor.
+Hearthdeck Console session starts Gamescope directly on the DRM/KMS seat with
+Xterm as its primary client, then launches the Flutter client through the
+published Xwayland display. The bridge passes that graphical environment to
+registered desktop applications so they join the active Console session.
 Configure LAN TLS through
 `~/.config/hearthdeck/daemon.env`; see `deploy/systemd/daemon.env.example`.
 
