@@ -18,14 +18,9 @@ import 'tv_two_pane.dart';
 import 'virtual_keyboard.dart';
 
 class FullLibraryPage extends StatefulWidget {
-  const FullLibraryPage({
-    super.key,
-    this.catalogRepository,
-    this.initialGameSourceId,
-  });
+  const FullLibraryPage({super.key, this.catalogRepository});
 
   final CatalogRepository? catalogRepository;
-  final String? initialGameSourceId;
 
   @override
   State<FullLibraryPage> createState() => _FullLibraryPageState();
@@ -45,10 +40,7 @@ class _FullLibraryPageState extends State<FullLibraryPage> {
   Timer? _eventRetryTimer;
 
   List<CatalogSource> get _sources => switch (_category) {
-    LibraryCategory.games => <CatalogSource>[
-      ...?_catalog?.gameSources,
-      ...?_catalog?.consoleSources,
-    ],
+    LibraryCategory.games => _catalog?.gameSources ?? const <CatalogSource>[],
     LibraryCategory.apps => _catalog?.appSources ?? const <CatalogSource>[],
     LibraryCategory.groups => const <CatalogSource>[],
     LibraryCategory.history => const <CatalogSource>[],
@@ -82,14 +74,7 @@ class _FullLibraryPageState extends State<FullLibraryPage> {
   }
 
   void _selectSource(int index) {
-    final currentIsConsole = _selectedSource?.isConsoleCollection ?? false;
-    final nextIsConsole = _sources[index].isConsoleCollection;
-    setState(() {
-      _sourceIndex = index;
-      if (currentIsConsole != nextIsConsole) {
-        _filters = const LibraryFilterState();
-      }
-    });
+    setState(() => _sourceIndex = index);
   }
 
   @override
@@ -137,13 +122,11 @@ class _FullLibraryPageState extends State<FullLibraryPage> {
   Future<void> _loadCatalog() async {
     try {
       final catalog = await _catalogRepository.load();
-      final selectedSourceId =
-          _selectedSource?.id ?? widget.initialGameSourceId;
       if (mounted) {
         setState(() {
           _catalog = catalog;
           _catalogError = null;
-          _sourceIndex = _sourceIndexFor(catalog, selectedSourceId);
+          _sourceIndex = 0;
         });
       }
     } catch (error) {
@@ -151,22 +134,6 @@ class _FullLibraryPageState extends State<FullLibraryPage> {
         setState(() => _catalogError = error);
       }
     }
-  }
-
-  int _sourceIndexFor(CatalogData catalog, String? sourceId) {
-    final sources = switch (_category) {
-      LibraryCategory.games => <CatalogSource>[
-        ...catalog.gameSources,
-        ...catalog.consoleSources,
-      ],
-      LibraryCategory.apps => catalog.appSources,
-      LibraryCategory.groups ||
-      LibraryCategory.history => const <CatalogSource>[],
-    };
-    final index = sourceId == null
-        ? -1
-        : sources.indexWhere((CatalogSource source) => source.id == sourceId);
-    return index < 0 ? 0 : index;
   }
 
   Future<void> _launchItem(DashboardItem item) async {
@@ -272,8 +239,6 @@ class _FullLibraryPageState extends State<FullLibraryPage> {
                           layout: layout,
                           isAscending: _isAscending,
                           filters: _filters,
-                          isConsoleCollection:
-                              _selectedSource?.isConsoleCollection ?? false,
                           onSourceSelected: _selectSource,
                           onSortChanged: () =>
                               setState(() => _isAscending = !_isAscending),
@@ -416,7 +381,6 @@ class _LibraryContent extends StatelessWidget {
     required this.layout,
     required this.isAscending,
     required this.filters,
-    required this.isConsoleCollection,
     required this.onSourceSelected,
     required this.onSortChanged,
     required this.onFilterRequested,
@@ -435,7 +399,6 @@ class _LibraryContent extends StatelessWidget {
   final _LibraryLayout layout;
   final bool isAscending;
   final LibraryFilterState filters;
-  final bool isConsoleCollection;
   final ValueChanged<int> onSourceSelected;
   final VoidCallback onSortChanged;
   final VoidCallback onFilterRequested;
@@ -446,7 +409,7 @@ class _LibraryContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final title = switch (category) {
-      LibraryCategory.games => 'Games',
+      LibraryCategory.games => 'Games library',
       LibraryCategory.apps => 'Apps library',
       LibraryCategory.groups => 'Custom groups',
       LibraryCategory.history => 'Recently used',
@@ -513,28 +476,19 @@ class _LibraryContent extends StatelessWidget {
                 ),
                 SliverToBoxAdapter(child: SizedBox(height: layout.sectionGap)),
                 SliverToBoxAdapter(
-                  child: isConsoleCollection
-                      ? _ConsoleCollectionControls(count: items.length)
-                      : _LibraryControls(
-                          count: items.length,
-                          isAscending: isAscending,
-                          onSortChanged: onSortChanged,
-                          activeFilterCount: filters.selected.length,
-                          onFilterRequested: onFilterRequested,
-                        ),
+                  child: _LibraryControls(
+                    count: items.length,
+                    isAscending: isAscending,
+                    onSortChanged: onSortChanged,
+                    activeFilterCount: filters.selected.length,
+                    onFilterRequested: onFilterRequested,
+                  ),
                 ),
                 SliverToBoxAdapter(child: SizedBox(height: layout.gap)),
-                if (!isConsoleCollection) ...<Widget>[
-                  SliverToBoxAdapter(
-                    child: _FeatureShelf(features: features, gap: layout.gap),
-                  ),
-                  SliverToBoxAdapter(
-                    child: SizedBox(height: layout.sectionGap),
-                  ),
-                ] else
-                  SliverToBoxAdapter(
-                    child: SizedBox(height: layout.sectionGap),
-                  ),
+                SliverToBoxAdapter(
+                  child: _FeatureShelf(features: features, gap: layout.gap),
+                ),
+                SliverToBoxAdapter(child: SizedBox(height: layout.sectionGap)),
                 if (items.isEmpty)
                   const SliverToBoxAdapter(child: _EmptyLibraryState())
                 else
@@ -738,30 +692,6 @@ class _LibraryControls extends StatelessWidget {
           icon: Icons.filter_alt_outlined,
           onActivate: onFilterRequested,
         ),
-      ],
-    );
-  }
-}
-
-class _ConsoleCollectionControls extends StatelessWidget {
-  const _ConsoleCollectionControls({required this.count});
-
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    final tv = TvPalette.of(context);
-    return Row(
-      children: <Widget>[
-        Icon(Icons.gamepad_rounded, color: tv.accent),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            'Choose a platform to browse its RomM collection.',
-            style: TextStyle(color: tv.secondaryText),
-          ),
-        ),
-        Text('$count consoles', style: TextStyle(color: tv.secondaryText)),
       ],
     );
   }

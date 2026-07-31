@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 
 import 'catalog/catalog_repository.dart';
 import 'catalog/catalog_repository_factory.dart';
-import 'library_classification.dart';
 import 'platform_session.dart';
 import 'romm_settings.dart';
 import 'settings_models.dart';
@@ -176,18 +175,6 @@ class _SettingsPageState extends State<SettingsPage> {
                                   const RommSettingsPage(),
                             ),
                           ),
-                          onLibraryClassification: () =>
-                              Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                  settings: const RouteSettings(
-                                    name: '/library-classification',
-                                  ),
-                                  builder: (BuildContext context) =>
-                                      LibraryClassificationPage(
-                                        catalogRepository: _catalogRepository,
-                                      ),
-                                ),
-                              ),
                         ),
                       ),
                     ],
@@ -245,7 +232,6 @@ class _SettingsContent extends StatelessWidget {
     required this.onThemeSettings,
     required this.onServiceStatus,
     required this.onRommSettings,
-    required this.onLibraryClassification,
   });
 
   final SettingsCategoryDefinition definition;
@@ -256,7 +242,6 @@ class _SettingsContent extends StatelessWidget {
   final VoidCallback onThemeSettings;
   final VoidCallback onServiceStatus;
   final VoidCallback onRommSettings;
-  final VoidCallback onLibraryClassification;
 
   @override
   Widget build(BuildContext context) {
@@ -309,7 +294,6 @@ class _SettingsContent extends StatelessWidget {
                       'exit-to-desktop' => onExitToDesktop,
                       'service-status' => onServiceStatus,
                       'romm' => onRommSettings,
-                      'library-classification' => onLibraryClassification,
                       'personalization' => onThemeSettings,
                       _ => () => _showSettingsMessage(context, option),
                     },

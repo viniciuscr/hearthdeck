@@ -1,5 +1,3 @@
-import 'package:flutter/material.dart';
-
 import '../backend/hearthdeck_api_client.dart';
 import '../dashboard_models.dart';
 import '../library_models.dart';
@@ -40,11 +38,10 @@ class MockCatalogRepository implements CatalogRepository {
   Future<CatalogData> load() async {
     return CatalogData(
       gameSources: gameLibrarySources
-          .where((LibrarySource source) => source.id == 'all-games')
           .map(
             (LibrarySource source) => CatalogSource(
-              id: 'pc-games',
-              label: 'PC games',
+              id: source.id,
+              label: source.label,
               items: source.items,
             ),
           )
@@ -58,45 +55,8 @@ class MockCatalogRepository implements CatalogRepository {
             ),
           )
           .toList(growable: false),
-      consoleSources: const <CatalogSource>[
-        CatalogSource(
-          id: 'romm-consoles',
-          label: 'Consoles',
-          isConsoleCollection: true,
-          items: <DashboardItem>[
-            DashboardItem(
-              id: 'romm-console-nes',
-              title: 'Nintendo Entertainment System',
-              description: '341 games in RomM',
-              badge: '341 games',
-              icon: Icons.videogame_asset_rounded,
-              colors: <Color>[Color(0xFF57307E), Color(0xFF201033)],
-              kind: TvContentKind.game,
-            ),
-            DashboardItem(
-              id: 'romm-console-snes',
-              title: 'Super Nintendo',
-              description: '187 games in RomM',
-              badge: '187 games',
-              icon: Icons.videogame_asset_rounded,
-              colors: <Color>[Color(0xFF315E91), Color(0xFF142944)],
-              kind: TvContentKind.game,
-            ),
-          ],
-        ),
-      ],
     );
   }
-
-  @override
-  Future<List<HearthdeckLibraryItem>> libraryItems() async =>
-      const <HearthdeckLibraryItem>[];
-
-  @override
-  Future<void> updateLibraryClassification({
-    required String itemId,
-    required String? kind,
-  }) async {}
 
   @override
   Future<void> launch(DashboardItem item) async {}

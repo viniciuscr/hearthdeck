@@ -58,11 +58,6 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS catalog_enrichments_lookup
               ON catalog_enrichments (application_id, priority DESC, updated_at DESC);
-            CREATE TABLE IF NOT EXISTS catalog_classifications (
-              item_id TEXT PRIMARY KEY,
-              kind TEXT NOT NULL CHECK (kind IN ('game', 'application')),
-              updated_at TEXT NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS user_settings (
               id INTEGER PRIMARY KEY CHECK (id = 1),
               theme_mode TEXT NOT NULL,

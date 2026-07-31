@@ -59,11 +59,9 @@ impl CatalogStore {
             SELECT
               item.id, item.source_id, item.title, item.kind, item.launch_id, item.icon,
               item.metadata_json,
-              classification.kind AS classification_kind,
               enrichment.provider_id AS enrichment_provider_id,
               enrichment.payload_json AS enrichment_payload_json
             FROM library_items AS item
-            LEFT JOIN catalog_classifications AS classification ON classification.item_id = item.id
             LEFT JOIN catalog_enrichments AS enrichment ON enrichment.rowid = (
               SELECT candidate.rowid
               FROM catalog_enrichments AS candidate
@@ -86,15 +84,11 @@ impl CatalogStore {
                     .and_then(|payload| serde_json::from_str(&payload).ok());
                 let enrichment_provider: Option<String> = row.get("enrichment_provider_id");
                 let title: String = row.get("title");
-                let discovered_kind: String = row.get("kind");
-                let classification_kind: Option<String> = row.get("classification_kind");
                 CatalogItem {
                     id: row.get("id"),
                     source_id: row.get("source_id"),
                     title: title.clone(),
-                    kind: classification_kind
-                        .clone()
-                        .unwrap_or_else(|| discovered_kind.clone()),
+                    kind: row.get("kind"),
                     launch_id: row.get("launch_id"),
                     icon: row
                         .get::<Option<String>, _>("icon")
@@ -104,8 +98,6 @@ impl CatalogStore {
                         &discovery,
                         enrichment.as_ref(),
                         enrichment_provider,
-                        classification_kind.as_deref(),
-                        &discovered_kind,
                     ),
                 }
             })
@@ -170,46 +162,6 @@ impl CatalogStore {
         Ok(row.and_then(|row| row.get("source_id")))
     }
 
-    pub async fn set_classification(
-        &self,
-        item_id: &str,
-        kind: Option<&str>,
-    ) -> Result<bool, sqlx::Error> {
-        let mut transaction = self.pool.begin().await?;
-        let exists = sqlx::query("SELECT 1 FROM library_items WHERE id = ?")
-            .bind(item_id)
-            .fetch_optional(&mut *transaction)
-            .await?
-            .is_some();
-        if !exists {
-            transaction.rollback().await?;
-            return Ok(false);
-        }
-        match kind {
-            Some(kind) => {
-                sqlx::query(
-                    r#"
-                    INSERT INTO catalog_classifications (item_id, kind, updated_at)
-                    VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-                    ON CONFLICT(item_id) DO UPDATE SET kind = excluded.kind, updated_at = excluded.updated_at
-                    "#,
-                )
-                .bind(item_id)
-                .bind(kind)
-                .execute(&mut *transaction)
-                .await?;
-            }
-            None => {
-                sqlx::query("DELETE FROM catalog_classifications WHERE item_id = ?")
-                    .bind(item_id)
-                    .execute(&mut *transaction)
-                    .await?;
-            }
-        }
-        transaction.commit().await?;
-        Ok(true)
-    }
-
     pub async fn title_for(&self, item_id: &str) -> Result<Option<String>, sqlx::Error> {
         let row = sqlx::query("SELECT title FROM library_items WHERE id = ?")
             .bind(item_id)
@@ -224,8 +176,6 @@ fn merged_metadata(
     discovery: &Value,
     enrichment: Option<&Value>,
     enrichment_provider: Option<String>,
-    classification_kind: Option<&str>,
-    discovered_kind: &str,
 ) -> Value {
     let summary = metadata_string(enrichment, "description")
         .or_else(|| metadata_string(enrichment, "summary"))
@@ -265,11 +215,6 @@ fn merged_metadata(
         "discovery": discovery,
         "enrichment": enrichment,
         "enrichment_provider": enrichment_provider,
-        "classification": {
-            "kind": classification_kind,
-            "discovered_kind": discovered_kind,
-            "overridden": classification_kind.is_some(),
-        },
     })
 }
 
@@ -335,7 +280,7 @@ mod tests {
     use sqlx::Row;
     use tempfile::tempdir;
 
-    use super::{CatalogRecord, CatalogStore, EnrichmentRecord, merged_metadata};
+    use super::{CatalogStore, EnrichmentRecord, merged_metadata};
     use crate::database::Database;
 
     #[tokio::test]
@@ -392,92 +337,11 @@ mod tests {
             }),
             None,
             None,
-            None,
-            "application",
         );
 
         assert_eq!(metadata["summary"], "A useful application");
         assert_eq!(metadata["categories"], serde_json::json!(["Utility"]));
         assert_eq!(metadata["provenance"], "desktop-entry");
         assert_eq!(metadata["urls"], serde_json::json!({}));
-    }
-
-    #[tokio::test]
-    async fn classification_overrides_survive_source_replacement() {
-        let directory = tempdir().unwrap();
-        let database = Database::connect(&directory.path().join("hearthdeck.db"))
-            .await
-            .unwrap();
-        database.migrate().await.unwrap();
-        let catalog = CatalogStore::new(database.pool().clone());
-        let record = || CatalogRecord {
-            id: "desktop:example.desktop".to_owned(),
-            title: "Example".to_owned(),
-            kind: "application".to_owned(),
-            launch_id: Some("example.desktop".to_owned()),
-            icon: None,
-            metadata: serde_json::json!({"categories": ["Utility"]}),
-            updated_at: "2026-01-01T00:00:00Z".to_owned(),
-        };
-
-        catalog
-            .replace_source("desktop-apps", vec![record()])
-            .await
-            .unwrap();
-        assert!(
-            catalog
-                .set_classification("desktop:example.desktop", Some("game"))
-                .await
-                .unwrap()
-        );
-        catalog
-            .replace_source("desktop-apps", vec![record()])
-            .await
-            .unwrap();
-
-        let item = catalog.list().await.unwrap().pop().unwrap();
-        assert_eq!(item.kind, "game");
-        assert_eq!(item.metadata["classification"]["overridden"], true);
-        assert_eq!(
-            item.metadata["classification"]["discovered_kind"],
-            "application"
-        );
-    }
-
-    #[tokio::test]
-    async fn clearing_a_classification_restores_the_discovered_kind() {
-        let directory = tempdir().unwrap();
-        let database = Database::connect(&directory.path().join("hearthdeck.db"))
-            .await
-            .unwrap();
-        database.migrate().await.unwrap();
-        let catalog = CatalogStore::new(database.pool().clone());
-        catalog
-            .replace_source(
-                "desktop-apps",
-                vec![CatalogRecord {
-                    id: "desktop:example.desktop".to_owned(),
-                    title: "Example".to_owned(),
-                    kind: "application".to_owned(),
-                    launch_id: Some("example.desktop".to_owned()),
-                    icon: None,
-                    metadata: serde_json::Value::Null,
-                    updated_at: "2026-01-01T00:00:00Z".to_owned(),
-                }],
-            )
-            .await
-            .unwrap();
-        catalog
-            .set_classification("desktop:example.desktop", Some("game"))
-            .await
-            .unwrap();
-        catalog
-            .set_classification("desktop:example.desktop", None)
-            .await
-            .unwrap();
-
-        let item = catalog.list().await.unwrap().pop().unwrap();
-        assert_eq!(item.kind, "application");
-        assert_eq!(item.metadata["classification"]["overridden"], false);
     }
 }

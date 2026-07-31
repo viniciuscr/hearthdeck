@@ -161,12 +161,6 @@ const Map<SettingsCategory, List<SettingsOption>> settingsOptions =
           icon: Icons.refresh_rounded,
         ),
         SettingsOption(
-          id: 'library-classification',
-          label: 'Library classification',
-          description: 'Choose which discovered entries are games or apps',
-          icon: Icons.category_outlined,
-        ),
-        SettingsOption(
           id: 'updates',
           label: 'Updates',
           description: 'System and application updates',

@@ -8,13 +8,6 @@ abstract interface class CatalogRepository {
 
   Future<CatalogData> load();
 
-  Future<List<HearthdeckLibraryItem>> libraryItems();
-
-  Future<void> updateLibraryClassification({
-    required String itemId,
-    required String? kind,
-  });
-
   Future<void> launch(DashboardItem item);
 
   Future<void> requestRescan();
@@ -25,15 +18,10 @@ abstract interface class CatalogRepository {
 }
 
 class CatalogData {
-  const CatalogData({
-    required this.gameSources,
-    required this.appSources,
-    this.consoleSources = const <CatalogSource>[],
-  });
+  const CatalogData({required this.gameSources, required this.appSources});
 
   final List<CatalogSource> gameSources;
   final List<CatalogSource> appSources;
-  final List<CatalogSource> consoleSources;
 }
 
 class CatalogSource {
@@ -41,13 +29,11 @@ class CatalogSource {
     required this.id,
     required this.label,
     required this.items,
-    this.isConsoleCollection = false,
   });
 
   final String id;
   final String label;
   final List<DashboardItem> items;
-  final bool isConsoleCollection;
 }
 
 sealed class CatalogEvent {
