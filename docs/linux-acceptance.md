@@ -62,14 +62,20 @@ arguments. Query `GET /v1/sessions/active` after launch, then use
 `POST /v1/sessions/{id}/stop` to confirm the managed process exits.
 
 Select **Hearthdeck Kiosk** in the display manager. Confirm Hearthdeck opens
-fullscreen with no desktop shell behind it, then launch a graphical application
-and verify it opens inside a separate nested Gamescope instance. Exit
-Hearthdeck Kiosk and confirm its managed application services stop and the
-session returns to the display manager's login screen.
+fullscreen with no desktop shell behind it (no panel, wallpaper, or other
+window ever appears), then launch a graphical application and verify it opens
+inside a separate nested Gamescope instance. Exit Hearthdeck Kiosk and confirm
+its managed application services stop and the session returns to the display
+manager's login screen.
 
-The overlay has no automatic startup wired up yet. Run `just overlay-toggle`
-only while a managed application is open, and confirm Hearthdeck itself never
-shrinks or letterboxes while the overlay is present.
+While a managed application is open, run `just overlay-toggle` (the overlay
+has no automatic startup wired up yet — see `docs/kiosk-session.md`). Confirm
+the native overlay appears above the game, D-pad changes its selection,
+A activates it, B hides it, and selecting **Close game** stops the managed
+session. Confirm the gamepad returns to the game after hiding the overlay.
+Confirm Hearthdeck's own screen is unaffected by the overlay running: it
+must never shrink or letterbox, before, during, or after the overlay is
+shown.
 
 Confirm gamepad D-pad, A, B, and sticks navigate Hearthdeck. Confirm existing
 audio works through PipeWire/WirePlumber. Confirm preconfigured NetworkManager
