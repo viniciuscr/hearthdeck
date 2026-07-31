@@ -1,0 +1,19 @@
+[package]
+name = "hearthdeck-overlay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+hearthdeck-protocol = { path = "../hearthdeck-protocol" }
+hearthdeck-observability = { path = "../hearthdeck-observability" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = "0.13.2"
+libcosmic = { git = "https://github.com/pop-os/libcosmic.git", rev = "dc1cf9f00cbe2902a52166492654bb9fee8a73d1", default-features = false, features = ["tokio", "wayland"] }

@@ -4,6 +4,7 @@ members = [
   "hearthdeck-observability",
   "hearthdeck-daemon",
   "hearthdeck-bridge",
+  "hearthdeck-overlay",
 ]
 resolver = "3"
 
