@@ -8,6 +8,7 @@ license.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 hearthdeck-protocol = { path = "../hearthdeck-protocol" }
@@ -15,5 +16,4 @@ hearthdeck-observability = { path = "../hearthdeck-observability" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = "0.13.2"
-rustix = { version = "1.1.4", features = ["event"] }
-smithay-client-toolkit = { version = "0.21.1", default-features = false }
+libcosmic = { git = "https://github.com/pop-os/libcosmic.git", rev = "dc1cf9f00cbe2902a52166492654bb9fee8a73d1", default-features = false, features = ["tokio", "wayland"] }

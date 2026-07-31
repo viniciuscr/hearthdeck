@@ -16,13 +16,11 @@ pub enum BridgeRequest {
     LaunchApplication {
         source_id: String,
         application_id: String,
-        application_name: String,
         session_id: String,
     },
     LaunchHeroicGame {
         runner: HeroicRunner,
         application_id: String,
-        application_name: String,
         session_id: String,
     },
     ActiveApplicationSession,
@@ -71,11 +69,6 @@ pub struct ApplicationSession {
     pub id: String,
     pub source_id: String,
     pub application_id: String,
-    /// The human-readable title to display for this session (a desktop
-    /// entry's `Name=`, or a Heroic game's title). Falls back to
-    /// `application_id` when a display name could not be resolved, so
-    /// callers always have something reasonable to show.
-    pub application_name: String,
     pub state: ApplicationSessionState,
 }
 
@@ -115,7 +108,6 @@ mod tests {
         let request = BridgeRequest::LaunchApplication {
             source_id: "desktop-apps".to_owned(),
             application_id: "org.example.Launcher.desktop".to_owned(),
-            application_name: "Example Launcher".to_owned(),
             session_id: "session-1".to_owned(),
         };
         let serialized = serde_json::to_value(request).unwrap();
@@ -135,7 +127,6 @@ mod tests {
                 id: "session-1".to_owned(),
                 source_id: "desktop-apps".to_owned(),
                 application_id: "org.example.App.desktop".to_owned(),
-                application_name: "Example App".to_owned(),
                 state: ApplicationSessionState::Running,
             },
         };
@@ -152,7 +143,6 @@ mod tests {
         let request = BridgeRequest::LaunchHeroicGame {
             runner: HeroicRunner::Legendary,
             application_id: "Fortnite".to_owned(),
-            application_name: "Fortnite".to_owned(),
             session_id: "session-1".to_owned(),
         };
         let serialized = serde_json::to_value(request).unwrap();

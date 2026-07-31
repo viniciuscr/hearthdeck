@@ -39,17 +39,6 @@ fi
 #                     session required.
 # --fullscreen:      cover the full output mode.
 # --force-grab-cursor: keep the cursor confined to Hearthdeck's surface.
-# --expose-wayland: make this Gamescope's own Wayland socket connectable by
-#                    processes other than Hearthdeck itself. The bridge reads
-#                    that socket (via a runtime file Hearthdeck's own runner
-#                    writes) so a nested Gamescope instance it launches later,
-#                    for an app or game, can connect into this same
-#                    compositor. Nothing else about this outer Gamescope
-#                    changes based on that: it is not related to, and does
-#                    not require, the overlay (services/hearthdeck-overlay),
-#                    which is started per-launch by the bridge, not here. See
-#                    docs/kiosk-session.md for why nothing else should ever
-#                    be added as a client of this outer session.
 # Nested application launches (games, other desktop entries) run in their own
 # separate, on-demand Gamescope instance started by the bridge; this outer
 # Gamescope only ever hosts Hearthdeck itself.
@@ -57,5 +46,4 @@ exec gamescope \
   --backend drm \
   --fullscreen \
   --force-grab-cursor \
-  --expose-wayland \
   -- /opt/hearthdeck/hearthdeck

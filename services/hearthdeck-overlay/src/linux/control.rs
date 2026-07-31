@@ -1,15 +1,11 @@
-use std::{
-    env,
-    io::{BufRead, ErrorKind, Write},
-    os::unix::{
-        fs::PermissionsExt,
-        net::{UnixListener, UnixStream},
-    },
-    path::PathBuf,
-    time::Duration,
-};
+use std::{env, os::unix::fs::PermissionsExt, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
+use cosmic::iced::{Subscription, futures::SinkExt, stream};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{UnixListener, UnixStream},
+};
 use tracing::warn;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,44 +13,6 @@ pub enum OverlayCommand {
     Toggle,
     Show,
     Hide,
-}
-
-pub struct ControlListener {
-    listener: UnixListener,
-}
-
-impl ControlListener {
-    pub fn bind() -> Result<Self> {
-        let path = socket_path()?;
-        let parent = path
-            .parent()
-            .context("overlay control socket has no parent")?;
-        std::fs::create_dir_all(parent)?;
-        if path.exists() {
-            std::fs::remove_file(&path)?;
-        }
-        let listener = UnixListener::bind(&path)?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-        listener.set_nonblocking(true)?;
-        Ok(Self { listener })
-    }
-
-    pub fn drain(&self) -> Vec<OverlayCommand> {
-        let mut commands = Vec::new();
-        loop {
-            match self.listener.accept() {
-                Ok((stream, _)) => match read_command(stream) {
-                    Ok(command) => commands.push(command),
-                    Err(error) => warn!(%error, "overlay control command rejected"),
-                },
-                Err(error) if error.kind() == ErrorKind::WouldBlock => return commands,
-                Err(error) => {
-                    warn!(%error, "overlay control socket accept failed");
-                    return commands;
-                }
-            }
-        }
-    }
 }
 
 pub fn command_from_args() -> Result<Option<OverlayCommand>> {
@@ -71,30 +29,78 @@ pub fn command_from_args() -> Result<Option<OverlayCommand>> {
 
 pub fn send(command: OverlayCommand) -> Result<()> {
     let path = socket_path()?;
-    let mut stream = UnixStream::connect(&path)
+    let mut stream = std::os::unix::net::UnixStream::connect(&path)
         .with_context(|| format!("overlay service unavailable at {}", path.display()))?;
-    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+    use std::io::{BufRead, Write};
     stream.write_all(command.as_str().as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()?;
     let mut response = String::new();
-    std::io::BufReader::new(stream).read_line(&mut response)?;
+    let mut reader = std::io::BufReader::new(stream);
+    reader.read_line(&mut response)?;
     if response.trim() != "ok" {
         bail!("overlay rejected command: {}", response.trim())
     }
     Ok(())
 }
 
-fn read_command(mut stream: UnixStream) -> Result<OverlayCommand> {
-    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
-    let mut line = String::new();
-    std::io::BufReader::new(stream.try_clone()?).read_line(&mut line)?;
-    if line.len() > 32 {
-        bail!("overlay command exceeds 32 bytes")
+pub fn subscription() -> Subscription<OverlayCommand> {
+    Subscription::run(messages)
+}
+
+fn messages() -> impl cosmic::iced::futures::Stream<Item = OverlayCommand> {
+    stream::channel(8, |mut output| async move {
+        let listener = match bind_listener().await {
+            Ok(listener) => listener,
+            Err(error) => {
+                warn!(%error, "could not create overlay control socket");
+                return;
+            }
+        };
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(connection) => connection,
+                Err(error) => {
+                    warn!(%error, "overlay control socket accept failed");
+                    continue;
+                }
+            };
+            let command = match read_command(stream).await {
+                Ok(command) => command,
+                Err(error) => {
+                    warn!(%error, "overlay control command rejected");
+                    continue;
+                }
+            };
+            if output.send(command).await.is_err() {
+                return;
+            }
+        }
+    })
+}
+
+async fn bind_listener() -> Result<UnixListener> {
+    let path = socket_path()?;
+    let parent = path
+        .parent()
+        .context("overlay control socket has no parent")?;
+    tokio::fs::create_dir_all(parent).await?;
+    if path.exists() {
+        tokio::fs::remove_file(&path).await?;
     }
+    let listener = UnixListener::bind(&path)?;
+    tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).await?;
+    Ok(listener)
+}
+
+async fn read_command(stream: UnixStream) -> Result<OverlayCommand> {
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let mut line = String::new();
+    reader.read_line(&mut line).await?;
     let command = parse(line.trim())?;
-    stream.write_all(b"ok\n")?;
-    stream.flush()?;
+    writer.write_all(b"ok\n").await?;
+    writer.flush().await?;
     Ok(command)
 }
 

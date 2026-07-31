@@ -7,7 +7,7 @@ pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
 license=('MIT')
-depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'sqlite' 'systemd' 'wayland' 'xorg-xwayland')
+depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'sqlite' 'systemd' 'xorg-xwayland')
 makedepends=('clang' 'cmake' 'just' 'ninja' 'pkgconf' 'rust' 'sqlite')
 install="${pkgname}.install"
 backup=('etc/pacman.d/hearthdeck.conf')
@@ -33,7 +33,6 @@ package() {
   install -Dm755 packaging/arch/hearthdeck "$pkgdir/usr/bin/hearthdeck"
   install -Dm755 services/target/release/hearthdeck-bridge "$pkgdir/usr/lib/hearthdeck/hearthdeck-bridge"
   install -Dm755 services/target/release/hearthdeck-daemon "$pkgdir/usr/lib/hearthdeck/hearthdeck-daemon"
-  install -Dm755 services/target/release/hearthdeck-overlay "$pkgdir/usr/lib/hearthdeck/hearthdeck-overlay"
   install -Dm644 packaging/arch/hearthdeck.target "$pkgdir/usr/lib/systemd/user/hearthdeck.target"
   install -Dm644 packaging/arch/hearthdeck-bridge.socket "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.socket"
   install -Dm644 packaging/arch/hearthdeck-bridge.service "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.service"

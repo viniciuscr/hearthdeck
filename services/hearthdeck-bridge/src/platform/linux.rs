@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     env,
     ffi::OsString,
     fs,
@@ -141,30 +141,25 @@ async fn launch_with_systemd(
     if kiosk_session {
         command.arg("--slice=hearthdeck-kiosk.slice");
     }
-    let mut launch_environment = BTreeMap::new();
-    for name in [
-        "DISPLAY",
-        "WAYLAND_DISPLAY",
-        "GAMESCOPE_WAYLAND_DISPLAY",
-        "XAUTHORITY",
-        "GDK_BACKEND",
-        "SDL_VIDEODRIVER",
-        "XDG_CURRENT_DESKTOP",
-        "XDG_SESSION_DESKTOP",
-        "XDG_SESSION_TYPE",
-        "DBUS_SESSION_BUS_ADDRESS",
-    ] {
-        if let Some(value) = env::var_os(name) {
-            launch_environment.insert(name, value);
+    if !kiosk_session {
+        for name in [
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "GAMESCOPE_WAYLAND_DISPLAY",
+            "XAUTHORITY",
+            "GDK_BACKEND",
+            "SDL_VIDEODRIVER",
+            "XDG_CURRENT_DESKTOP",
+            "XDG_SESSION_DESKTOP",
+            "XDG_SESSION_TYPE",
+            "DBUS_SESSION_BUS_ADDRESS",
+        ] {
+            if let Some(value) = env::var_os(name) {
+                command
+                    .arg("--setenv")
+                    .arg(format!("{name}={}", value.to_string_lossy()));
+            }
         }
-    }
-    if let Some(wayland_display) = session_wayland_display() {
-        launch_environment.insert("WAYLAND_DISPLAY", OsString::from(wayland_display));
-    }
-    for (name, value) in launch_environment {
-        command
-            .arg("--setenv")
-            .arg(format!("{name}={}", value.to_string_lossy()));
     }
     command.arg("--");
     if kiosk_session && wrap_in_gamescope {
@@ -192,31 +187,9 @@ async fn launch_with_systemd(
 }
 
 fn is_kiosk_session() -> bool {
-    is_kiosk_session_for(&current_desktops())
-}
-
-fn is_kiosk_session_for(desktops: &[String]) -> bool {
-    desktops
+    current_desktops()
         .iter()
         .any(|desktop| desktop.eq_ignore_ascii_case("hearthdeck"))
-}
-
-fn session_wayland_display() -> Option<String> {
-    let runtime_directory = env::var_os("XDG_RUNTIME_DIR")?;
-    let value = std::fs::read_to_string(
-        PathBuf::from(runtime_directory).join("hearthdeck/gamescope-wayland-display"),
-    )
-    .ok()?;
-    let value = value.trim();
-    valid_wayland_display(value).then(|| value.to_owned())
-}
-
-fn valid_wayland_display(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value.bytes().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, b'.' | b'_' | b'-')
-        })
 }
 
 fn valid_heroic_application_id(value: &str) -> bool {
@@ -566,8 +539,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        desktop_entry_directories_for, is_kiosk_session_for, parse_desktop_entry, parse_exec,
-        valid_heroic_application_id, valid_wayland_display, visible_in_desktop,
+        desktop_entry_directories_for, parse_desktop_entry, parse_exec,
+        valid_heroic_application_id, visible_in_desktop,
     };
 
     #[tokio::test]
@@ -650,20 +623,6 @@ mod tests {
         assert!(visible_in_desktop("COSMIC;", &current_desktops));
         assert!(!visible_in_desktop("gamescope;", &current_desktops));
         assert!(!visible_in_desktop("KDE;", &current_desktops));
-    }
-
-    #[test]
-    fn kiosk_mode_is_detected_only_from_the_hearthdeck_desktop_name() {
-        assert!(is_kiosk_session_for(&["hearthdeck".to_owned()]));
-        assert!(!is_kiosk_session_for(&["COSMIC".to_owned()]));
-    }
-
-    #[test]
-    fn validates_the_runtime_gamescope_wayland_display_name() {
-        assert!(valid_wayland_display("gamescope-0"));
-        assert!(valid_wayland_display("gamescope.overlay_1"));
-        assert!(!valid_wayland_display("../socket"));
-        assert!(!valid_wayland_display("gamescope-0\nOTHER=value"));
     }
 
     #[test]
