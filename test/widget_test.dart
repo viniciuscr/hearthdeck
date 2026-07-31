@@ -545,7 +545,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(ContentDetailsPage), findsOneWidget);
-    expect(find.text('Your game stats'), findsOneWidget);
+    expect(find.text('YOUR GAME STATS'), findsOneWidget);
     expect(find.text('Recent captures'), findsOneWidget);
     expect(find.text('Play'), findsOneWidget);
   });
