@@ -4,6 +4,7 @@ mod bridge;
 mod catalog;
 mod config;
 mod database;
+mod diagnostics;
 mod discovery;
 mod enrichment;
 mod settings;
@@ -43,7 +44,7 @@ async fn main() -> Result<()> {
     );
     let database = database::Database::connect(&config.database_path).await?;
     database.migrate().await?;
-    info!(database_path = %config.database_path.display(), "database ready");
+    info!("database ready");
 
     let state = Arc::new(AppState::new(config.clone(), database));
     let discovery = discovery::DiscoveryService::start(

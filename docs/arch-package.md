@@ -5,12 +5,13 @@ CachyOS. It installs:
 
 - `/opt/hearthdeck/`: the Flutter Linux client bundle.
 - `/usr/bin/hearthdeck`: the desktop launcher command.
-- `/usr/lib/hearthdeck/`: the local bridge and daemon binaries.
-- `/usr/lib/systemd/user/`: the Hearthdeck target, Kiosk launcher, bridge
-  socket, bridge, and API daemon user units.
+- `/usr/lib/hearthdeck/`: the local bridge and daemon binaries, and the
+  Kiosk session script.
+- `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
+  API daemon user units.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
-- `/usr/share/wayland-sessions/hearthdeck-cosmic.desktop`: a COSMIC Kiosk
-  session shown by compatible display managers.
+- `/usr/share/wayland-sessions/hearthdeck.desktop`: the minimal Hearthdeck
+  Kiosk session shown by compatible display managers.
 
 ## Install
 
@@ -21,10 +22,8 @@ sudo pacman -U hearthdeck-*.pkg.tar.zst
 ```
 
 The package enables `hearthdeck.target` globally for the local daemon and
-bridge, and enables `hearthdeck-kiosk.service` for `cosmic-session.target`.
-The Kiosk service has a desktop-name condition, so it starts only from the
-**Hearthdeck Kiosk** session. Launching Hearthdeck starts the target for the
-current user immediately. To run the daemon before opening the client, use:
+bridge. Launching Hearthdeck starts the target for the current user
+immediately. To run the daemon before opening the client, use:
 
 ```sh
 systemctl --user daemon-reload
@@ -53,9 +52,7 @@ Arch systemd user units cannot reliably support directives such as
 
 `hearthdeck.target` starts the API daemon and owns the
 `hearthdeck-bridge.socket`; the bridge process is socket-activated on its first
-typed request. `hearthdeck-kiosk.service` is the graphical client unit and is
-started by COSMIC only after its compositor has initialized the graphical
-session. Future network and Bluetooth bridges will follow the same
+typed request. Future network and Bluetooth bridges will follow the same
 target-plus-socket lifecycle.
 
 If you previously used `just install-services`, its copies in
@@ -64,45 +61,45 @@ If you previously used `just install-services`, its copies in
 enabling the packaged target, then preserve any local customization in a
 systemd drop-in.
 
-The Kiosk session runs the distribution's `start-cosmic` entrypoint. This is
-intentional: COSMIC performs the DRM/logind handoff, initializes its compositor,
-and imports the Wayland socket into the systemd user manager. Once that work is
-complete, `cosmic-session.target` starts `hearthdeck-kiosk.service`, which runs
-the Flutter GTK client with `GDK_BACKEND=wayland`.
+## Kiosk session
 
-COSMIC's panel, launcher, applets, wallpaper, notifications, and settings
-services remain active. The package does not attempt to replace or terminate
-them because `cosmic-session` supervises and restarts its components. Hearthdeck
-runs fullscreen above the desktop. Select **Hearthdeck Kiosk** in the display
-manager, or configure it as the autologin session, for this direct-to-Hearthdeck
-experience. Closing Hearthdeck reveals the COSMIC desktop instead of ending the
-working Wayland session.
+**Hearthdeck Kiosk** is a plain Gamescope session with no desktop shell: no
+panel, launcher, wallpaper, notifications, or settings daemon. Select it in the
+display manager, or configure it as the autologin session, to boot straight
+into Hearthdeck fullscreen with the lowest possible memory and CPU footprint.
 
-Hearthdeck launches registered desktop applications in nested Gamescope using
-cosmic-comp's Wayland socket. Gamescope therefore uses no DRM or memory until
-an app is launched, and it never competes with cosmic-comp for the seat. X11-only apps use
-the nested Gamescope Xwayland server; Wayland apps use its exposed inner Wayland
-socket.
+The session script (`/usr/lib/hearthdeck/hearthdeck-session`) starts
+`hearthdeck.target` for the current user and then execs Gamescope directly on
+the DRM/KMS seat with Hearthdeck as its only child (`gamescope --backend drm
+--fullscreen -- /opt/hearthdeck/hearthdeck`). There is no intermediate desktop
+compositor to initialize first, and no other process for Gamescope to share
+the seat with. Exiting Hearthdeck ends Gamescope and returns to the display
+manager's login screen; there is no underlying desktop to fall back to.
+
+Hearthdeck launches registered desktop applications in a separate, on-demand
+nested Gamescope instance. That nested instance is unrelated to the outer
+Kiosk session compositor above: it is started by the bridge only when a game
+or app launch is requested, uses no DRM or memory until then, and is torn down
+when the launch ends. X11-only apps use the nested Gamescope's Xwayland
+server; Wayland apps use its exposed inner Wayland socket.
 
 Heroic game URI launches are unavailable in Kiosk mode because an existing
 Heroic process can accept a URI and detach the game from Hearthdeck's managed
 Gamescope lifecycle.
 
-Controller input remains Hearthdeck's direct Linux joystick reader, independent
-of COSMIC's desktop shell. PipeWire/WirePlumber provide audio, while NetworkManager and BlueZ
-remain system services. Their existing connections and paired devices continue
-to work, but Hearthdeck does not yet provide Wi-Fi, Bluetooth, or audio-routing
-configuration interfaces. NetworkManager changes needing authentication require
-a polkit agent; the Kiosk session intentionally does not start one.
+Controller input is Hearthdeck's direct Linux joystick reader; there is no
+desktop shell input stack to coordinate with. PipeWire/WirePlumber provide
+audio, while NetworkManager and BlueZ remain system services. Their existing
+connections and paired devices continue to work, but Hearthdeck does not yet
+provide Wi-Fi, Bluetooth, or audio-routing configuration interfaces, and the
+Kiosk session does not start a polkit agent, so NetworkManager changes needing
+authentication are unavailable from it.
 
 `gamepad-osk` remains optional and external to this package. It must be running
 as its upstream daemon service and have its uinput/input permissions configured
 before `gamepad-osk --toggle` can provide an OSK. Its evdev grab does not
 necessarily suppress Hearthdeck's direct joystick reader, so OSK input isolation
 is not guaranteed until controller input is unified behind one process.
-
-Use **Settings > General > Exit to desktop** inside Hearthdeck Kiosk. Confirm
-the prompt to close Hearthdeck and reveal the COSMIC desktop.
 
 The bridge scans the target machine's Freedesktop entries and launches only a
 re-discovered desktop entry. It honors desktop visibility constraints, `Path`,

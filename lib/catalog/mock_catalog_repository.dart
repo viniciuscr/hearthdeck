@@ -15,6 +15,26 @@ class MockCatalogRepository implements CatalogRepository {
   );
 
   @override
+  Future<HearthdeckDiagnostics> diagnostics() async =>
+      const HearthdeckDiagnostics(
+        generatedAt: '2026-01-01T00:00:00Z',
+        services: <HearthdeckServiceStatus>[],
+        romm: HearthdeckRommDiagnostic(
+          configured: false,
+          status: 'not_configured',
+          baseUrl: null,
+          consoleCount: null,
+          checkedAt: '2026-01-01T00:00:00Z',
+          error: null,
+        ),
+        logs: HearthdeckLogTail(
+          available: false,
+          error: 'Diagnostics are available when connected to Hearthdeck.',
+          entries: <HearthdeckLogEntry>[],
+        ),
+      );
+
+  @override
   Future<CatalogData> load() async {
     return CatalogData(
       gameSources: gameLibrarySources
@@ -43,6 +63,11 @@ class MockCatalogRepository implements CatalogRepository {
 
   @override
   Future<void> requestRescan() async {}
+
+  @override
+  Future<void> requestProviderRefresh(
+    HearthdeckProviderHealth provider,
+  ) async {}
 
   @override
   Stream<CatalogEvent> watch() => const Stream<CatalogEvent>.empty();

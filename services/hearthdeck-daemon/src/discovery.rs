@@ -87,6 +87,7 @@ impl DiscoveryService {
                         state.queued = false;
                         state.running = true;
                     }
+                    worker_health.lock().await.record_started();
                     let span = info_span!("discovery.run", source_id);
                     // ponytail: a provider is third-party-ish code we don't control (a
                     // future Steam/GOG scraper can misbehave). catch_unwind keeps a

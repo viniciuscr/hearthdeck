@@ -19,6 +19,10 @@ class LocalCatalogRepository implements CatalogRepository {
       _request((ApiCatalogRepository repository) => repository.health());
 
   @override
+  Future<HearthdeckDiagnostics> diagnostics() =>
+      _request((ApiCatalogRepository repository) => repository.diagnostics());
+
+  @override
   Future<CatalogData> load() =>
       _request((ApiCatalogRepository repository) => repository.load());
 
@@ -29,6 +33,13 @@ class LocalCatalogRepository implements CatalogRepository {
   @override
   Future<void> requestRescan() =>
       _request((ApiCatalogRepository repository) => repository.requestRescan());
+
+  @override
+  Future<void> requestProviderRefresh(HearthdeckProviderHealth provider) =>
+      _request(
+        (ApiCatalogRepository repository) =>
+            repository.requestProviderRefresh(provider),
+      );
 
   @override
   Stream<CatalogEvent> watch() async* {

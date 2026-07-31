@@ -1,6 +1,0 @@
-[Desktop Entry]
-Name=Hearthdeck Kiosk
-Comment=COSMIC session that starts Hearthdeck when Wayland is ready
-Exec=/usr/lib/hearthdeck/hearthdeck-cosmic-session
-Type=Application
-DesktopNames=hearthdeck;COSMIC

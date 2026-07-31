@@ -10,7 +10,7 @@ use tokio::{
 pub async fn request(socket_path: &Path, request: BridgeRequest) -> Result<BridgeResponse> {
     let stream = UnixStream::connect(socket_path)
         .await
-        .with_context(|| format!("bridge unavailable at {}", socket_path.display()))?;
+        .context("bridge unavailable")?;
     let (reader, mut writer) = stream.into_split();
     let payload = serde_json::to_string(&request)?;
     writer.write_all(payload.as_bytes()).await?;

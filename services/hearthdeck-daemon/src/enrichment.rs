@@ -85,6 +85,7 @@ impl EnrichmentService {
                         state.queued = false;
                         state.running = true;
                     }
+                    worker_health.lock().await.record_started();
                     let span = info_span!("metadata.enrich", provider_id);
                     match enrich_source(worker_provider.as_ref(), &worker_catalog, &worker_events)
                         .instrument(span)

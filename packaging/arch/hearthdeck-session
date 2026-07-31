@@ -1,0 +1,30 @@
+#!/usr/bin/bash
+# Minimal Hearthdeck kiosk session: no desktop shell, no window manager, no
+# panels or applets. Gamescope is the only compositor and it owns DRM/logind
+# directly. Hearthdeck is its one and only child; closing Hearthdeck ends
+# the session.
+set -Euo pipefail
+
+export XDG_CURRENT_DESKTOP=hearthdeck
+export XDG_SESSION_DESKTOP=hearthdeck
+export XDG_SESSION_TYPE=wayland
+
+# The local API daemon and Linux bridge are lightweight background services,
+# not a desktop shell. Starting them here (in addition to the global
+# default.target enablement) guarantees they are up before Hearthdeck makes
+# its first request, even on a from-cold-boot autologin.
+systemctl --user daemon-reload >/dev/null 2>&1 || true
+systemctl --user start hearthdeck.target >/dev/null 2>&1 || true
+
+# --backend drm:     run directly on the DRM/KMS seat; no outer Wayland/X11
+#                     session required.
+# --fullscreen:      cover the full output mode.
+# --force-grab-cursor: keep the cursor confined to Hearthdeck's surface.
+# Nested application launches (games, other desktop entries) run in their own
+# separate, on-demand Gamescope instance started by the bridge; this outer
+# Gamescope only ever hosts Hearthdeck itself.
+exec gamescope \
+  --backend drm \
+  --fullscreen \
+  --force-grab-cursor \
+  -- /opt/hearthdeck/hearthdeck

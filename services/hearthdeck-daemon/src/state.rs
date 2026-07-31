@@ -45,6 +45,7 @@ pub enum ProviderKind {
 #[serde(rename_all = "snake_case")]
 pub enum ProviderStatus {
     Starting,
+    Refreshing,
     Ready,
     Degraded,
 }
@@ -55,6 +56,7 @@ pub struct ProviderHealth {
     pub kind: ProviderKind,
     pub status: ProviderStatus,
     pub record_count: Option<usize>,
+    pub last_attempt_at: Option<String>,
     pub last_success_at: Option<String>,
     pub last_error: Option<String>,
 }
@@ -66,20 +68,30 @@ impl ProviderHealth {
             kind,
             status: ProviderStatus::Starting,
             record_count: None,
+            last_attempt_at: None,
             last_success_at: None,
             last_error: None,
         }
     }
 
+    pub fn record_started(&mut self) {
+        self.status = ProviderStatus::Refreshing;
+        self.last_attempt_at = Some(Utc::now().to_rfc3339());
+        self.last_error = None;
+    }
+
     pub fn record_success(&mut self, record_count: usize) {
         self.status = ProviderStatus::Ready;
         self.record_count = Some(record_count);
-        self.last_success_at = Some(Utc::now().to_rfc3339());
+        let now = Utc::now().to_rfc3339();
+        self.last_attempt_at = Some(now.clone());
+        self.last_success_at = Some(now);
         self.last_error = None;
     }
 
     pub fn record_failure(&mut self, error: &anyhow::Error) {
         self.status = ProviderStatus::Degraded;
+        self.last_attempt_at = Some(Utc::now().to_rfc3339());
         self.last_error = Some(error.to_string());
     }
 }

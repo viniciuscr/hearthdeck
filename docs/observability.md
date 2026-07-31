@@ -12,7 +12,8 @@ per line to stderr; systemd captures it in the user journal.
   `hearthdeck-bridge`.
 
 Do not log bearer tokens, pairing codes, certificate/private-key paths,
-authorization headers, request bodies, desktop `Exec` strings, or media paths.
+authorization headers, request bodies, local runtime/database/media paths, or
+desktop `Exec` strings.
 
 ## Events
 
@@ -29,8 +30,21 @@ The request trace intentionally excludes headers and bodies. It correlates API
 logs with the `x-request-id` response header.
 
 `GET /v1/health` is the current provider-health snapshot. It is the source of
-truth for whether a catalog source is `starting`, `ready`, or `degraded`; use
-logs for the associated operation detail.
+truth for whether a catalog source is `starting`, `refreshing`, `ready`, or
+`degraded`; use logs for the associated operation detail. A source reports its
+last attempt, last successful refresh, record count, and latest safe error.
+
+**Settings > System > Service status** combines that snapshot with a bounded
+diagnostics view. It reports the daemon, bridge socket, and bridge unit states;
+checks the configured RomM server by listing its platforms; and shows at most 30
+recent events from only `hearthdeck-daemon.service` and
+`hearthdeck-bridge.service`. The client cannot choose journal units, commands,
+or arbitrary filters. Entries are truncated and credentials are redacted before
+they leave the daemon.
+
+Use a provider card's **Refresh source** control to queue only that discovery or
+metadata provider. This makes it possible to confirm a Heroic scan separately
+from desktop discovery or a metadata refresh.
 
 For catalog synchronization, expect this lifecycle in order:
 
@@ -106,6 +120,12 @@ The bridge never logs desktop-entry `Exec` values.
 2. Check discovery records for `source_id`, `duration_ms`, and `record_count`.
 3. Check bridge logs for the matching desktop ID outcome.
 4. Check `systemctl --user status` if no lifecycle event exists.
+
+For RomM, first check the live connection card in Service status. `Connected`
+with a console count proves the configured URL and token can list platforms;
+`Attention` includes the safe connection or HTTP failure. Heroic reports its
+installed-game count as the `heroic` discovery provider, and logs explicit scan
+start/completion events with that count.
 
 Absence of a discovery completion event means the provider failed before
 catalog persistence. A catalog completion event with zero records means the

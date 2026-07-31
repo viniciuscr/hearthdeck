@@ -56,6 +56,19 @@ class HearthdeckApiClient {
     );
   }
 
+  Future<HearthdeckDiagnostics> diagnostics() async {
+    final response = await _client.get(
+      endpoint.api('diagnostics'),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 200) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+    return HearthdeckDiagnostics.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
+  }
+
   Future<List<HearthdeckLibraryItem>> library() async {
     final response = await _client.get(
       endpoint.api('library'),
@@ -183,6 +196,26 @@ class HearthdeckApiClient {
   Future<void> requestRescan() async {
     final response = await _client.post(
       endpoint.api('library/rescan'),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 202) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+  }
+
+  Future<void> requestDiscoveryRefresh(String sourceId) async {
+    final response = await _client.post(
+      endpoint.api('discovery/$sourceId/refresh'),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 202) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+  }
+
+  Future<void> requestMetadataRefresh(String providerId) async {
+    final response = await _client.post(
+      endpoint.api('metadata/$providerId/refresh'),
       headers: _authorizationHeaders(),
     );
     if (response.statusCode != 202) {
@@ -327,6 +360,127 @@ class HearthdeckHostCapabilities {
   final bool installRequests;
 }
 
+class HearthdeckDiagnostics {
+  const HearthdeckDiagnostics({
+    required this.generatedAt,
+    required this.services,
+    required this.romm,
+    required this.logs,
+  });
+
+  factory HearthdeckDiagnostics.fromJson(Map<String, dynamic> json) =>
+      HearthdeckDiagnostics(
+        generatedAt: json['generated_at'] as String,
+        services: (json['services'] as List<dynamic>)
+            .cast<Map<String, dynamic>>()
+            .map(HearthdeckServiceStatus.fromJson)
+            .toList(growable: false),
+        romm: HearthdeckRommDiagnostic.fromJson(
+          json['romm'] as Map<String, dynamic>,
+        ),
+        logs: HearthdeckLogTail.fromJson(json['logs'] as Map<String, dynamic>),
+      );
+
+  final String generatedAt;
+  final List<HearthdeckServiceStatus> services;
+  final HearthdeckRommDiagnostic romm;
+  final HearthdeckLogTail logs;
+}
+
+class HearthdeckServiceStatus {
+  const HearthdeckServiceStatus({
+    required this.id,
+    required this.unit,
+    required this.state,
+    required this.detail,
+  });
+
+  factory HearthdeckServiceStatus.fromJson(Map<String, dynamic> json) =>
+      HearthdeckServiceStatus(
+        id: json['id'] as String,
+        unit: json['unit'] as String,
+        state: json['state'] as String,
+        detail: json['detail'] as String,
+      );
+
+  final String id;
+  final String unit;
+  final String state;
+  final String detail;
+}
+
+class HearthdeckRommDiagnostic {
+  const HearthdeckRommDiagnostic({
+    required this.configured,
+    required this.status,
+    required this.baseUrl,
+    required this.consoleCount,
+    required this.checkedAt,
+    required this.error,
+  });
+
+  factory HearthdeckRommDiagnostic.fromJson(Map<String, dynamic> json) =>
+      HearthdeckRommDiagnostic(
+        configured: json['configured'] as bool,
+        status: json['status'] as String,
+        baseUrl: json['base_url'] as String?,
+        consoleCount: json['console_count'] as int?,
+        checkedAt: json['checked_at'] as String,
+        error: json['error'] as String?,
+      );
+
+  final bool configured;
+  final String status;
+  final String? baseUrl;
+  final int? consoleCount;
+  final String checkedAt;
+  final String? error;
+}
+
+class HearthdeckLogTail {
+  const HearthdeckLogTail({
+    required this.available,
+    required this.error,
+    required this.entries,
+  });
+
+  factory HearthdeckLogTail.fromJson(Map<String, dynamic> json) =>
+      HearthdeckLogTail(
+        available: json['available'] as bool,
+        error: json['error'] as String?,
+        entries: (json['entries'] as List<dynamic>)
+            .cast<Map<String, dynamic>>()
+            .map(HearthdeckLogEntry.fromJson)
+            .toList(growable: false),
+      );
+
+  final bool available;
+  final String? error;
+  final List<HearthdeckLogEntry> entries;
+}
+
+class HearthdeckLogEntry {
+  const HearthdeckLogEntry({
+    required this.timestamp,
+    required this.service,
+    required this.level,
+    required this.message,
+  });
+
+  factory HearthdeckLogEntry.fromJson(Map<String, dynamic> json) =>
+      HearthdeckLogEntry(
+        timestamp: json['timestamp'] as String?,
+        service: json['service'] as String,
+        level: json['level'] as String,
+        message: json['message'] as String,
+      );
+
+  final String? timestamp;
+  final String service;
+  final String level;
+  final String message;
+}
+
 class HearthdeckApplicationSession {
   const HearthdeckApplicationSession({
     required this.id,
@@ -355,6 +509,7 @@ class HearthdeckProviderHealth {
     required this.kind,
     required this.status,
     required this.recordCount,
+    required this.lastAttemptAt,
     required this.lastSuccessAt,
     required this.lastError,
   });
@@ -365,6 +520,7 @@ class HearthdeckProviderHealth {
         kind: json['kind'] as String,
         status: json['status'] as String,
         recordCount: json['record_count'] as int?,
+        lastAttemptAt: json['last_attempt_at'] as String?,
         lastSuccessAt: json['last_success_at'] as String?,
         lastError: json['last_error'] as String?,
       );
@@ -373,6 +529,7 @@ class HearthdeckProviderHealth {
   final String kind;
   final String status;
   final int? recordCount;
+  final String? lastAttemptAt;
   final String? lastSuccessAt;
   final String? lastError;
 }

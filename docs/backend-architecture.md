@@ -174,11 +174,13 @@ flows. It is not included in the public API contract.
 ## Deployment
 
 Install and enable `hearthdeck.target` from the systemd **user** units in
-`deploy/systemd/`. A user service owns graphical application launches. In the
-Hearthdeck Kiosk session, normal COSMIC startup publishes the primary Wayland
-socket to the user manager before `hearthdeck-kiosk.service` starts the Flutter
-client. The bridge launches registered desktop applications in nested Gamescope
-so they remain isolated from Hearthdeck while cosmic-comp retains DRM ownership.
+`deploy/systemd/`. A user service owns graphical application launches. The
+Hearthdeck Kiosk session's script execs Gamescope directly on the DRM/KMS seat
+with the Flutter client as its only child; there is no separate desktop
+compositor in front of it. The bridge launches registered desktop applications
+in a separate, on-demand nested Gamescope instance so they remain isolated
+from Hearthdeck without the outer session ever sharing DRM ownership with
+another compositor.
 Configure LAN TLS through
 `~/.config/hearthdeck/daemon.env`; see `deploy/systemd/daemon.env.example`.
 

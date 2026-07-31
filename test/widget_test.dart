@@ -335,6 +335,22 @@ void main() {
     expect(find.text('Desktop Apps'), findsOneWidget);
     expect(find.text('Attention'), findsOneWidget);
     expect(find.text('bridge unavailable'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('RomM connection'),
+      360,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('RomM connection'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Recent service events'),
+      360,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('Recent service events'), findsOneWidget);
+    expect(
+      find.text('RomM console check completed (console_count=12)'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('dashboard search opens a focused native text field', (
@@ -709,6 +725,10 @@ class _EventFailingCatalogRepository implements CatalogRepository {
   Future<HearthdeckHealth> health() => const MockCatalogRepository().health();
 
   @override
+  Future<HearthdeckDiagnostics> diagnostics() =>
+      const MockCatalogRepository().diagnostics();
+
+  @override
   Future<CatalogData> load() async {
     return const CatalogData(
       gameSources: <CatalogSource>[
@@ -723,6 +743,11 @@ class _EventFailingCatalogRepository implements CatalogRepository {
 
   @override
   Future<void> requestRescan() async {}
+
+  @override
+  Future<void> requestProviderRefresh(
+    HearthdeckProviderHealth provider,
+  ) async {}
 
   @override
   Stream<CatalogEvent> watch() =>
@@ -785,11 +810,46 @@ class _HealthCatalogRepository extends MockCatalogRepository {
         kind: 'discovery',
         status: 'degraded',
         recordCount: null,
+        lastAttemptAt: null,
         lastSuccessAt: null,
         lastError: 'bridge unavailable',
       ),
     ],
   );
+
+  @override
+  Future<HearthdeckDiagnostics> diagnostics() async =>
+      const HearthdeckDiagnostics(
+        generatedAt: '2026-01-01T00:00:00Z',
+        services: <HearthdeckServiceStatus>[
+          HearthdeckServiceStatus(
+            id: 'daemon',
+            unit: 'hearthdeck-daemon.service',
+            state: 'active',
+            detail: 'active (running)',
+          ),
+        ],
+        romm: HearthdeckRommDiagnostic(
+          configured: true,
+          status: 'ready',
+          baseUrl: 'http://127.0.0.1:8080',
+          consoleCount: 12,
+          checkedAt: '2026-01-01T00:00:00Z',
+          error: null,
+        ),
+        logs: HearthdeckLogTail(
+          available: true,
+          error: null,
+          entries: <HearthdeckLogEntry>[
+            HearthdeckLogEntry(
+              timestamp: '2026-01-01T00:00:00Z',
+              service: 'Daemon',
+              level: 'info',
+              message: 'RomM console check completed (console_count=12)',
+            ),
+          ],
+        ),
+      );
 }
 
 class _RetroHttpClient extends http.BaseClient {

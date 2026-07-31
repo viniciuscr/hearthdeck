@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
     let (listener, socket_activated) = bridge_listener(&socket_path).await?;
     let session_directory = bridge_session_directory(&socket_path);
     let sessions = Arc::new(Mutex::new(load_managed_sessions(&session_directory).await?));
-    info!(socket = %socket_path.display(), socket_activated, "bridge listening");
+    info!(socket_activated, "bridge listening");
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {

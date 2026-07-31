@@ -1,5 +1,5 @@
 post_install() {
-  systemctl --global enable hearthdeck.target hearthdeck-kiosk.service
+  systemctl --global enable hearthdeck.target
   if ! grep -qxF 'Include = /etc/pacman.d/hearthdeck.conf' /etc/pacman.conf; then
     cat >>/etc/pacman.conf <<'EOF'
 
@@ -10,13 +10,14 @@ EOF
   fi
 
   cat <<'EOF'
-Hearthdeck installs systemd user units for its API daemon, host bridge, and
-COSMIC Kiosk launcher.
+Hearthdeck installs systemd user units for its API daemon and host bridge, and
+a minimal "Hearthdeck Kiosk" Wayland session with no desktop shell.
 
-The local-service target starts for users at their next login. The Kiosk client
-starts only through the Hearthdeck Kiosk COSMIC session. The Hearthdeck launcher
-also starts local services for the current user. To start them immediately
-without launching Hearthdeck, run as that user:
+The local-service target starts for users at their next login. Select
+Hearthdeck Kiosk in the display manager to run Gamescope with Hearthdeck as
+its only child. The Hearthdeck launcher also starts local services for the
+current user. To start them immediately without launching Hearthdeck, run as
+that user:
 
   systemctl --user daemon-reload
   systemctl --user start hearthdeck.target
@@ -44,11 +45,10 @@ pre_remove() {
 }
 
 post_remove() {
-  systemctl --global disable hearthdeck.target hearthdeck-kiosk.service
+  systemctl --global disable hearthdeck.target
 
   cat <<'EOF'
 If this was the final Hearthdeck package removal, disable its user services:
-  systemctl --user disable --now hearthdeck.target hearthdeck-bridge.socket \
-    hearthdeck-kiosk.service
+  systemctl --user disable --now hearthdeck.target hearthdeck-bridge.socket
 EOF
 }

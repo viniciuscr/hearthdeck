@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::{Map, Value};
+use tracing::info;
 
 use crate::{catalog::CatalogRecord, discovery::DiscoveryProvider};
 
@@ -50,6 +51,11 @@ impl DiscoveryProvider for HeroicInstalledProvider {
     async fn discover(&self) -> anyhow::Result<Vec<CatalogRecord>> {
         let updated_at = Utc::now().to_rfc3339();
         let mut records = HashMap::new();
+        info!(
+            source_id = HEROIC_SOURCE,
+            config_directory_count = self.config_directories.len(),
+            "Heroic scan started"
+        );
         for directory in &self.config_directories {
             for record in discover_directory(directory, &updated_at).await? {
                 records.entry(record.id.clone()).or_insert(record);
@@ -57,6 +63,11 @@ impl DiscoveryProvider for HeroicInstalledProvider {
         }
         let mut records: Vec<_> = records.into_values().collect();
         records.sort_by(|left, right| left.title.cmp(&right.title));
+        info!(
+            source_id = HEROIC_SOURCE,
+            installed_game_count = records.len(),
+            "Heroic scan completed"
+        );
         Ok(records)
     }
 }
@@ -387,7 +398,7 @@ async fn gog_library(path: &Path) -> anyhow::Result<HashMap<String, Value>> {
 async fn read_json_if_exists(path: &Path) -> anyhow::Result<Option<Value>> {
     match tokio::fs::read_to_string(path).await {
         Ok(contents) => Ok(Some(serde_json::from_str(&contents).map_err(|error| {
-            anyhow::anyhow!("could not parse Heroic data at {}: {error}", path.display())
+            anyhow::anyhow!("could not parse Heroic configuration data: {error}")
         })?)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),

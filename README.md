@@ -75,15 +75,16 @@ automatically. See
 
 ## Kiosk Session
 
-The Arch package installs a **Hearthdeck Kiosk** Wayland session. It uses
-the distribution's normal COSMIC session lifecycle, so COSMIC retains ownership
-of DRM, logind, and Wayland activation. After COSMIC makes the Wayland socket
-available, a Kiosk-only systemd user unit starts Hearthdeck as a native,
-fullscreen Wayland client. COSMIC's panel, launcher, and supporting services
-remain running underneath for a reliable session; the launcher is not a custom
-replacement compositor.
-Gamescope starts only when Hearthdeck launches a managed desktop application or
-game, nested inside cosmic-comp rather than owning DRM for the whole session.
+The Arch package installs a **Hearthdeck Kiosk** Wayland session with no
+desktop shell. Its session script runs Gamescope directly on the DRM/KMS seat
+with Hearthdeck as its only child, for the lowest possible memory and CPU
+footprint. There is no panel, launcher, wallpaper, or other desktop component
+running underneath; Gamescope is the entire compositor for the session.
+
+Hearthdeck launches a separate, on-demand nested Gamescope instance only when
+it starts a managed desktop application or game. That instance is unrelated to
+the outer Kiosk session compositor: it uses no DRM or memory until a launch is
+requested and is torn down when the launch ends.
 
 Hearthdeck launches approved Linux desktop entries in transient systemd user
 services, so the host can identify and stop the active managed application. Remote
@@ -96,7 +97,7 @@ stay on NetworkManager and BlueZ system services. Those services remain active,
 but their configuration UIs are not yet implemented in Hearthdeck.
 
 Choose **Settings > General > Exit to desktop** to leave Hearthdeck Kiosk and
-reveal the COSMIC desktop.
+return to the display manager's login screen.
 
 ## Controller support
 

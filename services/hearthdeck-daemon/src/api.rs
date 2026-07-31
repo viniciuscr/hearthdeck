@@ -17,6 +17,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
+    diagnostics::{self, RommPlatform, RommQueryError},
     settings::{
         BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
     },
@@ -26,6 +27,7 @@ use crate::{
 pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/diagnostics", get(diagnostics))
         .route("/v1/pairing/complete", post(complete_pairing))
         .route("/v1/library", get(list_library))
         .route("/v1/retro/consoles", get(list_retro_consoles))
@@ -154,28 +156,9 @@ async fn list_retro_consoles(
     headers: HeaderMap,
 ) -> Result<Json<Vec<RommPlatform>>, ApiError> {
     authenticate(&state, &headers).await?;
-    let romm = state
-        .settings
-        .romm_credentials()
+    let mut platforms = diagnostics::romm_platforms(&state.settings)
         .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(ApiError::romm_unavailable)?;
-    let response = reqwest::Client::new()
-        .get(format!("{}/api/platforms", romm.base_url))
-        .header(reqwest::header::ACCEPT, "application/json")
-        .bearer_auth(&romm.token)
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await
-        .map_err(ApiError::bad_gateway)?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(ApiError::bad_gateway(format!("RomM returned {status}")));
-    }
-    let mut platforms = response
-        .json::<Vec<RommPlatform>>()
-        .await
-        .map_err(ApiError::bad_gateway)?;
+        .map_err(ApiError::romm_query)?;
     platforms.sort_by(|left, right| {
         left.display_name
             .as_deref()
@@ -183,6 +166,14 @@ async fn list_retro_consoles(
             .cmp(right.display_name.as_deref().unwrap_or(&right.name))
     });
     Ok(Json(platforms))
+}
+
+async fn diagnostics(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<diagnostics::DiagnosticsSnapshot>, ApiError> {
+    authenticate(&state, &headers).await?;
+    Ok(Json(diagnostics::snapshot(&state.settings).await))
 }
 
 async fn get_romm_settings(
@@ -583,20 +574,6 @@ struct UpdateRommSettingsRequest {
     token: String,
 }
 
-#[derive(Deserialize, Serialize)]
-struct RommPlatform {
-    id: i64,
-    name: String,
-    #[serde(default)]
-    display_name: Option<String>,
-    #[serde(default)]
-    rom_count: u64,
-    #[serde(default)]
-    slug: Option<String>,
-    #[serde(default)]
-    fs_slug: Option<String>,
-}
-
 struct ApiError {
     status: StatusCode,
     message: String,
@@ -692,6 +669,13 @@ impl ApiError {
             status: StatusCode::SERVICE_UNAVAILABLE,
             message: "RomM is not configured".to_owned(),
             settings: None,
+        }
+    }
+
+    fn romm_query(error: RommQueryError) -> Self {
+        match error {
+            RommQueryError::NotConfigured => Self::romm_unavailable(),
+            RommQueryError::Failed(error) => Self::bad_gateway(error),
         }
     }
 
@@ -885,6 +869,18 @@ mod tests {
         assert_eq!(romm_settings["configured"], true);
         assert!(romm_settings.get("token").is_none());
 
+        let (status, diagnostics) = response_json(
+            router(state.clone()),
+            Request::get("/v1/diagnostics")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(diagnostics["romm"]["configured"], true);
+        assert!(diagnostics["romm"].get("token").is_none());
+
         let (status, settings) = response_json(
             router(state.clone()),
             Request::get("/v1/settings")
@@ -994,6 +990,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(health["providers"][0]["status"], "ready");
         assert_eq!(health["providers"][0]["record_count"], 1);
+        assert!(health["providers"][0]["last_attempt_at"].is_string());
 
         let (status, library) = response_json(
             router(state),

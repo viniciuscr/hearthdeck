@@ -21,6 +21,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+  /v1/diagnostics:
+    get:
+      operationId: getDiagnostics
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Bounded Hearthdeck service diagnostics and recent events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Diagnostics'
   /v1/pairing/complete:
     post:
       operationId: completePairing
@@ -261,6 +273,52 @@ components:
         launch: { type: boolean }
         application_sessions: { type: boolean }
         install_requests: { type: boolean }
+    Diagnostics:
+      type: object
+      required: [generated_at, services, romm, logs]
+      properties:
+        generated_at: { type: string, format: date-time }
+        services:
+          type: array
+          items: { $ref: '#/components/schemas/ServiceStatus' }
+        romm: { $ref: '#/components/schemas/RommDiagnostic' }
+        logs: { $ref: '#/components/schemas/LogTail' }
+    ServiceStatus:
+      type: object
+      required: [id, unit, state, detail]
+      properties:
+        id: { type: string }
+        unit: { type: string }
+        state: { type: string, enum: [active, inactive, activating, deactivating, reloading, failed, maintenance, unavailable, unknown] }
+        detail: { type: string }
+    RommDiagnostic:
+      type: object
+      required: [configured, status, base_url, console_count, checked_at, error]
+      properties:
+        configured: { type: boolean }
+        status: { type: string, enum: [ready, degraded, not_configured] }
+        base_url: { type: [string, 'null'], format: uri }
+        console_count: { type: [integer, 'null'], minimum: 0 }
+        checked_at: { type: string, format: date-time }
+        error: { type: [string, 'null'] }
+    LogTail:
+      type: object
+      required: [available, error, entries]
+      properties:
+        available: { type: boolean }
+        error: { type: [string, 'null'] }
+        entries:
+          type: array
+          maxItems: 30
+          items: { $ref: '#/components/schemas/LogEntry' }
+    LogEntry:
+      type: object
+      required: [timestamp, service, level, message]
+      properties:
+        timestamp: { type: [string, 'null'], format: date-time }
+        service: { type: string }
+        level: { type: string, enum: [error, warning, info, debug] }
+        message: { type: string, maxLength: 600 }
     ApplicationSession:
       type: object
       required: [id, source_id, application_id, state]
@@ -271,12 +329,13 @@ components:
         state: { type: string, enum: [running] }
     ProviderHealth:
       type: object
-      required: [id, kind, status, record_count, last_success_at, last_error]
+      required: [id, kind, status, record_count, last_attempt_at, last_success_at, last_error]
       properties:
         id: { type: string }
         kind: { type: string, enum: [discovery, metadata] }
-        status: { type: string, enum: [starting, ready, degraded] }
+        status: { type: string, enum: [starting, refreshing, ready, degraded] }
         record_count: { type: [integer, 'null'], minimum: 0 }
+        last_attempt_at: { type: [string, 'null'], format: date-time }
         last_success_at: { type: [string, 'null'], format: date-time }
         last_error: { type: [string, 'null'] }
     PairingRequest:

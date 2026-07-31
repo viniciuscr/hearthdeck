@@ -4,11 +4,15 @@ import '../dashboard_models.dart';
 abstract interface class CatalogRepository {
   Future<HearthdeckHealth> health();
 
+  Future<HearthdeckDiagnostics> diagnostics();
+
   Future<CatalogData> load();
 
   Future<void> launch(DashboardItem item);
 
   Future<void> requestRescan();
+
+  Future<void> requestProviderRefresh(HearthdeckProviderHealth provider);
 
   Stream<CatalogEvent> watch();
 }

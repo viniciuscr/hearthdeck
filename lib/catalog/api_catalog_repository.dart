@@ -16,6 +16,9 @@ class ApiCatalogRepository implements CatalogRepository {
   Future<HearthdeckHealth> health() => _apiClient.health();
 
   @override
+  Future<HearthdeckDiagnostics> diagnostics() => _apiClient.diagnostics();
+
+  @override
   Future<CatalogData> load() async {
     final items = await _apiClient.library();
     final games = <HearthdeckLibraryItem>[];
@@ -62,6 +65,13 @@ class ApiCatalogRepository implements CatalogRepository {
 
   @override
   Future<void> requestRescan() => _apiClient.requestRescan();
+
+  @override
+  Future<void> requestProviderRefresh(HearthdeckProviderHealth provider) {
+    return provider.kind == 'metadata'
+        ? _apiClient.requestMetadataRefresh(provider.id)
+        : _apiClient.requestDiscoveryRefresh(provider.id);
+  }
 
   @override
   Stream<CatalogEvent> watch() async* {
