@@ -79,18 +79,25 @@ compositor to initialize first, and no other process for Gamescope to share
 the seat with. Exiting Hearthdeck ends Gamescope and returns to the display
 manager's login screen; there is no underlying desktop to fall back to.
 
-The Flutter runner starts the lightweight native overlay only after its first
-frame. The overlay is a direct outer-Gamescope child, not a systemd service or
-desktop component, and the runner terminates it with Hearthdeck. This preserves
-the direct Kiosk startup chain while allowing a layer-shell surface above a
-nested game.
+Hearthdeck's own runner does not start any other graphical process. A
+previous version had it launch the native in-game overlay (see below) as its
+own child; that made the overlay a second Wayland client of this same outer
+Gamescope instance for the entire time Hearthdeck was running, which
+prevented Gamescope from sizing its output to Hearthdeck alone (Hearthdeck
+rendered into a fraction of the real screen). See `docs/kiosk-session.md` for
+the full incident note — the overlay must only ever run as part of a nested
+game/app launch, never here.
 
 Hearthdeck launches registered desktop applications in a separate, on-demand
 nested Gamescope instance. That nested instance is unrelated to the outer
 Kiosk session compositor above: it is started by the bridge only when a game
 or app launch is requested, uses no DRM or memory until then, and is torn down
 when the launch ends. X11-only apps use the nested Gamescope's Xwayland
-server; Wayland apps use its exposed inner Wayland socket.
+server; Wayland apps use its exposed inner Wayland socket. The native overlay
+binary (`/usr/lib/hearthdeck/hearthdeck-overlay`) shows an in-game
+resume/close menu above a running game; it has no automatic startup wired up
+yet and can be run manually via `just overlay` for development.
+
 
 Heroic game URI launches are unavailable in Kiosk mode because an existing
 Heroic process can accept a URI and detach the game from Hearthdeck's managed

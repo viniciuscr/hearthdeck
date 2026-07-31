@@ -20,8 +20,7 @@ Display manager (SDDM/GDM/greetd/...)
        -> systemctl --user start hearthdeck.target   (BLOCKS until ready, see below)
         -> exec gamescope --backend drm --fullscreen --force-grab-cursor --expose-wayland -- \
              /opt/hearthdeck/hearthdeck
-             -> Hearthdeck is Gamescope's direct child process
-                -> optional native overlay, started after Flutter's first frame
+             -> Hearthdeck is Gamescope's ONLY child process
 ```
 
 That's the entire startup chain. There is no desktop compositor, no session
@@ -30,9 +29,9 @@ second systemd unit standing between the display manager and Hearthdeck's
 window. `hearthdeck-session` is a single bash script that ends in `exec`,
 so by the time Hearthdeck is running, `gamescope` has *replaced* that shell
 process — there's exactly one extra process (`gamescope`) between the
-display manager and the app. The optional overlay is not a session service: the
-Flutter runner starts it only after the dashboard has rendered, and terminates
-it when Hearthdeck exits.
+display manager and the app, full stop. **Nothing else ever connects to this
+outer Gamescope instance as a Wayland client — see the incident note below
+for why that matters.**
 
 ### Files involved
 
@@ -46,6 +45,43 @@ it when Hearthdeck exits.
 
 None of these files reference COSMIC, a window manager, or any other
 compositor. That is intentional.
+
+## Incident: the in-game overlay used to shrink Hearthdeck's own screen
+
+A short-lived version of this session had the Flutter runner
+(`linux/runner/my_application.cc`) start `hearthdeck-overlay` as its own child
+immediately after Hearthdeck's first frame, unconditionally, for the entire
+time Hearthdeck was running — not just while a game was active. That overlay
+process connected into this *same* outer Gamescope instance as a second
+Wayland client (binding `wl_compositor`/`wlr-layer-shell`/`wl_output`,
+and — in the version that shipped briefly — creating a full-screen anchored
+layer-shell surface right at startup, before any user had ever asked to show
+it).
+
+The result: Gamescope's own output/canvas sizing was no longer negotiated
+with Hearthdeck as its only client. The visible symptom was Hearthdeck
+rendering into roughly a third of the screen, centered, with the rest black —
+Gamescope was no longer treating Hearthdeck as the sole thing it needed to
+fill the display with.
+
+**The fix was to stop the overlay from ever running as a client of this outer
+session at all.** The Flutter runner no longer starts, tracks, or knows about
+`hearthdeck-overlay` in any way. The overlay is a standalone binary
+(`/usr/lib/hearthdeck/hearthdeck-overlay`, runnable manually via `just overlay`
+for development) that has no automatic startup mechanism wired up yet; giving
+it one is tracked as follow-up work, and per the rule below, that follow-up
+must never make it a client of *this* outer Gamescope again.
+
+This is why the rule immediately below exists, and why it says "any Wayland
+client," not "any systemd unit."
+
+## Do not
+
+These are not style preferences. Each one previously caused this session to
+fail in ways that took real effort to diagnose (a black screen, a silent
+fallback to login, a systemd unit sitting `inactive (dead)` for no apparent
+reason, or — as in the incident above — a Hearthdeck window rendering at a
+fraction of the real screen size).
 
 ## How backend services are guaranteed to be up before the app starts
 
@@ -92,13 +128,6 @@ indefinite hang if the daemon never becomes healthy. If you add this, always
 pair it with a timeout and a clear log line on give-up, and never let it
 block forever.
 
-## Do not
-
-These are not style preferences. Each one previously caused this session to
-fail in ways that took real effort to diagnose (a black screen, a silent
-fallback to login, or a systemd unit sitting `inactive (dead)` for no
-apparent reason).
-
 - **Do not put another compositor, window manager, or session manager in
   front of Gamescope.** No COSMIC, no labwc, no sway, no Xorg. Gamescope
   must be the only thing that opens DRM for this session. Every extra layer
@@ -130,11 +159,13 @@ apparent reason).
   with no extra supervision logic needed, and it's what lets Gamescope own
    the app's Wayland/X11 environment directly instead of hoping a shared
    socket gets imported into the right place.
-- **Do not run the overlay as a systemd unit that is a sibling of Gamescope.**
-  It must be the Flutter runner's child so it inherits the exact outer
-  Gamescope Wayland socket. The runner publishes that socket to the user
-  manager only to let future transient nested-game services attach to it; this
-  does not turn the overlay into a session service.
+- **Do not make Hearthdeck's own runner (`linux/runner/my_application.cc`)
+  start, track, or connect `hearthdeck-overlay` as its child again.** See the
+  incident note above — this is exactly what caused Hearthdeck's own window
+  to render at a fraction of the screen. The overlay must only ever be
+  started as part of a *nested* game/app launch (the bridge's transient unit
+  for that launch), never as a client of this outer session, no matter how
+  convenient "start it from the runner" seems.
 - **Do not remove `--backend drm`.** Without it, Gamescope will try to run
   nested inside another Wayland/X11 session, which does not exist here (and
   reintroduces exactly the "who owns DRM" problem this design avoids).
@@ -146,10 +177,9 @@ apparent reason).
   its lifecycle.
 - **Do not add XDG autostart scanning, a settings daemon, a notification
   daemon, or any other "just one small desktop service" to this session.**
-  The only graphical child Hearthdeck may start is its native overlay, after
-  the first frame, because it must inherit Gamescope's exact Wayland socket and
-  exit with Hearthdeck. If a feature instead needs a desktop-shell-style
-  background service, it belongs in `hearthdeck-bridge`/`hearthdeck-daemon`
+  Hearthdeck's runner starts no graphical child processes at all now (see the
+  incident note above). If a feature needs a desktop-shell-style background
+  service, it belongs in `hearthdeck-bridge`/`hearthdeck-daemon`
   (already-established backend services with their own lifecycle under
   `hearthdeck.target`), not in the session itself.
 
