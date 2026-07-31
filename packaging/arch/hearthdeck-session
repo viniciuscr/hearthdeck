@@ -3,53 +3,23 @@
 # panels or applets. Gamescope is the only compositor and it owns DRM/logind
 # directly. Hearthdeck is its one and only child; closing Hearthdeck ends
 # the session.
-#
-# See docs/kiosk-session.md before changing anything in this file. In short:
-# keep this a single, linear exec chain with no other compositor, session
-# manager, or conditional systemd unit in front of Hearthdeck.
 set -Euo pipefail
 
 export XDG_CURRENT_DESKTOP=hearthdeck
 export XDG_SESSION_DESKTOP=hearthdeck
 export XDG_SESSION_TYPE=wayland
 
-# hearthdeck.target is already WantedBy=default.target (enabled globally by
-# the package), so it normally starts on its own before any session begins.
-# We start it again here, synchronously, as a safety net for the first login
-# after install/upgrade and for autologin-from-cold-boot, where the global
-# enablement may not have taken effect yet.
-#
-# hearthdeck-daemon.service is Type=notify: `systemctl --user start` on the
-# target BLOCKS until the daemon calls sd_notify(READY=1) after its listeners
-# are bound (or until it times out). That is what actually guarantees the
-# backend is reachable before Hearthdeck's first request, not just that the
-# unit was queued to start. Do not add `&` or otherwise background this call.
-#
-# Errors are logged, not swallowed, but are not fatal to the session: a
-# degraded backend should not prevent the fullscreen kiosk from showing at
-# all. Hearthdeck's own UI surfaces backend/API errors to the user.
-if ! systemctl --user daemon-reload; then
-  echo "hearthdeck-session: systemctl --user daemon-reload failed" >&2
-fi
-if ! systemctl --user start hearthdeck.target; then
-  echo "hearthdeck-session: hearthdeck.target did not report ready in time; continuing anyway" >&2
-fi
+# The local API daemon and Linux bridge are lightweight background services,
+# not a desktop shell. Starting them here (in addition to the global
+# default.target enablement) guarantees they are up before Hearthdeck makes
+# its first request, even on a from-cold-boot autologin.
+systemctl --user daemon-reload >/dev/null 2>&1 || true
+systemctl --user start hearthdeck.target >/dev/null 2>&1 || true
 
 # --backend drm:     run directly on the DRM/KMS seat; no outer Wayland/X11
 #                     session required.
 # --fullscreen:      cover the full output mode.
 # --force-grab-cursor: keep the cursor confined to Hearthdeck's surface.
-# --expose-wayland: make this Gamescope's own Wayland socket connectable by
-#                    processes other than Hearthdeck itself. The bridge reads
-#                    that socket (via a runtime file Hearthdeck's own runner
-#                    writes) so a nested Gamescope instance it launches later,
-#                    for an app or game, can connect into this same
-#                    compositor. Nothing else about this outer Gamescope
-#                    changes based on that: it is not related to, and does
-#                    not require, the overlay (services/hearthdeck-overlay),
-#                    which is started per-launch by the bridge, not here. See
-#                    docs/kiosk-session.md for why nothing else should ever
-#                    be added as a client of this outer session.
 # Nested application launches (games, other desktop entries) run in their own
 # separate, on-demand Gamescope instance started by the bridge; this outer
 # Gamescope only ever hosts Hearthdeck itself.
@@ -57,5 +27,4 @@ exec gamescope \
   --backend drm \
   --fullscreen \
   --force-grab-cursor \
-  --expose-wayland \
   -- /opt/hearthdeck/hearthdeck

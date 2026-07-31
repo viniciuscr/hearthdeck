@@ -1,0 +1,580 @@
+2026-07-30T13:40:49+02:00 starting minimal Gamescope Xterm session
+2026-07-30T13:40:49+02:00 runtime=/run/user/1000 dbus=unix:path=/run/user/1000/bus
+[gamescope] [[0;34mInfo[0m]  [0;37mconsole:[0m gamescope version 3.16.24 (gcc 16.1.1)
+No CAP_SYS_NICE, falling back to regular-priority compute and threads.
+Performance will be affected.
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope/common'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/inspect.lua' (id: 0)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/modegen.lua' (id: 1)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/util.lua' (id: 2)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope/displays'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/asus.rogally.lcd.lua' (id: 3)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/deckhd.steamdeck.deckhd-lcd.lua' (id: 4)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/gpd.win4.lcd.lua' (id: 5)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongo.lcd.lua' (id: 6)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongos.lcd.lua' (id: 7)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/onexplayer.f1.oled.lua' (id: 8)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/valve.steamdeck.lcd.lua' (id: 9)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/valve.steamdeck.oled.lua' (id: 10)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/zotac.zone.oled.lua' (id: 11)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/etc/gamescope/scripts'
+[gamescope] [[0;33mWarn[0m]  [0;37mscriptmgr:[0m Directory '/etc/gamescope/scripts' does not exist
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/home/vinicius/.config/gamescope/scripts'
+[gamescope] [[0;33mWarn[0m]  [0;37mscriptmgr:[0m Directory '/home/vinicius/.config/gamescope/scripts' does not exist
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m Intel device detected, forcing general queue family instead of compute-only queue
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m selecting physical device 'Intel(R) HD Graphics 630 (KBL GT2)': queue family 0 (general queue family 0)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m physical device supports DRM format modifiers
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [backend/headless/backend.c:67] Creating headless backend
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [libseat] [libseat/backend/seatd.c:64] Could not connect to socket /run/seatd.sock: No such file or directory
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [libseat] [libseat/libseat.c:76] Backend 'seatd' failed to open seat, skipping
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [libseat] [libseat/libseat.c:73] Seat opened with backend 'logind'
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [backend/session/session.c:108] Successfully loaded libseat session
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m opening DRM node '/dev/dri/card1'
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m Connector DP-1 -> HPN - OMEN 32c
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: EDID with colorimetry detected. Using it
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: r 0.678711 0.311523
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: g 0.272461 0.639648
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: b 0.145508 0.079102
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: w 0.313477 0.329102
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m Connector DP-1 -> HPN - OMEN 32c
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: EDID with colorimetry detected. Using it
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: r 0.678711 0.311523
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: g 0.272461 0.639648
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: b 0.145508 0.079102
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: w 0.313477 0.329102
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m Connectors:
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m   HDMI-A-2 (disconnected)
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m   DP-2 (disconnected)
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m   HDMI-A-1 (disconnected)
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m   DP-1 (connected)
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m selecting connector DP-1
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m selecting mode 2560x1440@60Hz
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m supported DRM formats for sampling usage:
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   AR24 (0x34325241)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XR24 (0x34325258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   AB24 (0x34324241)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XB24 (0x34324258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   RG16 (0x36314752)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   NV12 (0x3231564E)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XB4H (0x48344258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XB30 (0x30334258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XR30 (0x30335258)
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m Using explicit sync when available
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m Running compositor on wayland display 'gamescope-0'
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [backend/headless/backend.c:17] Starting headless backend
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m Successfully initialized libei for input emulation!
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [xwayland/server.c:107] Starting Xwayland on :1
+The XKEYBOARD keymap compiler (xkbcomp) reports:
+> Warning:          Multiple symbols for level 1/group 1 on key <FK23>
+>                   Using F23, ignoring XF86TouchpadOff
+> Warning:          Symbol map for key <FK23> redefined
+>                   Using last definition for conflicting fields
+> Warning:          Symbol map for key <FK24> redefined
+>                   Using last definition for conflicting fields
+> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOn
+> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOff
+> Warning:          Could not resolve keysym XF86ActionOnSelection
+> Warning:          Could not resolve keysym XF86ContextualInsert
+> Warning:          Could not resolve keysym XF86ContextualQuery
+Errors from xkbcomp are not fatal to the X server
+[gamescope] [[0;34mInfo[0m]  [0;37mpipewire:[0m stream state changed: connecting
+[gamescope] [[0;34mInfo[0m]  [0;37mpipewire:[0m stream state changed: paused
+[gamescope] [[0;34mInfo[0m]  [0;37mpipewire:[0m stream available on node ID: 32
+[gamescope] [[0;34mInfo[0m]  [0;37mxwm:[0m Embedded, no cursor set. Using left_ptr by default.
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;34mInfo[0m]  [0;37mvblank:[0m Using timerfd.
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+The XKEYBOARD keymap compiler (xkbcomp) reports:
+> Warning:          Unsupported maximum keycode 709, clipping.
+>                   X11 cannot support keycodes above 255.
+> Warning:          Virtual modifier Hyper multiply defined
+>                   Using 0, ignoring 0
+> Warning:          Virtual modifier ScrollLock multiply defined
+>                   Using 0, ignoring 0
+Errors from xkbcomp are not fatal to the X server
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mxwm:[0m waylandres but no win
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mxwm:[0m waylandres but no win
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescopereaper] [[0;34mInfo[0m]  [0;37mreaper:[0m Parent of gamescopereaper was killed. Killing children.
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [xwayland/server.c:217] Restarting Xwayland
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [xwayland/server.c:107] Starting Xwayland on :1
+[gamescope] [[0;34mInfo[0m]  [0;37mlaunch:[0m Primary child shut down!
+(EE) could not connect to wayland server
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeRmFB failed: Bad file descriptor
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeRmFB failed: Bad file descriptor
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeRmFB failed: Bad file descriptor
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeRmFB failed: Bad file descriptor
+2026-07-30T14:08:28+02:00 starting minimal Gamescope Xterm session
+2026-07-30T14:08:28+02:00 runtime=/run/user/1000 dbus=unix:path=/run/user/1000/bus
+[gamescope] [[0;34mInfo[0m]  [0;37mconsole:[0m gamescope version 3.16.24 (gcc 16.1.1)
+No CAP_SYS_NICE, falling back to regular-priority compute and threads.
+Performance will be affected.
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope/common'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/inspect.lua' (id: 0)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/modegen.lua' (id: 1)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/util.lua' (id: 2)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope/displays'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/asus.rogally.lcd.lua' (id: 3)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/deckhd.steamdeck.deckhd-lcd.lua' (id: 4)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/gpd.win4.lcd.lua' (id: 5)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongo.lcd.lua' (id: 6)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongos.lcd.lua' (id: 7)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/onexplayer.f1.oled.lua' (id: 8)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/valve.steamdeck.lcd.lua' (id: 9)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/valve.steamdeck.oled.lua' (id: 10)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/zotac.zone.oled.lua' (id: 11)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/etc/gamescope/scripts'
+[gamescope] [[0;33mWarn[0m]  [0;37mscriptmgr:[0m Directory '/etc/gamescope/scripts' does not exist
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/home/vinicius/.config/gamescope/scripts'
+[gamescope] [[0;33mWarn[0m]  [0;37mscriptmgr:[0m Directory '/home/vinicius/.config/gamescope/scripts' does not exist
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m Intel device detected, forcing general queue family instead of compute-only queue
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m selecting physical device 'Intel(R) HD Graphics 630 (KBL GT2)': queue family 0 (general queue family 0)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m physical device supports DRM format modifiers
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [backend/headless/backend.c:67] Creating headless backend
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [libseat] [libseat/backend/seatd.c:64] Could not connect to socket /run/seatd.sock: No such file or directory
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [libseat] [libseat/libseat.c:76] Backend 'seatd' failed to open seat, skipping
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [libseat] [libseat/libseat.c:73] Seat opened with backend 'logind'
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [backend/session/session.c:108] Successfully loaded libseat session
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m opening DRM node '/dev/dri/card1'
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m Connector DP-1 -> HPN - OMEN 32c
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: EDID with colorimetry detected. Using it
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: r 0.678711 0.311523
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: g 0.272461 0.639648
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: b 0.145508 0.079102
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: w 0.313477 0.329102
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m Connector DP-1 -> HPN - OMEN 32c
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: EDID with colorimetry detected. Using it
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: r 0.678711 0.311523
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: g 0.272461 0.639648
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: b 0.145508 0.079102
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m [colorimetry]: w 0.313477 0.329102
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m Connectors:
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m   HDMI-A-2 (disconnected)
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m   DP-2 (disconnected)
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m   HDMI-A-1 (disconnected)
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m   DP-1 (connected)
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m selecting connector DP-1
+[gamescope] [[0;34mInfo[0m]  [0;37mdrm:[0m selecting mode 2560x1440@60Hz
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m supported DRM formats for sampling usage:
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   AR24 (0x34325241)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XR24 (0x34325258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   AB24 (0x34324241)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XB24 (0x34324258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   RG16 (0x36314752)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   NV12 (0x3231564E)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XB4H (0x48344258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XB30 (0x30334258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XR30 (0x30335258)
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m Using explicit sync when available
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m Running compositor on wayland display 'gamescope-0'
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [backend/headless/backend.c:17] Starting headless backend
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m Successfully initialized libei for input emulation!
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [xwayland/server.c:107] Starting Xwayland on :1
+The XKEYBOARD keymap compiler (xkbcomp) reports:
+> Warning:          Multiple symbols for level 1/group 1 on key <FK23>
+>                   Using F23, ignoring XF86TouchpadOff
+> Warning:          Symbol map for key <FK23> redefined
+>                   Using last definition for conflicting fields
+> Warning:          Symbol map for key <FK24> redefined
+>                   Using last definition for conflicting fields
+> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOn
+> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOff
+> Warning:          Could not resolve keysym XF86ActionOnSelection
+> Warning:          Could not resolve keysym XF86ContextualInsert
+> Warning:          Could not resolve keysym XF86ContextualQuery
+Errors from xkbcomp are not fatal to the X server
+[gamescope] [[0;34mInfo[0m]  [0;37mpipewire:[0m stream state changed: connecting
+[gamescope] [[0;34mInfo[0m]  [0;37mpipewire:[0m stream state changed: paused
+[gamescope] [[0;34mInfo[0m]  [0;37mpipewire:[0m stream available on node ID: 33
+[gamescope] [[0;34mInfo[0m]  [0;37mxwm:[0m Embedded, no cursor set. Using left_ptr by default.
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;34mInfo[0m]  [0;37mvblank:[0m Using timerfd.
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+The XKEYBOARD keymap compiler (xkbcomp) reports:
+> Warning:          Unsupported maximum keycode 709, clipping.
+>                   X11 cannot support keycodes above 255.
+> Warning:          Virtual modifier Hyper multiply defined
+>                   Using 0, ignoring 0
+> Warning:          Virtual modifier ScrollLock multiply defined
+>                   Using 0, ignoring 0
+Errors from xkbcomp are not fatal to the X server
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescope] [[0;31mError[0m] [0;37mdrm:[0m drmModeAddFB2WithModifiers failed: Invalid argument
+[gamescopereaper] [[0;34mInfo[0m]  [0;37mreaper:[0m Parent of gamescopereaper was killed. Killing children.
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [xwayland/server.c:217] Restarting Xwayland
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [xwayland/server.c:107] Starting Xwayland on :1
+[gamescope] [[0;34mInfo[0m]  [0;37mlaunch:[0m Primary child shut down!
+(EE) could not connect to wayland server

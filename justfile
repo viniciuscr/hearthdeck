@@ -62,14 +62,6 @@ bridge:
 daemon:
   mise exec -- cargo run --manifest-path services/Cargo.toml -p hearthdeck-daemon
 
-# Run the native Gamescope layer-shell overlay in the active Wayland session.
-overlay:
-  mise exec -- cargo run --manifest-path services/Cargo.toml -p hearthdeck-overlay
-
-# Toggle the resident native Gamescope overlay.
-overlay-toggle:
-  mise exec -- cargo run --manifest-path services/Cargo.toml -p hearthdeck-overlay -- toggle
-
 # Scan installed macOS application bundles through the real provider.
 macos-discovery-check: build-services-debug
   ./scripts/macos-discovery-check

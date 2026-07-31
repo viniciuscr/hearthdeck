@@ -359,26 +359,18 @@ async fn launch_app(
         .map_err(ApiError::internal)?
         .ok_or_else(ApiError::not_found)?;
     let session_id = Uuid::new_v4().to_string();
-    let application_name = state
-        .catalog
-        .title_for(&id)
-        .await
-        .map_err(ApiError::internal)?
-        .unwrap_or_else(|| launch_id.clone());
     let request = if source_id == "heroic" {
         let (runner, application_id) =
             heroic_launch_target(&launch_id).ok_or_else(ApiError::not_found)?;
         BridgeRequest::LaunchHeroicGame {
             runner,
             application_id,
-            application_name,
             session_id,
         }
     } else {
         BridgeRequest::LaunchApplication {
             source_id,
             application_id: launch_id,
-            application_name,
             session_id,
         }
     };

@@ -75,10 +75,6 @@ automatically. See
 
 ## Kiosk Session
 
-See `docs/kiosk-session.md` for the full architecture, startup-ordering
-guarantees, and a "do not" list before changing anything about how the
-session starts.
-
 The Arch package installs a **Hearthdeck Kiosk** Wayland session with no
 desktop shell. Its session script runs Gamescope directly on the DRM/KMS seat
 with Hearthdeck as its only child, for the lowest possible memory and CPU
@@ -89,13 +85,6 @@ Hearthdeck launches a separate, on-demand nested Gamescope instance only when
 it starts a managed desktop application or game. That instance is unrelated to
 the outer Kiosk session compositor: it uses no DRM or memory until a launch is
 requested and is torn down when the launch ends.
-
-The native in-game overlay (a small Wayland layer-shell client showing a
-resume/close menu) is not started automatically yet; it must never be
-launched by Hearthdeck's own runner as a client of this outer session — doing
-so once broke Hearthdeck's own fullscreen sizing (see
-`docs/kiosk-session.md`). Run it manually with `just overlay` for
-development until it is wired into a nested game launch.
 
 Hearthdeck launches approved Linux desktop entries in transient systemd user
 services, so the host can identify and stop the active managed application. Remote
