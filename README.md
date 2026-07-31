@@ -76,10 +76,10 @@ automatically. See
 ## Console Session
 
 The Arch package depends on the distribution `gamescope` package and installs a
-**Hearthdeck Console** Wayland session. Select it from a display manager or set
-it as the autologin session to boot directly into Hearthdeck without another
-desktop shell. Gamescope is not bundled because its GPU/DRM components must
-match the host graphics stack.
+**Hearthdeck Console** Wayland session. It starts direct DRM Gamescope with
+Xterm as its primary client, then launches Hearthdeck from the user's interactive
+shell. Gamescope is not bundled because its GPU/DRM components must match the
+host graphics stack.
 
 Hearthdeck launches approved Linux desktop entries in transient systemd user
 services, so the host can identify and stop the active managed application. Remote

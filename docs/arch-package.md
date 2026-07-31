@@ -6,8 +6,8 @@ CachyOS. It installs:
 - `/opt/hearthdeck/`: the Flutter Linux client bundle.
 - `/usr/bin/hearthdeck`: the desktop launcher command.
 - `/usr/lib/hearthdeck/`: the local bridge and daemon binaries.
-- `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, API
-  daemon, Gamescope compositor, and console client user units.
+- `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
+  API daemon user units.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck-gamescope.desktop`: the supervised DRM
   console session shown by compatible display managers.
@@ -71,23 +71,11 @@ recovery option.
 
 The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
-runner is migrated and tested as a Wayland client. The display-manager
-entrypoint starts `hearthdeck-gamescope.target` through the user manager.
-`hearthdeck-gamescope.service` owns Gamescope and waits for its readiness socket
-to publish the Xwayland display. It writes that environment to
-`$XDG_RUNTIME_DIR/hearthdeck/gamescope-environment` and signals systemd ready.
-Only then can `hearthdeck-console-client.service` start Hearthdeck with the
-private Xwayland display. The bridge reads the same environment when launching
-managed applications.
-
-If Console returns to the display manager, inspect:
-
-```sh
-journalctl --user -u hearthdeck-gamescope.service -u hearthdeck-console-client.service -b
-cat ~/.local/state/hearthdeck/console-session.log
-cat ~/.local/state/hearthdeck/gamescope-service.log
-cat ~/.local/state/hearthdeck/console-client.log
-```
+runner is migrated and tested as a Wayland client. The Console entrypoint starts
+direct DRM Gamescope with Xterm as its primary Xwayland client. Once Xterm has
+mapped, it starts `/usr/bin/hearthdeck` from the user's interactive shell. This
+matches the known-good Xterm launch topology. A normal Hearthdeck exit returns
+to the display manager; a failed launch leaves Xterm open with its output.
 
 Use **Settings > General > Exit to desktop** inside Hearthdeck Console. Confirm
 the prompt to close the console session and return to the display manager.

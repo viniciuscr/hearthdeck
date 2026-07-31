@@ -1,0 +1,17 @@
+#!/usr/bin/bash
+# Xterm supplies the same interactive shell environment used for the verified
+# manual launch. Retain it only when Hearthdeck exits with an error.
+set -Euo pipefail
+
+shell="${1:-${SHELL:-/bin/sh}}"
+if [[ ! -x "$shell" ]]; then
+  shell=/bin/sh
+fi
+
+if "$shell" -ic '/usr/bin/hearthdeck'; then
+  exit 0
+else
+  status=$?
+  printf 'Hearthdeck exited with status %s. Inspect the output above.\n' "$status"
+  exec "$shell" -i
+fi

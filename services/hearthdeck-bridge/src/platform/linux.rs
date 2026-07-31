@@ -111,14 +111,12 @@ pub async fn launch_application(
     for name in [
         "DISPLAY",
         "WAYLAND_DISPLAY",
-        "GAMESCOPE_WAYLAND_DISPLAY",
         "XAUTHORITY",
         "GDK_BACKEND",
         "SDL_VIDEODRIVER",
         "XDG_CURRENT_DESKTOP",
         "XDG_SESSION_DESKTOP",
         "XDG_SESSION_TYPE",
-        "DBUS_SESSION_BUS_ADDRESS",
     ] {
         if let Some(value) = env::var_os(name) {
             command
