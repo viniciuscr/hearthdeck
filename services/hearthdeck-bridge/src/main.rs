@@ -172,6 +172,30 @@ async fn handle_request(
                 }
             }
         },
+        BridgeRequest::LaunchHeroicGame {
+            runner,
+            application_id,
+            session_id,
+        } => match platform::launch_heroic_game(runner, &application_id, &session_id).await {
+            Ok(launched) => {
+                register_launch(
+                    sessions,
+                    session_directory,
+                    "heroic".to_owned(),
+                    application_id,
+                    session_id,
+                    launched,
+                )
+                .await
+            }
+            Err(error) => {
+                warn!(%error, "Heroic game launch rejected");
+                BridgeResponse::Error {
+                    code: BridgeErrorCode::LaunchFailed,
+                    message: error.to_string(),
+                }
+            }
+        },
         BridgeRequest::ActiveApplicationSession => {
             let candidates = {
                 sessions
@@ -226,6 +250,40 @@ async fn handle_request(
             }
         }
     }
+}
+
+async fn register_launch(
+    sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
+    session_directory: &Path,
+    source_id: String,
+    application_id: String,
+    session_id: String,
+    launched: platform::LaunchedApplication,
+) -> BridgeResponse {
+    let session = hearthdeck_protocol::ApplicationSession {
+        id: session_id.clone(),
+        source_id: source_id.clone(),
+        application_id: application_id.clone(),
+        state: hearthdeck_protocol::ApplicationSessionState::Running,
+    };
+    let managed = ManagedSession {
+        session: session.clone(),
+        unit_name: launched.unit_name,
+    };
+    if let Err(error) = save_managed_session(session_directory, &managed).await {
+        let _ = platform::stop_application(managed.unit_name.as_deref()).await;
+        warn!(source_id, application_id, %error, "could not persist managed application session");
+        return BridgeResponse::Error {
+            code: BridgeErrorCode::LaunchFailed,
+            message: "could not persist managed application session".to_owned(),
+        };
+    }
+    sessions.lock().await.insert(session_id, managed);
+    info!(
+        source_id,
+        application_id, "registered application launch accepted"
+    );
+    BridgeResponse::LaunchAccepted { session }
 }
 
 fn bridge_session_directory(socket_path: &Path) -> PathBuf {

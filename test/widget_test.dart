@@ -17,6 +17,7 @@ import 'package:hearthdeck/full_library.dart';
 import 'package:hearthdeck/main.dart';
 import 'package:hearthdeck/platform_session.dart';
 import 'package:hearthdeck/retro.dart';
+import 'package:hearthdeck/romm_settings.dart';
 import 'package:hearthdeck/search.dart';
 import 'package:hearthdeck/settings.dart';
 import 'package:hearthdeck/settings/user_settings_repository.dart';
@@ -64,6 +65,29 @@ void main() {
 
     expect(find.text('Nintendo Entertainment System'), findsOneWidget);
     expect(find.text('341 games'), findsOneWidget);
+  });
+
+  testWidgets('settings opens the RomM connection form', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(const HearthdeckApp());
+    await tester.tap(find.bySemanticsLabel('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.bySemanticsLabel('System'));
+    await tester.pumpAndSettle();
+    final rommSettings = find.byKey(
+      const ValueKey<String>('settings-option-romm'),
+    );
+    await tester.scrollUntilVisible(
+      rommSettings,
+      240,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(rommSettings);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(RommSettingsPage), findsOneWidget);
+    expect(find.text('RomM server URL'), findsOneWidget);
   });
 
   testWidgets('library opens details before dispatching a catalog launch', (

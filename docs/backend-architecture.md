@@ -174,11 +174,10 @@ flows. It is not included in the public API contract.
 ## Deployment
 
 Install and enable `hearthdeck.target` from the systemd **user** units in
-`deploy/systemd/`. A user service owns graphical application launches. The
-Gamescope console client receives its private Xwayland endpoint and updates the
-user manager before restarting the bridge, which then passes that endpoint only
-to managed applications. Console startup remains independent from that optional
-bridge refresh.
+`deploy/systemd/`. A user service owns graphical application launches. In the
+Labwc Kiosk session, Labwc publishes the primary Wayland socket to the user
+manager; the bridge launches registered desktop applications in nested Gamescope
+so they remain isolated from Hearthdeck while Labwc retains DRM ownership.
 Configure LAN TLS through
 `~/.config/hearthdeck/daemon.env`; see `deploy/systemd/daemon.env.example`.
 

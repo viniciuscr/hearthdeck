@@ -17,10 +17,10 @@ requires `HEARTHDECK_LAN_ENABLED=true`, a certificate path, and a private key pa
 the daemon then serves HTTPS through Rustls. Pairing code creation is exposed
 only on the loopback admin listener at `127.0.0.1:38401`.
 
-Set `HEARTHDECK_ROMM_URL` and `HEARTHDECK_ROMM_TOKEN` together to connect a
-local RomM instance. The token requires the RomM `platforms.read` permission.
-Hearthdeck exposes the resulting console list at `GET /v1/retro/consoles`; the
-RomM credential remains on the host and is never sent to paired clients.
+Connect a local RomM instance through **Settings > System > Retro & RomM**.
+The supplied RomM client token requires the `platforms.read` permission.
+Hearthdeck exposes its console list at `GET /v1/retro/consoles`; the credential
+is stored in the daemon's SQLite data and is never returned through the API.
 
 The processes communicate through `$XDG_RUNTIME_DIR/hearthdeck/bridge.sock` using
 newline-delimited JSON defined in `hearthdeck-protocol`. The protocol has typed scan
@@ -42,6 +42,15 @@ API daemon and owns `hearthdeck-bridge.socket`; the bridge process starts only
 when a typed daemon request arrives. Future NetworkManager and BlueZ adapters
 will receive their own socket/service pair under the same target rather than
 being folded into the daemon.
+
+In the Labwc Kiosk session, the bridge wraps registered desktop applications in
+nested Gamescope. Labwc remains the DRM compositor, while each app receives its
+own Gamescope Xwayland and Wayland environment. PipeWire/WirePlumber audio,
+NetworkManager networking, and BlueZ Bluetooth remain host services outside the
+Hearthdeck process tree.
+
+Heroic game URI launches are rejected in Kiosk mode because the running Heroic
+process can detach a game from the transient service that Hearthdeck tracks.
 
 `GET /v1/health` reports every discovery and metadata provider as `starting`,
 `ready`, or `degraded`, with the last successful record count and safe error

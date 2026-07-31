@@ -143,6 +143,12 @@ const Map<SettingsCategory, List<SettingsOption>> settingsOptions =
       ],
       SettingsCategory.system: <SettingsOption>[
         SettingsOption(
+          id: 'romm',
+          label: 'Retro & RomM',
+          description: 'Connect your local retro game library',
+          icon: Icons.videogame_asset_rounded,
+        ),
+        SettingsOption(
           id: 'service-status',
           label: 'Service status',
           description: 'Provider health, errors, and last refreshes',

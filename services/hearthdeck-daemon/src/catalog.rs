@@ -172,6 +172,7 @@ fn merged_metadata(
     let summary = metadata_string(enrichment, "description")
         .or_else(|| metadata_string(enrichment, "summary"))
         .or_else(|| metadata_string(Some(discovery), "comment"))
+        .or_else(|| metadata_string(Some(discovery), "description"))
         .unwrap_or_else(|| title.to_owned());
     let categories = metadata_string_list(enrichment, "categories")
         .or_else(|| metadata_string_list(Some(discovery), "categories"))
@@ -182,13 +183,25 @@ fn merged_metadata(
 
     json!({
         "summary": summary,
-        "description": metadata_string(enrichment, "description"),
+        "description": metadata_string(enrichment, "description")
+            .or_else(|| metadata_string(Some(discovery), "description")),
         "categories": categories,
-        "developer": metadata_string(enrichment, "developer"),
+        "developer": metadata_string(enrichment, "developer")
+            .or_else(|| metadata_string(Some(discovery), "developer")),
         "project_license": metadata_string(enrichment, "project_license"),
+        "store": metadata_string(Some(discovery), "store"),
+        "runner": metadata_string(Some(discovery), "runner"),
+        "version": metadata_string(Some(discovery), "version"),
+        "platform": metadata_string(Some(discovery), "platform"),
+        "cloud_saves": discovery.get("cloud_saves").and_then(Value::as_bool),
+        "install_size_bytes": discovery.get("install_size_bytes").and_then(Value::as_u64),
         "urls": urls,
         "screenshots": screenshots,
-        "provenance": enrichment_provider.as_deref().unwrap_or("desktop-entry"),
+        "provenance": enrichment_provider
+            .as_deref()
+            .map(ToString::to_string)
+            .or_else(|| metadata_string(Some(discovery), "provenance"))
+            .unwrap_or_else(|| "desktop-entry".to_owned()),
         "discovery": discovery,
         "enrichment": enrichment,
         "enrichment_provider": enrichment_provider,

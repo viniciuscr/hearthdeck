@@ -1,0 +1,11 @@
+#!/bin/sh
+# The user manager can outlive the compositor, so discard its dead socket.
+export GDK_BACKEND= HEARTHDECK_LABWC= WAYLAND_DISPLAY= XDG_CURRENT_DESKTOP= \
+  XDG_SESSION_DESKTOP= XDG_SESSION_TYPE=
+dbus-update-activation-environment --systemd \
+  GDK_BACKEND HEARTHDECK_LABWC WAYLAND_DISPLAY XDG_CURRENT_DESKTOP \
+  XDG_SESSION_DESKTOP XDG_SESSION_TYPE 2>/dev/null || true
+systemctl --user unset-environment \
+  GDK_BACKEND HEARTHDECK_LABWC WAYLAND_DISPLAY XDG_CURRENT_DESKTOP \
+  XDG_SESSION_DESKTOP XDG_SESSION_TYPE 2>/dev/null || true
+systemctl --user stop hearthdeck-labwc.slice hearthdeck.target 2>/dev/null || true

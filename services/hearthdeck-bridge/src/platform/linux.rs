@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use hearthdeck_protocol::DiscoveredApplication;
+use hearthdeck_protocol::{DiscoveredApplication, HeroicRunner};
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
@@ -88,6 +88,42 @@ pub async fn launch_application(
 ) -> Result<LaunchedApplication> {
     let path = desktop_entry_path(source_id, application_id).await?;
     let launch = command_for_desktop_entry(&path).await?;
+    launch_with_systemd(launch.command, launch.working_directory, session_id, true).await
+}
+
+/// Delegate game startup to Heroic so its configured Wine, Proton, UMU,
+/// wrappers, and per-game launch options remain authoritative.
+pub async fn launch_heroic_game(
+    runner: HeroicRunner,
+    application_id: &str,
+    session_id: &str,
+) -> Result<LaunchedApplication> {
+    if env::var_os("HEARTHDECK_LABWC").as_deref() == Some(OsStr::new("1")) {
+        anyhow::bail!("Heroic game launches are unavailable in the Labwc Kiosk session")
+    }
+    if !valid_heroic_application_id(application_id) {
+        anyhow::bail!("Heroic application identifier is invalid")
+    }
+    let runner = match runner {
+        HeroicRunner::Legendary => "legendary",
+        HeroicRunner::Gog => "gog",
+    };
+    let uri = format!("heroic://launch?appName={application_id}&runner={runner}&gui=false");
+    launch_with_systemd(
+        vec![OsString::from("xdg-open"), OsString::from(uri)],
+        None,
+        session_id,
+        false,
+    )
+    .await
+}
+
+async fn launch_with_systemd(
+    application_command: Vec<OsString>,
+    working_directory: Option<PathBuf>,
+    session_id: &str,
+    wrap_in_gamescope: bool,
+) -> Result<LaunchedApplication> {
     let unit_name = format!("hearthdeck-app-{session_id}.service");
     let mut command = Command::new("systemd-run");
     command
@@ -100,33 +136,45 @@ pub async fn launch_application(
         ])
         .arg(&unit_name)
         .arg("--working-directory")
-        .arg(
-            launch
-                .working_directory
-                .unwrap_or_else(|| PathBuf::from("/")),
-        );
-    if env::var_os("HEARTHDECK_CONSOLE").as_deref() == Some(OsStr::new("1")) {
-        command.arg("--slice=hearthdeck-console.slice");
+        .arg(working_directory.unwrap_or_else(|| PathBuf::from("/")));
+    let labwc_session = env::var_os("HEARTHDECK_LABWC").as_deref() == Some(OsStr::new("1"));
+    if labwc_session {
+        command.arg("--slice=hearthdeck-labwc.slice");
     }
-    for name in [
-        "DISPLAY",
-        "WAYLAND_DISPLAY",
-        "XAUTHORITY",
-        "GDK_BACKEND",
-        "SDL_VIDEODRIVER",
-        "XDG_CURRENT_DESKTOP",
-        "XDG_SESSION_DESKTOP",
-        "XDG_SESSION_TYPE",
-    ] {
-        if let Some(value) = env::var_os(name) {
-            command
-                .arg("--setenv")
-                .arg(format!("{name}={}", value.to_string_lossy()));
+    if !labwc_session {
+        for name in [
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "GAMESCOPE_WAYLAND_DISPLAY",
+            "XAUTHORITY",
+            "GDK_BACKEND",
+            "SDL_VIDEODRIVER",
+            "XDG_CURRENT_DESKTOP",
+            "XDG_SESSION_DESKTOP",
+            "XDG_SESSION_TYPE",
+            "DBUS_SESSION_BUS_ADDRESS",
+        ] {
+            if let Some(value) = env::var_os(name) {
+                command
+                    .arg("--setenv")
+                    .arg(format!("{name}={}", value.to_string_lossy()));
+            }
         }
     }
+    command.arg("--");
+    if labwc_session && wrap_in_gamescope {
+        command.args([
+            "/usr/bin/gamescope",
+            "--backend",
+            "wayland",
+            "--expose-wayland",
+            "--force-windows-fullscreen",
+            "-f",
+            "--",
+        ]);
+    }
     let status = command
-        .arg("--")
-        .args(launch.command)
+        .args(application_command)
         .status()
         .await
         .context("could not start supervised application launch")?;
@@ -136,6 +184,14 @@ pub async fn launch_application(
     Ok(LaunchedApplication {
         unit_name: Some(unit_name),
     })
+}
+
+fn valid_heroic_application_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value.bytes().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, b'.' | b'_' | b'-')
+        })
 }
 
 struct DesktopLaunch {
@@ -161,7 +217,7 @@ async fn command_for_desktop_entry(path: &Path) -> Result<DesktopLaunch> {
     let values = desktop_entry_values(&content);
     validate_desktop_entry(&values)?;
     if desktop_entry_boolean(&values, "Terminal") {
-        anyhow::bail!("terminal desktop entries are not supported in console mode")
+        anyhow::bail!("terminal desktop entries are not supported in Kiosk mode")
     }
     if desktop_entry_boolean(&values, "DBusActivatable") {
         anyhow::bail!("D-Bus-activated desktop entries are not supported in a managed session")
@@ -445,6 +501,9 @@ async fn parse_desktop_entry(path: &Path) -> Result<DiscoveredApplication> {
                     .collect()
             })
             .unwrap_or_default(),
+        launch_scheme: values
+            .get("Exec")
+            .and_then(|exec| exec.contains("heroic://").then_some("heroic".to_owned())),
     })
 }
 
@@ -474,7 +533,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        desktop_entry_directories_for, parse_desktop_entry, parse_exec, visible_in_desktop,
+        desktop_entry_directories_for, parse_desktop_entry, parse_exec,
+        valid_heroic_application_id, visible_in_desktop,
     };
 
     #[tokio::test]
@@ -492,6 +552,23 @@ mod tests {
 
         assert_eq!(entry.name, "Example");
         assert_eq!(entry.categories, ["Utility"]);
+        assert_eq!(entry.launch_scheme, None);
+    }
+
+    #[tokio::test]
+    async fn identifies_heroic_shortcuts_for_dedicated_game_discovery() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("heroic-game.desktop");
+        tokio::fs::write(
+            &path,
+            "[Desktop Entry]\nType=Application\nName=Example\nExec=xdg-open heroic://launch?appName=Example&runner=legendary\nCategories=Game;\n",
+        )
+        .await
+        .unwrap();
+
+        let entry = parse_desktop_entry(&path).await.unwrap();
+
+        assert_eq!(entry.launch_scheme.as_deref(), Some("heroic"));
     }
 
     #[test]
@@ -533,11 +610,12 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_all_console_desktop_names() {
-        let current_desktops = vec!["gamescope".to_owned(), "hearthdeck".to_owned()];
+    fn recognizes_all_kiosk_desktop_names() {
+        let current_desktops = vec!["hearthdeck".to_owned(), "labwc".to_owned()];
 
         assert!(visible_in_desktop("hearthdeck;", &current_desktops));
-        assert!(visible_in_desktop("gamescope;", &current_desktops));
+        assert!(visible_in_desktop("labwc;", &current_desktops));
+        assert!(!visible_in_desktop("gamescope;", &current_desktops));
         assert!(!visible_in_desktop("KDE;", &current_desktops));
     }
 
@@ -578,5 +656,13 @@ mod tests {
                 .count(),
             1,
         );
+    }
+
+    #[test]
+    fn validates_heroic_application_identifiers_before_uri_construction() {
+        assert!(valid_heroic_application_id("Fortnite"));
+        assert!(valid_heroic_application_id("1091500"));
+        assert!(!valid_heroic_application_id("Fortnite&runner=gog"));
+        assert!(!valid_heroic_application_id("../Fortnite"));
     }
 }

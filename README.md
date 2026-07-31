@@ -73,20 +73,25 @@ demand for host requests. The package's client pairs with its loopback daemon
 automatically. See
 `docs/arch-package.md` for package contents and troubleshooting.
 
-## Console Session
+## Kiosk Session
 
-The Arch package depends on the distribution `gamescope` package and installs a
-**Hearthdeck Console** Wayland session. It starts direct DRM Gamescope with
-Xterm as its primary client, then launches Hearthdeck from the user's interactive
-shell. Gamescope is not bundled because its GPU/DRM components must match the
-host graphics stack.
+The Arch package installs a **Hearthdeck Kiosk** Wayland session. It uses Labwc,
+a lightweight DRM Wayland compositor with no panel, wallpaper, portal, or
+desktop-shell process. Hearthdeck runs as its native Wayland session client.
+Gamescope starts only when Hearthdeck launches a managed desktop application or
+game, nested inside Labwc rather than owning DRM for the whole session.
 
 Hearthdeck launches approved Linux desktop entries in transient systemd user
 services, so the host can identify and stop the active managed application. Remote
 clients can inspect host capabilities and request an installation for host-side
 approval, but cannot execute a package manager or arbitrary host command.
 
-Choose **Settings > General > Exit to desktop** to leave Hearthdeck Console and
+Controller input continues through Hearthdeck's direct Linux gamepad reader.
+Audio stays on the existing PipeWire/WirePlumber services; Wi-Fi and Bluetooth
+stay on NetworkManager and BlueZ system services. Those services remain active,
+but their configuration UIs are not yet implemented in Hearthdeck.
+
+Choose **Settings > General > Exit to desktop** to leave Hearthdeck Kiosk and
 return to the display manager, then select COSMIC.
 
 **Hearthdeck Gamescope Xterm Test** is a separate recovery session that runs
@@ -126,17 +131,10 @@ or `system`), keeping future content sources independent from the UI layout.
 ## RomM
 
 Hearthdeck can list consoles from a local RomM instance in the **Retro**
-section. Add these values to `~/.config/hearthdeck/daemon.env`, then restart
-`hearthdeck-daemon`:
-
-```sh
-HEARTHDECK_ROMM_URL=http://127.0.0.1:8080
-HEARTHDECK_ROMM_TOKEN=rmm_your_romm_client_token
-```
-
-The RomM client token must grant `platforms.read`. Its secret stays in the
-Hearthdeck daemon; clients only receive the console data through the paired
-local API. Game listing and launch integration will follow in a later step.
+section. Open **Settings > System > Retro & RomM** and enter the local server
+URL plus a RomM client token with the `platforms.read` permission. The token is
+stored in the Hearthdeck daemon and is never returned through the paired API.
+Game listing and launch integration will follow in a later step.
 
 ## Shared Screens
 

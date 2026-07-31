@@ -1,6 +1,8 @@
 use anyhow::Result;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 use hearthdeck_protocol::DiscoveredApplication;
+#[cfg(all(not(target_os = "linux"), not(test)))]
+use hearthdeck_protocol::HeroicRunner;
 
 #[cfg(any(target_os = "linux", test))]
 pub const DESKTOP_APPS_SOURCE: &str = "desktop-apps";
@@ -10,7 +12,7 @@ pub const MACOS_APPS_SOURCE: &str = "macos-apps";
 #[cfg(any(target_os = "linux", test))]
 mod linux;
 #[cfg(any(target_os = "linux", test))]
-pub use linux::{discover_applications, launch_application};
+pub use linux::{discover_applications, launch_application, launch_heroic_game};
 
 #[cfg(all(target_os = "macos", not(test)))]
 mod macos;
@@ -56,6 +58,15 @@ pub async fn application_is_running(unit_name: Option<&str>) -> Result<bool> {
 #[cfg(all(not(target_os = "linux"), not(test)))]
 pub async fn application_is_running(_unit_name: Option<&str>) -> Result<bool> {
     Ok(false)
+}
+
+#[cfg(all(not(target_os = "linux"), not(test)))]
+pub async fn launch_heroic_game(
+    _runner: HeroicRunner,
+    _application_id: &str,
+    _session_id: &str,
+) -> Result<LaunchedApplication> {
+    anyhow::bail!("Heroic game launch is unsupported on this platform")
 }
 
 #[cfg(all(not(any(target_os = "linux", target_os = "macos")), not(test)))]

@@ -91,5 +91,6 @@ async fn parse_application_bundle(path: &Path) -> Result<DiscoveredApplication> 
         comment: None,
         icon: None,
         categories: vec!["Application".to_owned()],
+        launch_scheme: None,
     })
 }

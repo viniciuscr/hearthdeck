@@ -84,6 +84,52 @@ class HearthdeckApiClient {
         .toList(growable: false);
   }
 
+  Future<HearthdeckRommSettings?> rommSettings() async {
+    final response = await _client.get(
+      endpoint.api('retro/settings'),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 200) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+    if (response.body.trim() == 'null') {
+      return null;
+    }
+    return HearthdeckRommSettings.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
+  }
+
+  Future<HearthdeckRommSettings> updateRommSettings({
+    required String baseUrl,
+    required String token,
+  }) async {
+    final response = await _client.put(
+      endpoint.api('retro/settings'),
+      headers: <String, String>{
+        ..._authorizationHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(<String, String>{'base_url': baseUrl, 'token': token}),
+    );
+    if (response.statusCode != 200) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+    return HearthdeckRommSettings.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
+  }
+
+  Future<void> clearRommSettings() async {
+    final response = await _client.delete(
+      endpoint.api('retro/settings'),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 204) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+  }
+
   Future<void> launch(String itemId) async {
     final response = await _client.post(
       endpoint.api('apps/$itemId/launch'),
@@ -438,6 +484,25 @@ class HearthdeckRetroConsole {
   final int romCount;
   final String? slug;
   final String? filesystemSlug;
+}
+
+class HearthdeckRommSettings {
+  const HearthdeckRommSettings({
+    required this.baseUrl,
+    required this.configured,
+    required this.updatedAt,
+  });
+
+  factory HearthdeckRommSettings.fromJson(Map<String, dynamic> json) =>
+      HearthdeckRommSettings(
+        baseUrl: json['base_url'] as String,
+        configured: json['configured'] as bool,
+        updatedAt: json['updated_at'] as String,
+      );
+
+  final String baseUrl;
+  final bool configured;
+  final String updatedAt;
 }
 
 sealed class HearthdeckServerEvent {

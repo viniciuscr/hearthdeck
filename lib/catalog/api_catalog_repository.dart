@@ -89,6 +89,7 @@ class ApiCatalogRepository implements CatalogRepository {
       description: metadata['summary'] as String? ?? item.title,
       icon: _iconFor(kind),
       colors: _colorsFor(item.id),
+      artworkUrl: _artworkUrl(item.icon),
       kind: kind,
       details: _detailsFor(item, metadata),
     );
@@ -102,6 +103,12 @@ class ApiCatalogRepository implements CatalogRepository {
     final description = metadata['description'] as String?;
     final developer = metadata['developer'] as String?;
     final license = metadata['project_license'] as String?;
+    final store = metadata['store'] as String?;
+    final runner = metadata['runner'] as String?;
+    final version = metadata['version'] as String?;
+    final platform = metadata['platform'] as String?;
+    final installSize = metadata['install_size_bytes'];
+    final cloudSaves = metadata['cloud_saves'] as bool?;
     final categories =
         (metadata['categories'] as List<dynamic>? ?? const <dynamic>[])
             .whereType<String>()
@@ -149,6 +156,44 @@ class ApiCatalogRepository implements CatalogRepository {
           value: _metadataLabel(metadata['provenance'] as String?),
           icon: Icons.info_outline_rounded,
         ),
+        if (store != null)
+          ContentFact(
+            label: 'Store',
+            value: store,
+            icon: Icons.storefront_outlined,
+          ),
+        if (runner != null)
+          ContentFact(
+            label: 'Launcher',
+            value: runner == 'legendary' ? 'Heroic / Epic' : 'Heroic / GOG',
+            icon: Icons.rocket_launch_outlined,
+          ),
+        if (version != null)
+          ContentFact(
+            label: 'Version',
+            value: version,
+            icon: Icons.new_releases_outlined,
+          ),
+        if (platform != null)
+          ContentFact(
+            label: 'Platform',
+            value: platform,
+            icon: Icons.computer_rounded,
+          ),
+        if (installSize is int)
+          ContentFact(
+            label: 'Installed size',
+            value: _formatBytes(installSize),
+            icon: Icons.storage_rounded,
+          ),
+        if (cloudSaves != null)
+          ContentFact(
+            label: 'Cloud saves',
+            value: cloudSaves ? 'Supported by Heroic' : 'Not reported',
+            icon: cloudSaves
+                ? Icons.cloud_done_outlined
+                : Icons.cloud_off_outlined,
+          ),
         if (developer != null)
           ContentFact(
             label: 'Developer',
@@ -242,9 +287,25 @@ class ApiCatalogRepository implements CatalogRepository {
         (uri.scheme == 'http' || uri.scheme == 'https');
   }
 
+  String? _artworkUrl(String? value) =>
+      value != null && _isHttpUrl(value) ? value : null;
+
+  String _formatBytes(int bytes) {
+    const units = <String>['B', 'KB', 'MB', 'GB', 'TB'];
+    var value = bytes.toDouble();
+    var unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit += 1;
+    }
+    final precision = value >= 10 || unit == 0 ? 0 : 1;
+    return '${value.toStringAsFixed(precision)} ${units[unit]}';
+  }
+
   String _metadataLabel(String? provenance) => switch (provenance) {
     'appstream-local' => 'AppStream',
     'desktop-entry' => 'Desktop entry',
+    'heroic' => 'Heroic',
     null || '' => 'Local catalog',
     final String value => _sourceLabel(value),
   };

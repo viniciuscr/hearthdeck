@@ -9,15 +9,8 @@ pub struct Config {
     pub local_admin_address: SocketAddr,
     pub database_path: PathBuf,
     pub bridge_socket_path: PathBuf,
-    pub romm: Option<RommConfig>,
     pub lan_enabled: bool,
     pub tls: Option<TlsConfig>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RommConfig {
-    pub base_url: String,
-    pub token: String,
 }
 
 #[derive(Clone, Debug)]
@@ -73,21 +66,6 @@ impl Config {
         } else {
             None
         };
-        let romm_url = env::var("HEARTHDECK_ROMM_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty());
-        let romm_token = env::var("HEARTHDECK_ROMM_TOKEN")
-            .ok()
-            .filter(|value| !value.trim().is_empty());
-        let romm = match (romm_url, romm_token) {
-            (Some(base_url), Some(token)) => Some(RommConfig {
-                base_url: base_url.trim_end_matches('/').to_owned(),
-                token,
-            }),
-            (None, None) => None,
-            _ => bail!("HEARTHDECK_ROMM_URL and HEARTHDECK_ROMM_TOKEN must be set together"),
-        };
-
         Ok(Self {
             bind_address,
             local_admin_address,
@@ -98,7 +76,6 @@ impl Config {
                 .filter(|path| !path.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| runtime_dir.join("hearthdeck/bridge.sock")),
-            romm,
             lan_enabled,
             tls,
         })

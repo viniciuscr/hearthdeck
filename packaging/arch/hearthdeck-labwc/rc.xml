@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<labwc_config>
+  <core>
+    <decoration>client</decoration>
+    <gap>0</gap>
+    <xwaylandPersistence>no</xwaylandPersistence>
+  </core>
+  <keyboard>
+    <keybind key="W-Return">
+      <action name="None" />
+    </keybind>
+  </keyboard>
+  <mouse>
+    <context name="Root">
+      <mousebind button="Left" action="Press">
+        <action name="None" />
+      </mousebind>
+      <mousebind button="Right" action="Press">
+        <action name="None" />
+      </mousebind>
+    </context>
+  </mouse>
+  <windowRules>
+    <windowRule identifier="*">
+      <serverDecoration>no</serverDecoration>
+    </windowRule>
+  </windowRules>
+</labwc_config>

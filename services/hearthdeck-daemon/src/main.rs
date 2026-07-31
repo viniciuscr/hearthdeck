@@ -130,11 +130,14 @@ fn notify_ready() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn discovery_providers(config: &Config) -> Vec<Arc<dyn discovery::DiscoveryProvider>> {
-    vec![Arc::new(
-        discovery::providers::desktop_apps::DesktopAppsProvider::new(
-            config.bridge_socket_path.clone(),
+    vec![
+        Arc::new(
+            discovery::providers::desktop_apps::DesktopAppsProvider::new(
+                config.bridge_socket_path.clone(),
+            ),
         ),
-    )]
+        Arc::new(discovery::providers::heroic::HeroicInstalledProvider::from_system()),
+    ]
 }
 
 #[cfg(target_os = "macos")]

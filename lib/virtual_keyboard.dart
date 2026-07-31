@@ -51,7 +51,7 @@ class GamepadOskVirtualKeyboard implements VirtualKeyboard {
           _visible = !_visible;
         }
       } on ProcessException {
-        // The virtual keyboard is optional outside the console session.
+        // The virtual keyboard is optional outside the Kiosk session.
       }
     });
     return _pending;

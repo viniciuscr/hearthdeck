@@ -53,6 +53,7 @@ impl DiscoveryProvider for DesktopAppsProvider {
         let updated_at = Utc::now().to_rfc3339();
         Ok(applications
             .into_iter()
+            .filter(|application| application.launch_scheme.as_deref() != Some("heroic"))
             .map(|application| CatalogRecord {
                 id: format!("desktop:{}", application.application_id),
                 title: application.name,

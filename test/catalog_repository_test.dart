@@ -63,6 +63,36 @@ void main() {
     expect(item.kind, TvContentKind.application);
   });
 
+  test(
+    'API catalog exposes Heroic installed-game details and artwork',
+    () async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.local(),
+        token: 'test-token',
+        client: _HeroicCatalogHttpClient(),
+      );
+
+      final item = (await ApiCatalogRepository(
+        client,
+      ).load()).gameSources.single.items.single;
+
+      expect(item.artworkUrl, 'https://example.org/game.jpg');
+      expect(
+        item.details?.facts.any(
+          (ContentFact fact) => fact.label == 'Store' && fact.value == 'GOG',
+        ),
+        isTrue,
+      );
+      expect(
+        item.details?.facts.any(
+          (ContentFact fact) =>
+              fact.label == 'Installed size' && fact.value == '1.5 GB',
+        ),
+        isTrue,
+      );
+    },
+  );
+
   test('API catalog translates source-aware library events', () async {
     final client = HearthdeckApiClient(
       endpoint: HearthdeckEndpoint.local(),
@@ -114,6 +144,22 @@ void main() {
       expect(consoles.last.filesystemSlug, 'snes');
     },
   );
+
+  test('API client saves RomM credentials without receiving them back', () async {
+    final client = HearthdeckApiClient(
+      endpoint: HearthdeckEndpoint.local(),
+      token: 'test-token',
+      client: _RommSettingsHttpClient(),
+    );
+
+    final settings = await client.updateRommSettings(
+      baseUrl: 'http://127.0.0.1:8080',
+      token: 'rmm_private_token',
+    );
+
+    expect(settings.baseUrl, 'http://127.0.0.1:8080');
+    expect(settings.configured, isTrue);
+  });
 
   test('API catalog reloads on metadata provider events', () async {
     final client = HearthdeckApiClient(
@@ -211,6 +257,16 @@ class _UnrecognizedKindHttpClient extends http.BaseClient {
   }
 }
 
+class _HeroicCatalogHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    const body = '''[
+      {"id":"heroic:gog:1091500","source_id":"heroic","title":"Cyberpunk 2077","kind":"game","launch_id":"gog:1091500","icon":"https://example.org/game.jpg","metadata":{"summary":"Night City","description":"Night City","categories":["RPG"],"store":"GOG","runner":"gog","version":"2.2","platform":"windows","cloud_saves":true,"install_size_bytes":1610612736,"urls":{},"provenance":"desktop-entry"}}
+    ]''';
+    return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
+  }
+}
+
 class _PairingHttpClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -236,6 +292,22 @@ class _RetroHttpClient extends http.BaseClient {
       {"id":1,"name":"Nintendo Entertainment System","display_name":null,"rom_count":341,"slug":"nes","fs_slug":"nes"},
       {"id":2,"name":"Super Nintendo Entertainment System","display_name":"Super Nintendo","rom_count":187,"slug":"snes","fs_slug":"snes"}
     ]''';
+    return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
+  }
+}
+
+class _RommSettingsHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    expect(request.method, 'PUT');
+    expect(request.url.path, '/v1/retro/settings');
+    expect(request.headers['authorization'], 'Bearer test-token');
+    expect(
+      (request as http.Request).body,
+      '{"base_url":"http://127.0.0.1:8080","token":"rmm_private_token"}',
+    );
+    const body =
+        '{"base_url":"http://127.0.0.1:8080","configured":true,"updated_at":"2026-01-01T00:00:00Z"}';
     return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
   }
 }

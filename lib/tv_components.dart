@@ -649,6 +649,7 @@ class TvArtworkVisual extends StatelessWidget {
   Widget build(BuildContext context) {
     final tv = TvPalette.of(context);
     final iconSize = shape == TvTileShape.square ? 42.0 : 48.0;
+    final artworkUrl = item.artworkUrl;
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(6),
@@ -660,16 +661,36 @@ class TvArtworkVisual extends StatelessWidget {
       ),
       child: Stack(
         children: <Widget>[
-          Align(
-            alignment: shape == TvTileShape.square
-                ? const Alignment(0, -0.15)
-                : const Alignment(0.44, -0.08),
-            child: Icon(
-              item.icon,
-              size: iconSize,
-              color: Colors.white.withValues(alpha: 0.92),
+          if (artworkUrl != null)
+            Positioned.fill(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Image.network(
+                  artworkUrl,
+                  fit: BoxFit.cover,
+                  errorBuilder:
+                      (
+                        BuildContext context,
+                        Object error,
+                        StackTrace? stackTrace,
+                      ) => _ArtworkFallback(
+                        icon: item.icon,
+                        size: iconSize,
+                        alignment: shape == TvTileShape.square
+                            ? const Alignment(0, -0.15)
+                            : const Alignment(0.44, -0.08),
+                      ),
+                ),
+              ),
             ),
-          ),
+          if (artworkUrl == null)
+            _ArtworkFallback(
+              icon: item.icon,
+              size: iconSize,
+              alignment: shape == TvTileShape.square
+                  ? const Alignment(0, -0.15)
+                  : const Alignment(0.44, -0.08),
+            ),
           if (item.badge case final String badge)
             Positioned(
               top: 10,
@@ -699,6 +720,24 @@ class TvArtworkVisual extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ArtworkFallback extends StatelessWidget {
+  const _ArtworkFallback({
+    required this.icon,
+    required this.size,
+    required this.alignment,
+  });
+
+  final IconData icon;
+  final double size;
+  final Alignment alignment;
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: alignment,
+    child: Icon(icon, size: size, color: Colors.white.withValues(alpha: 0.92)),
+  );
 }
 
 class _ArtworkCaption extends StatelessWidget {

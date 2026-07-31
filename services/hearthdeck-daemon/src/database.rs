@@ -65,6 +65,12 @@ impl Database {
               revision INTEGER NOT NULL DEFAULT 0,
               updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS romm_settings (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              base_url TEXT NOT NULL,
+              token TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS hearthdeck_schema_migrations (
               version INTEGER PRIMARY KEY
             );

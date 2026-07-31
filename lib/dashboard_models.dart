@@ -82,6 +82,7 @@ class DashboardItem {
     required this.colors,
     this.badge,
     this.description,
+    this.artworkUrl,
     this.kind = TvContentKind.application,
     this.details,
   });
@@ -92,6 +93,7 @@ class DashboardItem {
   final List<Color> colors;
   final String? badge;
   final String? description;
+  final String? artworkUrl;
   final TvContentKind kind;
   final ContentDetails? details;
 }

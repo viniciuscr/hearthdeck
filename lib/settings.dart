@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'catalog/catalog_repository.dart';
 import 'catalog/catalog_repository_factory.dart';
 import 'platform_session.dart';
+import 'romm_settings.dart';
 import 'settings_models.dart';
 import 'system_health.dart';
 import 'theme_settings.dart';
@@ -162,7 +163,16 @@ class _SettingsPageState extends State<SettingsPage> {
                               builder: (BuildContext context) =>
                                   SystemHealthPage(
                                     catalogRepository: _catalogRepository,
-                                  ),
+                              ),
+                            ),
+                          ),
+                          onRommSettings: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              settings: const RouteSettings(
+                                name: '/romm-settings',
+                              ),
+                              builder: (BuildContext context) =>
+                                  const RommSettingsPage(),
                             ),
                           ),
                         ),
@@ -221,6 +231,7 @@ class _SettingsContent extends StatelessWidget {
     required this.onExitToDesktop,
     required this.onThemeSettings,
     required this.onServiceStatus,
+    required this.onRommSettings,
   });
 
   final SettingsCategoryDefinition definition;
@@ -230,6 +241,7 @@ class _SettingsContent extends StatelessWidget {
   final VoidCallback onExitToDesktop;
   final VoidCallback onThemeSettings;
   final VoidCallback onServiceStatus;
+  final VoidCallback onRommSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -281,6 +293,7 @@ class _SettingsContent extends StatelessWidget {
                       'rescan-library' => onLibraryRescan,
                       'exit-to-desktop' => onExitToDesktop,
                       'service-status' => onServiceStatus,
+                      'romm' => onRommSettings,
                       'personalization' => onThemeSettings,
                       _ => () => _showSettingsMessage(context, option),
                     },
@@ -305,7 +318,7 @@ class _ExitToDesktopDialog extends StatelessWidget {
       backgroundColor: tv.surface,
       title: const Text('Exit to desktop?'),
       content: Text(
-        'Hearthdeck will close. Console mode returns to the login screen; a desktop session returns to its desktop.',
+        'Hearthdeck will close. Kiosk mode returns to the login screen; a desktop session returns to its desktop.',
         style: TextStyle(color: tv.secondaryText),
       ),
       actions: <Widget>[

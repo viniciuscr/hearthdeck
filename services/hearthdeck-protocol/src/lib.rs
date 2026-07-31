@@ -18,10 +18,25 @@ pub enum BridgeRequest {
         application_id: String,
         session_id: String,
     },
+    LaunchHeroicGame {
+        runner: HeroicRunner,
+        application_id: String,
+        session_id: String,
+    },
     ActiveApplicationSession,
     StopApplicationSession {
         session_id: String,
     },
+}
+
+/// The Heroic runners Hearthdeck can delegate to. The bridge constructs the
+/// URI from this enum and a validated application ID; callers cannot supply a
+/// free-form URI or command line.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeroicRunner {
+    Legendary,
+    Gog,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -70,6 +85,7 @@ pub struct DiscoveredApplication {
     pub comment: Option<String>,
     pub icon: Option<String>,
     pub categories: Vec<String>,
+    pub launch_scheme: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -83,7 +99,9 @@ pub enum BridgeErrorCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{ApplicationSession, ApplicationSessionState, BridgeRequest, BridgeResponse};
+    use super::{
+        ApplicationSession, ApplicationSessionState, BridgeRequest, BridgeResponse, HeroicRunner,
+    };
 
     #[test]
     fn request_serialization_has_no_command_field() {
@@ -118,5 +136,20 @@ mod tests {
         assert!(
             matches!(parsed, BridgeResponse::LaunchAccepted { session } if session.id == "session-1")
         );
+    }
+
+    #[test]
+    fn heroic_launch_serialization_is_typed() {
+        let request = BridgeRequest::LaunchHeroicGame {
+            runner: HeroicRunner::Legendary,
+            application_id: "Fortnite".to_owned(),
+            session_id: "session-1".to_owned(),
+        };
+        let serialized = serde_json::to_value(request).unwrap();
+
+        assert_eq!(serialized["type"], "launch_heroic_game");
+        assert_eq!(serialized["runner"], "legendary");
+        assert!(serialized.get("command").is_none());
+        assert!(serialized.get("url").is_none());
     }
 }

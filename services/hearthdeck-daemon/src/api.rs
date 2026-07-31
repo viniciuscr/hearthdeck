@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
-use hearthdeck_protocol::{ApplicationSession, BridgeRequest, BridgeResponse};
+use hearthdeck_protocol::{ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner};
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -17,7 +17,9 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
-    settings::{BackdropMode, SettingsChange, SettingsUpdate, ThemeMode, UserSettings},
+    settings::{
+        BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
+    },
     state::{ProviderHealth, ServerEvent, SharedState},
 };
 
@@ -27,6 +29,12 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/pairing/complete", post(complete_pairing))
         .route("/v1/library", get(list_library))
         .route("/v1/retro/consoles", get(list_retro_consoles))
+        .route(
+            "/v1/retro/settings",
+            get(get_romm_settings)
+                .put(update_romm_settings)
+                .delete(clear_romm_settings),
+        )
         .route("/v1/library/rescan", post(rescan_library))
         .route("/v1/settings", get(get_settings).put(update_settings))
         .route("/v1/discovery/{source_id}/refresh", post(refresh_source))
@@ -147,9 +155,10 @@ async fn list_retro_consoles(
 ) -> Result<Json<Vec<RommPlatform>>, ApiError> {
     authenticate(&state, &headers).await?;
     let romm = state
-        .config
-        .romm
-        .as_ref()
+        .settings
+        .romm_credentials()
+        .await
+        .map_err(ApiError::internal)?
         .ok_or_else(ApiError::romm_unavailable)?;
     let response = reqwest::Client::new()
         .get(format!("{}/api/platforms", romm.base_url))
@@ -174,6 +183,46 @@ async fn list_retro_consoles(
             .cmp(right.display_name.as_deref().unwrap_or(&right.name))
     });
     Ok(Json(platforms))
+}
+
+async fn get_romm_settings(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<Option<RommSettings>>, ApiError> {
+    authenticate(&state, &headers).await?;
+    state
+        .settings
+        .romm()
+        .await
+        .map(Json)
+        .map_err(ApiError::internal)
+}
+
+async fn update_romm_settings(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateRommSettingsRequest>,
+) -> Result<Json<RommSettings>, ApiError> {
+    authenticate(&state, &headers).await?;
+    state
+        .settings
+        .save_romm(&request.base_url, &request.token)
+        .await
+        .map(Json)
+        .map_err(ApiError::invalid_romm_settings)
+}
+
+async fn clear_romm_settings(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    state
+        .settings
+        .clear_romm()
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn rescan_library(
@@ -312,22 +361,31 @@ async fn launch_app(
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(ApiError::not_found)?;
+    let source_id = state
+        .catalog
+        .source_id_for(&id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(ApiError::not_found)?;
     let session_id = Uuid::new_v4().to_string();
-    let response = crate::bridge::request(
-        &state.config.bridge_socket_path,
+    let request = if source_id == "heroic" {
+        let (runner, application_id) =
+            heroic_launch_target(&launch_id).ok_or_else(ApiError::not_found)?;
+        BridgeRequest::LaunchHeroicGame {
+            runner,
+            application_id,
+            session_id,
+        }
+    } else {
         BridgeRequest::LaunchApplication {
-            source_id: state
-                .catalog
-                .source_id_for(&id)
-                .await
-                .map_err(ApiError::internal)?
-                .ok_or_else(ApiError::not_found)?,
+            source_id,
             application_id: launch_id,
             session_id,
-        },
-    )
-    .await
-    .map_err(ApiError::bad_gateway)?;
+        }
+    };
+    let response = crate::bridge::request(&state.config.bridge_socket_path, request)
+        .await
+        .map_err(ApiError::bad_gateway)?;
     let BridgeResponse::LaunchAccepted { session } = response else {
         return Err(ApiError::bad_gateway("bridge rejected application launch"));
     };
@@ -336,6 +394,19 @@ async fn launch_app(
         session: Some(session.clone()),
     });
     Ok(Json(session))
+}
+
+fn heroic_launch_target(launch_id: &str) -> Option<(HeroicRunner, String)> {
+    let (runner, application_id) = launch_id.split_once(':')?;
+    if application_id.is_empty() {
+        return None;
+    }
+    let runner = match runner {
+        "legendary" => HeroicRunner::Legendary,
+        "gog" => HeroicRunner::Gog,
+        _ => return None,
+    };
+    Some((runner, application_id.to_owned()))
 }
 
 async fn active_application_session(
@@ -506,6 +577,12 @@ struct UpdateSettingsRequest {
     revision: Option<i64>,
 }
 
+#[derive(Deserialize)]
+struct UpdateRommSettingsRequest {
+    base_url: String,
+    token: String,
+}
+
 #[derive(Deserialize, Serialize)]
 struct RommPlatform {
     id: i64,
@@ -618,6 +695,14 @@ impl ApiError {
         }
     }
 
+    fn invalid_romm_settings(error: impl std::fmt::Display) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: error.to_string(),
+            settings: None,
+        }
+    }
+
     fn capability_unavailable(capability: &str) -> Self {
         Self {
             status: StatusCode::NOT_IMPLEMENTED,
@@ -662,6 +747,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
+    use hearthdeck_protocol::HeroicRunner;
     use tokio::time::timeout;
     use tower::ServiceExt;
 
@@ -723,7 +809,6 @@ mod tests {
                 local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
                 database_path: temporary.path().join("hearthdeck.db"),
                 bridge_socket_path: temporary.path().join("bridge.sock"),
-                romm: None,
                 lan_enabled: false,
                 tls: None,
             },
@@ -781,6 +866,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(retro_without_romm.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        state
+            .settings
+            .save_romm("http://127.0.0.1:8080", "rmm_private_token")
+            .await
+            .unwrap();
+        let (status, romm_settings) = response_json(
+            router(state.clone()),
+            Request::get("/v1/retro/settings")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(romm_settings["base_url"], "http://127.0.0.1:8080");
+        assert_eq!(romm_settings["configured"], true);
+        assert!(romm_settings.get("token").is_none());
 
         let (status, settings) = response_json(
             router(state.clone()),
@@ -902,5 +1005,19 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(library[0]["id"], "test:app");
+    }
+
+    #[test]
+    fn parses_only_supported_heroic_launch_targets() {
+        assert!(matches!(
+            super::heroic_launch_target("legendary:Fortnite"),
+            Some((HeroicRunner::Legendary, application_id)) if application_id == "Fortnite"
+        ));
+        assert!(matches!(
+            super::heroic_launch_target("gog:1091500"),
+            Some((HeroicRunner::Gog, application_id)) if application_id == "1091500"
+        ));
+        assert!(super::heroic_launch_target("steam:570").is_none());
+        assert!(super::heroic_launch_target("legendary:").is_none());
     }
 }
