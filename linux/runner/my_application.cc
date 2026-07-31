@@ -1,6 +1,7 @@
 #include "my_application.h"
 
 #include <flutter_linux/flutter_linux.h>
+#include <glib/gstdio.h>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -8,10 +9,65 @@ struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
   FlMethodChannel* session_channel;
+  GSubprocess* overlay_process;
 };
 
 static constexpr char kSessionChannel[] =
     "io.github.viniciuscr.hearthdeck/session";
+
+static gboolean overlay_enabled() {
+  return g_strcmp0(g_getenv("HEARTHDECK_OVERLAY"), "1") == 0;
+}
+
+static gchar* gamescope_wayland_display_path() {
+  const gchar* runtime_directory = g_getenv("XDG_RUNTIME_DIR");
+  if (runtime_directory == nullptr || *runtime_directory == '\0') {
+    return nullptr;
+  }
+  return g_build_filename(runtime_directory, "hearthdeck",
+                          "gamescope-wayland-display", nullptr);
+}
+
+static void publish_gamescope_wayland_display() {
+  const gchar* wayland_display = g_getenv("WAYLAND_DISPLAY");
+  if (wayland_display == nullptr || *wayland_display == '\0') {
+    return;
+  }
+
+  g_autofree gchar* path = gamescope_wayland_display_path();
+  if (path == nullptr) {
+    return;
+  }
+  g_autoptr(GError) error = nullptr;
+  g_autofree gchar* directory = g_path_get_dirname(path);
+  if (g_mkdir_with_parents(directory, 0700) != 0 ||
+      !g_file_set_contents(path, wayland_display, -1, &error)) {
+    g_warning("Could not publish Gamescope Wayland socket: %s",
+              error == nullptr ? "unknown error" : error->message);
+  }
+}
+
+static void clear_gamescope_wayland_display() {
+  g_autofree gchar* path = gamescope_wayland_display_path();
+  if (path != nullptr) {
+    g_remove(path);
+  }
+}
+
+static void start_overlay(MyApplication* self) {
+  if (!overlay_enabled() || self->overlay_process != nullptr) {
+    return;
+  }
+
+  const gchar* arguments[] = {"/usr/lib/hearthdeck/hearthdeck-overlay",
+                              nullptr};
+  g_autoptr(GError) error = nullptr;
+  self->overlay_process =
+      g_subprocess_newv(arguments, G_SUBPROCESS_FLAGS_NONE, &error);
+  if (self->overlay_process == nullptr) {
+    g_warning("Could not start Hearthdeck overlay: %s", error->message);
+  }
+}
 
 static void session_method_call_cb(FlMethodChannel* channel,
                                    FlMethodCall* method_call,
@@ -32,6 +88,14 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  if (!overlay_enabled()) {
+    return;
+  }
+  // This process and its overlay child inherit Gamescope's exposed socket. The
+  // runtime file lets the already-running bridge pass that socket to a nested
+  // Gamescope game without restarting either backend service.
+  publish_gamescope_wayland_display();
+  start_overlay(self);
 }
 
 // Implements GApplication::activate.
@@ -106,9 +170,14 @@ static void my_application_startup(GApplication* application) {
 
 // Implements GApplication::shutdown.
 static void my_application_shutdown(GApplication* application) {
-  // MyApplication* self = MY_APPLICATION(object);
-
-  // Perform any actions required at application shutdown.
+  MyApplication* self = MY_APPLICATION(application);
+  if (self->overlay_process != nullptr &&
+      !g_subprocess_get_if_exited(self->overlay_process)) {
+    g_subprocess_force_exit(self->overlay_process);
+  }
+  if (overlay_enabled()) {
+    clear_gamescope_wayland_display();
+  }
 
   G_APPLICATION_CLASS(my_application_parent_class)->shutdown(application);
 }
@@ -118,6 +187,7 @@ static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   g_clear_object(&self->session_channel);
+  g_clear_object(&self->overlay_process);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 

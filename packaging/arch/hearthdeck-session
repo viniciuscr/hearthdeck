@@ -12,6 +12,9 @@ set -Euo pipefail
 export XDG_CURRENT_DESKTOP=hearthdeck
 export XDG_SESSION_DESKTOP=hearthdeck
 export XDG_SESSION_TYPE=wayland
+# The Flutter runner starts the optional overlay as its own child only after
+# rendering. This flag keeps normal desktop launches free of that process.
+export HEARTHDECK_OVERLAY=1
 
 # hearthdeck.target is already WantedBy=default.target (enabled globally by
 # the package), so it normally starts on its own before any session begins.
@@ -39,6 +42,9 @@ fi
 #                     session required.
 # --fullscreen:      cover the full output mode.
 # --force-grab-cursor: keep the cursor confined to Hearthdeck's surface.
+# --expose-wayland: make this Gamescope socket available to its direct child.
+#                    The runner starts the overlay from that child, so it can
+#                    create a layer-shell surface above nested game sessions.
 # Nested application launches (games, other desktop entries) run in their own
 # separate, on-demand Gamescope instance started by the bridge; this outer
 # Gamescope only ever hosts Hearthdeck itself.
@@ -46,4 +52,5 @@ exec gamescope \
   --backend drm \
   --fullscreen \
   --force-grab-cursor \
+  --expose-wayland \
   -- /opt/hearthdeck/hearthdeck

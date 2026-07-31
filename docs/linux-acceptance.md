@@ -68,6 +68,11 @@ inside a separate nested Gamescope instance. Exit Hearthdeck Kiosk and confirm
 its managed application services stop and the session returns to the display
 manager's login screen.
 
+While a managed application is open, press the controller Guide/PS button.
+Confirm the native overlay appears above the game, D-pad changes its selection,
+A activates it, B hides it, and selecting **Close game** stops the managed
+session. Confirm the gamepad returns to the game after hiding the overlay.
+
 Confirm gamepad D-pad, A, B, and sticks navigate Hearthdeck. Confirm existing
 audio works through PipeWire/WirePlumber. Confirm preconfigured NetworkManager
 and BlueZ connections remain available. Wi-Fi, Bluetooth, and audio-routing

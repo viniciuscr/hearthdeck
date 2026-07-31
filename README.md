@@ -90,6 +90,10 @@ it starts a managed desktop application or game. That instance is unrelated to
 the outer Kiosk session compositor: it uses no DRM or memory until a launch is
 requested and is torn down when the launch ends.
 
+The native in-game overlay is a small Wayland layer-shell client started by
+Hearthdeck after the dashboard renders. It connects to the exposed outer
+Gamescope socket and can appear above a nested game without a desktop shell.
+
 Hearthdeck launches approved Linux desktop entries in transient systemd user
 services, so the host can identify and stop the active managed application. Remote
 clients can inspect host capabilities and request an installation for host-side

@@ -2,17 +2,15 @@ use std::{
     collections::HashMap,
     io::ErrorKind,
     path::PathBuf,
-    sync::{OnceLock, mpsc},
+    sync::mpsc,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use cosmic::iced::{Subscription, futures::SinkExt, stream};
 use evdev::{AbsoluteAxisCode, Device, EventSummary, KeyCode};
-use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{debug, warn};
 
-static COMMANDS: OnceLock<mpsc::Sender<InputCommand>> = OnceLock::new();
+const DEVICE_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug)]
 pub enum InputCommand {
@@ -27,48 +25,45 @@ pub enum GamepadAction {
     Activate,
 }
 
-pub fn subscription() -> Subscription<GamepadAction> {
-    Subscription::run(messages)
+pub struct InputHandle {
+    commands: mpsc::Sender<InputCommand>,
+    pub actions: mpsc::Receiver<GamepadAction>,
 }
 
-pub fn set_visible(visible: bool) {
-    let Some(sender) = COMMANDS.get() else {
-        return;
-    };
-    if let Err(error) = sender.send(InputCommand::SetVisible(visible)) {
-        warn!(%error, "gamepad input worker is unavailable");
+impl InputHandle {
+    pub fn set_visible(&self, visible: bool) {
+        if let Err(error) = self.commands.send(InputCommand::SetVisible(visible)) {
+            warn!(%error, "gamepad input worker is unavailable");
+        }
     }
 }
 
-fn messages() -> impl cosmic::iced::futures::Stream<Item = GamepadAction> {
-    stream::channel(16, |mut output| async move {
-        let (events, mut receiver) = tokio_mpsc::unbounded_channel();
-        let (commands, command_receiver) = mpsc::channel();
-        let _ = COMMANDS.set(commands);
-        thread::Builder::new()
-            .name("hearthdeck-gamepad".to_owned())
-            .spawn(move || InputWorker::new(events, command_receiver).run())
-            .expect("could not start the gamepad input worker");
-        while let Some(event) = receiver.recv().await {
-            if output.send(event).await.is_err() {
-                return;
-            }
-        }
-    })
+pub fn start() -> InputHandle {
+    let (actions, action_receiver) = mpsc::channel();
+    let (commands, command_receiver) = mpsc::channel();
+    thread::Builder::new()
+        .name("hearthdeck-gamepad".to_owned())
+        .spawn(move || InputWorker::new(actions, command_receiver).run())
+        .expect("could not start the gamepad input worker");
+    InputHandle {
+        commands,
+        actions: action_receiver,
+    }
 }
 
 struct InputWorker {
     devices: HashMap<PathBuf, Device>,
-    event_sender: tokio_mpsc::UnboundedSender<GamepadAction>,
+    event_sender: mpsc::Sender<GamepadAction>,
     command_receiver: mpsc::Receiver<InputCommand>,
     last_guide_device: Option<PathBuf>,
     grabbed_device: Option<PathBuf>,
     visible: bool,
+    last_rescan: Instant,
 }
 
 impl InputWorker {
     fn new(
-        event_sender: tokio_mpsc::UnboundedSender<GamepadAction>,
+        event_sender: mpsc::Sender<GamepadAction>,
         command_receiver: mpsc::Receiver<InputCommand>,
     ) -> Self {
         Self {
@@ -78,13 +73,18 @@ impl InputWorker {
             last_guide_device: None,
             grabbed_device: None,
             visible: false,
+            last_rescan: Instant::now() - DEVICE_RESCAN_INTERVAL,
         }
     }
 
     fn run(mut self) {
         loop {
-            self.refresh_devices();
-            for command in self.command_receiver.try_iter() {
+            if self.last_rescan.elapsed() >= DEVICE_RESCAN_INTERVAL {
+                self.refresh_devices();
+                self.last_rescan = Instant::now();
+            }
+            let commands = self.command_receiver.try_iter().collect::<Vec<_>>();
+            for command in commands {
                 self.set_visible(matches!(command, InputCommand::SetVisible(true)));
             }
             let paths = self.devices.keys().cloned().collect::<Vec<_>>();
@@ -171,17 +171,12 @@ impl InputWorker {
 fn is_gamepad(device: &Device) -> bool {
     device
         .supported_keys()
-        .is_some_and(|keys| keys.contains(KeyCode::BTN_GAMEPAD) && keys.contains(KeyCode::BTN_MODE))
+        .is_some_and(|keys| keys.contains(KeyCode::BTN_SOUTH) && keys.contains(KeyCode::BTN_MODE))
 }
 
 fn action_for(event: EventSummary, visible: bool) -> Option<GamepadAction> {
     match event {
-        EventSummary::Key(_, KeyCode::BTN_MODE, 1) => Some(GamepadAction::Toggle),
-        EventSummary::Key(_, KeyCode::BTN_EAST, 1) if visible => Some(GamepadAction::Hide),
-        EventSummary::Key(_, KeyCode::BTN_SOUTH, 1) if visible => Some(GamepadAction::Activate),
-        EventSummary::Key(_, KeyCode::BTN_DPAD_LEFT | KeyCode::BTN_DPAD_RIGHT, 1) if visible => {
-            Some(GamepadAction::ToggleSelection)
-        }
+        EventSummary::Key(_, key, value) => action_for_key(key, value, visible),
         EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_HAT0X, value)
             if visible && value != 0 =>
         {
@@ -191,26 +186,42 @@ fn action_for(event: EventSummary, visible: bool) -> Option<GamepadAction> {
     }
 }
 
+fn action_for_key(key: KeyCode, value: i32, visible: bool) -> Option<GamepadAction> {
+    match (key, value, visible) {
+        (KeyCode::BTN_MODE, 1, _) => Some(GamepadAction::Toggle),
+        (KeyCode::BTN_EAST, 1, true) => Some(GamepadAction::Hide),
+        (KeyCode::BTN_SOUTH, 1, true) => Some(GamepadAction::Activate),
+        (KeyCode::BTN_DPAD_LEFT | KeyCode::BTN_DPAD_RIGHT, 1, true) => {
+            Some(GamepadAction::ToggleSelection)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use evdev::{EventSummary, KeyCode, KeyEvent};
+    use evdev::KeyCode;
 
-    use super::{GamepadAction, action_for};
+    use super::{GamepadAction, action_for_key};
 
     #[test]
     fn guide_toggles_from_any_state() {
         assert!(matches!(
-            action_for(EventSummary::Key(KeyEvent, KeyCode::BTN_MODE, 1), false),
+            action_for_key(KeyCode::BTN_MODE, 1, false),
             Some(GamepadAction::Toggle)
         ));
     }
 
     #[test]
     fn overlay_controls_are_ignored_while_hidden() {
-        assert!(action_for(EventSummary::Key(KeyEvent, KeyCode::BTN_SOUTH, 1), false).is_none());
+        assert!(action_for_key(KeyCode::BTN_SOUTH, 1, false).is_none());
         assert!(matches!(
-            action_for(EventSummary::Key(KeyEvent, KeyCode::BTN_SOUTH, 1), true),
+            action_for_key(KeyCode::BTN_SOUTH, 1, true),
             Some(GamepadAction::Activate)
+        ));
+        assert!(matches!(
+            action_for_key(KeyCode::BTN_DPAD_LEFT, 1, true),
+            Some(GamepadAction::ToggleSelection)
         ));
     }
 }

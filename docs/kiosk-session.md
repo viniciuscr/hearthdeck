@@ -18,18 +18,21 @@ Display manager (SDDM/GDM/greetd/...)
   -> Exec = /usr/lib/hearthdeck/hearthdeck-session
        -> systemctl --user daemon-reload
        -> systemctl --user start hearthdeck.target   (BLOCKS until ready, see below)
-       -> exec gamescope --backend drm --fullscreen --force-grab-cursor -- \
-            /opt/hearthdeck/hearthdeck
-            -> Hearthdeck is Gamescope's ONLY child process
+        -> exec gamescope --backend drm --fullscreen --force-grab-cursor --expose-wayland -- \
+             /opt/hearthdeck/hearthdeck
+             -> Hearthdeck is Gamescope's direct child process
+                -> optional native overlay, started after Flutter's first frame
 ```
 
-That's the entire session. There is no desktop compositor, no session
+That's the entire startup chain. There is no desktop compositor, no session
 manager, no panel/dock/launcher, no XDG autostart directory scan, and no
 second systemd unit standing between the display manager and Hearthdeck's
 window. `hearthdeck-session` is a single bash script that ends in `exec`,
 so by the time Hearthdeck is running, `gamescope` has *replaced* that shell
 process — there's exactly one extra process (`gamescope`) between the
-display manager and the app.
+display manager and the app. The optional overlay is not a session service: the
+Flutter runner starts it only after the dashboard has rendered, and terminates
+it when Hearthdeck exits.
 
 ### Files involved
 
@@ -125,8 +128,13 @@ apparent reason).
   must be Gamescope's literal child (`gamescope ... -- /opt/hearthdeck/hearthdeck`).
   That is what makes "Hearthdeck exits" and "session ends" the same event
   with no extra supervision logic needed, and it's what lets Gamescope own
-  the app's Wayland/X11 environment directly instead of hoping a shared
-  socket gets imported into the right place.
+   the app's Wayland/X11 environment directly instead of hoping a shared
+   socket gets imported into the right place.
+- **Do not run the overlay as a systemd unit that is a sibling of Gamescope.**
+  It must be the Flutter runner's child so it inherits the exact outer
+  Gamescope Wayland socket. The runner publishes that socket to the user
+  manager only to let future transient nested-game services attach to it; this
+  does not turn the overlay into a session service.
 - **Do not remove `--backend drm`.** Without it, Gamescope will try to run
   nested inside another Wayland/X11 session, which does not exist here (and
   reintroduces exactly the "who owns DRM" problem this design avoids).
@@ -138,12 +146,12 @@ apparent reason).
   its lifecycle.
 - **Do not add XDG autostart scanning, a settings daemon, a notification
   daemon, or any other "just one small desktop service" to this session.**
-  The entire point of this design is that Gamescope + Hearthdeck are the
-  only two processes in the graphical session. If a feature seems to need a
-  desktop-shell-style background service, it belongs in
-  `hearthdeck-bridge`/`hearthdeck-daemon` (already-established backend
-  services with their own lifecycle under `hearthdeck.target`), not in the
-  session itself.
+  The only graphical child Hearthdeck may start is its native overlay, after
+  the first frame, because it must inherit Gamescope's exact Wayland socket and
+  exit with Hearthdeck. If a feature instead needs a desktop-shell-style
+  background service, it belongs in `hearthdeck-bridge`/`hearthdeck-daemon`
+  (already-established backend services with their own lifecycle under
+  `hearthdeck.target`), not in the session itself.
 
 ## How to safely change something here
 

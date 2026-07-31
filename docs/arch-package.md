@@ -5,8 +5,8 @@ CachyOS. It installs:
 
 - `/opt/hearthdeck/`: the Flutter Linux client bundle.
 - `/usr/bin/hearthdeck`: the desktop launcher command.
-- `/usr/lib/hearthdeck/`: the local bridge and daemon binaries, and the
-  Kiosk session script.
+- `/usr/lib/hearthdeck/`: the local bridge, daemon, and native overlay binaries,
+  plus the Kiosk session script.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
   API daemon user units.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
@@ -74,10 +74,16 @@ into Hearthdeck fullscreen with the lowest possible memory and CPU footprint.
 The session script (`/usr/lib/hearthdeck/hearthdeck-session`) starts
 `hearthdeck.target` for the current user and then execs Gamescope directly on
 the DRM/KMS seat with Hearthdeck as its only child (`gamescope --backend drm
---fullscreen -- /opt/hearthdeck/hearthdeck`). There is no intermediate desktop
+--fullscreen --expose-wayland -- /opt/hearthdeck/hearthdeck`). There is no intermediate desktop
 compositor to initialize first, and no other process for Gamescope to share
 the seat with. Exiting Hearthdeck ends Gamescope and returns to the display
 manager's login screen; there is no underlying desktop to fall back to.
+
+The Flutter runner starts the lightweight native overlay only after its first
+frame. The overlay is a direct outer-Gamescope child, not a systemd service or
+desktop component, and the runner terminates it with Hearthdeck. This preserves
+the direct Kiosk startup chain while allowing a layer-shell surface above a
+nested game.
 
 Hearthdeck launches registered desktop applications in a separate, on-demand
 nested Gamescope instance. That nested instance is unrelated to the outer
