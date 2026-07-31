@@ -87,6 +87,48 @@ paths:
                   $ref: '#/components/schemas/RetroConsole'
         '503':
           description: RomM is not configured
+  /v1/retro/roms:
+    get:
+      operationId: listRetroRoms
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: platform_id
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 48 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: A paginated live view of RomM games for one console
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetroGamePage'
+        '503':
+          description: RomM is not configured
+  /v1/retro/assets:
+    get:
+      operationId: getRetroAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: A RomM /resources image path returned by listRetroRoms
+          schema: { type: string }
+      responses:
+        '200':
+          description: A locally proxied RomM cover image
+          content:
+            image/*:
+              schema: { type: string, format: binary }
   /v1/retro/settings:
     get:
       operationId: getRommSettings
@@ -425,6 +467,33 @@ components:
         rom_count: { type: integer, minimum: 0 }
         slug: { type: [string, 'null'] }
         fs_slug: { type: [string, 'null'] }
+    RetroGamePage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/RetroGame' }
+        total: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        offset: { type: integer, minimum: 0 }
+    RetroGame:
+      type: object
+      required: [id, platform_id, title, genres, regions]
+      properties:
+        id: { type: integer }
+        platform_id: { type: integer }
+        title: { type: string }
+        summary: { type: [string, 'null'] }
+        cover_path: { type: [string, 'null'] }
+        genres:
+          type: array
+          items: { type: string }
+        player_count: { type: [string, 'null'] }
+        release_year: { type: [integer, 'null'] }
+        regions:
+          type: array
+          items: { type: string }
     RommSettings:
       type: object
       required: [base_url, configured, updated_at]

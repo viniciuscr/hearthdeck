@@ -97,6 +97,37 @@ class HearthdeckApiClient {
         .toList(growable: false);
   }
 
+  Future<HearthdeckRetroGamePage> retroGames({
+    required int platformId,
+    int limit = 48,
+    int offset = 0,
+  }) async {
+    final response = await _client.get(
+      endpoint
+          .api('retro/roms')
+          .replace(
+            queryParameters: <String, String>{
+              'platform_id': '$platformId',
+              'limit': '$limit',
+              'offset': '$offset',
+            },
+          ),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 200) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+    return HearthdeckRetroGamePage.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
+  }
+
+  Uri retroAssetUri(String path) => endpoint
+      .api('retro/assets')
+      .replace(queryParameters: <String, String>{'path': path});
+
+  Map<String, String> get authorizationHeaders => _authorizationHeaders();
+
   Future<HearthdeckRommSettings?> rommSettings() async {
     final response = await _client.get(
       endpoint.api('retro/settings'),
@@ -641,6 +672,72 @@ class HearthdeckRetroConsole {
   final int romCount;
   final String? slug;
   final String? filesystemSlug;
+}
+
+class HearthdeckRetroGamePage {
+  const HearthdeckRetroGamePage({
+    required this.items,
+    required this.total,
+    required this.limit,
+    required this.offset,
+  });
+
+  factory HearthdeckRetroGamePage.fromJson(Map<String, dynamic> json) =>
+      HearthdeckRetroGamePage(
+        items: (json['items'] as List<dynamic>? ?? const <dynamic>[])
+            .cast<Map<String, dynamic>>()
+            .map(HearthdeckRetroGame.fromJson)
+            .toList(growable: false),
+        total: json['total'] as int,
+        limit: json['limit'] as int,
+        offset: json['offset'] as int,
+      );
+
+  final List<HearthdeckRetroGame> items;
+  final int total;
+  final int limit;
+  final int offset;
+}
+
+class HearthdeckRetroGame {
+  const HearthdeckRetroGame({
+    required this.id,
+    required this.platformId,
+    required this.title,
+    required this.genres,
+    required this.regions,
+    this.summary,
+    this.coverPath,
+    this.playerCount,
+    this.releaseYear,
+  });
+
+  factory HearthdeckRetroGame.fromJson(Map<String, dynamic> json) =>
+      HearthdeckRetroGame(
+        id: json['id'] as int,
+        platformId: json['platform_id'] as int,
+        title: json['title'] as String,
+        summary: json['summary'] as String?,
+        coverPath: json['cover_path'] as String?,
+        genres: (json['genres'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<String>()
+            .toList(growable: false),
+        playerCount: json['player_count'] as String?,
+        releaseYear: json['release_year'] as int?,
+        regions: (json['regions'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<String>()
+            .toList(growable: false),
+      );
+
+  final int id;
+  final int platformId;
+  final String title;
+  final String? summary;
+  final String? coverPath;
+  final List<String> genres;
+  final String? playerCount;
+  final int? releaseYear;
+  final List<String> regions;
 }
 
 class HearthdeckRommSettings {

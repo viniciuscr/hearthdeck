@@ -158,6 +158,29 @@ void main() {
   );
 
   test(
+    'API client reads a paginated live RomM game page through Hearthdeck',
+    () async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.local(),
+        token: 'test-token',
+        client: _RetroGamesHttpClient(),
+      );
+
+      final page = await client.retroGames(
+        platformId: 2,
+        limit: 24,
+        offset: 48,
+      );
+
+      expect(page.total, 187);
+      expect(page.limit, 24);
+      expect(page.offset, 48);
+      expect(page.items.single.title, 'Super Metroid');
+      expect(page.items.single.genres, <String>['Action', 'Adventure']);
+    },
+  );
+
+  test(
     'API client saves RomM credentials without receiving them back',
     () async {
       final client = HearthdeckApiClient(
@@ -323,6 +346,25 @@ class _RommSettingsHttpClient extends http.BaseClient {
     );
     const body =
         '{"base_url":"http://127.0.0.1:8080","configured":true,"updated_at":"2026-01-01T00:00:00Z"}';
+    return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
+  }
+}
+
+class _RetroGamesHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    expect(request.method, 'GET');
+    expect(request.url.path, '/v1/retro/roms');
+    expect(request.url.queryParameters, <String, String>{
+      'platform_id': '2',
+      'limit': '24',
+      'offset': '48',
+    });
+    expect(request.headers['authorization'], 'Bearer test-token');
+    const body = '''{
+      "items":[{"id":42,"platform_id":2,"title":"Super Metroid","summary":"Explore Zebes.","cover_path":"/resources/roms/2/42/cover.webp","genres":["Action","Adventure"],"player_count":"1","release_year":1994,"regions":["USA"]}],
+      "total":187,"limit":24,"offset":48
+    }''';
     return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
   }
 }

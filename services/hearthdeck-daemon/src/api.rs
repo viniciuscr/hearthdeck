@@ -4,11 +4,11 @@ use axum::{
         Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use hearthdeck_protocol::{ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner};
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
-    diagnostics::{self, RommPlatform, RommQueryError},
+    diagnostics::{self, RommGame, RommPlatform, RommQueryError},
     settings::{
         BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
     },
@@ -31,6 +31,8 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/pairing/complete", post(complete_pairing))
         .route("/v1/library", get(list_library))
         .route("/v1/retro/consoles", get(list_retro_consoles))
+        .route("/v1/retro/roms", get(list_retro_roms))
+        .route("/v1/retro/assets", get(retro_asset))
         .route(
             "/v1/retro/settings",
             get(get_romm_settings)
@@ -166,6 +168,47 @@ async fn list_retro_consoles(
             .cmp(right.display_name.as_deref().unwrap_or(&right.name))
     });
     Ok(Json(platforms))
+}
+
+async fn list_retro_roms(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<RommGamesQuery>,
+) -> Result<Json<RommGamesResponse>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let limit = query.limit.unwrap_or(48).clamp(1, 100);
+    let offset = query.offset.unwrap_or(0);
+    let games = diagnostics::romm_games(&state.settings, query.platform_id, limit, offset)
+        .await
+        .map_err(ApiError::romm_query)?;
+    Ok(Json(RommGamesResponse {
+        items: games.items.iter().map(RetroGame::from).collect(),
+        total: games.total,
+        limit: games.limit,
+        offset: games.offset,
+    }))
+}
+
+async fn retro_asset(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<RommAssetQuery>,
+) -> Result<Response, ApiError> {
+    authenticate(&state, &headers).await?;
+    let asset = diagnostics::romm_asset(&state.settings, &query.path)
+        .await
+        .map_err(ApiError::romm_query)?;
+    let content_type = HeaderValue::from_str(&asset.content_type)
+        .map_err(|_| ApiError::bad_gateway("RomM returned an invalid image type"))?;
+    let mut response = asset.bytes.into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=3600"),
+    );
+    Ok(response)
 }
 
 async fn diagnostics(
@@ -572,6 +615,68 @@ struct UpdateSettingsRequest {
 struct UpdateRommSettingsRequest {
     base_url: String,
     token: String,
+}
+
+#[derive(Deserialize)]
+struct RommGamesQuery {
+    platform_id: i64,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct RommAssetQuery {
+    path: String,
+}
+
+#[derive(Serialize)]
+struct RommGamesResponse {
+    items: Vec<RetroGame>,
+    total: u64,
+    limit: u32,
+    offset: u32,
+}
+
+#[derive(Serialize)]
+struct RetroGame {
+    id: i64,
+    platform_id: i64,
+    title: String,
+    summary: Option<String>,
+    cover_path: Option<String>,
+    genres: Vec<String>,
+    player_count: Option<String>,
+    release_year: Option<i32>,
+    regions: Vec<String>,
+}
+
+impl From<&RommGame> for RetroGame {
+    fn from(game: &RommGame) -> Self {
+        let title = game
+            .name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(&game.fs_name_no_tags)
+            .to_owned();
+        let player_count = (!game.metadatum.player_count.trim().is_empty())
+            .then(|| game.metadatum.player_count.clone());
+        let release_year = game
+            .metadatum
+            .first_release_date
+            .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
+            .map(|date| date.year());
+        Self {
+            id: game.id,
+            platform_id: game.platform_id,
+            title,
+            summary: game.summary.clone(),
+            cover_path: game.path_cover_small.clone(),
+            genres: game.metadatum.genres.clone(),
+            player_count,
+            release_year,
+            regions: game.regions.clone(),
+        }
+    }
 }
 
 struct ApiError {

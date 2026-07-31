@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 
 import 'backend/hearthdeck_api_client.dart';
 import 'catalog/catalog_repository_factory.dart';
+import 'content_details.dart';
+import 'dashboard_models.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
 import 'virtual_keyboard.dart';
@@ -21,14 +23,174 @@ class _RetroPageState extends State<RetroPage> {
   late final Future<HearthdeckApiClient?> _apiClient = widget.apiClient == null
       ? createRetroApiClient()
       : Future<HearthdeckApiClient?>.value(widget.apiClient);
-  late final Future<List<HearthdeckRetroConsole>> _consoles = _loadConsoles();
+  late Future<List<HearthdeckRetroConsole>> _consoles = _loadConsoles();
+  HearthdeckApiClient? _connectedApiClient;
+  HearthdeckRetroConsole? _selectedConsole;
+  HearthdeckRetroGamePage? _games;
+  Object? _gamesError;
+  var _isLoadingGames = false;
+  var _isLoadingMore = false;
 
   Future<List<HearthdeckRetroConsole>> _loadConsoles() async {
     final apiClient = await _apiClient;
     if (apiClient == null) {
       throw StateError('No Hearthdeck backend is connected.');
     }
+    _connectedApiClient = apiClient;
     return apiClient.retroConsoles();
+  }
+
+  Future<void> _selectConsole(
+    HearthdeckRetroConsole console, {
+    bool force = false,
+  }) async {
+    if (!force && _selectedConsole?.id == console.id && _games != null) {
+      return;
+    }
+    setState(() {
+      _selectedConsole = console;
+      _games = null;
+      _gamesError = null;
+      _isLoadingGames = true;
+    });
+    try {
+      final apiClient = await _apiClient;
+      if (apiClient == null) {
+        throw StateError('No Hearthdeck backend is connected.');
+      }
+      _connectedApiClient = apiClient;
+      final games = await apiClient.retroGames(platformId: console.id);
+      if (mounted && _selectedConsole?.id == console.id) {
+        setState(() => _games = games);
+      }
+    } catch (error) {
+      if (mounted && _selectedConsole?.id == console.id) {
+        setState(() => _gamesError = error);
+      }
+    } finally {
+      if (mounted && _selectedConsole?.id == console.id) {
+        setState(() => _isLoadingGames = false);
+      }
+    }
+  }
+
+  Future<void> _loadMore() async {
+    final console = _selectedConsole;
+    final games = _games;
+    if (console == null ||
+        games == null ||
+        _isLoadingMore ||
+        games.offset + games.items.length >= games.total) {
+      return;
+    }
+    setState(() => _isLoadingMore = true);
+    try {
+      final apiClient = await _apiClient;
+      if (apiClient == null) {
+        throw StateError('No Hearthdeck backend is connected.');
+      }
+      final nextPage = await apiClient.retroGames(
+        platformId: console.id,
+        limit: games.limit,
+        offset: games.offset + games.items.length,
+      );
+      if (mounted && _selectedConsole?.id == console.id) {
+        setState(() {
+          _games = HearthdeckRetroGamePage(
+            items: <HearthdeckRetroGame>[...games.items, ...nextPage.items],
+            total: nextPage.total,
+            limit: nextPage.limit,
+            offset: games.offset,
+          );
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load more games: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingMore = false);
+      }
+    }
+  }
+
+  Future<void> _refresh() async {
+    final console = _selectedConsole;
+    if (console == null) {
+      setState(() => _consoles = _loadConsoles());
+      return;
+    }
+    await _selectConsole(console, force: true);
+  }
+
+  DashboardItem _dashboardItem(HearthdeckRetroGame game) {
+    final apiClient = _connectedApiClient;
+    final coverPath = game.coverPath;
+    return DashboardItem(
+      id: 'romm:${game.id}',
+      title: game.title,
+      description: _gameDescription(game),
+      icon: Icons.sports_esports_rounded,
+      colors: _colorsFor(game.id),
+      artworkUrl: apiClient == null || coverPath == null
+          ? null
+          : apiClient.retroAssetUri(coverPath).toString(),
+      artworkHeaders: apiClient == null || coverPath == null
+          ? null
+          : apiClient.authorizationHeaders,
+      kind: TvContentKind.game,
+      details: ContentDetails(
+        summary: game.summary?.trim().isNotEmpty == true
+            ? game.summary!.trim()
+            : 'Metadata supplied by your local RomM library.',
+        actions: const <ContentAction>[],
+        facts: const <ContentFact>[],
+        factSections: <ContentFactSection>[
+          ContentFactSection(
+            title: 'Game details',
+            facts: <ContentFact>[
+              if (game.genres.isNotEmpty)
+                ContentFact(
+                  label: 'Genre',
+                  value: game.genres.join(', '),
+                  icon: Icons.category_outlined,
+                ),
+              if (game.releaseYear != null)
+                ContentFact(
+                  label: 'Released',
+                  value: '${game.releaseYear}',
+                  icon: Icons.calendar_today_outlined,
+                ),
+              if (game.playerCount?.isNotEmpty == true)
+                ContentFact(
+                  label: 'Players',
+                  value: game.playerCount!,
+                  icon: Icons.people_outline_rounded,
+                ),
+              if (game.regions.isNotEmpty)
+                ContentFact(
+                  label: 'Region',
+                  value: game.regions.join(', '),
+                  icon: Icons.public_outlined,
+                ),
+            ],
+          ),
+        ],
+        galleryTitle: 'Screenshots',
+        gallery: const <ContentGalleryItem>[],
+      ),
+    );
+  }
+
+  String _gameDescription(HearthdeckRetroGame game) {
+    final parts = <String>[
+      if (game.releaseYear != null) '${game.releaseYear}',
+      if (game.genres.isNotEmpty) game.genres.first,
+    ];
+    return parts.isEmpty ? 'RomM library' : parts.join(' - ');
   }
 
   @override
@@ -65,12 +227,59 @@ class _RetroPageState extends State<RetroPage> {
                           BuildContext context,
                           AsyncSnapshot<List<HearthdeckRetroConsole>> snapshot,
                         ) {
+                          final consoles = snapshot.data;
+                          if (snapshot.connectionState !=
+                              ConnectionState.done) {
+                            return const Center(
+                              child: CircularProgressIndicator(),
+                            );
+                          }
+                          if (snapshot.hasError || consoles == null) {
+                            return const _RetroState(
+                              icon: Icons.link_off_rounded,
+                              title: 'RomM unavailable',
+                              message:
+                                  'Configure the local RomM connection in Hearthdeck and try again.',
+                            );
+                          }
+                          if (consoles.isEmpty) {
+                            return const _RetroState(
+                              icon: Icons.sports_esports_outlined,
+                              title: 'No consoles found',
+                              message: 'Scan games in RomM, then reopen Retro.',
+                            );
+                          }
+                          final selected = _selectedConsole ?? consoles.first;
+                          if (_selectedConsole == null) {
+                            WidgetsBinding.instance.addPostFrameCallback(
+                              (_) => _selectConsole(selected),
+                            );
+                          }
                           return _RetroContent(
-                            consoles: snapshot.data,
-                            error: snapshot.error,
-                            isLoading:
-                                snapshot.connectionState !=
-                                ConnectionState.done,
+                            consoles: consoles,
+                            selectedConsole: selected,
+                            games: _games,
+                            gamesError: _gamesError,
+                            isLoadingGames: _isLoadingGames,
+                            isLoadingMore: _isLoadingMore,
+                            onConsoleSelected: _selectConsole,
+                            onLoadMore: _loadMore,
+                            onRefresh: _refresh,
+                            gameItemFor: _dashboardItem,
+                            onOpenGame: (DashboardItem item) {
+                              Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  settings: RouteSettings(
+                                    name: '/retro/${item.id}',
+                                  ),
+                                  builder: (BuildContext context) =>
+                                      ContentDetailsPage(
+                                        item: item,
+                                        sourceShape: TvTileShape.square,
+                                      ),
+                                ),
+                              );
+                            },
                           );
                         },
                   ),
@@ -87,115 +296,300 @@ class _RetroPageState extends State<RetroPage> {
 class _RetroContent extends StatelessWidget {
   const _RetroContent({
     required this.consoles,
-    required this.error,
-    required this.isLoading,
+    required this.selectedConsole,
+    required this.games,
+    required this.gamesError,
+    required this.isLoadingGames,
+    required this.isLoadingMore,
+    required this.onConsoleSelected,
+    required this.onLoadMore,
+    required this.onRefresh,
+    required this.gameItemFor,
+    required this.onOpenGame,
   });
 
-  final List<HearthdeckRetroConsole>? consoles;
-  final Object? error;
-  final bool isLoading;
-
-  @override
-  Widget build(BuildContext context) {
-    const pagePadding = EdgeInsets.fromLTRB(48, 38, 48, 56);
-    if (isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    final loadedConsoles = consoles;
-    if (error != null || loadedConsoles == null) {
-      return _RetroState(
-        icon: Icons.link_off_rounded,
-        title: 'RomM unavailable',
-        message:
-            'Configure the local RomM connection in Hearthdeck and try again.',
-      );
-    }
-    if (loadedConsoles.isEmpty) {
-      return const _RetroState(
-        icon: Icons.sports_esports_outlined,
-        title: 'No consoles found',
-        message: 'Scan games in RomM, then reopen Retro.',
-      );
-    }
-    return CustomScrollView(
-      scrollCacheExtent: ScrollCacheExtent.viewport(2),
-      slivers: <Widget>[
-        SliverPadding(
-          padding: pagePadding,
-          sliver: SliverMainAxisGroup(
-            slivers: <Widget>[
-              SliverToBoxAdapter(
-                child: Text(
-                  'Retro',
-                  style: Theme.of(context).textTheme.displaySmall,
-                ),
-              ),
-              const SliverToBoxAdapter(child: SizedBox(height: 10)),
-              SliverToBoxAdapter(
-                child: Text(
-                  '${loadedConsoles.length} consoles from your local RomM library',
-                  style: TextStyle(color: TvPalette.of(context).secondaryText),
-                ),
-              ),
-              const SliverToBoxAdapter(child: SizedBox(height: 34)),
-              SliverGrid.builder(
-                itemCount: loadedConsoles.length,
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 230,
-                  mainAxisSpacing: 18,
-                  crossAxisSpacing: 18,
-                  childAspectRatio: 1,
-                ),
-                itemBuilder: (BuildContext context, int index) {
-                  final console = loadedConsoles[index];
-                  return _ConsoleTile(console: console);
-                },
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ConsoleTile extends StatelessWidget {
-  const _ConsoleTile({required this.console});
-
-  final HearthdeckRetroConsole console;
+  final List<HearthdeckRetroConsole> consoles;
+  final HearthdeckRetroConsole selectedConsole;
+  final HearthdeckRetroGamePage? games;
+  final Object? gamesError;
+  final bool isLoadingGames;
+  final bool isLoadingMore;
+  final ValueChanged<HearthdeckRetroConsole> onConsoleSelected;
+  final VoidCallback onLoadMore;
+  final VoidCallback onRefresh;
+  final DashboardItem Function(HearthdeckRetroGame game) gameItemFor;
+  final ValueChanged<DashboardItem> onOpenGame;
 
   @override
   Widget build(BuildContext context) {
     final tv = TvPalette.of(context);
-    return AnimatedContainer(
-      duration: TvTheme.focusDuration,
-      curve: TvTheme.focusCurve,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(colors: _colorsFor(console.id)),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: tv.borderSubtle),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final scale = (constraints.biggest.shortestSide / 720)
+            .clamp(0.72, 1.3)
+            .toDouble();
+        final padding = (constraints.maxWidth * 0.04)
+            .clamp(24 * scale, 76 * scale)
+            .toDouble();
+        final gap = 14 * scale;
+        final maxTileExtent = (constraints.maxWidth * 0.16)
+            .clamp(148 * scale, 244 * scale)
+            .toDouble();
+        final page = games;
+        final gameItems = page?.items.map(gameItemFor).toList(growable: false);
+        return CustomScrollView(
+          scrollCacheExtent: ScrollCacheExtent.viewport(2),
+          slivers: <Widget>[
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(padding, padding, padding, 56),
+              sliver: SliverMainAxisGroup(
+                slivers: <Widget>[
+                  SliverToBoxAdapter(
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            'Console games',
+                            style: Theme.of(context).textTheme.displaySmall,
+                          ),
+                        ),
+                        TvDetailAction(
+                          action: const ContentAction(
+                            id: 'refresh',
+                            label: 'Refresh',
+                            icon: Icons.refresh_rounded,
+                          ),
+                          onActivate: onRefresh,
+                        ),
+                      ],
+                    ),
+                  ),
+                  SliverToBoxAdapter(child: SizedBox(height: gap * 0.75)),
+                  SliverToBoxAdapter(
+                    child: Text(
+                      'Live from your local RomM library',
+                      style: TextStyle(color: tv.secondaryText),
+                    ),
+                  ),
+                  SliverToBoxAdapter(child: SizedBox(height: gap * 2)),
+                  SliverToBoxAdapter(
+                    child: _ConsoleTabs(
+                      consoles: consoles,
+                      selectedConsole: selectedConsole,
+                      onSelected: onConsoleSelected,
+                      gap: gap,
+                    ),
+                  ),
+                  SliverToBoxAdapter(child: SizedBox(height: gap * 2)),
+                  if (isLoadingGames)
+                    const SliverToBoxAdapter(child: _GamesLoadingState())
+                  else if (gamesError != null)
+                    SliverToBoxAdapter(
+                      child: _GamesErrorState(onRetry: onRefresh),
+                    )
+                  else if (page == null)
+                    const SliverToBoxAdapter(child: _GamesLoadingState())
+                  else ...<Widget>[
+                    SliverToBoxAdapter(
+                      child: Text(
+                        '${selectedConsole.displayName} - ${page.total} games',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ),
+                    SliverToBoxAdapter(child: SizedBox(height: gap)),
+                    if (gameItems!.isEmpty)
+                      const SliverToBoxAdapter(
+                        child: _RetroState(
+                          icon: Icons.videogame_asset_off_rounded,
+                          title: 'No games in this console',
+                          message: 'Scan this platform in RomM and try again.',
+                        ),
+                      )
+                    else
+                      SliverGrid.builder(
+                        itemCount: gameItems.length,
+                        gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                          maxCrossAxisExtent: maxTileExtent,
+                          mainAxisSpacing: gap,
+                          crossAxisSpacing: gap,
+                          childAspectRatio: 0.72,
+                        ),
+                        itemBuilder: (BuildContext context, int index) {
+                          final item = gameItems[index];
+                          return TvContentTile(
+                            key: ValueKey<String>('retro-game-${item.id}'),
+                            item: item,
+                            shape: TvTileShape.square,
+                            onActivate: () => onOpenGame(item),
+                          );
+                        },
+                      ),
+                    if (page.offset + page.items.length <
+                        page.total) ...<Widget>[
+                      SliverToBoxAdapter(child: SizedBox(height: gap * 1.5)),
+                      SliverToBoxAdapter(
+                        child: Center(
+                          child: TvDetailAction(
+                            action: ContentAction(
+                              id: 'load-more',
+                              label: isLoadingMore
+                                  ? 'Loading games...'
+                                  : 'Load more',
+                              icon: Icons.expand_more_rounded,
+                            ),
+                            onActivate: isLoadingMore ? () {} : onLoadMore,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ConsoleTabs extends StatelessWidget {
+  const _ConsoleTabs({
+    required this.consoles,
+    required this.selectedConsole,
+    required this.onSelected,
+    required this.gap,
+  });
+
+  final List<HearthdeckRetroConsole> consoles;
+  final HearthdeckRetroConsole selectedConsole;
+  final ValueChanged<HearthdeckRetroConsole> onSelected;
+  final double gap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
         children: <Widget>[
-          const Icon(Icons.videogame_asset_rounded, size: 42),
-          const Spacer(),
-          Text(
-            console.displayName,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '${console.romCount} games',
-            style: TextStyle(color: tv.secondaryText),
-          ),
+          for (final console in consoles) ...<Widget>[
+            if (console != consoles.first) SizedBox(width: gap),
+            _ConsoleTab(
+              console: console,
+              isSelected: console.id == selectedConsole.id,
+              onActivate: () => onSelected(console),
+            ),
+          ],
         ],
       ),
     );
   }
+}
+
+class _ConsoleTab extends StatelessWidget {
+  const _ConsoleTab({
+    required this.console,
+    required this.isSelected,
+    required this.onActivate,
+  });
+
+  final HearthdeckRetroConsole console;
+  final bool isSelected;
+  final VoidCallback onActivate;
+
+  @override
+  Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
+    return TvFocusable(
+      semanticLabel: console.displayName,
+      onActivate: onActivate,
+      builder: (BuildContext context, bool isFocused) {
+        final style = TvControlStyle.resolve(
+          tv,
+          variant: TvControlVariant.selectable,
+          isFocused: isFocused,
+          isSelected: isSelected,
+        );
+        return AnimatedContainer(
+          duration: TvTheme.focusDuration,
+          curve: TvTheme.focusCurve,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+          decoration: BoxDecoration(
+            color: style.background,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: style.border, width: 2),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(
+                Icons.videogame_asset_rounded,
+                size: 18,
+                color: style.foreground,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                console.displayName,
+                style: TextStyle(
+                  color: style.foreground,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${console.romCount}',
+                style: TextStyle(
+                  color: style.foreground.withValues(alpha: 0.72),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _GamesLoadingState extends StatelessWidget {
+  const _GamesLoadingState();
+
+  @override
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.symmetric(vertical: 80),
+    child: Center(child: CircularProgressIndicator()),
+  );
+}
+
+class _GamesErrorState extends StatelessWidget {
+  const _GamesErrorState({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 80),
+      child: Column(
+        children: <Widget>[
+          const Icon(Icons.cloud_off_rounded, size: 46),
+          const SizedBox(height: 14),
+          Text(
+            'Could not load games',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 16),
+          TvDetailAction(
+            action: const ContentAction(
+              id: 'retry',
+              label: 'Try again',
+              icon: Icons.refresh_rounded,
+            ),
+            onActivate: onRetry,
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _RetroState extends StatelessWidget {

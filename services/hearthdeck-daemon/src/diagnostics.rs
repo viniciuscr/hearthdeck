@@ -30,6 +30,47 @@ pub struct RommPlatform {
     pub fs_slug: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct RommGamePage {
+    pub items: Vec<RommGame>,
+    pub total: u64,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RommGame {
+    pub id: i64,
+    pub platform_id: i64,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub fs_name_no_tags: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub path_cover_small: Option<String>,
+    #[serde(default)]
+    pub metadatum: RommGameMetadata,
+    #[serde(default)]
+    pub regions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct RommGameMetadata {
+    #[serde(default)]
+    pub genres: Vec<String>,
+    #[serde(default)]
+    pub player_count: String,
+    #[serde(default)]
+    pub first_release_date: Option<i64>,
+}
+
+pub struct RommAsset {
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Serialize)]
 pub struct DiagnosticsSnapshot {
     pub generated_at: String,
@@ -91,6 +132,92 @@ pub async fn romm_platforms(
         .map_err(RommQueryError::Failed)?
         .ok_or(RommQueryError::NotConfigured)?;
     query_romm(&credentials).await
+}
+
+pub async fn romm_games(
+    settings: &SettingsRepository,
+    platform_id: i64,
+    limit: u32,
+    offset: u32,
+) -> std::result::Result<RommGamePage, RommQueryError> {
+    let credentials = settings
+        .romm_credentials()
+        .await
+        .map_err(RommQueryError::Failed)?
+        .ok_or(RommQueryError::NotConfigured)?;
+    let response = reqwest::Client::new()
+        .get(format!("{}/api/roms", credentials.base_url))
+        .query(&[
+            ("platform_ids", platform_id.to_string()),
+            ("limit", limit.to_string()),
+            ("offset", offset.to_string()),
+            ("with_char_index", "false".to_owned()),
+            ("with_filter_values", "false".to_owned()),
+            ("with_rom_id_index", "false".to_owned()),
+            ("order_by", "name".to_owned()),
+            ("order_dir", "asc".to_owned()),
+        ])
+        .header(reqwest::header::ACCEPT, "application/json")
+        .bearer_auth(&credentials.token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(RommQueryError::Failed(anyhow::anyhow!(
+            "RomM returned {status}"
+        )));
+    }
+    response
+        .json::<RommGamePage>()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))
+}
+
+pub async fn romm_asset(
+    settings: &SettingsRepository,
+    path: &str,
+) -> std::result::Result<RommAsset, RommQueryError> {
+    let credentials = settings
+        .romm_credentials()
+        .await
+        .map_err(RommQueryError::Failed)?
+        .ok_or(RommQueryError::NotConfigured)?;
+    let path = normalized_romm_asset_path(path).map_err(RommQueryError::Failed)?;
+    let response = reqwest::Client::new()
+        .get(format!("{}{}", credentials.base_url, path))
+        .bearer_auth(&credentials.token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(RommQueryError::Failed(anyhow::anyhow!(
+            "RomM artwork request returned {status}"
+        )));
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    if !content_type.starts_with("image/") {
+        return Err(RommQueryError::Failed(anyhow::anyhow!(
+            "RomM artwork response was not an image"
+        )));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))?
+        .to_vec();
+    Ok(RommAsset {
+        content_type,
+        bytes,
+    })
 }
 
 async fn romm_diagnostic(settings: &SettingsRepository) -> RommDiagnostic {
@@ -170,6 +297,23 @@ async fn query_romm(
         "RomM console check completed"
     );
     Ok(platforms)
+}
+
+fn normalized_romm_asset_path(value: &str) -> anyhow::Result<String> {
+    let path = value.trim();
+    let path = if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    };
+    if !path.starts_with("/resources/")
+        || path.contains("..")
+        || path.contains('#')
+        || path.contains("//")
+    {
+        anyhow::bail!("invalid RomM artwork path");
+    }
+    Ok(path)
 }
 
 async fn service_statuses() -> Vec<ServiceStatus> {
@@ -412,5 +556,16 @@ mod tests {
             super::truncate_and_redact("could not read /home/alex/.config/heroic/installed.json");
 
         assert_eq!(message, "could not read [path]");
+    }
+
+    #[test]
+    fn accepts_only_relative_romm_resource_paths() {
+        assert_eq!(
+            super::normalized_romm_asset_path("resources/roms/1/cover.webp?ts=1").unwrap(),
+            "/resources/roms/1/cover.webp?ts=1"
+        );
+        assert!(super::normalized_romm_asset_path("/api/roms").is_err());
+        assert!(super::normalized_romm_asset_path("https://example.com/cover.webp").is_err());
+        assert!(super::normalized_romm_asset_path("/resources/../secret").is_err());
     }
 }

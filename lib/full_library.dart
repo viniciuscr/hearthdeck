@@ -409,7 +409,7 @@ class _LibraryContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final title = switch (category) {
-      LibraryCategory.games => 'Games library',
+      LibraryCategory.games => 'PC games',
       LibraryCategory.apps => 'Apps library',
       LibraryCategory.groups => 'Custom groups',
       LibraryCategory.history => 'Recently used',

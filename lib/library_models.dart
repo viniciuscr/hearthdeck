@@ -48,8 +48,8 @@ const List<LibraryCategoryDefinition> libraryCategories =
     <LibraryCategoryDefinition>[
       LibraryCategoryDefinition(
         category: LibraryCategory.games,
-        label: 'Games',
-        icon: Icons.sports_esports_rounded,
+        label: 'PC games',
+        icon: Icons.computer_rounded,
       ),
       LibraryCategoryDefinition(
         category: LibraryCategory.apps,

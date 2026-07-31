@@ -48,7 +48,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(FullLibraryPage), findsOneWidget);
-    expect(find.text('Games library'), findsOneWidget);
+    expect(find.text('PC games'), findsOneWidget);
     expect(find.text('All games'), findsOneWidget);
   });
 
@@ -64,7 +64,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Nintendo Entertainment System'), findsOneWidget);
-    expect(find.text('341 games'), findsOneWidget);
+    expect(
+      find.text('Nintendo Entertainment System - 341 games'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('settings opens the RomM connection form', (
@@ -498,12 +501,12 @@ void main() {
     await tester.tap(find.bySemanticsLabel('Full library'));
     await tester.pumpAndSettle();
 
-    expect(FocusManager.instance.primaryFocus?.debugLabel, 'Games');
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'PC games');
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
 
-    expect(FocusManager.instance.primaryFocus?.debugLabel, isNot('Games'));
+    expect(FocusManager.instance.primaryFocus?.debugLabel, isNot('PC games'));
   });
 
   testWidgets('library filters slide in and apply to the content grid', (
@@ -855,9 +858,18 @@ class _HealthCatalogRepository extends MockCatalogRepository {
 class _RetroHttpClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    const body = '''[
-      {"id":1,"name":"Nintendo Entertainment System","display_name":null,"rom_count":341,"slug":"nes","fs_slug":"nes"}
-    ]''';
+    final body = switch (request.url.path) {
+      '/v1/retro/consoles' =>
+        '''[
+        {"id":1,"name":"Nintendo Entertainment System","display_name":null,"rom_count":341,"slug":"nes","fs_slug":"nes"}
+      ]''',
+      '/v1/retro/roms' =>
+        '''{
+        "items":[{"id":12,"platform_id":1,"title":"Metroid","summary":"An action adventure.","cover_path":null,"genres":["Adventure"],"player_count":"1","release_year":1986,"regions":["USA"]}],
+        "total":341,"limit":48,"offset":0
+      }''',
+      _ => throw StateError('Unexpected request: ${request.url}'),
+    };
     return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
   }
 }

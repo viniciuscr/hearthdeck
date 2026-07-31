@@ -94,6 +94,7 @@ class DashboardItem {
     this.badge,
     this.description,
     this.artworkUrl,
+    this.artworkHeaders,
     this.kind = TvContentKind.application,
     this.details,
   });
@@ -105,6 +106,7 @@ class DashboardItem {
   final String? badge;
   final String? description;
   final String? artworkUrl;
+  final Map<String, String>? artworkHeaders;
   final TvContentKind kind;
   final ContentDetails? details;
 }
@@ -166,7 +168,7 @@ const List<DashboardSection> dashboardSections = <DashboardSection>[
       ),
       DashboardItem(
         id: 'retro',
-        title: 'Retro',
+        title: 'Console games',
         icon: Icons.videogame_asset_rounded,
         colors: <Color>[Color(0xFF883A55), Color(0xFF3E1425)],
         kind: TvContentKind.game,

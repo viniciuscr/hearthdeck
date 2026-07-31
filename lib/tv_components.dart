@@ -668,6 +668,7 @@ class TvArtworkVisual extends StatelessWidget {
                 child: Image.network(
                   artworkUrl,
                   fit: BoxFit.cover,
+                  headers: item.artworkHeaders,
                   errorBuilder:
                       (
                         BuildContext context,
