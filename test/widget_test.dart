@@ -1,22 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_gamepads/flutter_gamepads.dart';
-import 'package:http/http.dart' as http;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gamepads/gamepads.dart';
 import 'package:gamepads_platform_interface/gamepads_platform_interface.dart';
 import 'package:gamepads_platform_interface/method_channel_gamepads_platform_interface.dart';
 import 'package:hearthdeck/backend/hearthdeck_api_client.dart';
-import 'package:hearthdeck/backend/hearthdeck_endpoint.dart';
 import 'package:hearthdeck/catalog/catalog_repository.dart';
 import 'package:hearthdeck/catalog/mock_catalog_repository.dart';
 import 'package:hearthdeck/content_details.dart';
 import 'package:hearthdeck/dashboard_models.dart';
 import 'package:hearthdeck/external_link.dart';
 import 'package:hearthdeck/full_library.dart';
+import 'package:hearthdeck/library_classification.dart';
 import 'package:hearthdeck/main.dart';
 import 'package:hearthdeck/platform_session.dart';
-import 'package:hearthdeck/retro.dart';
 import 'package:hearthdeck/romm_settings.dart';
 import 'package:hearthdeck/search.dart';
 import 'package:hearthdeck/settings.dart';
@@ -48,23 +46,21 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(FullLibraryPage), findsOneWidget);
-    expect(find.text('Games library'), findsOneWidget);
-    expect(find.text('All games'), findsOneWidget);
+    expect(find.text('Games'), findsOneWidget);
+    expect(find.text('PC games'), findsOneWidget);
   });
 
-  testWidgets('Retro opens the configured RomM console browser', (
-    WidgetTester tester,
-  ) async {
-    final client = HearthdeckApiClient(
-      endpoint: HearthdeckEndpoint.local(),
-      token: 'test-token',
-      client: _RetroHttpClient(),
-    );
-    await tester.pumpWidget(MaterialApp(home: RetroPage(apiClient: client)));
+  testWidgets('Retro opens the Games console tab', (WidgetTester tester) async {
+    await tester.pumpWidget(const HearthdeckApp());
+    await tester.tap(find.text('Retro'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Nintendo Entertainment System'), findsOneWidget);
-    expect(find.text('341 games'), findsOneWidget);
+    expect(find.byType(FullLibraryPage), findsOneWidget);
+    expect(find.text('Consoles'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('library-tile-romm-console-nes')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('settings opens the RomM connection form', (
@@ -88,6 +84,37 @@ void main() {
 
     expect(find.byType(RommSettingsPage), findsOneWidget);
     expect(find.text('RomM server URL'), findsOneWidget);
+  });
+
+  testWidgets('settings opens library classification management', (
+    WidgetTester tester,
+  ) async {
+    final repository = _ClassificationCatalogRepository();
+    await tester.pumpWidget(
+      MaterialApp(home: SettingsPage(catalogRepository: repository)),
+    );
+    await tester.tap(find.bySemanticsLabel('System'));
+    await tester.pumpAndSettle();
+    final classification = find.byKey(
+      const ValueKey<String>('settings-option-library-classification'),
+    );
+    await tester.scrollUntilVisible(
+      classification,
+      240,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(classification);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(LibraryClassificationPage), findsOneWidget);
+    expect(find.text('GOverlay'), findsOneWidget);
+    await tester.tap(find.text('GOverlay'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('App'));
+    await tester.pumpAndSettle();
+
+    expect(repository.classifiedItemId, 'desktop:goverlay.desktop');
+    expect(repository.classifiedKind, 'application');
   });
 
   testWidgets('library opens details before dispatching a catalog launch', (
@@ -475,20 +502,39 @@ void main() {
     expect(find.byType(TvSearchPage), findsOneWidget);
   });
 
-  testWidgets('library source selection updates its item grid', (
+  testWidgets('Games library switches from PC games to RomM consoles', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(const HearthdeckApp());
     await tester.tap(find.bySemanticsLabel('Full library'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Steam'));
+    await tester.tap(find.text('Consoles'));
     await tester.pumpAndSettle();
 
     expect(
-      find.byKey(const ValueKey<String>('library-tile-ember-steam')),
+      find.byKey(const ValueKey<String>('library-tile-romm-console-nes')),
       findsOneWidget,
     );
+  });
+
+  testWidgets('console tile opens its RomM platform overview', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(const HearthdeckApp());
+    await tester.tap(find.bySemanticsLabel('Full library'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Consoles'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('library-tile-romm-console-nes')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ContentDetailsPage), findsOneWidget);
+    expect(find.text('Nintendo Entertainment System'), findsOneWidget);
+    expect(find.text('341 games in RomM'), findsOneWidget);
   });
 
   testWidgets('library supports directional focus into its content grid', (
@@ -739,6 +785,16 @@ class _EventFailingCatalogRepository implements CatalogRepository {
   }
 
   @override
+  Future<List<HearthdeckLibraryItem>> libraryItems() async =>
+      const <HearthdeckLibraryItem>[];
+
+  @override
+  Future<void> updateLibraryClassification({
+    required String itemId,
+    required String? kind,
+  }) async {}
+
+  @override
   Future<void> launch(DashboardItem item) async {}
 
   @override
@@ -852,12 +908,36 @@ class _HealthCatalogRepository extends MockCatalogRepository {
       );
 }
 
-class _RetroHttpClient extends http.BaseClient {
+class _ClassificationCatalogRepository extends MockCatalogRepository {
+  String? classifiedItemId;
+  String? classifiedKind;
+
   @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    const body = '''[
-      {"id":1,"name":"Nintendo Entertainment System","display_name":null,"rom_count":341,"slug":"nes","fs_slug":"nes"}
-    ]''';
-    return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
+  Future<List<HearthdeckLibraryItem>> libraryItems() async =>
+      <HearthdeckLibraryItem>[
+        const HearthdeckLibraryItem(
+          id: 'desktop:goverlay.desktop',
+          sourceId: 'desktop-apps',
+          title: 'GOverlay',
+          kind: 'game',
+          launchId: 'goverlay.desktop',
+          icon: null,
+          metadata: <String, dynamic>{
+            'classification': <String, dynamic>{
+              'kind': null,
+              'discovered_kind': 'game',
+              'overridden': false,
+            },
+          },
+        ),
+      ];
+
+  @override
+  Future<void> updateLibraryClassification({
+    required String itemId,
+    required String? kind,
+  }) async {
+    classifiedItemId = itemId;
+    classifiedKind = kind;
   }
 }

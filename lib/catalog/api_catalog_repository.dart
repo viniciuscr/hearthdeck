@@ -21,6 +21,7 @@ class ApiCatalogRepository implements CatalogRepository {
   @override
   Future<CatalogData> load() async {
     final items = await _apiClient.library();
+    final consoles = await _loadConsoles();
     final games = <HearthdeckLibraryItem>[];
     final appsByCategory = <String, List<HearthdeckLibraryItem>>{};
     for (final item in items) {
@@ -39,9 +40,19 @@ class ApiCatalogRepository implements CatalogRepository {
         ? const <CatalogSource>[]
         : <CatalogSource>[
             CatalogSource(
-              id: 'all-games',
-              label: 'All games',
+              id: 'pc-games',
+              label: 'PC games',
               items: games.map(_toDashboardItem).toList(growable: false),
+            ),
+          ];
+    final consoleSources = consoles.isEmpty
+        ? const <CatalogSource>[]
+        : <CatalogSource>[
+            CatalogSource(
+              id: 'romm-consoles',
+              label: 'Consoles',
+              isConsoleCollection: true,
+              items: consoles.map(_toConsoleItem).toList(growable: false),
             ),
           ];
     final appSources =
@@ -57,8 +68,31 @@ class ApiCatalogRepository implements CatalogRepository {
               );
             })
             .toList(growable: false);
-    return CatalogData(gameSources: gameSources, appSources: appSources);
+    return CatalogData(
+      gameSources: gameSources,
+      appSources: appSources,
+      consoleSources: consoleSources,
+    );
   }
+
+  Future<List<HearthdeckRetroConsole>> _loadConsoles() async {
+    try {
+      return await _apiClient.retroConsoles();
+    } on Object {
+      // RomM is optional; its live diagnostic reports the connection failure
+      // without hiding installed PC games from the library.
+      return const <HearthdeckRetroConsole>[];
+    }
+  }
+
+  @override
+  Future<List<HearthdeckLibraryItem>> libraryItems() => _apiClient.library();
+
+  @override
+  Future<void> updateLibraryClassification({
+    required String itemId,
+    required String? kind,
+  }) => _apiClient.updateLibraryClassification(itemId: itemId, kind: kind);
 
   @override
   Future<void> launch(DashboardItem item) => _apiClient.launch(item.id);
@@ -104,6 +138,41 @@ class ApiCatalogRepository implements CatalogRepository {
       details: _detailsFor(item, metadata),
     );
   }
+
+  DashboardItem _toConsoleItem(HearthdeckRetroConsole console) => DashboardItem(
+    id: 'romm-console-${console.id}',
+    title: console.displayName,
+    description: '${console.romCount} games in RomM',
+    badge: '${console.romCount} games',
+    icon: Icons.videogame_asset_rounded,
+    colors: _colorsFor('romm-console-${console.id}'),
+    kind: TvContentKind.game,
+    details: ContentDetails(
+      summary:
+          'RomM reports ${console.romCount} games for this platform. Individual game browsing will appear here once the RomM game-list endpoint is connected.',
+      actions: const <ContentAction>[],
+      facts: const <ContentFact>[],
+      factSections: <ContentFactSection>[
+        ContentFactSection(
+          title: 'Console library',
+          facts: <ContentFact>[
+            ContentFact(
+              label: 'Games',
+              value: '${console.romCount}',
+              icon: Icons.sports_esports_rounded,
+            ),
+            const ContentFact(
+              label: 'Source',
+              value: 'RomM',
+              icon: Icons.dns_rounded,
+            ),
+          ],
+        ),
+      ],
+      galleryTitle: 'Platform details',
+      gallery: const <ContentGalleryItem>[],
+    ),
+  );
 
   ContentDetails? _detailsFor(
     HearthdeckLibraryItem item,

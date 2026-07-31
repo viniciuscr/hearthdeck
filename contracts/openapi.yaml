@@ -71,6 +71,26 @@ paths:
       responses:
         '202':
           description: Discovery jobs accepted
+  /v1/library/{id}/classification:
+    put:
+      operationId: updateLibraryClassification
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryClassificationUpdate'
+      responses:
+        '204':
+          description: Classification saved
   /v1/retro/consoles:
     get:
       operationId: listRetroConsoles
@@ -366,6 +386,11 @@ components:
         theme_mode: { type: string, enum: [system, aurora, ember, indigo, noir] }
         backdrop_mode: { type: string, enum: [solid, edge_wash, quiet_grid] }
         revision: { type: integer, minimum: 0 }
+    LibraryClassificationUpdate:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: [string, 'null'], enum: [game, application, null] }
     LibraryItem:
       type: object
       required: [id, source_id, title, kind, metadata]
@@ -416,6 +441,13 @@ components:
               type: array
               items: { type: string, format: uri }
             provenance: { type: string }
+            classification:
+              type: object
+              required: [kind, discovered_kind, overridden]
+              properties:
+                kind: { type: [string, 'null'], enum: [game, application, null] }
+                discovered_kind: { type: string }
+                overridden: { type: boolean }
     RetroConsole:
       type: object
       required: [id, name, rom_count]

@@ -27,6 +27,19 @@ class LocalCatalogRepository implements CatalogRepository {
       _request((ApiCatalogRepository repository) => repository.load());
 
   @override
+  Future<List<HearthdeckLibraryItem>> libraryItems() =>
+      _request((ApiCatalogRepository repository) => repository.libraryItems());
+
+  @override
+  Future<void> updateLibraryClassification({
+    required String itemId,
+    required String? kind,
+  }) => _request(
+    (ApiCatalogRepository repository) =>
+        repository.updateLibraryClassification(itemId: itemId, kind: kind),
+  );
+
+  @override
   Future<void> launch(DashboardItem item) =>
       _request((ApiCatalogRepository repository) => repository.launch(item));
 

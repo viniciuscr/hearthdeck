@@ -30,6 +30,10 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/diagnostics", get(diagnostics))
         .route("/v1/pairing/complete", post(complete_pairing))
         .route("/v1/library", get(list_library))
+        .route(
+            "/v1/library/{id}/classification",
+            axum::routing::put(update_library_classification),
+        )
         .route("/v1/retro/consoles", get(list_retro_consoles))
         .route(
             "/v1/retro/settings",
@@ -149,6 +153,37 @@ async fn list_library(
     let items = state.catalog.list().await.map_err(ApiError::internal)?;
     info!(item_count = items.len(), "catalog listed");
     Ok(Json(items))
+}
+
+async fn update_library_classification(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateLibraryClassificationRequest>,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    if id.is_empty() || id.chars().count() > 512 {
+        return Err(ApiError::invalid_library_item_id());
+    }
+    let kind = match request.kind.as_deref() {
+        Some("game") | Some("application") => request.kind.as_deref(),
+        None => None,
+        _ => return Err(ApiError::invalid_classification_kind()),
+    };
+    if !state
+        .catalog
+        .set_classification(&id, kind)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        return Err(ApiError::not_found());
+    }
+    let _ = state.events.send(ServerEvent::LibraryChanged {
+        source_id: "user-classification".to_owned(),
+        record_count: 1,
+    });
+    info!(item_id = %id, classification = ?kind, "library classification updated");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_retro_consoles(
@@ -551,6 +586,11 @@ struct InstallRequest {
     item_id: String,
 }
 
+#[derive(Deserialize)]
+struct UpdateLibraryClassificationRequest {
+    kind: Option<String>,
+}
+
 #[derive(Serialize)]
 struct PairingResponse {
     code: String,
@@ -641,6 +681,22 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: "item_id must contain 1 to 512 characters".to_owned(),
+            settings: None,
+        }
+    }
+
+    fn invalid_library_item_id() -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: "library item ID must contain 1 to 512 characters".to_owned(),
+            settings: None,
+        }
+    }
+
+    fn invalid_classification_kind() -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: "classification kind must be game, application, or null".to_owned(),
             settings: None,
         }
     }
@@ -1000,6 +1056,18 @@ mod tests {
         assert_eq!(health["providers"][0]["record_count"], 1);
         assert!(health["providers"][0]["last_attempt_at"].is_string());
 
+        let classification = router(state.clone())
+            .oneshot(
+                Request::put("/v1/library/test:app/classification")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind":"game"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(classification.status(), StatusCode::NO_CONTENT);
+
         let (status, library) = response_json(
             router(state),
             Request::get("/v1/library")
@@ -1010,6 +1078,8 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(library[0]["id"], "test:app");
+        assert_eq!(library[0]["kind"], "game");
+        assert_eq!(library[0]["metadata"]["classification"]["overridden"], true);
     }
 
     #[test]

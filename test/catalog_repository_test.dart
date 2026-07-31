@@ -30,9 +30,14 @@ void main() {
       );
       final catalog = await ApiCatalogRepository(client).load();
 
-      expect(catalog.gameSources.single.label, 'All games');
+      expect(catalog.gameSources.single.label, 'PC games');
+      expect(catalog.consoleSources.single.label, 'Consoles');
       expect(catalog.appSources.single.label, 'Graphics');
       expect(catalog.gameSources.single.items.single.title, 'Orbit');
+      expect(
+        catalog.consoleSources.single.items.single.title,
+        'Nintendo Entertainment System',
+      );
       expect(catalog.appSources.single.items.single.title, 'Gallery');
       expect(
         catalog.appSources.single.items.single.details?.factSections.any(
@@ -176,6 +181,19 @@ void main() {
     },
   );
 
+  test('API client saves a library classification override', () async {
+    final client = HearthdeckApiClient(
+      endpoint: HearthdeckEndpoint.local(),
+      token: 'test-token',
+      client: _LibraryClassificationHttpClient(),
+    );
+
+    await client.updateLibraryClassification(
+      itemId: 'desktop:goverlay.desktop',
+      kind: 'application',
+    );
+  });
+
   test('API catalog reloads on metadata provider events', () async {
     final client = HearthdeckApiClient(
       endpoint: HearthdeckEndpoint.local(),
@@ -246,6 +264,16 @@ class _CatalogHttpClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     expect(request.headers['authorization'], 'Bearer test-token');
+    if (request.url.path == '/v1/retro/consoles') {
+      const consoles = '''[
+        {"id":1,"name":"Nintendo Entertainment System","display_name":null,"rom_count":341,"slug":"nes","fs_slug":"nes"}
+      ]''';
+      return http.StreamedResponse(
+        Stream<List<int>>.value(consoles.codeUnits),
+        200,
+        headers: const <String, String>{'content-type': 'application/json'},
+      );
+    }
     const body = '''[
       {"id":"steam:orbit","source_id":"steam","title":"Orbit","kind":"game","launch_id":null,"icon":null,"metadata":{"summary":"Space exploration","categories":["Adventure"],"urls":{},"provenance":"steam"}},
       {"id":"desktop:gallery","source_id":"desktop-apps","title":"Gallery","kind":"application","launch_id":"gallery.desktop","icon":null,"metadata":{"summary":"Browse photos","categories":["Graphics"],"urls":{"homepage":"https://example.org/gallery"},"provenance":"appstream-local"}}
@@ -324,6 +352,21 @@ class _RommSettingsHttpClient extends http.BaseClient {
     const body =
         '{"base_url":"http://127.0.0.1:8080","configured":true,"updated_at":"2026-01-01T00:00:00Z"}';
     return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
+  }
+}
+
+class _LibraryClassificationHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    expect(request.method, 'PUT');
+    expect(
+      request.url.path,
+      '/v1/library/desktop:goverlay.desktop/classification',
+    );
+    expect(request.headers['authorization'], 'Bearer test-token');
+    expect(request.headers['content-type'], 'application/json');
+    expect((request as http.Request).body, '{"kind":"application"}');
+    return http.StreamedResponse(Stream<List<int>>.empty(), 204);
   }
 }
 

@@ -83,6 +83,23 @@ class HearthdeckApiClient {
         .toList(growable: false);
   }
 
+  Future<void> updateLibraryClassification({
+    required String itemId,
+    required String? kind,
+  }) async {
+    final response = await _client.put(
+      endpoint.api('library/$itemId/classification'),
+      headers: <String, String>{
+        ..._authorizationHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(<String, String?>{'kind': kind}),
+    );
+    if (response.statusCode != 204) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+  }
+
   Future<List<HearthdeckRetroConsole>> retroConsoles() async {
     final response = await _client.get(
       endpoint.api('retro/consoles'),
