@@ -11,7 +11,7 @@ use hearthdeck_protocol::{BridgeRequest, BridgeResponse};
 
 #[derive(Clone, Debug)]
 pub struct ManagedSession {
-    pub application_id: String,
+    pub application_name: String,
     pub id: String,
 }
 
@@ -19,7 +19,7 @@ pub fn active_session() -> Result<Option<ManagedSession>> {
     match request(BridgeRequest::ActiveApplicationSession)? {
         BridgeResponse::ApplicationSession { session } => {
             Ok(session.map(|session| ManagedSession {
-                application_id: session.application_id,
+                application_name: session.application_name,
                 id: session.id,
             }))
         }

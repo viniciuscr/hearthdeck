@@ -497,7 +497,7 @@ fn render(
             text_x,
             text_y,
             scale.saturating_sub(1).max(2),
-            &session.application_id,
+            &session.application_name,
             Color::new(0xFF, 0xA7, 0xB0, 0xC0),
         );
     }

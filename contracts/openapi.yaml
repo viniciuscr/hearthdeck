@@ -321,11 +321,12 @@ components:
         message: { type: string, maxLength: 600 }
     ApplicationSession:
       type: object
-      required: [id, source_id, application_id, state]
+      required: [id, source_id, application_id, application_name, state]
       properties:
         id: { type: string }
         source_id: { type: string }
         application_id: { type: string }
+        application_name: { type: string }
         state: { type: string, enum: [running] }
     ProviderHealth:
       type: object

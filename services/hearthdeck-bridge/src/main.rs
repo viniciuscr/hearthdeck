@@ -136,6 +136,7 @@ async fn handle_request(
         BridgeRequest::LaunchApplication {
             source_id,
             application_id,
+            application_name,
             session_id,
         } => match platform::launch_application(&source_id, &application_id, &session_id).await {
             Ok(launched) => {
@@ -143,6 +144,7 @@ async fn handle_request(
                     id: session_id.clone(),
                     source_id: source_id.clone(),
                     application_id: application_id.clone(),
+                    application_name: application_name.clone(),
                     state: hearthdeck_protocol::ApplicationSessionState::Running,
                 };
                 let managed = ManagedSession {
@@ -175,6 +177,7 @@ async fn handle_request(
         BridgeRequest::LaunchHeroicGame {
             runner,
             application_id,
+            application_name,
             session_id,
         } => match platform::launch_heroic_game(runner, &application_id, &session_id).await {
             Ok(launched) => {
@@ -183,6 +186,7 @@ async fn handle_request(
                     session_directory,
                     "heroic".to_owned(),
                     application_id,
+                    application_name,
                     session_id,
                     launched,
                 )
@@ -257,6 +261,7 @@ async fn register_launch(
     session_directory: &Path,
     source_id: String,
     application_id: String,
+    application_name: String,
     session_id: String,
     launched: platform::LaunchedApplication,
 ) -> BridgeResponse {
@@ -264,6 +269,7 @@ async fn register_launch(
         id: session_id.clone(),
         source_id: source_id.clone(),
         application_id: application_id.clone(),
+        application_name: application_name.clone(),
         state: hearthdeck_protocol::ApplicationSessionState::Running,
     };
     let managed = ManagedSession {
@@ -378,6 +384,7 @@ mod tests {
                 id: "session-1".to_owned(),
                 source_id: "desktop-apps".to_owned(),
                 application_id: "org.example.App.desktop".to_owned(),
+                application_name: "Example App".to_owned(),
                 state: ApplicationSessionState::Running,
             },
             unit_name: Some("hearthdeck-app-session-1.service".to_owned()),
