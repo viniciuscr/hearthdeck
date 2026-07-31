@@ -75,6 +75,10 @@ automatically. See
 
 ## Kiosk Session
 
+See `docs/kiosk-session.md` for the full architecture, startup-ordering
+guarantees, and a "do not" list before changing anything about how the
+session starts.
+
 The Arch package installs a **Hearthdeck Kiosk** Wayland session with no
 desktop shell. Its session script runs Gamescope directly on the DRM/KMS seat
 with Hearthdeck as its only child, for the lowest possible memory and CPU
