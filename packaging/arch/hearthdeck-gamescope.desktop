@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Hearthdeck Console
-Comment=Direct DRM Gamescope session with Xterm bootstrap
+Comment=Direct DRM Gamescope session with a visible Xterm bootstrap
 Exec=/usr/lib/hearthdeck/hearthdeck-console-session
 Type=Application
 DesktopNames=gamescope;hearthdeck

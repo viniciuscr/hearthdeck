@@ -72,10 +72,9 @@ recovery option.
 The current Flutter GTK shell uses Gamescope's XWayland display rather than
 Gamescope's Wayland client socket. This is intentional until the shell's native
 runner is migrated and tested as a Wayland client. The Console entrypoint starts
-direct DRM Gamescope with Xterm as its primary Xwayland client. Once Xterm has
-mapped, it starts `/usr/bin/hearthdeck` from the user's interactive shell. This
-matches the known-good Xterm launch topology. A normal Hearthdeck exit returns
-to the display manager; a failed launch leaves Xterm open with its output.
+the exact direct DRM Gamescope and Xterm topology used by the recovery session.
+Xterm then launches `/usr/bin/hearthdeck`. When Hearthdeck exits, its status and
+output remain visible in Xterm; run `exit` to return to the display manager.
 
 Use **Settings > General > Exit to desktop** inside Hearthdeck Console. Confirm
 the prompt to close the console session and return to the display manager.

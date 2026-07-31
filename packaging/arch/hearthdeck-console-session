@@ -1,13 +1,7 @@
 #!/usr/bin/bash
-# Keep Xterm as Gamescope's primary client, then start Hearthdeck from the
-# user's normal shell after Xterm has mapped its Xwayland window.
+# Start the exact known-good Gamescope Xterm topology, then launch Hearthdeck.
 set -Euo pipefail
 
-shell="${SHELL:-/bin/sh}"
-if [[ ! -x "$shell" ]]; then
-  shell=/bin/sh
-fi
-
 exec /usr/bin/gamescope --backend drm --force-windows-fullscreen -- \
-  /usr/bin/xterm -wf -fa Monospace -fs 16 -e \
-  /usr/lib/hearthdeck/hearthdeck-console-bootstrap "$shell"
+  /usr/bin/xterm -fa Monospace -fs 16 -e \
+  /usr/lib/hearthdeck/hearthdeck-console-bootstrap
