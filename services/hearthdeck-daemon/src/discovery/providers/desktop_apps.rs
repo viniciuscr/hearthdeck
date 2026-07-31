@@ -77,22 +77,25 @@ impl DiscoveryProvider for DesktopAppsProvider {
         Ok(applications
             .into_iter()
             .filter(|application| application.launch_scheme.as_deref() != Some("heroic"))
-            .map(|application| CatalogRecord {
-                id: format!("desktop:{}", application.application_id),
-                title: application.name,
-                kind: content_kind(
+            .map(|application| {
+                let kind = content_kind(
                     &application.application_id,
                     &application.name,
                     &application.categories,
                 )
-                .to_owned(),
-                launch_id: Some(application.application_id),
-                icon: application.icon,
-                metadata: serde_json::json!({
-                    "categories": application.categories,
-                    "comment": application.comment,
-                }),
-                updated_at: updated_at.clone(),
+                .to_owned();
+                CatalogRecord {
+                    id: format!("desktop:{}", application.application_id),
+                    title: application.name,
+                    kind,
+                    launch_id: Some(application.application_id),
+                    icon: application.icon,
+                    metadata: serde_json::json!({
+                        "categories": application.categories,
+                        "comment": application.comment,
+                    }),
+                    updated_at: updated_at.clone(),
+                }
             })
             .collect())
     }

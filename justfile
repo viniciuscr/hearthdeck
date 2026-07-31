@@ -90,7 +90,7 @@ ci-check:
 
 # Build the Arch Linux package from the current source checkout.
 ci-package-arch:
-  cd packaging/arch && makepkg --cleanbuild --noconfirm --nodeps
+  cd packaging/arch && makepkg --cleanbuild --log --noconfirm --nodeps
 
 # Install Linux systemd user units and enable the local services.
 install-services:

@@ -72,6 +72,15 @@ jobs:
           package_version="1.0.0.r${GITHUB_RUN_NUMBER}"
           su --login builder --command "cd '$GITHUB_WORKSPACE' && HEARTHDECK_PKGVER='$package_version' HEARTHDECK_PKGREL=1 PATH='$flutter_bin:/home/builder/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/bin' just ci-package-arch"
 
+      - name: Archive package build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthdeck-package-build-logs
+          path: packaging/arch/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Build pacman repository database
         run: |
           repository="$GITHUB_WORKSPACE/repository/arch/x86_64"
