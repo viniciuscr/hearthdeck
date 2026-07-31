@@ -318,7 +318,7 @@ class _ExitToDesktopDialog extends StatelessWidget {
       backgroundColor: tv.surface,
       title: const Text('Exit to desktop?'),
       content: Text(
-        'Hearthdeck will close. Kiosk mode returns to the login screen; a desktop session returns to its desktop.',
+        'Hearthdeck will close. Kiosk mode returns to the COSMIC desktop; a desktop session returns to its desktop.',
         style: TextStyle(color: tv.secondaryText),
       ),
       actions: <Widget>[

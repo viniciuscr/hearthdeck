@@ -1,22 +1,10 @@
 #!/usr/bin/bash
-# Minimal COSMIC compositor session: no cosmic-session, panel, launcher,
-# applets, wallpaper, notifications, or settings services are started.
+# Let COSMIC own DRM, logind, and the Wayland activation environment. Its
+# startup script imports this desktop name before starting cosmic-session.target.
 set -Euo pipefail
 
-: "${XDG_RUNTIME_DIR:?Hearthdeck Kiosk requires XDG_RUNTIME_DIR}"
-runtime_directory="$XDG_RUNTIME_DIR/hearthdeck"
-mkdir -p -- "$runtime_directory"
-exec >>"$runtime_directory/cosmic-session.log" 2>&1
-
-echo "$(date -Iseconds) starting Hearthdeck Kiosk"
-echo "$(date -Iseconds) user=${USER:-unset} runtime=$XDG_RUNTIME_DIR"
-
-# A display-manager session must claim KMS, not nest in an inherited display.
-unset DISPLAY WAYLAND_DISPLAY COSMIC_SESSION_SOCK
-export COSMIC_BACKEND=kms
 export XDG_CURRENT_DESKTOP=hearthdeck:COSMIC
-export XDG_SESSION_DESKTOP=hearthdeck
+export XDG_SESSION_DESKTOP=COSMIC
 export XDG_SESSION_TYPE=wayland
 
-exec /usr/bin/cosmic-comp --no-xwayland \
-  /usr/lib/hearthdeck/hearthdeck-cosmic-client
+exec /usr/bin/start-cosmic

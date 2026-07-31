@@ -43,11 +43,12 @@ when a typed daemon request arrives. Future NetworkManager and BlueZ adapters
 will receive their own socket/service pair under the same target rather than
 being folded into the daemon.
 
-In the COSMIC Kiosk session, the bridge wraps registered desktop applications in
-nested Gamescope. cosmic-comp remains the DRM compositor, while each app receives its
-own Gamescope Xwayland and Wayland environment. PipeWire/WirePlumber audio,
-NetworkManager networking, and BlueZ Bluetooth remain host services outside the
-Hearthdeck process tree.
+In the COSMIC Kiosk session, normal COSMIC startup publishes the Wayland socket
+before the Kiosk client starts. The bridge wraps registered desktop applications
+in nested Gamescope. cosmic-comp remains the DRM compositor, while each app
+receives its own Gamescope Xwayland and Wayland environment. PipeWire/WirePlumber
+audio, NetworkManager networking, and BlueZ Bluetooth remain host services
+outside the Hearthdeck process tree.
 
 Heroic game URI launches are rejected in Kiosk mode because the running Heroic
 process can detach a game from the transient service that Hearthdeck tracks.

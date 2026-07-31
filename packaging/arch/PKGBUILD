@@ -2,12 +2,12 @@ pkgname=hearthdeck
 # CI supplies a monotonically increasing version for the GitHub Pages pacman
 # repository. Local builds retain the current release version.
 pkgver="${HEARTHDECK_PKGVER:-1.0.0}"
-pkgrel="${HEARTHDECK_PKGREL:-31}"
+pkgrel="${HEARTHDECK_PKGREL:-32}"
 pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
 license=('MIT')
-depends=('cosmic-comp' 'gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'sqlite' 'systemd' 'xorg-xwayland')
+depends=('cosmic-session' 'gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'sqlite' 'systemd' 'xorg-xwayland')
 makedepends=('clang' 'cmake' 'just' 'ninja' 'pkgconf' 'rust' 'sqlite')
 install="${pkgname}.install"
 backup=('etc/pacman.d/hearthdeck.conf')
@@ -44,7 +44,7 @@ package() {
   install -Dm644 packaging/arch/hearthdeck.desktop "$pkgdir/usr/share/applications/io.github.viniciuscr.hearthdeck.desktop"
   install -Dm644 packaging/arch/hearthdeck-cosmic.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck-cosmic.desktop"
   install -Dm755 packaging/arch/hearthdeck-cosmic-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-cosmic-session"
-  install -Dm755 packaging/arch/hearthdeck-cosmic-client "$pkgdir/usr/lib/hearthdeck/hearthdeck-cosmic-client"
+  install -Dm644 packaging/arch/hearthdeck-kiosk.service "$pkgdir/usr/lib/systemd/user/hearthdeck-kiosk.service"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

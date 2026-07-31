@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     env,
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -187,7 +187,9 @@ async fn launch_with_systemd(
 }
 
 fn is_kiosk_session() -> bool {
-    env::var_os("HEARTHDECK_KIOSK").as_deref() == Some(OsStr::new("1"))
+    current_desktops()
+        .iter()
+        .any(|desktop| desktop.eq_ignore_ascii_case("hearthdeck"))
 }
 
 fn valid_heroic_application_id(value: &str) -> bool {

@@ -62,17 +62,10 @@ arguments. Query `GET /v1/sessions/active` after launch, then use
 `POST /v1/sessions/{id}/stop` to confirm the managed process exits.
 
 Select **Hearthdeck Kiosk** in the display manager. Confirm Hearthdeck opens
-without a panel or desktop shell, then launch a graphical application and verify
-it opens inside nested Gamescope. Exit Hearthdeck Kiosk and confirm its managed
-application services stop before the display manager returns.
-
-If Kiosk returns to the display manager before Hearthdeck appears, inspect the
-session logs from a desktop session or TTY:
-
-```sh
-cat "$XDG_RUNTIME_DIR/hearthdeck/cosmic-session.log"
-cat "$XDG_RUNTIME_DIR/hearthdeck/cosmic-client.log"
-```
+after the normal COSMIC session has initialized. Confirm it is fullscreen, then
+launch a graphical application and verify it opens inside nested Gamescope. Exit
+Hearthdeck Kiosk and confirm its managed application services stop while the
+COSMIC desktop remains available.
 
 Confirm gamepad D-pad, A, B, and sticks navigate Hearthdeck. Confirm existing
 audio works through PipeWire/WirePlumber. Confirm preconfigured NetworkManager
