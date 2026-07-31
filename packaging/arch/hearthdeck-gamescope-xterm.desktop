@@ -1,6 +1,0 @@
-[Desktop Entry]
-Name=Hearthdeck Gamescope Xterm Test
-Comment=Known-good minimal direct DRM Gamescope session
-Exec=/usr/lib/hearthdeck/hearthdeck-gamescope-xterm
-Type=Application
-DesktopNames=gamescope

@@ -98,8 +98,8 @@ pub async fn launch_heroic_game(
     application_id: &str,
     session_id: &str,
 ) -> Result<LaunchedApplication> {
-    if env::var_os("HEARTHDECK_LABWC").as_deref() == Some(OsStr::new("1")) {
-        anyhow::bail!("Heroic game launches are unavailable in the Labwc Kiosk session")
+    if is_kiosk_session() {
+        anyhow::bail!("Heroic game launches are unavailable in the Hearthdeck Kiosk session")
     }
     if !valid_heroic_application_id(application_id) {
         anyhow::bail!("Heroic application identifier is invalid")
@@ -137,11 +137,11 @@ async fn launch_with_systemd(
         .arg(&unit_name)
         .arg("--working-directory")
         .arg(working_directory.unwrap_or_else(|| PathBuf::from("/")));
-    let labwc_session = env::var_os("HEARTHDECK_LABWC").as_deref() == Some(OsStr::new("1"));
-    if labwc_session {
-        command.arg("--slice=hearthdeck-labwc.slice");
+    let kiosk_session = is_kiosk_session();
+    if kiosk_session {
+        command.arg("--slice=hearthdeck-kiosk.slice");
     }
-    if !labwc_session {
+    if !kiosk_session {
         for name in [
             "DISPLAY",
             "WAYLAND_DISPLAY",
@@ -162,7 +162,7 @@ async fn launch_with_systemd(
         }
     }
     command.arg("--");
-    if labwc_session && wrap_in_gamescope {
+    if kiosk_session && wrap_in_gamescope {
         command.args([
             "/usr/bin/gamescope",
             "--backend",
@@ -184,6 +184,10 @@ async fn launch_with_systemd(
     Ok(LaunchedApplication {
         unit_name: Some(unit_name),
     })
+}
+
+fn is_kiosk_session() -> bool {
+    env::var_os("HEARTHDECK_KIOSK").as_deref() == Some(OsStr::new("1"))
 }
 
 fn valid_heroic_application_id(value: &str) -> bool {
@@ -610,11 +614,11 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_all_kiosk_desktop_names() {
-        let current_desktops = vec!["hearthdeck".to_owned(), "labwc".to_owned()];
+    fn recognizes_hearthdeck_cosmic_kiosk_desktop_names() {
+        let current_desktops = vec!["hearthdeck".to_owned(), "COSMIC".to_owned()];
 
         assert!(visible_in_desktop("hearthdeck;", &current_desktops));
-        assert!(visible_in_desktop("labwc;", &current_desktops));
+        assert!(visible_in_desktop("COSMIC;", &current_desktops));
         assert!(!visible_in_desktop("gamescope;", &current_desktops));
         assert!(!visible_in_desktop("KDE;", &current_desktops));
     }

@@ -1,6 +1,0 @@
-# Labwc reads this before creating its Wayland display and activation environment.
-GDK_BACKEND=wayland
-XDG_CURRENT_DESKTOP=hearthdeck:labwc:wlroots
-XDG_SESSION_DESKTOP=hearthdeck
-XDG_SESSION_TYPE=wayland
-LABWC_UPDATE_ACTIVATION_ENV=1

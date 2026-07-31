@@ -75,11 +75,12 @@ automatically. See
 
 ## Kiosk Session
 
-The Arch package installs a **Hearthdeck Kiosk** Wayland session. It uses Labwc,
-a lightweight DRM Wayland compositor with no panel, wallpaper, portal, or
-desktop-shell process. Hearthdeck runs as its native Wayland session client.
+The Arch package installs a **Hearthdeck Kiosk** Wayland session. It uses
+COSMIC's `cosmic-comp` directly in its single-application mode, without
+`cosmic-session`, the panel, launcher, applets, wallpaper, notifications, or
+settings services. Hearthdeck runs as its native Wayland session client.
 Gamescope starts only when Hearthdeck launches a managed desktop application or
-game, nested inside Labwc rather than owning DRM for the whole session.
+game, nested inside cosmic-comp rather than owning DRM for the whole session.
 
 Hearthdeck launches approved Linux desktop entries in transient systemd user
 services, so the host can identify and stop the active managed application. Remote
@@ -93,10 +94,6 @@ but their configuration UIs are not yet implemented in Hearthdeck.
 
 Choose **Settings > General > Exit to desktop** to leave Hearthdeck Kiosk and
 return to the display manager, then select COSMIC.
-
-**Hearthdeck Gamescope Xterm Test** is a separate recovery session that runs
-only Gamescope and Xterm, without starting Hearthdeck or its services. Run
-`exit` in Xterm to return to the display manager.
 
 ## Controller support
 

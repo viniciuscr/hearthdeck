@@ -1,0 +1,32 @@
+#!/usr/bin/bash
+# cosmic-comp starts this after its direct KMS Wayland socket is ready.
+set -Euo pipefail
+
+: "${WAYLAND_DISPLAY:?Hearthdeck Kiosk requires WAYLAND_DISPLAY}"
+: "${XDG_RUNTIME_DIR:?Hearthdeck Kiosk requires XDG_RUNTIME_DIR}"
+runtime_directory="$XDG_RUNTIME_DIR/hearthdeck"
+mkdir -p -- "$runtime_directory"
+exec >>"$runtime_directory/cosmic-client.log" 2>&1
+
+echo "$(date -Iseconds) starting Hearthdeck Kiosk client"
+echo "$(date -Iseconds) wayland=$WAYLAND_DISPLAY"
+export GDK_BACKEND=wayland
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM=wayland
+export XDG_CURRENT_DESKTOP=hearthdeck:COSMIC
+export XDG_SESSION_DESKTOP=hearthdeck
+export XDG_SESSION_TYPE=wayland
+export HEARTHDECK_KIOSK=1
+
+# The bridge is socket-activated. Import the compositor socket before any
+# request can start it, so managed applications nest inside cosmic-comp.
+dbus-update-activation-environment --systemd \
+  WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP \
+  XDG_SESSION_TYPE HEARTHDECK_KIOSK || true
+systemctl --user import-environment \
+  WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP \
+  XDG_SESSION_TYPE HEARTHDECK_KIOSK || true
+systemctl --user try-restart hearthdeck-bridge.service || true
+systemctl --user start hearthdeck.target || true
+
+exec /usr/bin/hearthdeck

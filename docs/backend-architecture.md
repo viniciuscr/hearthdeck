@@ -175,9 +175,10 @@ flows. It is not included in the public API contract.
 
 Install and enable `hearthdeck.target` from the systemd **user** units in
 `deploy/systemd/`. A user service owns graphical application launches. In the
-Labwc Kiosk session, Labwc publishes the primary Wayland socket to the user
-manager; the bridge launches registered desktop applications in nested Gamescope
-so they remain isolated from Hearthdeck while Labwc retains DRM ownership.
+Hearthdeck Kiosk session, cosmic-comp publishes the primary Wayland socket to
+the user manager; the bridge launches registered desktop applications in nested
+Gamescope so they remain isolated from Hearthdeck while cosmic-comp retains DRM
+ownership.
 Configure LAN TLS through
 `~/.config/hearthdeck/daemon.env`; see `deploy/systemd/daemon.env.example`.
 

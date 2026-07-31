@@ -1,6 +1,0 @@
-[Desktop Entry]
-Name=Hearthdeck Kiosk
-Comment=Lightweight Labwc Wayland session
-Exec=/usr/lib/hearthdeck/hearthdeck-labwc-session
-Type=Application
-DesktopNames=hearthdeck;labwc

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Hearthdeck Kiosk
+Comment=Direct COSMIC compositor session for Hearthdeck
+Exec=/usr/lib/hearthdeck/hearthdeck-cosmic-session
+Type=Application
+DesktopNames=hearthdeck;COSMIC

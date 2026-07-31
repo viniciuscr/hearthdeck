@@ -43,8 +43,8 @@ when a typed daemon request arrives. Future NetworkManager and BlueZ adapters
 will receive their own socket/service pair under the same target rather than
 being folded into the daemon.
 
-In the Labwc Kiosk session, the bridge wraps registered desktop applications in
-nested Gamescope. Labwc remains the DRM compositor, while each app receives its
+In the COSMIC Kiosk session, the bridge wraps registered desktop applications in
+nested Gamescope. cosmic-comp remains the DRM compositor, while each app receives its
 own Gamescope Xwayland and Wayland environment. PipeWire/WirePlumber audio,
 NetworkManager networking, and BlueZ Bluetooth remain host services outside the
 Hearthdeck process tree.

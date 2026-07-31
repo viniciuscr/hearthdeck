@@ -2,12 +2,12 @@ pkgname=hearthdeck
 # CI supplies a monotonically increasing version for the GitHub Pages pacman
 # repository. Local builds retain the current release version.
 pkgver="${HEARTHDECK_PKGVER:-1.0.0}"
-pkgrel="${HEARTHDECK_PKGREL:-30}"
+pkgrel="${HEARTHDECK_PKGREL:-31}"
 pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
 license=('MIT')
-depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'labwc' 'sqlite' 'systemd' 'xorg-xwayland' 'xterm')
+depends=('cosmic-comp' 'gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'sqlite' 'systemd' 'xorg-xwayland')
 makedepends=('clang' 'cmake' 'just' 'ninja' 'pkgconf' 'rust' 'sqlite')
 install="${pkgname}.install"
 backup=('etc/pacman.d/hearthdeck.conf')
@@ -42,14 +42,9 @@ package() {
   install -Dm644 docs/arch-package.md "$pkgdir/usr/share/doc/hearthdeck/README.md"
   install -Dm644 docs/linux-acceptance.md "$pkgdir/usr/share/doc/hearthdeck/ACCEPTANCE.md"
   install -Dm644 packaging/arch/hearthdeck.desktop "$pkgdir/usr/share/applications/io.github.viniciuscr.hearthdeck.desktop"
-  install -Dm644 packaging/arch/hearthdeck-labwc.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck-labwc.desktop"
-  install -Dm644 packaging/arch/hearthdeck-gamescope-xterm.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck-gamescope-xterm.desktop"
-  install -Dm755 packaging/arch/hearthdeck-labwc-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-labwc-session"
-  install -Dm755 packaging/arch/hearthdeck-labwc-client "$pkgdir/usr/lib/hearthdeck/hearthdeck-labwc-client"
-  install -Dm644 packaging/arch/hearthdeck-labwc/environment "$pkgdir/usr/share/hearthdeck/labwc/environment"
-  install -Dm644 packaging/arch/hearthdeck-labwc/rc.xml "$pkgdir/usr/share/hearthdeck/labwc/rc.xml"
-  install -Dm755 packaging/arch/hearthdeck-labwc/shutdown "$pkgdir/usr/share/hearthdeck/labwc/shutdown"
-  install -Dm755 packaging/arch/hearthdeck-gamescope-xterm "$pkgdir/usr/lib/hearthdeck/hearthdeck-gamescope-xterm"
+  install -Dm644 packaging/arch/hearthdeck-cosmic.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck-cosmic.desktop"
+  install -Dm755 packaging/arch/hearthdeck-cosmic-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-cosmic-session"
+  install -Dm755 packaging/arch/hearthdeck-cosmic-client "$pkgdir/usr/lib/hearthdeck/hearthdeck-cosmic-client"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

@@ -9,10 +9,8 @@ CachyOS. It installs:
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
   API daemon user units.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
-- `/usr/share/wayland-sessions/hearthdeck-labwc.desktop`: the lightweight Labwc
-  kiosk session shown by compatible display managers.
-- `/usr/share/wayland-sessions/hearthdeck-gamescope-xterm.desktop`: the isolated
-  DRM Gamescope and Xterm recovery session.
+- `/usr/share/wayland-sessions/hearthdeck-cosmic.desktop`: the minimal COSMIC
+  compositor kiosk session shown by compatible display managers.
 
 ## Install
 
@@ -62,21 +60,22 @@ If you previously used `just install-services`, its copies in
 enabling the packaged target, then preserve any local customization in a
 systemd drop-in.
 
-`labwc` is the Kiosk session's DRM Wayland compositor. It is intentionally
-minimal: it provides the display, input seat, and window placement without a
-panel, wallpaper, portal, notification daemon, or desktop shell. Select
+`cosmic-comp` is the Kiosk session's DRM Wayland compositor. The session calls
+it directly in its built-in single-application mode, rather than starting
+`cosmic-session`. As a result, it does not start the COSMIC panel, launcher,
+applets, wallpaper, notifications, settings daemon, or desktop shell. Select
 **Hearthdeck Kiosk** in the display manager, or configure it as the autologin
-session, for the minimal direct-to-display experience. A normal desktop session
-remains a separate recovery option.
+session, for the minimal direct-to-display experience. A normal COSMIC desktop
+session remains a separate recovery option.
 
-The Flutter GTK client uses Labwc's native Wayland socket with
-`GDK_BACKEND=wayland`. Labwc's DRM backend publishes that socket to D-Bus and
-the systemd user manager before it starts Hearthdeck. Closing Hearthdeck ends
-the Kiosk session.
+The Flutter GTK client uses cosmic-comp's native Wayland socket with
+`GDK_BACKEND=wayland`. Closing Hearthdeck ends the Kiosk session. Session and
+client output are retained in `$XDG_RUNTIME_DIR/hearthdeck/cosmic-session.log`
+and `$XDG_RUNTIME_DIR/hearthdeck/cosmic-client.log`.
 
 Hearthdeck launches registered desktop applications in nested Gamescope using
-Labwc's Wayland socket. Gamescope therefore uses no DRM or memory until an app
-is launched, and it never competes with Labwc for the seat. X11-only apps use
+cosmic-comp's Wayland socket. Gamescope therefore uses no DRM or memory until
+an app is launched, and it never competes with cosmic-comp for the seat. X11-only apps use
 the nested Gamescope Xwayland server; Wayland apps use its exposed inner Wayland
 socket.
 
@@ -85,7 +84,7 @@ Heroic process can accept a URI and detach the game from Hearthdeck's managed
 Gamescope lifecycle.
 
 Controller input remains Hearthdeck's direct Linux joystick reader, independent
-of Labwc. PipeWire/WirePlumber provide audio, while NetworkManager and BlueZ
+of COSMIC's desktop shell. PipeWire/WirePlumber provide audio, while NetworkManager and BlueZ
 remain system services. Their existing connections and paired devices continue
 to work, but Hearthdeck does not yet provide Wi-Fi, Bluetooth, or audio-routing
 configuration interfaces. NetworkManager changes needing authentication require
@@ -99,14 +98,6 @@ is not guaranteed until controller input is unified behind one process.
 
 Use **Settings > General > Exit to desktop** inside Hearthdeck Kiosk. Confirm
 the prompt to close the session and return to the display manager.
-
-**Hearthdeck Gamescope Xterm Test** starts only direct DRM Gamescope and Xterm.
-It does not launch Hearthdeck, systemd services, or a session supervisor. Run
-`exit` in Xterm to return to the display manager. Its output is retained at:
-
-```sh
-cat /tmp/hearthdeck-gamescope-xterm-$(id -u).log
-```
 
 The bridge scans the target machine's Freedesktop entries and launches only a
 re-discovered desktop entry. It honors desktop visibility constraints, `Path`,

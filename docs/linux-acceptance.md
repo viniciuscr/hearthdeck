@@ -66,6 +66,14 @@ without a panel or desktop shell, then launch a graphical application and verify
 it opens inside nested Gamescope. Exit Hearthdeck Kiosk and confirm its managed
 application services stop before the display manager returns.
 
+If Kiosk returns to the display manager before Hearthdeck appears, inspect the
+session logs from a desktop session or TTY:
+
+```sh
+cat "$XDG_RUNTIME_DIR/hearthdeck/cosmic-session.log"
+cat "$XDG_RUNTIME_DIR/hearthdeck/cosmic-client.log"
+```
+
 Confirm gamepad D-pad, A, B, and sticks navigate Hearthdeck. Confirm existing
 audio works through PipeWire/WirePlumber. Confirm preconfigured NetworkManager
 and BlueZ connections remain available. Wi-Fi, Bluetooth, and audio-routing
@@ -75,10 +83,6 @@ Heroic game URI launches are intentionally unavailable in Kiosk mode. If
 `gamepad-osk` is installed, confirm it is running in daemon mode with access to
 the controller input and `/dev/uinput`. Its evdev grab cannot reliably suppress
 Hearthdeck's direct joystick reader, so OSK input isolation is not guaranteed.
-
-Select **Hearthdeck Gamescope Xterm Test** to verify the direct DRM Gamescope
-baseline independently. It must open Xterm; run `exit` to return to the display
-manager. Inspect `/tmp/hearthdeck-gamescope-xterm-$(id -u).log` if it fails.
 
 ## LAN Mode
 

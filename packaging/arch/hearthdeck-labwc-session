@@ -1,6 +1,0 @@
-#!/usr/bin/bash
-# Labwc owns DRM and starts Hearthdeck as the Wayland session client.
-set -Euo pipefail
-
-exec /usr/bin/labwc -C /usr/share/hearthdeck/labwc \
-  -S /usr/lib/hearthdeck/hearthdeck-labwc-client
