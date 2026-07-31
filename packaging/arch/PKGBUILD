@@ -2,7 +2,7 @@ pkgname=hearthdeck
 # CI supplies a monotonically increasing version for the GitHub Pages pacman
 # repository. Local builds retain the current release version.
 pkgver="${HEARTHDECK_PKGVER:-1.0.0}"
-pkgrel="${HEARTHDECK_PKGREL:-25}"
+pkgrel="${HEARTHDECK_PKGREL:-26}"
 pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
@@ -45,7 +45,6 @@ package() {
   install -Dm644 packaging/arch/hearthdeck-gamescope.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck-gamescope.desktop"
   install -Dm644 packaging/arch/hearthdeck-gamescope-xterm.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck-gamescope-xterm.desktop"
   install -Dm755 packaging/arch/hearthdeck-console-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-console-session"
-  install -Dm755 packaging/arch/hearthdeck-console-bootstrap "$pkgdir/usr/lib/hearthdeck/hearthdeck-console-bootstrap"
   install -Dm755 packaging/arch/hearthdeck-gamescope-xterm "$pkgdir/usr/lib/hearthdeck/hearthdeck-gamescope-xterm"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

@@ -66,8 +66,11 @@ then launch a graphical application and verify it opens inside Gamescope. Exit
 Hearthdeck Console and confirm its managed application services stop before the
 display manager returns.
 
-When Hearthdeck exits, read the terminal output and status before running
-`exit` to return to the display manager.
+If Hearthdeck does not appear, read:
+
+```sh
+cat "$XDG_RUNTIME_DIR/hearthdeck/console-client.log"
+```
 
 Select **Hearthdeck Gamescope Xterm Test** to verify the direct DRM Gamescope
 baseline independently. It must open Xterm; run `exit` to return to the display
