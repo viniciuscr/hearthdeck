@@ -46,6 +46,7 @@ package() {
   install -Dm644 packaging/arch/hearthdeck.desktop "$pkgdir/usr/share/applications/io.github.viniciuscr.hearthdeck.desktop"
   install -Dm644 packaging/arch/hearthdeck-session.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck.desktop"
   install -Dm755 packaging/arch/hearthdeck-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-session"
+  install -Dm755 packaging/arch/hearthdeck-session-client "$pkgdir/usr/lib/hearthdeck/hearthdeck-session-client"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

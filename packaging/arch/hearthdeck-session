@@ -39,6 +39,8 @@ fi
 #                     session required.
 # --fullscreen:      cover the full output mode.
 # --force-grab-cursor: keep the cursor confined to Hearthdeck's surface.
+# --force-windows-fullscreen: force the Xwayland Hearthdeck window to the
+#                             Gamescope nested display size.
 # --expose-wayland: make this Gamescope's own Wayland socket connectable by
 #                    processes other than Hearthdeck itself. The bridge reads
 #                    that socket (via a runtime file Hearthdeck's own runner
@@ -57,5 +59,6 @@ exec gamescope \
   --backend drm \
   --fullscreen \
   --force-grab-cursor \
+  --force-windows-fullscreen \
   --expose-wayland \
-  -- /opt/hearthdeck/hearthdeck
+  -- /usr/lib/hearthdeck/hearthdeck-session-client

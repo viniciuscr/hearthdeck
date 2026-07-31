@@ -7,11 +7,16 @@ chain:
 Display manager
   -> /usr/lib/hearthdeck/hearthdeck-session
   -> systemctl --user start hearthdeck.target
-  -> gamescope --backend drm --fullscreen --force-grab-cursor --expose-wayland
-  -> /opt/hearthdeck/hearthdeck
+  -> gamescope --backend drm --fullscreen --force-grab-cursor
+       --force-windows-fullscreen --expose-wayland
+  -> /usr/lib/hearthdeck/hearthdeck-session-client
+  -> /opt/hearthdeck/hearthdeck (Xwayland)
 ```
 
-Hearthdeck is the outer Gamescope instance's only graphical child. Do not add a
+Hearthdeck is the outer Gamescope instance's only graphical child. The session
+client wrapper records Gamescope's Wayland socket for nested game launches, then
+unsets `WAYLAND_DISPLAY` and forces GTK to Xwayland. This keeps Hearthdeck at
+the Gamescope display size rather than a small Wayland virtual surface. Do not add a
 desktop compositor, session manager, panel, launcher, wallpaper, notification
 service, or overlay client to that outer session.
 

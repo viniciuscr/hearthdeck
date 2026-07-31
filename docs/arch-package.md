@@ -70,10 +70,12 @@ into Hearthdeck fullscreen.
 
 The session script (`/usr/lib/hearthdeck/hearthdeck-session`) starts
 `hearthdeck.target` for the current user and then execs Gamescope directly on
-the DRM/KMS seat with Hearthdeck as its only child. The Flutter runner publishes
-Gamescope's Wayland socket only for a later nested app/game launch; it does not
-start the overlay or any other graphical client. Exiting Hearthdeck ends
-Gamescope and returns to the display manager's login screen.
+the DRM/KMS seat. Its only graphical child is Hearthdeck, launched through
+Gamescope Xwayland with `--force-windows-fullscreen`; this avoids the small
+virtual-surface negotiation seen with a direct GTK Wayland client. The session
+wrapper records Gamescope's Wayland socket only for a later nested app/game
+launch. Exiting Hearthdeck ends Gamescope and returns to the display manager's
+login screen.
 
 Hearthdeck launches registered desktop applications in a separate, on-demand
 nested Gamescope instance. X11-only apps use the nested Gamescope Xwayland

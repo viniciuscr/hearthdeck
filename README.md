@@ -77,9 +77,9 @@ automatically. See
 
 The Arch package installs a **Hearthdeck Kiosk** Wayland session with no
 desktop shell. Its session script runs Gamescope directly on the DRM/KMS seat
-with Hearthdeck as its only child. There is no panel, launcher, wallpaper, or
-other desktop component running underneath; Gamescope is the compositor for the
-session.
+with Hearthdeck as its only child through Gamescope Xwayland. There is no panel,
+launcher, wallpaper, or other desktop component running underneath; Gamescope
+is the compositor for the session.
 
 Hearthdeck launches a separate, on-demand nested Gamescope instance only when
 it starts a managed desktop application or game. That instance is unrelated to
