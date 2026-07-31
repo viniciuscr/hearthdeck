@@ -5,14 +5,13 @@ CachyOS. It installs:
 
 - `/opt/hearthdeck/`: the Flutter Linux client bundle.
 - `/usr/bin/hearthdeck`: the desktop launcher command.
-- `/usr/lib/hearthdeck/`: the local bridge, daemon, and native overlay binaries.
+- `/usr/lib/hearthdeck/`: the local bridge, daemon, and native overlay binaries,
+  plus the Kiosk session script.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
   API daemon user units.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
-- `/usr/share/wayland-sessions/hearthdeck-gamescope.desktop`: the direct DRM
-  Console session shown by compatible display managers.
-- `/usr/share/wayland-sessions/hearthdeck-gamescope-xterm.desktop`: the
-  isolated DRM Gamescope and Xterm recovery session.
+- `/usr/share/wayland-sessions/hearthdeck.desktop`: the minimal Hearthdeck
+  Kiosk session shown by compatible display managers.
 
 ## Install
 
@@ -62,37 +61,37 @@ If you previously used `just install-services`, its copies in
 enabling the packaged target, then preserve any local customization in a
 systemd drop-in.
 
-`gamescope` is a runtime dependency, installed by pacman with Hearthdeck. It
-is intentionally not bundled: Gamescope needs to match the host's Mesa,
-Vulkan, DRM, and kernel graphics stack. Select **Hearthdeck Console** in the
-display manager, or configure it as the autologin session, for the minimal
-direct-to-display experience. A normal desktop session remains a separate
-recovery option.
+## Kiosk session
 
-The Console entrypoint starts direct DRM Gamescope with Xterm as its primary
-client. Once Gamescope publishes its Xwayland display, it launches Hearthdeck
-as a second Xwayland client. Xterm keeps the Console session available if
-Hearthdeck exits. Client output is written to:
+**Hearthdeck Kiosk** is a plain Gamescope session with no desktop shell: no
+panel, launcher, wallpaper, notifications, or settings daemon. Select it in the
+display manager, or configure it as the autologin session, to boot straight
+into Hearthdeck fullscreen.
 
-```sh
-cat "$XDG_RUNTIME_DIR/hearthdeck/console-client.log"
-```
+The session script (`/usr/lib/hearthdeck/hearthdeck-session`) starts
+`hearthdeck.target` for the current user and then execs Gamescope directly on
+the DRM/KMS seat with Hearthdeck as its only child. The Flutter runner publishes
+Gamescope's Wayland socket only for a later nested app/game launch; it does not
+start the overlay or any other graphical client. Exiting Hearthdeck ends
+Gamescope and returns to the display manager's login screen.
 
-Use **Settings > General > Exit to desktop** inside Hearthdeck Console. Confirm
-the prompt to close the Console session and return to the display manager.
+Hearthdeck launches registered desktop applications in a separate, on-demand
+nested Gamescope instance. X11-only apps use the nested Gamescope Xwayland
+server; Wayland apps use its exposed inner Wayland socket. The native overlay
+binary (`/usr/lib/hearthdeck/hearthdeck-overlay`) is standalone and has no
+automatic startup wired up yet.
 
-**Hearthdeck Gamescope Xterm Test** starts only direct DRM Gamescope and Xterm.
-It does not launch Hearthdeck, systemd services, or a session supervisor. Run
-`exit` in Xterm to return to the display manager. Its output is retained at:
+Heroic game URI launches are unavailable in Kiosk mode because an existing
+Heroic process can detach a game from Hearthdeck's managed Gamescope lifecycle.
 
-```sh
-cat /tmp/hearthdeck-gamescope-xterm-$(id -u).log
-```
+Controller input is Hearthdeck's direct Linux joystick reader. PipeWire/
+WirePlumber provide audio, while NetworkManager and BlueZ remain system
+services. The Kiosk session does not start a desktop shell or polkit agent.
 
 The bridge scans the target machine's Freedesktop entries and launches only a
 re-discovered desktop entry. It honors desktop visibility constraints, `Path`,
 and `TryExec`, and rejects terminal and D-Bus-activated entries because those
-cannot be managed safely in the Console session. Linux launches are placed in transient
+cannot be managed safely in the Kiosk session. Linux launches are placed in transient
 systemd user services, allowing Hearthdeck to query and stop the active managed
 session even if the bridge restarts.
 The daemon maintains the SQLite catalog at `~/.local/share/hearthdeck/hearthdeck.db`

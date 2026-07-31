@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Hearthdeck Kiosk
+Comment=Minimal fullscreen Hearthdeck session with no desktop shell
+Exec=/usr/lib/hearthdeck/hearthdeck-session
+Type=Application
+DesktopNames=hearthdeck

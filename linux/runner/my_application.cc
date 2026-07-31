@@ -1,6 +1,7 @@
 #include "my_application.h"
 
 #include <flutter_linux/flutter_linux.h>
+#include <glib/gstdio.h>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -12,6 +13,48 @@ struct _MyApplication {
 
 static constexpr char kSessionChannel[] =
     "io.github.viniciuscr.hearthdeck/session";
+
+static gchar* gamescope_wayland_display_path() {
+  const gchar* runtime_directory = g_getenv("XDG_RUNTIME_DIR");
+  if (runtime_directory == nullptr || *runtime_directory == '\0') {
+    return nullptr;
+  }
+  return g_build_filename(runtime_directory, "hearthdeck",
+                          "gamescope-wayland-display", nullptr);
+}
+
+// Records this process's own Wayland socket (Gamescope's, in the Kiosk
+// session; whatever desktop compositor's, otherwise) to a runtime file. The
+// bridge reads this file so a game/app it launches later, in its own
+// transient systemd unit, can be pointed at the same compositor Hearthdeck
+// itself is running in without needing its own copy of that environment
+// variable. This is unrelated to, and does not require, the overlay
+// (services/hearthdeck-overlay): it is plumbing for nested game launches.
+static void publish_gamescope_wayland_display() {
+  const gchar* wayland_display = g_getenv("WAYLAND_DISPLAY");
+  if (wayland_display == nullptr || *wayland_display == '\0') {
+    return;
+  }
+
+  g_autofree gchar* path = gamescope_wayland_display_path();
+  if (path == nullptr) {
+    return;
+  }
+  g_autoptr(GError) error = nullptr;
+  g_autofree gchar* directory = g_path_get_dirname(path);
+  if (g_mkdir_with_parents(directory, 0700) != 0 ||
+      !g_file_set_contents(path, wayland_display, -1, &error)) {
+    g_warning("Could not publish Gamescope Wayland socket: %s",
+              error == nullptr ? "unknown error" : error->message);
+  }
+}
+
+static void clear_gamescope_wayland_display() {
+  g_autofree gchar* path = gamescope_wayland_display_path();
+  if (path != nullptr) {
+    g_remove(path);
+  }
+}
 
 static void session_method_call_cb(FlMethodChannel* channel,
                                    FlMethodCall* method_call,
@@ -32,6 +75,7 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  publish_gamescope_wayland_display();
 }
 
 // Implements GApplication::activate.
@@ -106,9 +150,7 @@ static void my_application_startup(GApplication* application) {
 
 // Implements GApplication::shutdown.
 static void my_application_shutdown(GApplication* application) {
-  // MyApplication* self = MY_APPLICATION(object);
-
-  // Perform any actions required at application shutdown.
+  clear_gamescope_wayland_display();
 
   G_APPLICATION_CLASS(my_application_parent_class)->shutdown(application);
 }

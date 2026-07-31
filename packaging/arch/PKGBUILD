@@ -2,12 +2,12 @@ pkgname=hearthdeck
 # CI supplies a monotonically increasing version for the GitHub Pages pacman
 # repository. Local builds retain the current release version.
 pkgver="${HEARTHDECK_PKGVER:-1.0.0}"
-pkgrel="${HEARTHDECK_PKGREL:-33}"
+pkgrel="${HEARTHDECK_PKGREL:-34}"
 pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
 license=('MIT')
-depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'sqlite' 'systemd' 'wayland' 'xorg-xwayland' 'xterm')
+depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'sqlite' 'systemd' 'wayland' 'xorg-xwayland')
 makedepends=('clang' 'cmake' 'just' 'ninja' 'pkgconf' 'rust' 'sqlite')
 install="${pkgname}.install"
 backup=('etc/pacman.d/hearthdeck.conf')
@@ -42,11 +42,10 @@ package() {
   install -Dm644 packaging/arch/hearthdeck-pacman-repo.conf "$pkgdir/etc/pacman.d/hearthdeck.conf"
   install -Dm644 docs/arch-package.md "$pkgdir/usr/share/doc/hearthdeck/README.md"
   install -Dm644 docs/linux-acceptance.md "$pkgdir/usr/share/doc/hearthdeck/ACCEPTANCE.md"
+  install -Dm644 docs/kiosk-session.md "$pkgdir/usr/share/doc/hearthdeck/KIOSK-SESSION.md"
   install -Dm644 packaging/arch/hearthdeck.desktop "$pkgdir/usr/share/applications/io.github.viniciuscr.hearthdeck.desktop"
-  install -Dm644 packaging/arch/hearthdeck-gamescope.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck-gamescope.desktop"
-  install -Dm644 packaging/arch/hearthdeck-gamescope-xterm.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck-gamescope-xterm.desktop"
-  install -Dm755 packaging/arch/hearthdeck-console-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-console-session"
-  install -Dm755 packaging/arch/hearthdeck-gamescope-xterm "$pkgdir/usr/lib/hearthdeck/hearthdeck-gamescope-xterm"
+  install -Dm644 packaging/arch/hearthdeck-session.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck.desktop"
+  install -Dm755 packaging/arch/hearthdeck-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-session"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
