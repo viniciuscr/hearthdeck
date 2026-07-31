@@ -161,6 +161,14 @@ impl CatalogStore {
             .await?;
         Ok(row.and_then(|row| row.get("source_id")))
     }
+
+    pub async fn title_for(&self, item_id: &str) -> Result<Option<String>, sqlx::Error> {
+        let row = sqlx::query("SELECT title FROM library_items WHERE id = ?")
+            .bind(item_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.and_then(|row| row.get("title")))
+    }
 }
 
 fn merged_metadata(

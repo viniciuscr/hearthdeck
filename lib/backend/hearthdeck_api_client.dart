@@ -486,6 +486,7 @@ class HearthdeckApplicationSession {
     required this.id,
     required this.sourceId,
     required this.applicationId,
+    required this.applicationName,
     required this.state,
   });
 
@@ -494,12 +495,14 @@ class HearthdeckApplicationSession {
         id: json['id'] as String,
         sourceId: json['source_id'] as String,
         applicationId: json['application_id'] as String,
+        applicationName: json['application_name'] as String,
         state: json['state'] as String,
       );
 
   final String id;
   final String sourceId;
   final String applicationId;
+  final String applicationName;
   final String state;
 }
 
