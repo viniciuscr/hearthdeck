@@ -163,7 +163,7 @@ class _SettingsPageState extends State<SettingsPage> {
                               builder: (BuildContext context) =>
                                   SystemHealthPage(
                                     catalogRepository: _catalogRepository,
-                              ),
+                                  ),
                             ),
                           ),
                           onRommSettings: () => Navigator.of(context).push(

@@ -21,8 +21,7 @@ class _RommSettingsPageState extends State<RommSettingsPage> {
   final _tokenController = TextEditingController();
   final _urlFocusNode = FocusNode(debugLabel: 'RomM URL');
   final _tokenFocusNode = FocusNode(debugLabel: 'RomM token');
-  late final Future<HearthdeckApiClient?> _apiClient =
-      widget.apiClient == null
+  late final Future<HearthdeckApiClient?> _apiClient = widget.apiClient == null
       ? createRetroApiClient()
       : Future<HearthdeckApiClient?>.value(widget.apiClient);
   var _isLoading = true;
@@ -74,7 +73,9 @@ class _RommSettingsPageState extends State<RommSettingsPage> {
     final baseUrl = _urlController.text.trim();
     final token = _tokenController.text.trim();
     if (token.isEmpty) {
-      setState(() => _error = 'Enter a RomM client token to save this connection.');
+      setState(
+        () => _error = 'Enter a RomM client token to save this connection.',
+      );
       _tokenFocusNode.requestFocus();
       return;
     }
@@ -97,9 +98,9 @@ class _RommSettingsPageState extends State<RommSettingsPage> {
           _urlController.text = settings.baseUrl;
           _tokenController.clear();
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('RomM connection saved.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('RomM connection saved.')));
       }
     } catch (error) {
       if (mounted) {
@@ -242,7 +243,8 @@ class _RommSettingsPageState extends State<RommSettingsPage> {
                                           : tv.success,
                                     ),
                                   ),
-                                  if (_error case final String error) ...<Widget>[
+                                  if (_error
+                                      case final String error) ...<Widget>[
                                     const SizedBox(height: 12),
                                     Text(
                                       error,
@@ -410,7 +412,6 @@ class _RommSettingsBackdrop extends StatelessWidget {
   const _RommSettingsBackdrop();
 
   @override
-  Widget build(BuildContext context) => const TvBackdrop(
-    center: Alignment(0.68, -0.48),
-  );
+  Widget build(BuildContext context) =>
+      const TvBackdrop(center: Alignment(0.68, -0.48));
 }

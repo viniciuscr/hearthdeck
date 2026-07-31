@@ -145,21 +145,24 @@ void main() {
     },
   );
 
-  test('API client saves RomM credentials without receiving them back', () async {
-    final client = HearthdeckApiClient(
-      endpoint: HearthdeckEndpoint.local(),
-      token: 'test-token',
-      client: _RommSettingsHttpClient(),
-    );
+  test(
+    'API client saves RomM credentials without receiving them back',
+    () async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.local(),
+        token: 'test-token',
+        client: _RommSettingsHttpClient(),
+      );
 
-    final settings = await client.updateRommSettings(
-      baseUrl: 'http://127.0.0.1:8080',
-      token: 'rmm_private_token',
-    );
+      final settings = await client.updateRommSettings(
+        baseUrl: 'http://127.0.0.1:8080',
+        token: 'rmm_private_token',
+      );
 
-    expect(settings.baseUrl, 'http://127.0.0.1:8080');
-    expect(settings.configured, isTrue);
-  });
+      expect(settings.baseUrl, 'http://127.0.0.1:8080');
+      expect(settings.configured, isTrue);
+    },
+  );
 
   test('API catalog reloads on metadata provider events', () async {
     final client = HearthdeckApiClient(
