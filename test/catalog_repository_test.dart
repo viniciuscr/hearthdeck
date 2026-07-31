@@ -35,8 +35,13 @@ void main() {
       expect(catalog.gameSources.single.items.single.title, 'Orbit');
       expect(catalog.appSources.single.items.single.title, 'Gallery');
       expect(
-        catalog.appSources.single.items.single.details?.facts.any(
-          (ContentFact fact) => fact.label == 'Metadata',
+        catalog.appSources.single.items.single.details?.factSections.any(
+          (ContentFactSection section) =>
+              section.title == 'About' &&
+              section.facts.any(
+                (ContentFact fact) =>
+                    fact.label == 'Genres' && fact.value == 'Graphics',
+              ),
         ),
         isTrue,
       );
@@ -78,15 +83,22 @@ void main() {
 
       expect(item.artworkUrl, 'https://example.org/game.jpg');
       expect(
-        item.details?.facts.any(
-          (ContentFact fact) => fact.label == 'Store' && fact.value == 'GOG',
+        item.details?.factSections.any(
+          (ContentFactSection section) =>
+              section.title == 'Installed' &&
+              section.facts.any(
+                (ContentFact fact) =>
+                    fact.label == 'Store' && fact.value == 'GOG',
+              ),
         ),
         isTrue,
       );
       expect(
-        item.details?.facts.any(
-          (ContentFact fact) =>
-              fact.label == 'Installed size' && fact.value == '1.5 GB',
+        item.details?.factSections.any(
+          (ContentFactSection section) => section.facts.any(
+            (ContentFact fact) =>
+                fact.label == 'Size' && fact.value == '1.5 GB',
+          ),
         ),
         isTrue,
       );
@@ -264,7 +276,7 @@ class _HeroicCatalogHttpClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     const body = '''[
-      {"id":"heroic:gog:1091500","source_id":"heroic","title":"Cyberpunk 2077","kind":"game","launch_id":"gog:1091500","icon":"https://example.org/game.jpg","metadata":{"summary":"Night City","description":"Night City","categories":["RPG"],"store":"GOG","runner":"gog","version":"2.2","platform":"windows","cloud_saves":true,"install_size_bytes":1610612736,"urls":{},"provenance":"desktop-entry"}}
+      {"id":"heroic:gog:1091500","source_id":"heroic","title":"Cyberpunk 2077","kind":"game","launch_id":"gog:1091500","icon":"https://example.org/game.jpg","metadata":{"summary":"Night City","description":"Night City","categories":["RPG"],"store":"GOG","runner":"gog","version":"2.2","platform":"windows","cloud_saves":true,"install_size_bytes":1610612736,"requirements":[],"memory_compatibility":null,"urls":{},"provenance":"heroic"}}
     ]''';
     return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
   }

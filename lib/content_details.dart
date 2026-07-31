@@ -98,19 +98,17 @@ class _ContentDetailsPageState extends State<ContentDetailsPage> {
                                   ),
                                 ),
                                 SliverToBoxAdapter(
-                                  child: SizedBox(height: layout.sectionGap),
-                                ),
-                                SliverToBoxAdapter(
-                                  child: _DetailsSectionTitle(
-                                    title: _factsTitle(widget.item.kind),
-                                  ),
-                                ),
-                                SliverToBoxAdapter(
-                                  child: SizedBox(height: layout.itemGap),
-                                ),
-                                SliverToBoxAdapter(
-                                  child: _FactGrid(
-                                    facts: details.facts,
+                                  child: _MetadataPanel(
+                                    sections: details.factSections.isEmpty
+                                        ? <ContentFactSection>[
+                                            ContentFactSection(
+                                              title: _factsTitle(
+                                                widget.item.kind,
+                                              ),
+                                              facts: details.facts,
+                                            ),
+                                          ]
+                                        : details.factSections,
                                     progress: details.progress,
                                     layout: layout,
                                   ),
@@ -309,6 +307,16 @@ class _DetailsInformation extends StatelessWidget {
             ),
           ),
         ),
+        if (details.highlights.isNotEmpty) ...<Widget>[
+          SizedBox(height: layout.itemGap),
+          Wrap(
+            spacing: layout.itemGap * 0.7,
+            runSpacing: layout.itemGap * 0.7,
+            children: details.highlights
+                .map((ContentFact fact) => _DetailHighlight(fact: fact))
+                .toList(growable: false),
+          ),
+        ],
         SizedBox(height: layout.headerGap),
         Wrap(
           spacing: layout.itemGap,
@@ -460,50 +468,8 @@ class _DetailsSectionTitle extends StatelessWidget {
   }
 }
 
-class _FactGrid extends StatelessWidget {
-  const _FactGrid({
-    required this.facts,
-    required this.progress,
-    required this.layout,
-  });
-
-  final List<ContentFact> facts;
-  final ContentProgress? progress;
-  final _ContentDetailsLayout layout;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final minPanelWidth = 210.0;
-        final columnCount = math
-            .max(1, (constraints.maxWidth / minPanelWidth).floor())
-            .clamp(1, 4);
-        final panels = <Widget>[
-          ...facts.map((ContentFact fact) => _FactPanel(fact: fact)),
-          if (progress case final ContentProgress progress)
-            _ProgressPanel(progress: progress),
-        ];
-
-        return GridView.builder(
-          shrinkWrap: true,
-          primary: false,
-          itemCount: panels.length,
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: columnCount,
-            mainAxisSpacing: layout.itemGap,
-            crossAxisSpacing: layout.itemGap,
-            childAspectRatio: 2.1,
-          ),
-          itemBuilder: (BuildContext context, int index) => panels[index],
-        );
-      },
-    );
-  }
-}
-
-class _FactPanel extends StatelessWidget {
-  const _FactPanel({required this.fact});
+class _DetailHighlight extends StatelessWidget {
+  const _DetailHighlight({required this.fact});
 
   final ContentFact fact;
 
@@ -512,31 +478,23 @@ class _FactPanel extends StatelessWidget {
     final tv = TvPalette.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: tv.surface.withValues(alpha: 0.9),
-        borderRadius: BorderRadius.circular(10),
+        color: tv.surface.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: tv.accent.withValues(alpha: 0.5)),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(fact.icon, color: tv.accent),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(fact.label, style: TextStyle(color: tv.secondaryText)),
-                  const SizedBox(height: 4),
-                  Text(
-                    fact.value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
+            Icon(fact.icon, size: 18, color: tv.accent),
+            const SizedBox(width: 7),
+            Text(
+              fact.label,
+              style: const TextStyle(fontWeight: FontWeight.w700),
             ),
+            const SizedBox(width: 6),
+            Text(fact.value, style: TextStyle(color: tv.secondaryText)),
           ],
         ),
       ),
@@ -544,48 +502,161 @@ class _FactPanel extends StatelessWidget {
   }
 }
 
-class _ProgressPanel extends StatelessWidget {
-  const _ProgressPanel({required this.progress});
+class _MetadataPanel extends StatelessWidget {
+  const _MetadataPanel({
+    required this.sections,
+    required this.progress,
+    required this.layout,
+  });
+
+  final List<ContentFactSection> sections;
+  final ContentProgress? progress;
+  final _ContentDetailsLayout layout;
+
+  @override
+  Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
+    final visibleSections = sections
+        .where((ContentFactSection section) => section.facts.isNotEmpty)
+        .toList(growable: false);
+    if (visibleSections.isEmpty && progress == null) {
+      return const SizedBox.shrink();
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: tv.surface.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tv.surfaceMuted),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            for (
+              var index = 0;
+              index < visibleSections.length;
+              index++
+            ) ...<Widget>[
+              if (index > 0) ...<Widget>[
+                SizedBox(height: layout.itemGap),
+                Divider(color: tv.surfaceMuted, height: 1),
+                SizedBox(height: layout.itemGap),
+              ],
+              Text(
+                visibleSections[index].title.toUpperCase(),
+                style: TextStyle(
+                  color: tv.secondaryText,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              SizedBox(height: layout.itemGap * 0.65),
+              LayoutBuilder(
+                builder: (BuildContext context, BoxConstraints constraints) {
+                  final wide = constraints.maxWidth >= 640;
+                  final width = wide
+                      ? (constraints.maxWidth - layout.itemGap) / 2
+                      : constraints.maxWidth;
+                  return Wrap(
+                    spacing: layout.itemGap,
+                    runSpacing: layout.itemGap * 0.7,
+                    children: visibleSections[index].facts
+                        .map(
+                          (ContentFact fact) => SizedBox(
+                            width: width,
+                            child: _CompactFact(fact: fact),
+                          ),
+                        )
+                        .toList(growable: false),
+                  );
+                },
+              ),
+            ],
+            if (progress case final ContentProgress progress) ...<Widget>[
+              if (visibleSections.isNotEmpty) ...<Widget>[
+                SizedBox(height: layout.itemGap),
+                Divider(color: tv.surfaceMuted, height: 1),
+                SizedBox(height: layout.itemGap),
+              ],
+              _CompactProgress(progress: progress),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactFact extends StatelessWidget {
+  const _CompactFact({required this.fact});
+
+  final ContentFact fact;
+
+  @override
+  Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Icon(fact.icon, size: 18, color: tv.accent),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(fact.label, style: TextStyle(color: tv.secondaryText)),
+              const SizedBox(height: 2),
+              Text(
+                fact.value,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  height: 1.25,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CompactProgress extends StatelessWidget {
+  const _CompactProgress({required this.progress});
 
   final ContentProgress progress;
 
   @override
   Widget build(BuildContext context) {
     final tv = TvPalette.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: tv.surface.withValues(alpha: 0.9),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(progress.label, style: TextStyle(color: tv.secondaryText)),
+        const SizedBox(height: 7),
+        Row(
           children: <Widget>[
-            Text(progress.label, style: TextStyle(color: tv.secondaryText)),
-            const SizedBox(height: 7),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: LinearProgressIndicator(
-                    value: progress.value,
-                    minHeight: 7,
-                    borderRadius: BorderRadius.circular(8),
-                    backgroundColor: tv.surfaceMuted,
-                    color: tv.accent,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  progress.summary,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ],
+            Expanded(
+              child: LinearProgressIndicator(
+                value: progress.value,
+                minHeight: 7,
+                borderRadius: BorderRadius.circular(8),
+                backgroundColor: tv.surfaceMuted,
+                color: tv.accent,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              progress.summary,
+              style: const TextStyle(fontWeight: FontWeight.w700),
             ),
           ],
         ),
-      ),
+      ],
     );
   }
 }

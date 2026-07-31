@@ -109,6 +109,9 @@ class ApiCatalogRepository implements CatalogRepository {
     final platform = metadata['platform'] as String?;
     final installSize = metadata['install_size_bytes'];
     final cloudSaves = metadata['cloud_saves'] as bool?;
+    final requirements = _requirements(metadata['requirements']);
+    final memoryCompatibility =
+        metadata['memory_compatibility'] as Map<String, dynamic>?;
     final categories =
         (metadata['categories'] as List<dynamic>? ?? const <dynamic>[])
             .whereType<String>()
@@ -145,81 +148,86 @@ class ApiCatalogRepository implements CatalogRepository {
           ),
         ),
       ],
-      facts: <ContentFact>[
-        ContentFact(
-          label: 'Source',
-          value: _sourceLabel(item.sourceId),
-          icon: Icons.inventory_2_outlined,
+      facts: const <ContentFact>[],
+      highlights: <ContentFact>[
+        if (memoryCompatibility != null)
+          _memoryCompatibilityFact(memoryCompatibility),
+      ],
+      factSections: <ContentFactSection>[
+        ContentFactSection(
+          title: 'Installed',
+          facts: <ContentFact>[
+            if (store != null)
+              ContentFact(
+                label: 'Store',
+                value: store,
+                icon: Icons.storefront_outlined,
+              ),
+            if (runner != null)
+              ContentFact(
+                label: 'Launcher',
+                value: runner == 'legendary' ? 'Heroic / Epic' : 'Heroic / GOG',
+                icon: Icons.rocket_launch_outlined,
+              ),
+            if (version != null)
+              ContentFact(
+                label: 'Version',
+                value: version,
+                icon: Icons.new_releases_outlined,
+              ),
+            if (platform != null)
+              ContentFact(
+                label: 'Platform',
+                value: platform,
+                icon: Icons.computer_rounded,
+              ),
+            if (installSize is int)
+              ContentFact(
+                label: 'Size',
+                value: _formatBytes(installSize),
+                icon: Icons.storage_rounded,
+              ),
+            if (cloudSaves != null)
+              ContentFact(
+                label: 'Cloud saves',
+                value: cloudSaves ? 'Supported' : 'Not reported',
+                icon: cloudSaves
+                    ? Icons.cloud_done_outlined
+                    : Icons.cloud_off_outlined,
+              ),
+          ],
         ),
-        ContentFact(
-          label: 'Metadata',
-          value: _metadataLabel(metadata['provenance'] as String?),
-          icon: Icons.info_outline_rounded,
-        ),
-        if (store != null)
-          ContentFact(
-            label: 'Store',
-            value: store,
-            icon: Icons.storefront_outlined,
+        if (developer != null || categories.isNotEmpty || license != null)
+          ContentFactSection(
+            title: 'About',
+            facts: <ContentFact>[
+              if (developer != null)
+                ContentFact(
+                  label: 'Developer',
+                  value: developer,
+                  icon: Icons.business_outlined,
+                ),
+              if (categories.isNotEmpty)
+                ContentFact(
+                  label: 'Genres',
+                  value: categories.join(', '),
+                  icon: Icons.category_outlined,
+                ),
+              if (license != null)
+                ContentFact(
+                  label: 'License',
+                  value: license,
+                  icon: Icons.gavel_outlined,
+                ),
+            ],
           ),
-        if (runner != null)
-          ContentFact(
-            label: 'Launcher',
-            value: runner == 'legendary' ? 'Heroic / Epic' : 'Heroic / GOG',
-            icon: Icons.rocket_launch_outlined,
-          ),
-        if (version != null)
-          ContentFact(
-            label: 'Version',
-            value: version,
-            icon: Icons.new_releases_outlined,
-          ),
-        if (platform != null)
-          ContentFact(
-            label: 'Platform',
-            value: platform,
-            icon: Icons.computer_rounded,
-          ),
-        if (installSize is int)
-          ContentFact(
-            label: 'Installed size',
-            value: _formatBytes(installSize),
-            icon: Icons.storage_rounded,
-          ),
-        if (cloudSaves != null)
-          ContentFact(
-            label: 'Cloud saves',
-            value: cloudSaves ? 'Supported by Heroic' : 'Not reported',
-            icon: cloudSaves
-                ? Icons.cloud_done_outlined
-                : Icons.cloud_off_outlined,
-          ),
-        if (developer != null)
-          ContentFact(
-            label: 'Developer',
-            value: developer,
-            icon: Icons.business_outlined,
-          ),
-        if (license != null)
-          ContentFact(
-            label: 'License',
-            value: license,
-            icon: Icons.gavel_outlined,
-          ),
-        if (categories.isNotEmpty)
-          ContentFact(
-            label: 'Categories',
-            value: categories.join(', '),
-            icon: Icons.category_outlined,
-          ),
-        if (urls.isNotEmpty)
-          ContentFact(
-            label: 'Project links',
-            value: '${urls.length} available',
-            icon: Icons.link_rounded,
+        if (requirements.isNotEmpty)
+          ContentFactSection(
+            title: 'Publisher requirements',
+            facts: requirements,
           ),
       ],
-      galleryTitle: 'Application details',
+      galleryTitle: 'Media',
       gallery: const <ContentGalleryItem>[],
     );
   }
@@ -302,13 +310,53 @@ class ApiCatalogRepository implements CatalogRepository {
     return '${value.toStringAsFixed(precision)} ${units[unit]}';
   }
 
-  String _metadataLabel(String? provenance) => switch (provenance) {
-    'appstream-local' => 'AppStream',
-    'desktop-entry' => 'Desktop entry',
-    'heroic' => 'Heroic',
-    null || '' => 'Local catalog',
-    final String value => _sourceLabel(value),
-  };
+  List<ContentFact> _requirements(Object? value) {
+    if (value is! List<dynamic>) {
+      return const <ContentFact>[];
+    }
+    return value
+        .whereType<Map<String, dynamic>>()
+        .map((requirement) {
+          final title = requirement['title'] as String? ?? 'Requirement';
+          final minimum = requirement['minimum'] as String?;
+          final recommended = requirement['recommended'] as String?;
+          final detail = switch ((minimum, recommended)) {
+            (final String minimum, final String recommended) =>
+              'Min: $minimum\nRecommended: $recommended',
+            (final String minimum, null) => 'Min: $minimum',
+            (null, final String recommended) => 'Recommended: $recommended',
+            _ => '',
+          };
+          return ContentFact(
+            label: title,
+            value: detail,
+            icon: Icons.tune_rounded,
+          );
+        })
+        .where((fact) => fact.value.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  ContentFact _memoryCompatibilityFact(Map<String, dynamic> value) {
+    final status = value['status'] as String?;
+    final memory = value['system_memory_bytes'];
+    final label = switch (status) {
+      'recommended' => 'Memory: recommended',
+      'minimum' => 'Memory: minimum met',
+      'below_minimum' => 'Memory: below minimum',
+      'below_recommended' => 'Memory: below recommended',
+      _ => 'Memory requirements',
+    };
+    return ContentFact(
+      label: label,
+      value: memory is int ? '${_formatBytes(memory)} detected' : 'Unavailable',
+      icon: switch (status) {
+        'recommended' => Icons.verified_rounded,
+        'minimum' => Icons.info_outline_rounded,
+        _ => Icons.warning_amber_rounded,
+      },
+    );
+  }
 
   // Single choke point every backend `kind` string passes through. An
   // unrecognized value (a new provider shipping "movie" or "show", say)
@@ -353,13 +401,4 @@ class ApiCatalogRepository implements CatalogRepository {
         palette.length;
     return palette[index];
   }
-
-  String _sourceLabel(String sourceId) => sourceId
-      .split('-')
-      .map(
-        (String word) => word.isEmpty
-            ? word
-            : '${word[0].toUpperCase()}${word.substring(1)}',
-      )
-      .join(' ');
 }

@@ -332,6 +332,23 @@ components:
             platform: { type: [string, 'null'] }
             cloud_saves: { type: [boolean, 'null'] }
             install_size_bytes: { type: [integer, 'null'], minimum: 0 }
+            requirements:
+              type: array
+              items:
+                type: object
+                required: [title, minimum, recommended]
+                properties:
+                  title: { type: string }
+                  minimum: { type: [string, 'null'] }
+                  recommended: { type: [string, 'null'] }
+            memory_compatibility:
+              type: [object, 'null']
+              required: [status, system_memory_bytes, minimum_bytes, recommended_bytes]
+              properties:
+                status: { type: string, enum: [recommended, minimum, below_minimum, below_recommended] }
+                system_memory_bytes: { type: integer, minimum: 0 }
+                minimum_bytes: { type: [integer, 'null'], minimum: 0 }
+                recommended_bytes: { type: [integer, 'null'], minimum: 0 }
             urls:
               type: object
               additionalProperties: { type: string, format: uri-reference }

@@ -32,6 +32,13 @@ class ContentFact {
   final IconData icon;
 }
 
+class ContentFactSection {
+  const ContentFactSection({required this.title, required this.facts});
+
+  final String title;
+  final List<ContentFact> facts;
+}
+
 class ContentProgress {
   const ContentProgress({
     required this.label,
@@ -63,12 +70,16 @@ class ContentDetails {
     required this.facts,
     required this.gallery,
     required this.galleryTitle,
+    this.factSections = const <ContentFactSection>[],
+    this.highlights = const <ContentFact>[],
     this.progress,
   });
 
   final String summary;
   final List<ContentAction> actions;
   final List<ContentFact> facts;
+  final List<ContentFactSection> factSections;
+  final List<ContentFact> highlights;
   final ContentProgress? progress;
   final String galleryTitle;
   final List<ContentGalleryItem> gallery;

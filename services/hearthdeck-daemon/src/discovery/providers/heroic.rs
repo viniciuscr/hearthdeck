@@ -9,7 +9,8 @@ use std::{collections::HashSet, env};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use serde_json::Value;
+use serde::Serialize;
+use serde_json::{Map, Value};
 
 use crate::{catalog::CatalogRecord, discovery::DiscoveryProvider};
 
@@ -79,6 +80,7 @@ async fn discover_epic(directory: &Path, updated_at: &str) -> anyhow::Result<Vec
         anyhow::bail!("Heroic Epic installed.json must contain an object")
     };
 
+    let game_info = epic_game_info(&directory.join("store_cache/legendary_gameinfo.json")).await?;
     let mut records = Vec::new();
     for (key, install) in installed {
         if install.get("is_dlc").and_then(Value::as_bool) == Some(true) {
@@ -105,6 +107,12 @@ async fn discover_epic(directory: &Path, updated_at: &str) -> anyhow::Result<Vec
         let developer = string_at(catalog_metadata, &["developer"]);
         let categories = epic_categories(catalog_metadata);
         let artwork = epic_artwork(catalog_metadata);
+        let requirements = catalog_metadata
+            .get("namespace")
+            .and_then(Value::as_str)
+            .and_then(|namespace| game_info.get(namespace))
+            .map(publisher_requirements)
+            .unwrap_or_default();
         records.push(heroic_record(
             "epic",
             "legendary",
@@ -123,6 +131,7 @@ async fn discover_epic(directory: &Path, updated_at: &str) -> anyhow::Result<Vec
                 .and_then(|attribute| attribute.get("value"))
                 .and_then(Value::as_str)
                 .is_some(),
+            requirements,
             updated_at,
         ));
     }
@@ -195,6 +204,7 @@ async fn discover_gog(directory: &Path, updated_at: &str) -> anyhow::Result<Vec<
                 .and_then(|game| game.get("cloud_save_enabled"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            Vec::new(),
             updated_at,
         ));
     }
@@ -215,6 +225,7 @@ fn heroic_record(
     platform: Option<String>,
     install_size_bytes: Option<u64>,
     cloud_saves: bool,
+    requirements: Vec<PublisherRequirement>,
     updated_at: &str,
 ) -> CatalogRecord {
     let store = match store_id {
@@ -238,10 +249,126 @@ fn heroic_record(
             "platform": platform,
             "install_size_bytes": install_size_bytes,
             "cloud_saves": cloud_saves,
+            "requirements": requirements,
+            "memory_compatibility": memory_compatibility(&requirements, system_memory_bytes()),
             "provenance": "heroic",
         }),
         updated_at: updated_at.to_owned(),
     }
+}
+
+#[derive(Serialize)]
+struct PublisherRequirement {
+    title: String,
+    minimum: Option<String>,
+    recommended: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MemoryCompatibility {
+    status: &'static str,
+    system_memory_bytes: u64,
+    minimum_bytes: Option<u64>,
+    recommended_bytes: Option<u64>,
+}
+
+async fn epic_game_info(path: &Path) -> anyhow::Result<Map<String, Value>> {
+    let Some(cache) = read_json_if_exists(path).await? else {
+        return Ok(Map::new());
+    };
+    Ok(cache.as_object().cloned().unwrap_or_default())
+}
+
+fn publisher_requirements(value: &Value) -> Vec<PublisherRequirement> {
+    value
+        .get("reqs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|requirement| {
+            let title = string_at(requirement, &["title"])?;
+            let minimum = string_at(requirement, &["minimum"]);
+            let recommended = string_at(requirement, &["recommended"]);
+            (minimum.is_some() || recommended.is_some()).then_some(PublisherRequirement {
+                title,
+                minimum,
+                recommended,
+            })
+        })
+        .collect()
+}
+
+fn memory_compatibility(
+    requirements: &[PublisherRequirement],
+    system_memory_bytes: Option<u64>,
+) -> Option<MemoryCompatibility> {
+    let system_memory_bytes = system_memory_bytes?;
+    let memory = requirements.iter().find(|requirement| {
+        let title = requirement.title.to_ascii_lowercase();
+        title.contains("memory") || title.contains("ram")
+    })?;
+    let minimum_bytes = memory.minimum.as_deref().and_then(memory_bytes);
+    let recommended_bytes = memory.recommended.as_deref().and_then(memory_bytes);
+    let status = match (minimum_bytes, recommended_bytes) {
+        (_, Some(recommended)) if system_memory_bytes >= recommended => "recommended",
+        (Some(minimum), _) if system_memory_bytes >= minimum => "minimum",
+        (Some(_), _) => "below_minimum",
+        (None, Some(_)) => "below_recommended",
+        (None, None) => return None,
+    };
+    Some(MemoryCompatibility {
+        status,
+        system_memory_bytes,
+        minimum_bytes,
+        recommended_bytes,
+    })
+}
+
+fn memory_bytes(value: &str) -> Option<u64> {
+    let lower = value.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if !bytes[index].is_ascii_digit() {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'.') {
+            index += 1;
+        }
+        let amount = lower[start..index].parse::<f64>().ok()?;
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        let multiplier = if lower[index..].starts_with("gib") || lower[index..].starts_with("gb") {
+            1024_u64.pow(3)
+        } else if lower[index..].starts_with("mib") || lower[index..].starts_with("mb") {
+            1024_u64.pow(2)
+        } else {
+            continue;
+        };
+        return Some((amount * multiplier as f64) as u64);
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn system_memory_bytes() -> Option<u64> {
+    let memory_info = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let total_kib = memory_info
+        .lines()
+        .find_map(|line| line.strip_prefix("MemTotal:"))?
+        .split_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()?;
+    Some(total_kib * 1024)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn system_memory_bytes() -> Option<u64> {
+    None
 }
 
 async fn gog_library(path: &Path) -> anyhow::Result<HashMap<String, Value>> {
@@ -384,7 +511,13 @@ mod tests {
         .unwrap();
         tokio::fs::write(
             heroic.join("legendaryConfig/legendary/metadata/Fortnite.json"),
-            r#"{"app_title":"Fortnite","metadata":{"title":"Fortnite","description":"Battle royale","developer":"Epic Games","categories":[{"path":"games"}],"keyImages":[{"type":"DieselGameBoxTall","url":"https://example.test/fortnite.jpg"}],"customAttributes":{"CloudSaveFolder":{"value":"saves"}}}}"#,
+            r#"{"app_title":"Fortnite","metadata":{"title":"Fortnite","namespace":"epic-namespace","description":"Battle royale","developer":"Epic Games","categories":[{"path":"games"}],"keyImages":[{"type":"DieselGameBoxTall","url":"https://example.test/fortnite.jpg"}],"customAttributes":{"CloudSaveFolder":{"value":"saves"}}}}"#,
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            heroic.join("store_cache/legendary_gameinfo.json"),
+            r#"{"epic-namespace":{"reqs":[{"title":"Memory","minimum":"8 GB RAM","recommended":"16 GB RAM"}]}}"#,
         )
         .await
         .unwrap();
@@ -421,6 +554,10 @@ mod tests {
         assert_eq!(epic.metadata["store"], "Epic Games");
         assert_eq!(epic.metadata["developer"], "Epic Games");
         assert_eq!(
+            epic.metadata["requirements"],
+            serde_json::json!([{"title":"Memory","minimum":"8 GB RAM","recommended":"16 GB RAM"}])
+        );
+        assert_eq!(
             epic.icon.as_deref(),
             Some("https://example.test/fortnite.jpg")
         );
@@ -431,5 +568,31 @@ mod tests {
         assert_eq!(gog.launch_id.as_deref(), Some("gog:1091500"));
         assert_eq!(gog.metadata["store"], "GOG");
         assert_eq!(gog.metadata["categories"], serde_json::json!(["RPG"]));
+    }
+
+    #[test]
+    fn reports_memory_requirements_without_claiming_cpu_or_gpu_compatibility() {
+        let requirements = super::publisher_requirements(&serde_json::json!({
+            "reqs": [
+                {"title": "Processor", "minimum": "Core i5", "recommended": "Core i7"},
+                {"title": "Memory", "minimum": "8 GB RAM", "recommended": "16 GB RAM"},
+            ]
+        }));
+
+        let status = super::memory_compatibility(&requirements, Some(12 * 1024_u64.pow(3)))
+            .expect("memory requirement should be parsed");
+
+        assert_eq!(status.status, "minimum");
+        assert_eq!(status.minimum_bytes, Some(8 * 1024_u64.pow(3)));
+        assert_eq!(status.recommended_bytes, Some(16 * 1024_u64.pow(3)));
+    }
+
+    #[test]
+    fn ignores_non_memory_publisher_requirements_for_compatibility() {
+        let requirements = super::publisher_requirements(&serde_json::json!({
+            "reqs": [{"title": "Graphics", "minimum": "GTX 1060", "recommended": "RTX 2060"}]
+        }));
+
+        assert!(super::memory_compatibility(&requirements, Some(32 * 1024_u64.pow(3))).is_none());
     }
 }

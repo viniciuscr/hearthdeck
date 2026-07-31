@@ -195,6 +195,8 @@ fn merged_metadata(
         "platform": metadata_string(Some(discovery), "platform"),
         "cloud_saves": discovery.get("cloud_saves").and_then(Value::as_bool),
         "install_size_bytes": discovery.get("install_size_bytes").and_then(Value::as_u64),
+        "requirements": discovery.get("requirements").cloned().unwrap_or_else(|| json!([])),
+        "memory_compatibility": discovery.get("memory_compatibility").cloned(),
         "urls": urls,
         "screenshots": screenshots,
         "provenance": enrichment_provider
