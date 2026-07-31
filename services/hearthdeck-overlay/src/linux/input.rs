@@ -177,7 +177,10 @@ fn is_gamepad(device: &Device) -> bool {
 fn action_for(event: EventSummary, visible: bool) -> Option<GamepadAction> {
     match event {
         EventSummary::Key(_, key, value) => action_for_key(key, value, visible),
-        EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_HAT0X, value)
+        // The overlay's menu is a vertical list (Resume above Close), so
+        // selection moves on the vertical hat axis/D-pad buttons, not the
+        // horizontal ones.
+        EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_HAT0Y, value)
             if visible && value != 0 =>
         {
             Some(GamepadAction::ToggleSelection)
@@ -191,7 +194,7 @@ fn action_for_key(key: KeyCode, value: i32, visible: bool) -> Option<GamepadActi
         (KeyCode::BTN_MODE, 1, _) => Some(GamepadAction::Toggle),
         (KeyCode::BTN_EAST, 1, true) => Some(GamepadAction::Hide),
         (KeyCode::BTN_SOUTH, 1, true) => Some(GamepadAction::Activate),
-        (KeyCode::BTN_DPAD_LEFT | KeyCode::BTN_DPAD_RIGHT, 1, true) => {
+        (KeyCode::BTN_DPAD_UP | KeyCode::BTN_DPAD_DOWN, 1, true) => {
             Some(GamepadAction::ToggleSelection)
         }
         _ => None,
@@ -220,7 +223,7 @@ mod tests {
             Some(GamepadAction::Activate)
         ));
         assert!(matches!(
-            action_for_key(KeyCode::BTN_DPAD_LEFT, 1, true),
+            action_for_key(KeyCode::BTN_DPAD_UP, 1, true),
             Some(GamepadAction::ToggleSelection)
         ));
     }

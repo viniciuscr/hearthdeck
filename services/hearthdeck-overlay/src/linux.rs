@@ -50,23 +50,9 @@ pub fn run() -> Result<()> {
     let layer_shell = LayerShell::bind(&globals, &queue_handle)
         .context("Gamescope does not expose wlr-layer-shell")?;
     let shm = Shm::bind(&globals, &queue_handle).context("Gamescope does not expose wl_shm")?;
-    let surface = compositor.create_surface(&queue_handle);
-    let layer = layer_shell.create_layer_surface(
-        &queue_handle,
-        surface,
-        Layer::Overlay,
-        Some(OVERLAY_NAMESPACE),
-        None,
-    );
-    layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-    layer.set_size(0, 0);
-    layer.set_exclusive_zone(0);
-    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+    // Kept alive and reused for every layer surface the overlay creates; a
+    // wl_region isn't tied to a single surface.
     let input_region = Region::new(&compositor)?;
-    layer
-        .wl_surface()
-        .set_input_region(Some(input_region.wl_region()));
-    layer.commit();
     connection.flush()?;
     let pool = SlotPool::new(1, &shm)?;
 
@@ -75,9 +61,12 @@ pub fn run() -> Result<()> {
         gamepad: input::start(),
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &queue_handle),
+        queue_handle: queue_handle.clone(),
+        compositor,
+        layer_shell,
         shm,
         _input_region: input_region,
-        layer,
+        layer: None,
         pool,
         width: 0,
         height: 0,
@@ -134,10 +123,16 @@ struct Overlay {
     gamepad: InputHandle,
     registry_state: RegistryState,
     output_state: OutputState,
+    queue_handle: QueueHandle<Self>,
+    compositor: CompositorState,
+    layer_shell: LayerShell,
     shm: Shm,
-    // Retaining this empty region keeps the surface mouse and touch click-through.
+    // Retaining this empty region keeps every surface created from it mouse
+    // and touch click-through; a wl_region isn't tied to one surface.
     _input_region: Region,
-    layer: LayerSurface,
+    // None while hidden: the surface is fully destroyed rather than merely
+    // unmapped (see `hide`), so there is nothing to hold onto between shows.
+    layer: Option<LayerSurface>,
     pool: SlotPool,
     width: u32,
     height: u32,
@@ -190,6 +185,7 @@ impl Overlay {
     fn show(&mut self) {
         self.visible = true;
         self.message = None;
+        self.selection = Selection::Resume;
         self.active_session = match bridge::active_session() {
             Ok(session) => session,
             Err(error) => {
@@ -198,15 +194,52 @@ impl Overlay {
             }
         };
         self.gamepad.set_visible(true);
-        self.needs_redraw = true;
+        self.create_layer();
     }
 
+    // Creates a fresh layer surface for this show(). The compositor will send
+    // a `configure` event with the assigned size, which is what actually
+    // triggers the first redraw (see `configure` below).
+    fn create_layer(&mut self) {
+        if self.layer.is_some() {
+            return;
+        }
+        let surface = self.compositor.create_surface(&self.queue_handle);
+        let layer = self.layer_shell.create_layer_surface(
+            &self.queue_handle,
+            surface,
+            Layer::Overlay,
+            Some(OVERLAY_NAMESPACE),
+            None,
+        );
+        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+        layer.set_size(0, 0);
+        layer.set_exclusive_zone(0);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer
+            .wl_surface()
+            .set_input_region(Some(self._input_region.wl_region()));
+        layer.commit();
+        self.width = 0;
+        self.height = 0;
+        self.layer = Some(layer);
+    }
+
+    // Destroying the layer surface (rather than attaching a null buffer and
+    // committing) guarantees the compositor stops displaying it: that is
+    // dictated by the wl_surface/wlr-layer-shell protocol itself, not by a
+    // compositor's own interpretation of a null-buffer commit. Gamescope's
+    // layer-shell support does not reliably unmap a surface on a null-buffer
+    // commit, which previously left the overlay's last frame on screen
+    // indefinitely. Recreating the surface on the next `show` costs one
+    // extra `configure` round trip, which is not perceptible.
     fn hide(&mut self) {
         self.visible = false;
         self.active_session = None;
         self.gamepad.set_visible(false);
-        self.layer.wl_surface().attach(None, 0, 0);
-        self.layer.commit();
+        self.layer = None;
+        self.width = 0;
+        self.height = 0;
         self.needs_redraw = false;
     }
 
@@ -214,6 +247,9 @@ impl Overlay {
         if !self.visible || !self.needs_redraw || self.width == 0 || self.height == 0 {
             return Ok(());
         }
+        let Some(layer) = self.layer.as_ref() else {
+            return Ok(());
+        };
         let width = self.width;
         let height = self.height;
         let stride = width as i32 * 4;
@@ -231,15 +267,14 @@ impl Overlay {
             self.active_session.as_ref(),
             self.message.as_deref(),
         );
-        self.layer
+        layer
             .wl_surface()
             .damage_buffer(0, 0, width as i32, height as i32);
-        self.layer.wl_surface().frame(
-            queue_handle,
-            FrameCallbackData(self.layer.wl_surface().clone()),
-        );
-        buffer.attach_to(self.layer.wl_surface())?;
-        self.layer.commit();
+        layer
+            .wl_surface()
+            .frame(queue_handle, FrameCallbackData(layer.wl_surface().clone()));
+        buffer.attach_to(layer.wl_surface())?;
+        layer.commit();
         self.needs_redraw = false;
         Ok(())
     }
@@ -342,6 +377,11 @@ impl LayerShellHandler for Overlay {
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
+        // Stale configure from a surface already destroyed by a `hide` that
+        // raced this event: nothing to redraw onto.
+        if self.layer.is_none() {
+            return;
+        }
         self.width = NonZeroU32::new(configure.new_size.0).map_or(1280, NonZeroU32::get);
         self.height = NonZeroU32::new(configure.new_size.1).map_or(720, NonZeroU32::get);
         self.needs_redraw = self.visible;
