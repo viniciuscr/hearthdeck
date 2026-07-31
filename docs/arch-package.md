@@ -63,6 +63,10 @@ systemd drop-in.
 
 ## Kiosk session
 
+See `docs/kiosk-session.md` for the full startup sequence, an incident
+writeup of exactly how this session broke once already (and how not to
+repeat it), and what not to change.
+
 **Hearthdeck Kiosk** is a plain Gamescope session with no desktop shell: no
 panel, launcher, wallpaper, notifications, or settings daemon. Select it in the
 display manager, or configure it as the autologin session, to boot straight
