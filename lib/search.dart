@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 
 import 'content_details.dart';
 import 'dashboard_models.dart';
 import 'library_models.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
-import 'virtual_keyboard.dart';
 
 class TvSearchPage extends StatefulWidget {
   const TvSearchPage({super.key, this.initialQuery = ''});
@@ -60,118 +58,92 @@ class _TvSearchPageState extends State<TvSearchPage> {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final layout = _SearchLayout.fromConstraints(constraints);
-        return Actions(
-          actions: <Type, Action<Intent>>{
-            DismissIntent: CallbackAction<DismissIntent>(
-              onInvoke: (DismissIntent intent) {
-                dismissTextInputOrPop(context);
-                return null;
-              },
-            ),
-          },
-          child: TvDirectionalFocusNavigation(
-            child: Focus(
-              canRequestFocus: false,
-              onKeyEvent: (FocusNode node, KeyEvent event) {
-                if (event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.escape) {
-                  dismissTextInputOrPop(context);
-                  return KeyEventResult.handled;
-                }
-                return KeyEventResult.ignored;
-              },
-              child: Scaffold(
-                body: SafeArea(
-                  child: Stack(
-                    children: <Widget>[
-                      const Positioned.fill(child: _SearchBackdrop()),
-                      CustomScrollView(
-                        scrollCacheExtent: ScrollCacheExtent.viewport(2),
-                        slivers: <Widget>[
-                          SliverPadding(
-                            padding: EdgeInsets.fromLTRB(
-                              layout.pagePadding,
-                              layout.pagePadding,
-                              layout.pagePadding,
-                              layout.sectionGap,
+        // Escape/back is handled globally (see main.dart's HardwareKeyboard
+        // listener), regardless of what has focus on this screen.
+        return TvDirectionalFocusNavigation(
+          child: Scaffold(
+            body: SafeArea(
+              child: Stack(
+                children: <Widget>[
+                  const Positioned.fill(child: _SearchBackdrop()),
+                  CustomScrollView(
+                    scrollCacheExtent: ScrollCacheExtent.viewport(2),
+                    slivers: <Widget>[
+                      SliverPadding(
+                        padding: EdgeInsets.fromLTRB(
+                          layout.pagePadding,
+                          layout.pagePadding,
+                          layout.pagePadding,
+                          layout.sectionGap,
+                        ),
+                        sliver: SliverMainAxisGroup(
+                          slivers: <Widget>[
+                            SliverToBoxAdapter(
+                              child: _SearchHeader(
+                                controller: _controller,
+                                focusNode: _textFocusNode,
+                                onClear: _controller.clear,
+                              ),
                             ),
-                            sliver: SliverMainAxisGroup(
-                              slivers: <Widget>[
-                                SliverToBoxAdapter(
-                                  child: _SearchHeader(
-                                    controller: _controller,
-                                    focusNode: _textFocusNode,
-                                    onClear: _controller.clear,
-                                  ),
-                                ),
-                                SliverToBoxAdapter(
-                                  child: SizedBox(height: layout.sectionGap),
-                                ),
-                                SliverToBoxAdapter(
-                                  child: Text(
-                                    _controller.text.trim().isEmpty
-                                        ? 'Browse all'
-                                        : '${results.length} results',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleLarge,
-                                  ),
-                                ),
-                                SliverToBoxAdapter(
-                                  child: SizedBox(height: layout.gap),
-                                ),
-                                if (results.isEmpty)
-                                  const SliverToBoxAdapter(
-                                    child: _NoSearchResults(),
-                                  )
-                                else
-                                  SliverGrid.builder(
-                                    itemCount: results.length,
-                                    gridDelegate:
-                                        SliverGridDelegateWithMaxCrossAxisExtent(
-                                          maxCrossAxisExtent: layout.tileExtent,
-                                          mainAxisSpacing: layout.gap,
-                                          crossAxisSpacing: layout.gap,
-                                          childAspectRatio: 1,
-                                        ),
-                                    itemBuilder:
-                                        (BuildContext context, int index) {
-                                          final item = results[index];
-                                          return TvContentTile(
-                                            key: ValueKey<String>(
-                                              'search-tile-${item.id}',
+                            SliverToBoxAdapter(
+                              child: SizedBox(height: layout.sectionGap),
+                            ),
+                            SliverToBoxAdapter(
+                              child: Text(
+                                _controller.text.trim().isEmpty
+                                    ? 'Browse all'
+                                    : '${results.length} results',
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                            ),
+                            SliverToBoxAdapter(
+                              child: SizedBox(height: layout.gap),
+                            ),
+                            if (results.isEmpty)
+                              const SliverToBoxAdapter(
+                                child: _NoSearchResults(),
+                              )
+                            else
+                              SliverGrid.builder(
+                                itemCount: results.length,
+                                gridDelegate:
+                                    SliverGridDelegateWithMaxCrossAxisExtent(
+                                      maxCrossAxisExtent: layout.tileExtent,
+                                      mainAxisSpacing: layout.gap,
+                                      crossAxisSpacing: layout.gap,
+                                      childAspectRatio: 1,
+                                    ),
+                                itemBuilder: (BuildContext context, int index) {
+                                  final item = results[index];
+                                  return TvContentTile(
+                                    key: ValueKey<String>(
+                                      'search-tile-${item.id}',
+                                    ),
+                                    item: item,
+                                    shape: TvTileShape.square,
+                                    onActivate: () =>
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute<void>(
+                                            settings: RouteSettings(
+                                              name: '/details/${item.id}',
                                             ),
-                                            item: item,
-                                            shape: TvTileShape.square,
-                                            onActivate: () =>
-                                                Navigator.of(context).push(
-                                                  MaterialPageRoute<void>(
-                                                    settings: RouteSettings(
-                                                      name:
-                                                          '/details/${item.id}',
-                                                    ),
-                                                    builder:
-                                                        (
-                                                          BuildContext context,
-                                                        ) => ContentDetailsPage(
-                                                          item: item,
-                                                          sourceShape:
-                                                              TvTileShape
-                                                                  .square,
-                                                        ),
-                                                  ),
+                                            builder: (BuildContext context) =>
+                                                ContentDetailsPage(
+                                                  item: item,
+                                                  sourceShape:
+                                                      TvTileShape.square,
                                                 ),
-                                          );
-                                        },
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ],
+                                          ),
+                                        ),
+                                  );
+                                },
+                              ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
-                ),
+                ],
               ),
             ),
           ),

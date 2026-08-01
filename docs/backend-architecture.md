@@ -49,9 +49,10 @@ emulator, movie, and streaming providers portable at the contract level.
 
 Discovery is a registry of asynchronous provider modules, not one global scan.
 Each provider has a unique source ID, an optional refresh interval, and
-normalization logic. It emits `CatalogRecord` values; the catalog repository
-atomically replaces only that provider's source records. A failed provider
-cannot delete or overwrite items owned by another provider.
+normalization logic. It emits `CatalogRecord` values with globally namespaced
+item IDs; the catalog repository atomically replaces only that provider's
+source records. A failed provider cannot delete or overwrite items owned by
+another provider.
 
 ```text
 Provider worker (one bounded queue per source)
@@ -164,7 +165,8 @@ The public OpenAPI contract is `contracts/openapi.yaml`.
 - `GET /v1/health`: unauthenticated daemon discovery/status.
 - `POST /v1/pairing/complete`: consumes a host-created one-time pairing code.
 - `GET /v1/library`: authenticated library metadata.
-- `POST /v1/library/rescan`: authenticated desktop-entry scan.
+- `POST /v1/library/rescan`: authenticated request to refresh every registered
+  discovery and metadata provider.
 - `POST /v1/apps/{id}/launch`: authenticated launch of a registered item.
 - `GET /v1/events`: authenticated WebSocket for library/action events.
 

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 
 import 'backend/hearthdeck_api_client.dart';
 import 'catalog/catalog_repository_factory.dart';
@@ -8,7 +7,6 @@ import 'content_details.dart';
 import 'dashboard_models.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
-import 'virtual_keyboard.dart';
 
 class RetroPage extends StatefulWidget {
   const RetroPage({super.key, this.apiClient, this.embedded = false});
@@ -211,31 +209,12 @@ class _RetroPageState extends State<RetroPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Actions(
-      actions: <Type, Action<Intent>>{
-        DismissIntent: CallbackAction<DismissIntent>(
-          onInvoke: (DismissIntent intent) {
-            dismissTextInputOrPop(context);
-            return null;
-          },
-        ),
-      },
-      child: TvDirectionalFocusNavigation(
-        child: Focus(
-          canRequestFocus: false,
-          onKeyEvent: (FocusNode node, KeyEvent event) {
-            if (event is KeyDownEvent &&
-                event.logicalKey == LogicalKeyboardKey.escape) {
-              dismissTextInputOrPop(context);
-              return KeyEventResult.handled;
-            }
-            return KeyEventResult.ignored;
-          },
-          child: widget.embedded
-              ? _consoleBrowser()
-              : Scaffold(body: SafeArea(child: _consoleBrowser())),
-        ),
-      ),
+    // Escape/back is handled globally (see main.dart's HardwareKeyboard
+    // listener), regardless of what has focus on this screen.
+    return TvDirectionalFocusNavigation(
+      child: widget.embedded
+          ? _consoleBrowser()
+          : Scaffold(body: SafeArea(child: _consoleBrowser())),
     );
   }
 

@@ -1,6 +1,18 @@
 # Hearthdeck
 
-A responsive Flutter TV launcher for macOS and Linux.
+A local-first, controller-first TV library and launcher for macOS and Linux.
+
+## Product Foundations
+
+Start with [Product Foundations](docs/product-foundations.md). It defines the
+non-negotiable controller navigation contract, catalog and metadata model,
+service boundaries, and low-resource rules that every feature must follow.
+
+The current product scope is live desktop and installed Heroic game discovery
+on Linux, AppStream application enrichment, and a separate live RomM browser.
+Full Library uses the live catalog; dashboard and search are still fixture
+surfaces. See [backend architecture](docs/backend-architecture.md) and
+[metadata enrichment](docs/metadata-enrichment.md) for implementation detail.
 
 ## Local Services
 

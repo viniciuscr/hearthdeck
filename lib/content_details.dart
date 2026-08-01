@@ -2,13 +2,11 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 
 import 'dashboard_models.dart';
 import 'external_link.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
-import 'virtual_keyboard.dart';
 
 class ContentDetailsPage extends StatefulWidget {
   const ContentDetailsPage({
@@ -29,137 +27,101 @@ class ContentDetailsPage extends StatefulWidget {
 }
 
 class _ContentDetailsPageState extends State<ContentDetailsPage> {
-  late final FocusNode _routeFocusNode = FocusNode(
-    debugLabel: '${widget.item.title} details',
-    canRequestFocus: false,
-  );
-
-  @override
-  void dispose() {
-    _routeFocusNode.dispose();
-    super.dispose();
-  }
-
-  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (event is KeyDownEvent &&
-        event.logicalKey == LogicalKeyboardKey.escape) {
-      dismissTextInputOrPop(context);
-      return KeyEventResult.handled;
-    }
-    return KeyEventResult.ignored;
-  }
-
   @override
   Widget build(BuildContext context) {
     final details = contentDetailsFor(widget.item);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final layout = _ContentDetailsLayout.fromConstraints(constraints);
-        return Actions(
-          actions: <Type, Action<Intent>>{
-            DismissIntent: CallbackAction<DismissIntent>(
-              onInvoke: (DismissIntent intent) {
-                dismissTextInputOrPop(context);
-                return null;
-              },
-            ),
-          },
-          child: TvDirectionalFocusNavigation(
-            child: Focus(
-              focusNode: _routeFocusNode,
-              onKeyEvent: _handleKeyEvent,
-              child: Scaffold(
-                body: SafeArea(
-                  child: Stack(
-                    children: <Widget>[
-                      _DetailsBackdrop(item: widget.item),
-                      CustomScrollView(
-                        scrollCacheExtent: ScrollCacheExtent.viewport(2),
-                        slivers: <Widget>[
-                          SliverPadding(
-                            padding: EdgeInsets.only(
-                              left: layout.pagePadding,
-                              right: layout.pagePadding,
-                              top: layout.pagePadding * 0.55,
-                              bottom: layout.sectionGap,
+        // Escape/back is handled globally (see main.dart's HardwareKeyboard
+        // listener), regardless of what has focus on this screen.
+        return TvDirectionalFocusNavigation(
+          child: Scaffold(
+            body: SafeArea(
+              child: Stack(
+                children: <Widget>[
+                  _DetailsBackdrop(item: widget.item),
+                  CustomScrollView(
+                    scrollCacheExtent: ScrollCacheExtent.viewport(2),
+                    slivers: <Widget>[
+                      SliverPadding(
+                        padding: EdgeInsets.only(
+                          left: layout.pagePadding,
+                          right: layout.pagePadding,
+                          top: layout.pagePadding * 0.55,
+                          bottom: layout.sectionGap,
+                        ),
+                        sliver: SliverMainAxisGroup(
+                          slivers: <Widget>[
+                            SliverToBoxAdapter(
+                              child: _DetailsHeader(
+                                item: widget.item,
+                                details: details,
+                                sourceShape: widget.sourceShape,
+                                layout: layout,
+                                onPrimaryAction: widget.onPrimaryAction,
+                                externalLink:
+                                    widget.externalLink ??
+                                    const NativeExternalLink(),
+                              ),
                             ),
-                            sliver: SliverMainAxisGroup(
-                              slivers: <Widget>[
-                                SliverToBoxAdapter(
-                                  child: _DetailsHeader(
-                                    item: widget.item,
-                                    details: details,
-                                    sourceShape: widget.sourceShape,
-                                    layout: layout,
-                                    onPrimaryAction: widget.onPrimaryAction,
-                                    externalLink:
-                                        widget.externalLink ??
-                                        const NativeExternalLink(),
-                                  ),
-                                ),
-                                SliverToBoxAdapter(
-                                  child: _MetadataPanel(
-                                    sections: details.factSections.isEmpty
-                                        ? <ContentFactSection>[
-                                            ContentFactSection(
-                                              title: _factsTitle(
-                                                widget.item.kind,
-                                              ),
-                                              facts: details.facts,
-                                            ),
-                                          ]
-                                        : details.factSections,
-                                    progress: details.progress,
-                                    layout: layout,
-                                  ),
-                                ),
-                                SliverToBoxAdapter(
-                                  child: SizedBox(height: layout.sectionGap),
-                                ),
-                                SliverToBoxAdapter(
-                                  child: _DetailsSectionTitle(
-                                    title: details.galleryTitle,
-                                  ),
-                                ),
-                                SliverToBoxAdapter(
-                                  child: SizedBox(height: layout.itemGap),
-                                ),
-                                if (details.gallery.isNotEmpty)
-                                  SliverGrid.builder(
-                                    itemCount: details.gallery.length,
-                                    gridDelegate:
-                                        SliverGridDelegateWithMaxCrossAxisExtent(
-                                          maxCrossAxisExtent:
-                                              layout.galleryTileExtent,
-                                          mainAxisSpacing: layout.itemGap,
-                                          crossAxisSpacing: layout.itemGap,
-                                          childAspectRatio:
-                                              layout.galleryAspectRatio,
+                            SliverToBoxAdapter(
+                              child: _MetadataPanel(
+                                sections: details.factSections.isEmpty
+                                    ? <ContentFactSection>[
+                                        ContentFactSection(
+                                          title: _factsTitle(widget.item.kind),
+                                          facts: details.facts,
                                         ),
-                                    itemBuilder:
-                                        (BuildContext context, int index) {
-                                          return _GalleryCard(
-                                            item: details.gallery[index],
-                                            onActivate: () =>
-                                                _showGalleryFeedback(
-                                                  context,
-                                                  details.gallery[index],
-                                                ),
-                                          );
-                                        },
-                                  )
-                                else
-                                  const SliverToBoxAdapter(
-                                    child: _NoDetailGallery(),
-                                  ),
-                              ],
+                                      ]
+                                    : details.factSections,
+                                progress: details.progress,
+                                layout: layout,
+                              ),
                             ),
-                          ),
-                        ],
+                            SliverToBoxAdapter(
+                              child: SizedBox(height: layout.sectionGap),
+                            ),
+                            SliverToBoxAdapter(
+                              child: _DetailsSectionTitle(
+                                title: details.galleryTitle,
+                              ),
+                            ),
+                            SliverToBoxAdapter(
+                              child: SizedBox(height: layout.itemGap),
+                            ),
+                            if (details.gallery.isNotEmpty)
+                              SliverGrid.builder(
+                                itemCount: details.gallery.length,
+                                gridDelegate:
+                                    SliverGridDelegateWithMaxCrossAxisExtent(
+                                      maxCrossAxisExtent:
+                                          layout.galleryTileExtent,
+                                      mainAxisSpacing: layout.itemGap,
+                                      crossAxisSpacing: layout.itemGap,
+                                      childAspectRatio:
+                                          layout.galleryAspectRatio,
+                                    ),
+                                itemBuilder: (BuildContext context, int index) {
+                                  return _GalleryCard(
+                                    item: details.gallery[index],
+                                    onActivate: () => _showGalleryFeedback(
+                                      context,
+                                      details.gallery[index],
+                                    ),
+                                  );
+                                },
+                              )
+                            else
+                              const SliverToBoxAdapter(
+                                child: _NoDetailGallery(),
+                              ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
-                ),
+                ],
               ),
             ),
           ),

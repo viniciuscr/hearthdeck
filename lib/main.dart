@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_gamepads/flutter_gamepads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -50,6 +51,29 @@ class _HearthdeckAppState extends State<HearthdeckApp> {
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _settings.retryPending(),
     );
+    // Registered once for the whole app's lifetime. Unlike Focus-tree based
+    // key handling (which only sees a key event once it bubbles up from
+    // whichever widget currently has focus), HardwareKeyboard handlers fire
+    // for every key event regardless of what has focus. This makes "Escape
+    // goes back" a true core-system behavior instead of something each screen
+    // has to wire up (and can forget to make reachable, e.g. by omitting an
+    // autofocus somewhere).
+    HardwareKeyboard.instance.addHandler(_handleHardwareKeyEvent);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKeyEvent);
+    super.dispose();
+  }
+
+  static bool _handleHardwareKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return false;
+    }
+    unawaited(_handleBackIntent());
+    return true;
   }
 
   static Future<void> _handleBackIntent() async {
@@ -129,6 +153,14 @@ class _HearthdeckAppState extends State<HearthdeckApp> {
               theme: TvTheme.data(colors, palette),
               themeAnimationDuration: TvTheme.focusDuration,
               themeAnimationCurve: TvTheme.focusCurve,
+              // Escape is handled globally by the HardwareKeyboard listener
+              // registered in initState, regardless of what has focus. Drop
+              // it from the framework's default Shortcuts map so it can't
+              // also reach DismissIntent through the focus tree and pop
+              // twice for a single key press.
+              shortcuts: <ShortcutActivator, Intent>{
+                ...WidgetsApp.defaultShortcuts,
+              }..remove(const SingleActivator(LogicalKeyboardKey.escape)),
               builder: (BuildContext context, Widget? child) => Actions(
                 actions: <Type, Action<Intent>>{
                   DismissIntent: CallbackAction<DismissIntent>(

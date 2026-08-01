@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'backend/hearthdeck_api_client.dart';
 import 'catalog/catalog_repository_factory.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
-import 'virtual_keyboard.dart';
 
 class RommSettingsPage extends StatefulWidget {
   const RommSettingsPage({super.key, this.apiClient});
@@ -147,144 +145,124 @@ class _RommSettingsPageState extends State<RommSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final tv = TvPalette.of(context);
-    return Actions(
-      actions: <Type, Action<Intent>>{
-        DismissIntent: CallbackAction<DismissIntent>(
-          onInvoke: (DismissIntent intent) {
-            dismissTextInputOrPop(context);
-            return null;
-          },
-        ),
-      },
-      child: TvDirectionalFocusNavigation(
-        child: Focus(
-          canRequestFocus: false,
-          onKeyEvent: (FocusNode node, KeyEvent event) {
-            if (event is KeyDownEvent &&
-                event.logicalKey == LogicalKeyboardKey.escape) {
-              dismissTextInputOrPop(context);
-              return KeyEventResult.handled;
-            }
-            return KeyEventResult.ignored;
-          },
-          child: Scaffold(
-            body: SafeArea(
-              child: Stack(
-                children: <Widget>[
-                  const Positioned.fill(child: _RommSettingsBackdrop()),
-                  if (_isLoading)
-                    const Center(child: CircularProgressIndicator())
-                  else
-                    Center(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(32),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 660),
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: tv.surface.withValues(alpha: 0.94),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: tv.borderSubtle),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(28),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+    // Escape/back is handled globally (see main.dart's HardwareKeyboard
+    // listener), regardless of what has focus on this screen.
+    return TvDirectionalFocusNavigation(
+      child: Scaffold(
+        body: SafeArea(
+          child: Stack(
+            children: <Widget>[
+              const Positioned.fill(child: _RommSettingsBackdrop()),
+              if (_isLoading)
+                const Center(child: CircularProgressIndicator())
+              else
+                Center(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(32),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 660),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: tv.surface.withValues(alpha: 0.94),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: tv.borderSubtle),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(28),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Row(
                                 children: <Widget>[
-                                  Row(
-                                    children: <Widget>[
-                                      Icon(
-                                        Icons.videogame_asset_rounded,
-                                        color: tv.accent,
-                                        size: 34,
-                                      ),
-                                      const SizedBox(width: 14),
-                                      Text(
-                                        'Retro & RomM',
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.headlineSmall,
-                                      ),
-                                    ],
+                                  Icon(
+                                    Icons.videogame_asset_rounded,
+                                    color: tv.accent,
+                                    size: 34,
                                   ),
-                                  const SizedBox(height: 12),
+                                  const SizedBox(width: 14),
                                   Text(
-                                    'Connect the local RomM server that manages your emulator library. Hearthdeck stores the token in its local service and never displays it again.',
-                                    style: TextStyle(color: tv.secondaryText),
-                                  ),
-                                  const SizedBox(height: 28),
-                                  _RommTextField(
-                                    label: 'RomM server URL',
-                                    hintText: 'http://127.0.0.1:8080',
-                                    controller: _urlController,
-                                    focusNode: _urlFocusNode,
-                                    textInputAction: TextInputAction.next,
-                                    onSubmitted: (_) =>
-                                        _tokenFocusNode.requestFocus(),
-                                  ),
-                                  const SizedBox(height: 18),
-                                  _RommTextField(
-                                    label: 'RomM client token',
-                                    hintText: 'rmm_...',
-                                    controller: _tokenController,
-                                    focusNode: _tokenFocusNode,
-                                    obscureText: true,
-                                    textInputAction: TextInputAction.done,
-                                    onSubmitted: (_) => _save(),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    _settings == null
-                                        ? 'Not connected'
-                                        : 'Connected to ${_settings!.baseUrl}',
-                                    style: TextStyle(
-                                      color: _settings == null
-                                          ? tv.warning
-                                          : tv.success,
-                                    ),
-                                  ),
-                                  if (_error
-                                      case final String error) ...<Widget>[
-                                    const SizedBox(height: 12),
-                                    Text(
-                                      error,
-                                      style: TextStyle(color: tv.warning),
-                                    ),
-                                  ],
-                                  const SizedBox(height: 26),
-                                  Wrap(
-                                    spacing: 14,
-                                    runSpacing: 14,
-                                    children: <Widget>[
-                                      _RommAction(
-                                        label: _isSaving
-                                            ? 'Saving...'
-                                            : 'Save connection',
-                                        icon: Icons.save_outlined,
-                                        autofocus: true,
-                                        onActivate: _isSaving ? () {} : _save,
-                                      ),
-                                      if (_settings != null)
-                                        _RommAction(
-                                          label: 'Disconnect',
-                                          icon: Icons.link_off_rounded,
-                                          primary: false,
-                                          onActivate: _isSaving
-                                              ? () {}
-                                              : _disconnect,
-                                        ),
-                                    ],
+                                    'Retro & RomM',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.headlineSmall,
                                   ),
                                 ],
                               ),
-                            ),
+                              const SizedBox(height: 12),
+                              Text(
+                                'Connect the local RomM server that manages your emulator library. Hearthdeck stores the token in its local service and never displays it again.',
+                                style: TextStyle(color: tv.secondaryText),
+                              ),
+                              const SizedBox(height: 28),
+                              _RommTextField(
+                                label: 'RomM server URL',
+                                hintText: 'http://127.0.0.1:8080',
+                                controller: _urlController,
+                                focusNode: _urlFocusNode,
+                                textInputAction: TextInputAction.next,
+                                onSubmitted: (_) =>
+                                    _tokenFocusNode.requestFocus(),
+                              ),
+                              const SizedBox(height: 18),
+                              _RommTextField(
+                                label: 'RomM client token',
+                                hintText: 'rmm_...',
+                                controller: _tokenController,
+                                focusNode: _tokenFocusNode,
+                                obscureText: true,
+                                textInputAction: TextInputAction.done,
+                                onSubmitted: (_) => _save(),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                _settings == null
+                                    ? 'Not connected'
+                                    : 'Connected to ${_settings!.baseUrl}',
+                                style: TextStyle(
+                                  color: _settings == null
+                                      ? tv.warning
+                                      : tv.success,
+                                ),
+                              ),
+                              if (_error case final String error) ...<Widget>[
+                                const SizedBox(height: 12),
+                                Text(
+                                  error,
+                                  style: TextStyle(color: tv.warning),
+                                ),
+                              ],
+                              const SizedBox(height: 26),
+                              Wrap(
+                                spacing: 14,
+                                runSpacing: 14,
+                                children: <Widget>[
+                                  _RommAction(
+                                    label: _isSaving
+                                        ? 'Saving...'
+                                        : 'Save connection',
+                                    icon: Icons.save_outlined,
+                                    autofocus: true,
+                                    onActivate: _isSaving ? () {} : _save,
+                                  ),
+                                  if (_settings != null)
+                                    _RommAction(
+                                      label: 'Disconnect',
+                                      icon: Icons.link_off_rounded,
+                                      primary: false,
+                                      onActivate: _isSaving
+                                          ? () {}
+                                          : _disconnect,
+                                    ),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
                       ),
                     ),
-                ],
-              ),
-            ),
+                  ),
+                ),
+            ],
           ),
         ),
       ),

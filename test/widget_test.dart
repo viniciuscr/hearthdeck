@@ -613,6 +613,40 @@ void main() {
     expect(find.text('Discover something new'), findsOneWidget);
   });
 
+  testWidgets(
+    'Escape leaves the Service status screen even when nothing on it has '
+    'ever been focused or hovered',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(const HearthdeckApp());
+
+      await tester.tap(find.bySemanticsLabel('Settings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.bySemanticsLabel('System'));
+      await tester.pumpAndSettle();
+      final serviceStatus = find.byKey(
+        const ValueKey<String>('settings-option-service-status'),
+      );
+      await tester.scrollUntilVisible(
+        serviceStatus,
+        240,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.tap(serviceStatus);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SystemHealthPage), findsOneWidget);
+
+      // No tap/hover/focus request happens on the Service status screen
+      // itself here - this reproduces the reported bug where Escape did
+      // nothing unless the refresh button happened to have focus.
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SystemHealthPage), findsNothing);
+      expect(find.byType(SettingsPage), findsOneWidget);
+    },
+  );
+
   testWidgets('details route supports directional focus navigation', (
     WidgetTester tester,
   ) async {

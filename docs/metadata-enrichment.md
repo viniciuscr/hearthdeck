@@ -7,7 +7,7 @@ websites by application name and it does not perform network enrichment while
 serving a frontend request.
 
 ```text
-Application discovery -> catalog_items
+Application discovery -> library_items
 Metadata provider -> catalog_enrichments
 CatalogStore join -> API library item metadata
 ```
@@ -65,7 +65,10 @@ once an authoritative bundle-linked source is selected.
 
 The daemon stores screenshot URLs as metadata only. A future asset-cache module
 must download, validate, resize, evict, and serve cached media; frontend code
-must never load provider URLs directly as trusted local assets.
+must never load provider URLs directly as trusted local assets. Heroic artwork
+URLs are a documented temporary exception in the current client and must not be
+copied to new providers; see `docs/product-foundations.md` for the target
+media policy.
 
 ## Freshness And Priority
 

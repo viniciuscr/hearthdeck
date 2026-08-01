@@ -1,11 +1,9 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'tv_components.dart';
 import 'tv_theme.dart';
-import 'virtual_keyboard.dart';
 
 class TvSideSheet extends StatelessWidget {
   const TvSideSheet({
@@ -34,76 +32,57 @@ class TvSideSheet extends StatelessWidget {
       semanticLabel: title,
       shape: const RoundedRectangleBorder(),
       child: SafeArea(
-        child: Actions(
-          actions: <Type, Action<Intent>>{
-            DismissIntent: CallbackAction<DismissIntent>(
-              onInvoke: (DismissIntent intent) {
-                if (!unfocusWritableEditableText()) {
-                  _close(context);
-                }
-                return null;
-              },
-            ),
-          },
-          child: TvDirectionalFocusNavigation(
-            child: Focus(
-              canRequestFocus: false,
-              onKeyEvent: (FocusNode node, KeyEvent event) {
-                if (event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.escape) {
-                  if (!unfocusWritableEditableText()) {
-                    _close(context);
-                  }
-                  return KeyEventResult.handled;
-                }
-                return KeyEventResult.ignored;
-              },
-              child: Column(
-                children: <Widget>[
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(22, 18, 14, 12),
-                    child: Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: Text(
-                            title,
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
-                        ),
-                        TvFocusable(
-                          semanticLabel: 'Close $title',
-                          onActivate: () => _close(context),
-                          builder: (BuildContext context, bool isFocused) {
-                            final style = TvControlStyle.resolve(
-                              tv,
-                              variant: TvControlVariant.icon,
-                              isFocused: isFocused,
-                            );
-                            return AnimatedContainer(
-                              duration: TvTheme.focusDuration,
-                              width: 38,
-                              height: 38,
-                              decoration: BoxDecoration(
-                                color: isFocused
-                                    ? style.background
-                                    : tv.surfaceMuted,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Icon(
-                                Icons.close_rounded,
-                                color: style.foreground,
-                              ),
-                            );
-                          },
-                        ),
-                      ],
+        // Escape/back is handled globally (see main.dart's HardwareKeyboard
+        // listener), regardless of what has focus on this screen. That
+        // global handler pops the nearest route/local-history entry (which
+        // correctly closes this drawer), but it doesn't know about
+        // `onClose`, so `onClose` only fires for explicit close actions
+        // (e.g. tapping the close button) rather than Escape/back.
+        child: TvDirectionalFocusNavigation(
+          child: Column(
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(22, 18, 14, 12),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                     ),
-                  ),
-                  Divider(height: 1, color: tv.borderSubtle),
-                  Expanded(child: child),
-                ],
+                    TvFocusable(
+                      semanticLabel: 'Close $title',
+                      onActivate: () => _close(context),
+                      builder: (BuildContext context, bool isFocused) {
+                        final style = TvControlStyle.resolve(
+                          tv,
+                          variant: TvControlVariant.icon,
+                          isFocused: isFocused,
+                        );
+                        return AnimatedContainer(
+                          duration: TvTheme.focusDuration,
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: isFocused
+                                ? style.background
+                                : tv.surfaceMuted,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            Icons.close_rounded,
+                            color: style.foreground,
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
               ),
-            ),
+              Divider(height: 1, color: tv.borderSubtle),
+              Expanded(child: child),
+            ],
           ),
         ),
       ),

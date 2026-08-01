@@ -2,14 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 
 import 'backend/hearthdeck_api_client.dart';
 import 'catalog/catalog_repository.dart';
 import 'catalog/catalog_repository_factory.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
-import 'virtual_keyboard.dart';
 
 class SystemHealthPage extends StatefulWidget {
   const SystemHealthPage({super.key, this.catalogRepository});
@@ -114,171 +112,129 @@ class _SystemHealthPageState extends State<SystemHealthPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Actions(
-      actions: <Type, Action<Intent>>{
-        DismissIntent: CallbackAction<DismissIntent>(
-          onInvoke: (DismissIntent intent) {
-            dismissTextInputOrPop(context);
-            return null;
-          },
-        ),
-      },
-      child: TvDirectionalFocusNavigation(
-        child: Focus(
-          canRequestFocus: false,
-          onKeyEvent: (FocusNode node, KeyEvent event) {
-            if (event is KeyDownEvent &&
-                event.logicalKey == LogicalKeyboardKey.escape) {
-              dismissTextInputOrPop(context);
-              return KeyEventResult.handled;
-            }
-            return KeyEventResult.ignored;
-          },
-          child: Scaffold(
-            body: SafeArea(
-              child: Stack(
-                children: <Widget>[
-                  const Positioned.fill(child: _SystemHealthBackdrop()),
-                  CustomScrollView(
-                    scrollCacheExtent: ScrollCacheExtent.viewport(2),
-                    slivers: <Widget>[
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(48, 38, 48, 56),
-                        sliver: SliverMainAxisGroup(
-                          slivers: <Widget>[
-                            SliverToBoxAdapter(
-                              child: _HealthHeader(
-                                health: _health,
-                                diagnostics: _diagnostics,
-                                isLoading: _isLoading,
-                                onRefresh: _refresh,
-                              ),
-                            ),
-                            const SliverToBoxAdapter(
-                              child: SizedBox(height: 34),
-                            ),
-                            if (_error case final Object error)
-                              SliverToBoxAdapter(
-                                child: _HealthError(error: error),
-                              )
-                            else if (_isLoading)
-                              const SliverToBoxAdapter(
-                                child: Center(
-                                  child: Padding(
-                                    padding: EdgeInsets.all(42),
-                                    child: CircularProgressIndicator(),
-                                  ),
-                                ),
-                              )
-                            else ...<Widget>[
-                              SliverToBoxAdapter(
-                                child: _SectionTitle(
-                                  title: 'Local services',
-                                  subtitle:
-                                      'Daemon, bridge socket, and bridge activation state',
-                                ),
-                              ),
-                              const SliverToBoxAdapter(
-                                child: SizedBox(height: 14),
-                              ),
-                              SliverGrid.builder(
-                                itemCount: _diagnostics!.services.length,
-                                gridDelegate:
-                                    const SliverGridDelegateWithMaxCrossAxisExtent(
-                                      maxCrossAxisExtent: 390,
-                                      mainAxisSpacing: 14,
-                                      crossAxisSpacing: 14,
-                                      childAspectRatio: 2.05,
-                                    ),
-                                itemBuilder:
-                                    (BuildContext context, int index) =>
-                                        _ServiceStatusCard(
-                                          service:
-                                              _diagnostics!.services[index],
-                                        ),
-                              ),
-                              const SliverToBoxAdapter(
-                                child: SizedBox(height: 34),
-                              ),
-                              SliverToBoxAdapter(
-                                child: _SectionTitle(
-                                  title: 'Library sources',
-                                  subtitle:
-                                      'Last scan results for desktop apps, Heroic, and metadata sources',
-                                ),
-                              ),
-                              const SliverToBoxAdapter(
-                                child: SizedBox(height: 14),
-                              ),
-                              if (_health!.providers.isEmpty)
-                                const SliverToBoxAdapter(
-                                  child: _NoProviderHealth(),
-                                )
-                              else
-                                SliverGrid.builder(
-                                  itemCount: _health!.providers.length,
-                                  gridDelegate:
-                                      const SliverGridDelegateWithMaxCrossAxisExtent(
-                                        maxCrossAxisExtent: 520,
-                                        mainAxisSpacing: 18,
-                                        crossAxisSpacing: 18,
-                                        childAspectRatio: 1.35,
-                                      ),
-                                  itemBuilder:
-                                      (BuildContext context, int index) =>
-                                          _ProviderHealthCard(
-                                            provider: _health!.providers[index],
-                                            isRefreshing:
-                                                _refreshingProviderId ==
-                                                _health!.providers[index].id,
-                                            onRefresh: () => _refreshProvider(
-                                              _health!.providers[index],
-                                            ),
-                                          ),
-                                ),
-                              const SliverToBoxAdapter(
-                                child: SizedBox(height: 34),
-                              ),
-                              SliverToBoxAdapter(
-                                child: _SectionTitle(
-                                  title: 'RomM connection',
-                                  subtitle:
-                                      'A live platform request verifies the configured local server',
-                                ),
-                              ),
-                              const SliverToBoxAdapter(
-                                child: SizedBox(height: 14),
-                              ),
-                              SliverToBoxAdapter(
-                                child: _RommDiagnosticCard(
-                                  diagnostic: _diagnostics!.romm,
-                                ),
-                              ),
-                              const SliverToBoxAdapter(
-                                child: SizedBox(height: 34),
-                              ),
-                              SliverToBoxAdapter(
-                                child: _SectionTitle(
-                                  title: 'Recent service events',
-                                  subtitle:
-                                      'Latest 30 events from the Hearthdeck daemon and bridge journals, updating every 5 seconds',
-                                ),
-                              ),
-                              const SliverToBoxAdapter(
-                                child: SizedBox(height: 14),
-                              ),
-                              SliverToBoxAdapter(
-                                child: _LogTailCard(logs: _diagnostics!.logs),
-                              ),
-                            ],
-                          ],
+    // Escape/back is handled globally (see main.dart's HardwareKeyboard
+    // listener), regardless of what has focus on this screen.
+    return TvDirectionalFocusNavigation(
+      child: Scaffold(
+        body: SafeArea(
+          child: Stack(
+            children: <Widget>[
+              const Positioned.fill(child: _SystemHealthBackdrop()),
+              CustomScrollView(
+                scrollCacheExtent: ScrollCacheExtent.viewport(2),
+                slivers: <Widget>[
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(48, 38, 48, 56),
+                    sliver: SliverMainAxisGroup(
+                      slivers: <Widget>[
+                        SliverToBoxAdapter(
+                          child: _HealthHeader(
+                            health: _health,
+                            diagnostics: _diagnostics,
+                            isLoading: _isLoading,
+                            onRefresh: _refresh,
+                          ),
                         ),
-                      ),
-                    ],
+                        const SliverToBoxAdapter(child: SizedBox(height: 34)),
+                        if (_error case final Object error)
+                          SliverToBoxAdapter(child: _HealthError(error: error))
+                        else if (_isLoading)
+                          const SliverToBoxAdapter(
+                            child: Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(42),
+                                child: CircularProgressIndicator(),
+                              ),
+                            ),
+                          )
+                        else ...<Widget>[
+                          SliverToBoxAdapter(
+                            child: _SectionTitle(
+                              title: 'Local services',
+                              subtitle:
+                                  'Daemon, bridge socket, and bridge activation state',
+                            ),
+                          ),
+                          const SliverToBoxAdapter(child: SizedBox(height: 14)),
+                          SliverGrid.builder(
+                            itemCount: _diagnostics!.services.length,
+                            gridDelegate:
+                                const SliverGridDelegateWithMaxCrossAxisExtent(
+                                  maxCrossAxisExtent: 390,
+                                  mainAxisSpacing: 14,
+                                  crossAxisSpacing: 14,
+                                  childAspectRatio: 2.05,
+                                ),
+                            itemBuilder: (BuildContext context, int index) =>
+                                _ServiceStatusCard(
+                                  service: _diagnostics!.services[index],
+                                ),
+                          ),
+                          const SliverToBoxAdapter(child: SizedBox(height: 34)),
+                          SliverToBoxAdapter(
+                            child: _SectionTitle(
+                              title: 'Library sources',
+                              subtitle:
+                                  'Last scan results for desktop apps, Heroic, and metadata sources',
+                            ),
+                          ),
+                          const SliverToBoxAdapter(child: SizedBox(height: 14)),
+                          if (_health!.providers.isEmpty)
+                            const SliverToBoxAdapter(child: _NoProviderHealth())
+                          else
+                            SliverGrid.builder(
+                              itemCount: _health!.providers.length,
+                              gridDelegate:
+                                  const SliverGridDelegateWithMaxCrossAxisExtent(
+                                    maxCrossAxisExtent: 520,
+                                    mainAxisSpacing: 18,
+                                    crossAxisSpacing: 18,
+                                    childAspectRatio: 1.35,
+                                  ),
+                              itemBuilder: (BuildContext context, int index) =>
+                                  _ProviderHealthCard(
+                                    provider: _health!.providers[index],
+                                    isRefreshing:
+                                        _refreshingProviderId ==
+                                        _health!.providers[index].id,
+                                    onRefresh: () => _refreshProvider(
+                                      _health!.providers[index],
+                                    ),
+                                  ),
+                            ),
+                          const SliverToBoxAdapter(child: SizedBox(height: 34)),
+                          SliverToBoxAdapter(
+                            child: _SectionTitle(
+                              title: 'RomM connection',
+                              subtitle:
+                                  'A live platform request verifies the configured local server',
+                            ),
+                          ),
+                          const SliverToBoxAdapter(child: SizedBox(height: 14)),
+                          SliverToBoxAdapter(
+                            child: _RommDiagnosticCard(
+                              diagnostic: _diagnostics!.romm,
+                            ),
+                          ),
+                          const SliverToBoxAdapter(child: SizedBox(height: 34)),
+                          SliverToBoxAdapter(
+                            child: _SectionTitle(
+                              title: 'Recent service events',
+                              subtitle:
+                                  'Latest 30 events from the Hearthdeck daemon and bridge journals, updating every 5 seconds',
+                            ),
+                          ),
+                          const SliverToBoxAdapter(child: SizedBox(height: 14)),
+                          SliverToBoxAdapter(
+                            child: _LogTailCard(logs: _diagnostics!.logs),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 ],
               ),
-            ),
+            ],
           ),
         ),
       ),

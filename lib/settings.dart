@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 
 import 'catalog/catalog_repository.dart';
 import 'catalog/catalog_repository_factory.dart';
@@ -14,7 +13,6 @@ import 'theme_settings.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
 import 'tv_two_pane.dart';
-import 'virtual_keyboard.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, this.catalogRepository, this.platformSession});
@@ -91,95 +89,71 @@ class _SettingsPageState extends State<SettingsPage> {
           (SettingsCategoryDefinition definition) =>
               definition.category == _category,
         );
-        return Actions(
-          actions: <Type, Action<Intent>>{
-            DismissIntent: CallbackAction<DismissIntent>(
-              onInvoke: (DismissIntent intent) {
-                dismissTextInputOrPop(context);
-                return null;
-              },
-            ),
-          },
-          child: TvDirectionalFocusNavigation(
-            child: Focus(
-              canRequestFocus: false,
-              onKeyEvent: (FocusNode node, KeyEvent event) {
-                if (event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.escape) {
-                  dismissTextInputOrPop(context);
-                  return KeyEventResult.handled;
-                }
-                return KeyEventResult.ignored;
-              },
-              child: Scaffold(
-                body: SafeArea(
-                  child: Stack(
-                    children: <Widget>[
-                      const Positioned.fill(child: _SettingsBackdrop()),
-                      TvTwoPaneLayout(
-                        rail: TvNavigationRail(
-                          width: layout.railWidth,
-                          compact: layout.isRailCompact,
-                          headerBuilder: (BuildContext context, bool compact) =>
-                              TvProfileRailHeader(
-                                name: 'Alex',
-                                compact: compact,
-                                icon: Icons.settings_outlined,
-                              ),
-                          items: settingsCategories
-                              .map(
-                                (SettingsCategoryDefinition item) =>
-                                    TvNavigationRailItem(
-                                      id: item.category.name,
-                                      label: item.label,
-                                      icon: item.icon,
-                                      isSelected: item.category == _category,
-                                      onActivate: () =>
-                                          _selectCategory(item.category),
-                                    ),
-                              )
-                              .toList(growable: false),
+        // Escape/back is handled globally (see main.dart's HardwareKeyboard
+        // listener), regardless of what has focus on this screen.
+        return TvDirectionalFocusNavigation(
+          child: Scaffold(
+            body: SafeArea(
+              child: Stack(
+                children: <Widget>[
+                  const Positioned.fill(child: _SettingsBackdrop()),
+                  TvTwoPaneLayout(
+                    rail: TvNavigationRail(
+                      width: layout.railWidth,
+                      compact: layout.isRailCompact,
+                      headerBuilder: (BuildContext context, bool compact) =>
+                          TvProfileRailHeader(
+                            name: 'Alex',
+                            compact: compact,
+                            icon: Icons.settings_outlined,
+                          ),
+                      items: settingsCategories
+                          .map(
+                            (SettingsCategoryDefinition item) =>
+                                TvNavigationRailItem(
+                                  id: item.category.name,
+                                  label: item.label,
+                                  icon: item.icon,
+                                  isSelected: item.category == _category,
+                                  onActivate: () =>
+                                      _selectCategory(item.category),
+                                ),
+                          )
+                          .toList(growable: false),
+                    ),
+                    content: _SettingsContent(
+                      definition: definition,
+                      options: _options,
+                      layout: layout,
+                      onLibraryRescan: _requestLibraryRescan,
+                      onExitToDesktop: _confirmExitToDesktop,
+                      onThemeSettings: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          settings: const RouteSettings(
+                            name: '/theme-settings',
+                          ),
+                          builder: (BuildContext context) =>
+                              const ThemeSettingsPage(),
                         ),
-                        content: _SettingsContent(
-                          definition: definition,
-                          options: _options,
-                          layout: layout,
-                          onLibraryRescan: _requestLibraryRescan,
-                          onExitToDesktop: _confirmExitToDesktop,
-                          onThemeSettings: () => Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              settings: const RouteSettings(
-                                name: '/theme-settings',
-                              ),
-                              builder: (BuildContext context) =>
-                                  const ThemeSettingsPage(),
-                            ),
-                          ),
-                          onServiceStatus: () => Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              settings: const RouteSettings(
-                                name: '/system-health',
-                              ),
-                              builder: (BuildContext context) =>
-                                  SystemHealthPage(
-                                    catalogRepository: _catalogRepository,
-                                  ),
-                            ),
-                          ),
-                          onRommSettings: () => Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              settings: const RouteSettings(
-                                name: '/romm-settings',
-                              ),
-                              builder: (BuildContext context) =>
-                                  const RommSettingsPage(),
-                            ),
+                      ),
+                      onServiceStatus: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          settings: const RouteSettings(name: '/system-health'),
+                          builder: (BuildContext context) => SystemHealthPage(
+                            catalogRepository: _catalogRepository,
                           ),
                         ),
                       ),
-                    ],
+                      onRommSettings: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          settings: const RouteSettings(name: '/romm-settings'),
+                          builder: (BuildContext context) =>
+                              const RommSettingsPage(),
+                        ),
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
             ),
           ),

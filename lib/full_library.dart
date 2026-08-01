@@ -3,7 +3,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 
 import 'catalog/catalog_repository.dart';
 import 'catalog/catalog_repository_factory.dart';
@@ -16,7 +15,6 @@ import 'search.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
 import 'tv_two_pane.dart';
-import 'virtual_keyboard.dart';
 
 class FullLibraryPage extends StatefulWidget {
   const FullLibraryPage({super.key, this.catalogRepository});
@@ -190,75 +188,55 @@ class _FullLibraryPageState extends State<FullLibraryPage> {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final layout = _LibraryLayout.fromConstraints(constraints);
-        return Actions(
-          actions: <Type, Action<Intent>>{
-            DismissIntent: CallbackAction<DismissIntent>(
-              onInvoke: (DismissIntent intent) {
-                dismissTextInputOrPop(context);
-                return null;
+        // Escape/back is handled globally (see main.dart's HardwareKeyboard
+        // listener), regardless of what has focus on this screen.
+        return TvDirectionalFocusNavigation(
+          child: Scaffold(
+            key: _scaffoldKey,
+            endDrawerEnableOpenDragGesture: false,
+            endDrawer: LibraryFilterSheet(
+              initialState: _filters,
+              onApply: (LibraryFilterState state) {
+                setState(() => _filters = state);
               },
             ),
-          },
-          child: TvDirectionalFocusNavigation(
-            child: Focus(
-              canRequestFocus: false,
-              onKeyEvent: (FocusNode node, KeyEvent event) {
-                if (event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.escape) {
-                  dismissTextInputOrPop(context);
-                  return KeyEventResult.handled;
-                }
-                return KeyEventResult.ignored;
-              },
-              child: Scaffold(
-                key: _scaffoldKey,
-                endDrawerEnableOpenDragGesture: false,
-                endDrawer: LibraryFilterSheet(
-                  initialState: _filters,
-                  onApply: (LibraryFilterState state) {
-                    setState(() => _filters = state);
-                  },
-                ),
-                body: SafeArea(
-                  child: Stack(
-                    children: <Widget>[
-                      const Positioned.fill(child: _LibraryBackdrop()),
-                      TvTwoPaneLayout(
-                        rail: _LibraryRail(
-                          width: layout.railWidth,
-                          selected: _category,
-                          compact: layout.isRailCompact,
-                          onSelect: _selectCategory,
-                        ),
-                        content: _category == LibraryCategory.consoleGames
-                            ? const RetroPage(embedded: true)
-                            : _LibraryContent(
-                                category: _category,
-                                isLoading:
-                                    _catalog == null && _catalogError == null,
-                                loadError: _catalogError,
-                                sources: _sources,
-                                selectedSourceIndex: _sourceIndex,
-                                items: _items,
-                                features: _features,
-                                layout: layout,
-                                isAscending: _isAscending,
-                                filters: _filters,
-                                onSourceSelected: _selectSource,
-                                onSortChanged: () => setState(
-                                  () => _isAscending = !_isAscending,
-                                ),
-                                onFilterRequested: () {
-                                  _scaffoldKey.currentState?.openEndDrawer();
-                                },
-                                onRefreshRequested: _loadCatalog,
-                                onRescanRequested: _requestRescan,
-                                onOpen: _openItemDetails,
-                              ),
-                      ),
-                    ],
+            body: SafeArea(
+              child: Stack(
+                children: <Widget>[
+                  const Positioned.fill(child: _LibraryBackdrop()),
+                  TvTwoPaneLayout(
+                    rail: _LibraryRail(
+                      width: layout.railWidth,
+                      selected: _category,
+                      compact: layout.isRailCompact,
+                      onSelect: _selectCategory,
+                    ),
+                    content: _category == LibraryCategory.consoleGames
+                        ? const RetroPage(embedded: true)
+                        : _LibraryContent(
+                            category: _category,
+                            isLoading:
+                                _catalog == null && _catalogError == null,
+                            loadError: _catalogError,
+                            sources: _sources,
+                            selectedSourceIndex: _sourceIndex,
+                            items: _items,
+                            features: _features,
+                            layout: layout,
+                            isAscending: _isAscending,
+                            filters: _filters,
+                            onSourceSelected: _selectSource,
+                            onSortChanged: () =>
+                                setState(() => _isAscending = !_isAscending),
+                            onFilterRequested: () {
+                              _scaffoldKey.currentState?.openEndDrawer();
+                            },
+                            onRefreshRequested: _loadCatalog,
+                            onRescanRequested: _requestRescan,
+                            onOpen: _openItemDetails,
+                          ),
                   ),
-                ),
+                ],
               ),
             ),
           ),

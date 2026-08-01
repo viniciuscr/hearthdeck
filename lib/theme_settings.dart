@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'tv_components.dart';
 import 'tv_theme.dart';
-import 'virtual_keyboard.dart';
 
 class ThemeSettingsPage extends StatelessWidget {
   const ThemeSettingsPage({super.key});
@@ -12,116 +10,93 @@ class ThemeSettingsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final scope = TvThemeScope.of(context);
     final tv = TvPalette.of(context);
-    return Actions(
-      actions: <Type, Action<Intent>>{
-        DismissIntent: CallbackAction<DismissIntent>(
-          onInvoke: (DismissIntent intent) {
-            dismissTextInputOrPop(context);
-            return null;
-          },
-        ),
-      },
-      child: TvDirectionalFocusNavigation(
-        child: Focus(
-          canRequestFocus: false,
-          onKeyEvent: (FocusNode node, KeyEvent event) {
-            if (event is KeyDownEvent &&
-                event.logicalKey == LogicalKeyboardKey.escape) {
-              dismissTextInputOrPop(context);
-              return KeyEventResult.handled;
-            }
-            return KeyEventResult.ignored;
-          },
-          child: Scaffold(
-            body: SafeArea(
-              child: Stack(
-                children: <Widget>[
-                  const Positioned.fill(
-                    child: TvBackdrop(center: Alignment(-0.5, -0.6)),
-                  ),
-                  CustomScrollView(
-                    slivers: <Widget>[
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(48, 40, 48, 56),
-                        sliver: SliverMainAxisGroup(
-                          slivers: <Widget>[
-                            SliverToBoxAdapter(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+    // Escape/back is handled globally (see main.dart's HardwareKeyboard
+    // listener), regardless of what has focus on this screen.
+    return TvDirectionalFocusNavigation(
+      child: Scaffold(
+        body: SafeArea(
+          child: Stack(
+            children: <Widget>[
+              const Positioned.fill(
+                child: TvBackdrop(center: Alignment(-0.5, -0.6)),
+              ),
+              CustomScrollView(
+                slivers: <Widget>[
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(48, 40, 48, 56),
+                    sliver: SliverMainAxisGroup(
+                      slivers: <Widget>[
+                        SliverToBoxAdapter(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Row(
                                 children: <Widget>[
-                                  Row(
-                                    children: <Widget>[
-                                      Icon(
-                                        Icons.palette_outlined,
-                                        color: tv.focus,
-                                        size: 34,
-                                      ),
-                                      const SizedBox(width: 14),
-                                      Text(
-                                        'Appearance & color',
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.displaySmall,
-                                      ),
-                                    ],
+                                  Icon(
+                                    Icons.palette_outlined,
+                                    color: tv.focus,
+                                    size: 34,
                                   ),
-                                  const SizedBox(height: 10),
+                                  const SizedBox(width: 14),
                                   Text(
-                                    'System Colors follows your GTK theme accent on Linux and wallpaper colors on Android.',
-                                    style: TextStyle(color: tv.secondaryText),
-                                  ),
-                                  const SizedBox(height: 34),
-                                  Text(
-                                    'Backdrop treatment',
+                                    'Appearance & color',
                                     style: Theme.of(
                                       context,
-                                    ).textTheme.titleLarge,
+                                    ).textTheme.displaySmall,
                                   ),
-                                  const SizedBox(height: 14),
-                                  _BackdropChoices(
-                                    selected: scope.backdropMode,
-                                    onActivate: scope.onBackdropModeChanged,
-                                  ),
-                                  const SizedBox(height: 34),
-                                  Text(
-                                    'Theme palette',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleLarge,
-                                  ),
-                                  const SizedBox(height: 14),
-                                  const SizedBox(height: 18),
-                                  const _AppearanceRolePreview(),
-                                  const SizedBox(height: 34),
                                 ],
                               ),
-                            ),
-                            SliverGrid.builder(
-                              itemCount: TvThemeMode.values.length,
-                              gridDelegate:
-                                  const SliverGridDelegateWithMaxCrossAxisExtent(
-                                    maxCrossAxisExtent: 430,
-                                    mainAxisSpacing: 18,
-                                    crossAxisSpacing: 18,
-                                    childAspectRatio: 1.42,
-                                  ),
-                              itemBuilder: (BuildContext context, int index) {
-                                final mode = TvThemeMode.values[index];
-                                return _ThemeChoiceCard(
-                                  mode: mode,
-                                  isSelected: mode == scope.mode,
-                                  onActivate: () => scope.onModeChanged(mode),
-                                );
-                              },
-                            ),
-                          ],
+                              const SizedBox(height: 10),
+                              Text(
+                                'System Colors follows your GTK theme accent on Linux and wallpaper colors on Android.',
+                                style: TextStyle(color: tv.secondaryText),
+                              ),
+                              const SizedBox(height: 34),
+                              Text(
+                                'Backdrop treatment',
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                              const SizedBox(height: 14),
+                              _BackdropChoices(
+                                selected: scope.backdropMode,
+                                onActivate: scope.onBackdropModeChanged,
+                              ),
+                              const SizedBox(height: 34),
+                              Text(
+                                'Theme palette',
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                              const SizedBox(height: 14),
+                              const SizedBox(height: 18),
+                              const _AppearanceRolePreview(),
+                              const SizedBox(height: 34),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                        SliverGrid.builder(
+                          itemCount: TvThemeMode.values.length,
+                          gridDelegate:
+                              const SliverGridDelegateWithMaxCrossAxisExtent(
+                                maxCrossAxisExtent: 430,
+                                mainAxisSpacing: 18,
+                                crossAxisSpacing: 18,
+                                childAspectRatio: 1.42,
+                              ),
+                          itemBuilder: (BuildContext context, int index) {
+                            final mode = TvThemeMode.values[index];
+                            return _ThemeChoiceCard(
+                              mode: mode,
+                              isSelected: mode == scope.mode,
+                              onActivate: () => scope.onModeChanged(mode),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
-            ),
+            ],
           ),
         ),
       ),
