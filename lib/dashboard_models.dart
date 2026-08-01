@@ -99,6 +99,7 @@ class DashboardItem {
     this.description,
     this.artworkUrl,
     this.artworkHeaders,
+    this.artworkFallbackUrl,
     this.kind = TvContentKind.application,
     this.details,
   });
@@ -111,6 +112,7 @@ class DashboardItem {
   final String? description;
   final String? artworkUrl;
   final Map<String, String>? artworkHeaders;
+  final String? artworkFallbackUrl;
   final TvContentKind kind;
   final ContentDetails? details;
 }

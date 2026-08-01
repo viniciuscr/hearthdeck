@@ -487,6 +487,7 @@ components:
         title: { type: string }
         summary: { type: [string, 'null'] }
         cover_path: { type: [string, 'null'] }
+        cover_url: { type: [string, 'null'], format: uri }
         screenshot_paths:
           type: array
           items: { type: string }

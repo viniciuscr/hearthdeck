@@ -129,16 +129,18 @@ class _RetroPageState extends State<RetroPage> {
     final apiClient = _connectedApiClient;
     final coverPath = game.coverPath;
     final artworkHeaders = apiClient?.authorizationHeaders;
+    final artworkUrl = coverPath == null
+        ? game.coverUrl
+        : apiClient?.retroAssetUri(coverPath).toString();
     return DashboardItem(
       id: 'romm:${game.id}',
       title: game.title,
       description: _gameDescription(game),
       icon: Icons.sports_esports_rounded,
       colors: _colorsFor(game.id),
-      artworkUrl: apiClient == null || coverPath == null
-          ? null
-          : apiClient.retroAssetUri(coverPath).toString(),
+      artworkUrl: artworkUrl,
       artworkHeaders: coverPath == null ? null : artworkHeaders,
+      artworkFallbackUrl: coverPath == null ? null : game.coverUrl,
       kind: TvContentKind.game,
       details: ContentDetails(
         summary: game.summary?.trim().isNotEmpty == true

@@ -644,6 +644,7 @@ struct RetroGame {
     title: String,
     summary: Option<String>,
     cover_path: Option<String>,
+    cover_url: Option<String>,
     screenshot_paths: Vec<String>,
     has_manual: bool,
     genres: Vec<String>,
@@ -672,18 +673,38 @@ impl From<&RommGame> for RetroGame {
             platform_id: game.platform_id,
             title,
             summary: game.summary.clone(),
-            cover_path: game.path_cover_small.clone(),
-            screenshot_paths: game.merged_screenshots.clone(),
-            has_manual: game
-                .path_manual
-                .as_deref()
-                .is_some_and(|path| !path.trim().is_empty()),
+            cover_path: non_empty_romm_path(game.path_cover_small.as_ref())
+                .or_else(|| non_empty_romm_path(game.path_cover_large.as_ref())),
+            cover_url: http_url(game.url_cover.as_deref()),
+            screenshot_paths: game
+                .merged_screenshots
+                .iter()
+                .filter_map(|path| non_empty_romm_path(Some(path)))
+                .collect(),
+            has_manual: game.has_manual
+                || game
+                    .path_manual
+                    .as_deref()
+                    .is_some_and(|path| !path.trim().is_empty()),
             genres: game.metadatum.genres.clone(),
             player_count,
             release_year,
             regions: game.regions.clone(),
         }
     }
+}
+
+fn non_empty_romm_path(value: Option<&String>) -> Option<String> {
+    value
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+}
+
+fn http_url(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    let url = reqwest::Url::parse(value).ok()?;
+    matches!(url.scheme(), "http" | "https").then(|| url.to_string())
 }
 
 struct ApiError {
@@ -1128,5 +1149,27 @@ mod tests {
         ));
         assert!(super::heroic_launch_target("steam:570").is_none());
         assert!(super::heroic_launch_target("legendary:").is_none());
+    }
+
+    #[test]
+    fn ignores_empty_romm_artwork_paths() {
+        assert_eq!(super::non_empty_romm_path(Some(&"  ".to_owned())), None);
+        assert_eq!(
+            super::non_empty_romm_path(Some(&"/assets/romm/resources/cover.webp".to_owned())),
+            Some("/assets/romm/resources/cover.webp".to_owned())
+        );
+    }
+
+    #[test]
+    fn accepts_only_http_cover_urls() {
+        assert_eq!(
+            super::http_url(Some("https://images.example.com/cover.jpg")),
+            Some("https://images.example.com/cover.jpg".to_owned())
+        );
+        assert_eq!(
+            super::http_url(Some("file:///mnt/external/cover.jpg")),
+            None
+        );
+        assert_eq!(super::http_url(Some("not a url")), None);
     }
 }

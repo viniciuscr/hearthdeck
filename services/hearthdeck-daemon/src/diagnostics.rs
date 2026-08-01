@@ -51,9 +51,15 @@ pub struct RommGame {
     #[serde(default)]
     pub path_cover_small: Option<String>,
     #[serde(default)]
+    pub path_cover_large: Option<String>,
+    #[serde(default)]
+    pub url_cover: Option<String>,
+    #[serde(default)]
     pub merged_screenshots: Vec<String>,
     #[serde(default)]
     pub path_manual: Option<String>,
+    #[serde(default)]
+    pub has_manual: bool,
     #[serde(default)]
     pub metadatum: RommGameMetadata,
     #[serde(default)]

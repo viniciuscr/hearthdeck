@@ -178,6 +178,10 @@ void main() {
       expect(page.items.single.title, 'Super Metroid');
       expect(page.items.single.genres, <String>['Action', 'Adventure']);
       expect(
+        page.items.single.coverUrl,
+        'https://images.example.com/super-metroid.jpg',
+      );
+      expect(
         client
             .retroAssetUri(page.items.single.coverPath!)
             .queryParameters['path'],
@@ -370,7 +374,7 @@ class _RetroGamesHttpClient extends http.BaseClient {
     });
     expect(request.headers['authorization'], 'Bearer test-token');
     const body = '''{
-      "items":[{"id":42,"platform_id":2,"title":"Super Metroid","summary":"Explore Zebes.","cover_path":"/assets/romm/resources/roms/2/42/cover.webp","screenshot_paths":["/assets/romm/resources/roms/2/42/screenshot.webp"],"has_manual":true,"genres":["Action","Adventure"],"player_count":"1","release_year":1994,"regions":["USA"]}],
+      "items":[{"id":42,"platform_id":2,"title":"Super Metroid","summary":"Explore Zebes.","cover_path":"/assets/romm/resources/roms/2/42/cover.webp","cover_url":"https://images.example.com/super-metroid.jpg","screenshot_paths":["/assets/romm/resources/roms/2/42/screenshot.webp"],"has_manual":true,"genres":["Action","Adventure"],"player_count":"1","release_year":1994,"regions":["USA"]}],
       "total":187,"limit":24,"offset":48
     }''';
     return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);

@@ -674,13 +674,33 @@ class TvArtworkVisual extends StatelessWidget {
                         BuildContext context,
                         Object error,
                         StackTrace? stackTrace,
-                      ) => _ArtworkFallback(
-                        icon: item.icon,
-                        size: iconSize,
-                        alignment: shape == TvTileShape.square
-                            ? const Alignment(0, -0.15)
-                            : const Alignment(0.44, -0.08),
-                      ),
+                      ) {
+                        final fallbackUrl = item.artworkFallbackUrl;
+                        return fallbackUrl == null
+                            ? _ArtworkFallback(
+                                icon: item.icon,
+                                size: iconSize,
+                                alignment: shape == TvTileShape.square
+                                    ? const Alignment(0, -0.15)
+                                    : const Alignment(0.44, -0.08),
+                              )
+                            : Image.network(
+                                fallbackUrl,
+                                fit: BoxFit.cover,
+                                errorBuilder:
+                                    (
+                                      BuildContext context,
+                                      Object error,
+                                      StackTrace? stackTrace,
+                                    ) => _ArtworkFallback(
+                                      icon: item.icon,
+                                      size: iconSize,
+                                      alignment: shape == TvTileShape.square
+                                          ? const Alignment(0, -0.15)
+                                          : const Alignment(0.44, -0.08),
+                                    ),
+                              );
+                      },
                 ),
               ),
             ),
