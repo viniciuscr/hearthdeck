@@ -30,6 +30,14 @@ class _ContentDetailsPageState extends State<ContentDetailsPage> {
   @override
   Widget build(BuildContext context) {
     final details = contentDetailsFor(widget.item);
+    final factSections = details.factSections.isEmpty
+        ? <ContentFactSection>[
+            ContentFactSection(
+              title: _factsTitle(widget.item.kind),
+              facts: details.facts,
+            ),
+          ]
+        : details.factSections;
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final layout = _ContentDetailsLayout.fromConstraints(constraints);
@@ -57,6 +65,7 @@ class _ContentDetailsPageState extends State<ContentDetailsPage> {
                               child: _DetailsHeader(
                                 item: widget.item,
                                 details: details,
+                                factSections: factSections,
                                 sourceShape: widget.sourceShape,
                                 layout: layout,
                                 onPrimaryAction: widget.onPrimaryAction,
@@ -66,16 +75,11 @@ class _ContentDetailsPageState extends State<ContentDetailsPage> {
                               ),
                             ),
                             SliverToBoxAdapter(
-                              child: _MetadataPanel(
-                                sections: details.factSections.isEmpty
-                                    ? <ContentFactSection>[
-                                        ContentFactSection(
-                                          title: _factsTitle(widget.item.kind),
-                                          facts: details.facts,
-                                        ),
-                                      ]
-                                    : details.factSections,
-                                progress: details.progress,
+                              child: SizedBox(height: layout.sectionGap * 0.75),
+                            ),
+                            SliverToBoxAdapter(
+                              child: _DescriptionPanel(
+                                description: details.summary,
                                 layout: layout,
                               ),
                             ),
@@ -180,6 +184,7 @@ class _DetailsHeader extends StatelessWidget {
   const _DetailsHeader({
     required this.item,
     required this.details,
+    required this.factSections,
     required this.sourceShape,
     required this.layout,
     this.onPrimaryAction,
@@ -188,6 +193,7 @@ class _DetailsHeader extends StatelessWidget {
 
   final DashboardItem item;
   final ContentDetails details;
+  final List<ContentFactSection> factSections;
   final TvTileShape sourceShape;
   final _ContentDetailsLayout layout;
   final Future<void> Function(DashboardItem item)? onPrimaryAction;
@@ -206,6 +212,7 @@ class _DetailsHeader extends StatelessWidget {
     final information = _DetailsInformation(
       item: item,
       details: details,
+      factSections: factSections,
       layout: layout,
       onPrimaryAction: onPrimaryAction,
       externalLink: externalLink,
@@ -237,6 +244,7 @@ class _DetailsInformation extends StatelessWidget {
   const _DetailsInformation({
     required this.item,
     required this.details,
+    required this.factSections,
     required this.layout,
     this.onPrimaryAction,
     required this.externalLink,
@@ -244,6 +252,7 @@ class _DetailsInformation extends StatelessWidget {
 
   final DashboardItem item;
   final ContentDetails details;
+  final List<ContentFactSection> factSections;
   final _ContentDetailsLayout layout;
   final Future<void> Function(DashboardItem item)? onPrimaryAction;
   final ExternalLink externalLink;
@@ -251,26 +260,14 @@ class _DetailsInformation extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final tv = TvPalette.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         _ContentKindLabel(kind: item.kind),
         SizedBox(height: layout.itemGap * 0.5),
         Text(item.title, style: theme.textTheme.displaySmall),
-        SizedBox(height: layout.itemGap * 0.75),
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720),
-          child: Text(
-            details.summary,
-            style: theme.textTheme.titleMedium?.copyWith(
-              color: tv.secondaryText,
-              height: 1.35,
-            ),
-          ),
-        ),
         if (details.highlights.isNotEmpty) ...<Widget>[
-          SizedBox(height: layout.itemGap),
+          SizedBox(height: layout.itemGap * 0.75),
           Wrap(
             spacing: layout.itemGap * 0.7,
             runSpacing: layout.itemGap * 0.7,
@@ -279,6 +276,12 @@ class _DetailsInformation extends StatelessWidget {
                 .toList(growable: false),
           ),
         ],
+        SizedBox(height: layout.itemGap),
+        _MetadataPanel(
+          sections: factSections,
+          progress: details.progress,
+          layout: layout,
+        ),
         SizedBox(height: layout.headerGap),
         Wrap(
           spacing: layout.itemGap,
@@ -427,6 +430,50 @@ class _DetailsSectionTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Text(title, style: Theme.of(context).textTheme.titleLarge);
+  }
+}
+
+class _DescriptionPanel extends StatelessWidget {
+  const _DescriptionPanel({required this.description, required this.layout});
+
+  final String description;
+  final _ContentDetailsLayout layout;
+
+  @override
+  Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: tv.surface.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tv.surfaceMuted),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              'DESCRIPTION',
+              style: TextStyle(
+                color: tv.secondaryText,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.8,
+              ),
+            ),
+            SizedBox(height: layout.itemGap * 0.75),
+            Text(
+              description,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: tv.primaryText,
+                height: 1.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

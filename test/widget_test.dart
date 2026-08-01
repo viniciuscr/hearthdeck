@@ -172,6 +172,53 @@ void main() {
     expect(externalLink.openedUrl, 'https://example.org');
   });
 
+  testWidgets('content details show metadata before the description panel', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ContentDetailsPage(
+          item: const DashboardItem(
+            id: 'details-layout',
+            title: 'Metadata layout',
+            icon: Icons.sports_esports_rounded,
+            colors: <Color>[Color(0xFF000000), Color(0xFF111111)],
+            details: ContentDetails(
+              summary: 'A longer description belongs below the overview.',
+              actions: <ContentAction>[],
+              facts: <ContentFact>[],
+              factSections: <ContentFactSection>[
+                ContentFactSection(
+                  title: 'Game details',
+                  facts: <ContentFact>[
+                    ContentFact(
+                      label: 'Released',
+                      value: '1994',
+                      icon: Icons.calendar_today_outlined,
+                    ),
+                  ],
+                ),
+              ],
+              galleryTitle: 'Screenshots',
+              gallery: <ContentGalleryItem>[],
+            ),
+          ),
+          sourceShape: TvTileShape.square,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final metadata = tester.getTopLeft(find.text('Released'));
+    final description = tester.getTopLeft(find.text('DESCRIPTION'));
+
+    expect(metadata.dy, lessThan(description.dy));
+    expect(
+      find.text('A longer description belongs below the overview.'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('library keeps loaded catalog when event stream fails', (
     WidgetTester tester,
   ) async {
