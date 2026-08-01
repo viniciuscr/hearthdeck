@@ -1,0 +1,17 @@
+[package]
+name = "hearthdeck-overlay-spike"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = """
+Disposable spike, not a shipped Hearthdeck component. Confirms on real
+kiosk hardware whether GAMESCOPE_EXTERNAL_OVERLAY behaves as Gamescope's own
+source implies (composited on top without resizing/focus-stealing) before
+any real overlay work is built on top of that assumption. Delete this crate,
+and its workspace membership, once the finding is confirmed either way.
+See docs/kiosk-session.md.
+"""
+
+[dependencies]
+x11rb = "0.13"

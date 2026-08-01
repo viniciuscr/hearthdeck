@@ -62,6 +62,16 @@ bridge:
 daemon:
   mise exec -- cargo run --manifest-path services/Cargo.toml -p hearthdeck-daemon
 
+# Build the disposable Gamescope external-overlay spike (see
+# services/hearthdeck-overlay-spike). Build this once here, then copy the
+# resulting binary to the kiosk box and run it there directly — it needs no
+# Rust toolchain on that machine. Delete the crate once the finding from
+# docs/kiosk-session.md's overlay investigation is confirmed either way.
+build-overlay-spike:
+  mise exec -- cargo build --manifest-path services/Cargo.toml -p hearthdeck-overlay-spike --release
+  @echo "Copy services/target/release/hearthdeck-overlay-spike to the kiosk box and run it there directly."
+
+
 # Scan installed macOS application bundles through the real provider.
 macos-discovery-check: build-services-debug
   ./scripts/macos-discovery-check
