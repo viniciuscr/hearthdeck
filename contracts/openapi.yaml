@@ -95,8 +95,14 @@ paths:
       parameters:
         - name: platform_id
           in: query
-          required: true
+          required: false
+          description: Restrict results to one console. Omit to search across all consoles.
           schema: { type: integer, minimum: 1 }
+        - name: q
+          in: query
+          required: false
+          description: Free-text search term, forwarded to RomM's own search.
+          schema: { type: string, minLength: 1 }
         - name: limit
           in: query
           schema: { type: integer, minimum: 1, maximum: 100, default: 48 }
@@ -105,7 +111,7 @@ paths:
           schema: { type: integer, minimum: 0, default: 0 }
       responses:
         '200':
-          description: A paginated live view of RomM games for one console
+          description: A paginated live view of RomM games, optionally scoped to one console and/or a search term
           content:
             application/json:
               schema:

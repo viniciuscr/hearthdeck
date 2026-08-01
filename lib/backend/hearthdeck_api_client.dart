@@ -98,16 +98,20 @@ class HearthdeckApiClient {
   }
 
   Future<HearthdeckRetroGamePage> retroGames({
-    required int platformId,
+    int? platformId,
+    String? search,
     int limit = 48,
     int offset = 0,
   }) async {
+    final trimmedSearch = search?.trim();
     final response = await _client.get(
       endpoint
           .api('retro/roms')
           .replace(
             queryParameters: <String, String>{
-              'platform_id': '$platformId',
+              if (platformId != null) 'platform_id': '$platformId',
+              if (trimmedSearch != null && trimmedSearch.isNotEmpty)
+                'q': trimmedSearch,
               'limit': '$limit',
               'offset': '$offset',
             },

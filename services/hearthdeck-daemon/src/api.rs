@@ -178,9 +178,16 @@ async fn list_retro_roms(
     authenticate(&state, &headers).await?;
     let limit = query.limit.unwrap_or(48).clamp(1, 100);
     let offset = query.offset.unwrap_or(0);
-    let games = diagnostics::romm_games(&state.settings, query.platform_id, limit, offset)
-        .await
-        .map_err(ApiError::romm_query)?;
+    let search_term = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
+    let games = diagnostics::romm_games(
+        &state.settings,
+        query.platform_id,
+        search_term,
+        limit,
+        offset,
+    )
+    .await
+    .map_err(ApiError::romm_query)?;
     Ok(Json(RommGamesResponse {
         items: games.items.iter().map(RetroGame::from).collect(),
         total: games.total,
@@ -619,7 +626,9 @@ struct UpdateRommSettingsRequest {
 
 #[derive(Deserialize)]
 struct RommGamesQuery {
-    platform_id: i64,
+    platform_id: Option<i64>,
+    #[serde(default)]
+    q: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
 }
@@ -983,6 +992,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(retro_without_romm.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        // platform_id is optional so search can span every console; q is a
+        // free-text search term forwarded to RomM. Reaching the "RomM isn't
+        // configured" 503 (rather than a 400/422 query-parsing error) proves
+        // both are accepted without platform_id.
+        let roms_search_without_platform = router(state.clone())
+            .oneshot(
+                Request::get("/v1/retro/roms?q=mario")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            roms_search_without_platform.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
 
         state
             .settings

@@ -14,6 +14,7 @@ import 'package:hearthdeck/content_details.dart';
 import 'package:hearthdeck/dashboard_models.dart';
 import 'package:hearthdeck/external_link.dart';
 import 'package:hearthdeck/full_library.dart';
+import 'package:hearthdeck/library_models.dart';
 import 'package:hearthdeck/main.dart';
 import 'package:hearthdeck/platform_session.dart';
 import 'package:hearthdeck/retro.dart';
@@ -82,6 +83,154 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets(
+    'Console games Search opens pre-scoped to console games and finds RomM '
+    'results',
+    (WidgetTester tester) async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.local(),
+        token: 'test-token',
+        client: _RetroHttpClient(),
+      );
+      await tester.pumpWidget(MaterialApp(home: RetroPage(apiClient: client)));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Search'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TvSearchPage), findsOneWidget);
+      // Nothing has been typed yet: console games is scoped, so browsing is
+      // replaced with a hint to type rather than an empty/misleading grid.
+      expect(
+        find.text('Type to search your RomM console library.'),
+        findsOneWidget,
+      );
+
+      await tester.enterText(
+        find.byKey(const ValueKey<String>('search-input')),
+        'metroid',
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey<String>('search-tile-romm:12')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'console games search results are not hidden by an unrelated catalog '
+    'load failure',
+    (WidgetTester tester) async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.local(),
+        token: 'test-token',
+        client: _RetroHttpClient(),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TvSearchPage(
+            initialCategory: LibraryCategory.consoleGames,
+            catalogRepository: _ThrowingCatalogRepository(),
+            apiClient: client,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Nothing has been typed and the RomM search hasn't run yet, so this
+      // scope has no results either way - but the PC/apps catalog failing
+      // to load is irrelevant to a Console-games-only scope and must not
+      // steal the screen with its own error message.
+      expect(
+        find.text('Type to search your RomM console library.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Could not load your library'), findsNothing);
+
+      await tester.enterText(
+        find.byKey(const ValueKey<String>('search-input')),
+        'metroid',
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+
+      // The PC/apps catalog failed to load, but that's irrelevant to a
+      // search scoped to Console games only - the live RomM result must
+      // still show, not the catalog's "could not load" error.
+      expect(
+        find.byKey(const ValueKey<String>('search-tile-romm:12')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Could not load your library'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'console games search does not flash "no results" while debouncing',
+    (WidgetTester tester) async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.local(),
+        token: 'test-token',
+        client: _RetroHttpClient(),
+      );
+      await tester.pumpWidget(MaterialApp(home: RetroPage(apiClient: client)));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Search'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const ValueKey<String>('search-input')),
+        'metroid',
+      );
+      // Still inside the 350ms debounce window: no request has even been
+      // sent yet, so the screen must not claim there are no results.
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('No matching content'), findsNothing);
+
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey<String>('search-tile-romm:12')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'a pre-filled console games query searches immediately, without waiting '
+    'out the typing debounce',
+    (WidgetTester tester) async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.local(),
+        token: 'test-token',
+        client: _RetroHttpClient(),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TvSearchPage(
+            initialQuery: 'metroid',
+            initialCategory: LibraryCategory.consoleGames,
+            apiClient: client,
+          ),
+        ),
+      );
+      // Deliberately well under the 350ms typing debounce: this is a
+      // pre-filled deep link, not a keystroke, so it must not wait for it.
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey<String>('search-tile-romm:12')),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('RomM box art is contained in portrait tiles', (
     WidgetTester tester,
@@ -566,6 +715,55 @@ void main() {
     expect(find.byType(TvSearchPage), findsOneWidget);
   });
 
+  testWidgets(
+    'library search defaults to the active category but can be widened',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(const HearthdeckApp());
+      await tester.tap(find.bySemanticsLabel('Full library'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.bySemanticsLabel('Apps'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Search library'));
+      await tester.pumpAndSettle();
+
+      // Opened from the Apps tab: apps show up, PC games do not.
+      expect(find.text('Stream'), findsOneWidget);
+      expect(find.text('Orbit'), findsNothing);
+
+      // The default is just a starting point - widening to "All" brings PC
+      // games back without leaving the search screen.
+      await tester.tap(find.text('All'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Stream'), findsOneWidget);
+      expect(find.text('Orbit'), findsOneWidget);
+    },
+  );
+
+  testWidgets('search category chips scope the browsed results', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(const HearthdeckApp());
+    await tester.tap(find.bySemanticsLabel('Search'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Orbit'), findsOneWidget);
+    expect(find.text('Stream'), findsOneWidget);
+
+    await tester.tap(find.text('Apps'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Orbit'), findsNothing);
+    expect(find.text('Stream'), findsOneWidget);
+
+    await tester.tap(find.text('PC games'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Orbit'), findsOneWidget);
+    expect(find.text('Stream'), findsNothing);
+  });
+
   testWidgets('library source selection updates its item grid', (
     WidgetTester tester,
   ) async {
@@ -877,6 +1075,34 @@ class _EventFailingCatalogRepository implements CatalogRepository {
   @override
   Stream<CatalogEvent> watch() =>
       Stream<CatalogEvent>.error(StateError('event feed unavailable'));
+}
+
+class _ThrowingCatalogRepository implements CatalogRepository {
+  @override
+  Future<HearthdeckHealth> health() => const MockCatalogRepository().health();
+
+  @override
+  Future<HearthdeckDiagnostics> diagnostics() =>
+      const MockCatalogRepository().diagnostics();
+
+  @override
+  Future<CatalogData> load() async {
+    throw StateError('catalog unavailable');
+  }
+
+  @override
+  Future<void> launch(DashboardItem item) async {}
+
+  @override
+  Future<void> requestRescan() async {}
+
+  @override
+  Future<void> requestProviderRefresh(
+    HearthdeckProviderHealth provider,
+  ) async {}
+
+  @override
+  Stream<CatalogEvent> watch() => const Stream<CatalogEvent>.empty();
 }
 
 class _FakePlatformSession implements PlatformSession {

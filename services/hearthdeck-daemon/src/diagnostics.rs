@@ -146,7 +146,8 @@ pub async fn romm_platforms(
 
 pub async fn romm_games(
     settings: &SettingsRepository,
-    platform_id: i64,
+    platform_id: Option<i64>,
+    search_term: Option<&str>,
     limit: u32,
     offset: u32,
 ) -> std::result::Result<RommGamePage, RommQueryError> {
@@ -155,10 +156,9 @@ pub async fn romm_games(
         .await
         .map_err(RommQueryError::Failed)?
         .ok_or(RommQueryError::NotConfigured)?;
-    let response = reqwest::Client::new()
+    let mut request = reqwest::Client::new()
         .get(format!("{}/api/roms", credentials.base_url))
         .query(&[
-            ("platform_ids", platform_id.to_string()),
             ("limit", limit.to_string()),
             ("offset", offset.to_string()),
             ("with_char_index", "false".to_owned()),
@@ -166,7 +166,14 @@ pub async fn romm_games(
             ("with_rom_id_index", "false".to_owned()),
             ("order_by", "name".to_owned()),
             ("order_dir", "asc".to_owned()),
-        ])
+        ]);
+    if let Some(platform_id) = platform_id {
+        request = request.query(&[("platform_ids", platform_id.to_string())]);
+    }
+    if let Some(search_term) = search_term {
+        request = request.query(&[("search_term", search_term)]);
+    }
+    let response = request
         .header(reqwest::header::ACCEPT, "application/json")
         .bearer_auth(&credentials.token)
         .timeout(std::time::Duration::from_secs(10))

@@ -220,9 +220,22 @@ extend it to additional providers; replace it with the bounded asset cache.
 RomM consoles and games are currently a separate, paginated live view. The
 daemon stores only its connection settings and proxies the configured local
 RomM data; it does not yet materialize those games into `library_items` or
-support their launch. Dashboard and search also retain fixture content while
-Full Library uses the live catalog. New work must not imply that those surfaces
-already describe every installed source.
+support their launch. Dashboard tiles/shelves still show fixture content.
+New work must not imply that surface already describes every installed
+source.
+
+Search (`lib/search.dart`) reads through `CatalogRepository.load()` for PC
+games/apps (the same repository `FullLibraryPage` uses - live when
+configured, fixture-backed `MockCatalogRepository` otherwise) and issues a
+live, debounced query against `GET /v1/retro/roms?q=...` for console games,
+so it is no longer a separate fixture list. A `LibraryCategory` chip
+(All/PC games/Apps/Console games) scopes which of those sources is queried;
+opening search from a specific section (e.g. the Console games screen's own
+Search button) only pre-selects that chip as a default - the user can widen
+it back to All. `platform_id` on `/v1/retro/roms` is optional specifically so
+an unscoped search can span every console at once, forwarded to RomM's own
+`search_term`, rather than requiring the client to page through every
+console's full library to filter locally.
 
 ## Service Architecture
 

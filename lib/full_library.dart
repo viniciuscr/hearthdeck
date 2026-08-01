@@ -433,7 +433,7 @@ class _LibraryContent extends StatelessWidget {
                         MaterialPageRoute<void>(
                           settings: const RouteSettings(name: '/search'),
                           builder: (BuildContext context) =>
-                              const TvSearchPage(),
+                              TvSearchPage(initialCategory: category),
                         ),
                       ),
                     ),

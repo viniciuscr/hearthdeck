@@ -5,6 +5,8 @@ import 'backend/hearthdeck_api_client.dart';
 import 'catalog/catalog_repository_factory.dart';
 import 'content_details.dart';
 import 'dashboard_models.dart';
+import 'library_models.dart';
+import 'search.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
 
@@ -125,92 +127,6 @@ class _RetroPageState extends State<RetroPage> {
     await _selectConsole(console, force: true);
   }
 
-  DashboardItem _dashboardItem(HearthdeckRetroGame game) {
-    final apiClient = _connectedApiClient;
-    final coverPath = game.coverPath;
-    final artworkHeaders = apiClient?.authorizationHeaders;
-    final artworkUrl = coverPath == null
-        ? game.coverUrl
-        : apiClient?.retroAssetUri(coverPath).toString();
-    return DashboardItem(
-      id: 'romm:${game.id}',
-      title: game.title,
-      description: _gameDescription(game),
-      icon: Icons.sports_esports_rounded,
-      colors: _colorsFor(game.id),
-      artworkUrl: artworkUrl,
-      artworkHeaders: coverPath == null ? null : artworkHeaders,
-      artworkFallbackUrl: coverPath == null ? null : game.coverUrl,
-      artworkFit: BoxFit.contain,
-      artworkAspectRatio: 0.72,
-      kind: TvContentKind.game,
-      details: ContentDetails(
-        summary: game.summary?.trim().isNotEmpty == true
-            ? game.summary!.trim()
-            : 'Metadata supplied by your local RomM library.',
-        actions: const <ContentAction>[],
-        facts: const <ContentFact>[],
-        factSections: <ContentFactSection>[
-          ContentFactSection(
-            title: 'Game details',
-            facts: <ContentFact>[
-              if (game.genres.isNotEmpty)
-                ContentFact(
-                  label: 'Genre',
-                  value: game.genres.join(', '),
-                  icon: Icons.category_outlined,
-                ),
-              if (game.releaseYear != null)
-                ContentFact(
-                  label: 'Released',
-                  value: '${game.releaseYear}',
-                  icon: Icons.calendar_today_outlined,
-                ),
-              if (game.playerCount?.isNotEmpty == true)
-                ContentFact(
-                  label: 'Players',
-                  value: game.playerCount!,
-                  icon: Icons.people_outline_rounded,
-                ),
-              if (game.regions.isNotEmpty)
-                ContentFact(
-                  label: 'Region',
-                  value: game.regions.join(', '),
-                  icon: Icons.public_outlined,
-                ),
-              if (game.hasManual)
-                const ContentFact(
-                  label: 'Manual',
-                  value: 'Available in RomM',
-                  icon: Icons.menu_book_outlined,
-                ),
-            ],
-          ),
-        ],
-        galleryTitle: 'Screenshots',
-        gallery: game.screenshotPaths
-            .map(
-              (String path) => ContentGalleryItem(
-                label: '${game.title} screenshot',
-                icon: Icons.image_outlined,
-                colors: _colorsFor(game.id),
-                artworkUrl: apiClient?.retroAssetUri(path).toString(),
-                artworkHeaders: artworkHeaders,
-              ),
-            )
-            .toList(growable: false),
-      ),
-    );
-  }
-
-  String _gameDescription(HearthdeckRetroGame game) {
-    final parts = <String>[
-      if (game.releaseYear != null) '${game.releaseYear}',
-      if (game.genres.isNotEmpty) game.genres.first,
-    ];
-    return parts.isEmpty ? 'RomM library' : parts.join(' - ');
-  }
-
   @override
   Widget build(BuildContext context) {
     // Escape/back is handled globally (see main.dart's HardwareKeyboard
@@ -219,6 +135,18 @@ class _RetroPageState extends State<RetroPage> {
       child: widget.embedded
           ? _consoleBrowser()
           : Scaffold(body: SafeArea(child: _consoleBrowser())),
+    );
+  }
+
+  void _openSearch() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        settings: const RouteSettings(name: '/search'),
+        builder: (BuildContext context) => TvSearchPage(
+          initialCategory: LibraryCategory.consoleGames,
+          apiClient: _connectedApiClient,
+        ),
+      ),
     );
   }
 
@@ -267,7 +195,12 @@ class _RetroPageState extends State<RetroPage> {
                 onConsoleSelected: _selectConsole,
                 onLoadMore: _loadMore,
                 onRefresh: _refresh,
-                gameItemFor: _dashboardItem,
+                onSearch: _openSearch,
+                gameItemFor: (HearthdeckRetroGame game) =>
+                    retroGameToDashboardItem(
+                      game,
+                      apiClient: _connectedApiClient,
+                    ),
                 onOpenGame: (DashboardItem item) {
                   Navigator.of(context).push(
                     MaterialPageRoute<void>(
@@ -297,6 +230,7 @@ class _RetroContent extends StatelessWidget {
     required this.onConsoleSelected,
     required this.onLoadMore,
     required this.onRefresh,
+    required this.onSearch,
     required this.gameItemFor,
     required this.onOpenGame,
   });
@@ -310,6 +244,7 @@ class _RetroContent extends StatelessWidget {
   final ValueChanged<HearthdeckRetroConsole> onConsoleSelected;
   final VoidCallback onLoadMore;
   final VoidCallback onRefresh;
+  final VoidCallback onSearch;
   final DashboardItem Function(HearthdeckRetroGame game) gameItemFor;
   final ValueChanged<DashboardItem> onOpenGame;
 
@@ -346,6 +281,15 @@ class _RetroContent extends StatelessWidget {
                             style: Theme.of(context).textTheme.displaySmall,
                           ),
                         ),
+                        TvDetailAction(
+                          action: const ContentAction(
+                            id: 'search',
+                            label: 'Search',
+                            icon: Icons.search_rounded,
+                          ),
+                          onActivate: onSearch,
+                        ),
+                        const SizedBox(width: 10),
                         TvDetailAction(
                           action: const ContentAction(
                             id: 'refresh',
@@ -634,4 +578,96 @@ List<Color> _colorsFor(int id) {
     <Color>[Color(0xFF315E91), Color(0xFF142944)],
   ];
   return palette[id.abs() % palette.length];
+}
+
+String _gameDescription(HearthdeckRetroGame game) {
+  final parts = <String>[
+    if (game.releaseYear != null) '${game.releaseYear}',
+    if (game.genres.isNotEmpty) game.genres.first,
+  ];
+  return parts.isEmpty ? 'RomM library' : parts.join(' - ');
+}
+
+/// Converts a live RomM game into the shared [DashboardItem] shape used by
+/// tiles, detail routes, and search results. [apiClient] is used to build
+/// authenticated cover-art URIs; pass the client that actually served
+/// [game] (e.g. `retro.dart`'s connected client, or the one used to search).
+DashboardItem retroGameToDashboardItem(
+  HearthdeckRetroGame game, {
+  HearthdeckApiClient? apiClient,
+}) {
+  final coverPath = game.coverPath;
+  final artworkHeaders = apiClient?.authorizationHeaders;
+  final artworkUrl = coverPath == null
+      ? game.coverUrl
+      : apiClient?.retroAssetUri(coverPath).toString();
+  return DashboardItem(
+    id: 'romm:${game.id}',
+    title: game.title,
+    description: _gameDescription(game),
+    icon: Icons.sports_esports_rounded,
+    colors: _colorsFor(game.id),
+    artworkUrl: artworkUrl,
+    artworkHeaders: coverPath == null ? null : artworkHeaders,
+    artworkFallbackUrl: coverPath == null ? null : game.coverUrl,
+    artworkFit: BoxFit.contain,
+    artworkAspectRatio: 0.72,
+    kind: TvContentKind.game,
+    details: ContentDetails(
+      summary: game.summary?.trim().isNotEmpty == true
+          ? game.summary!.trim()
+          : 'Metadata supplied by your local RomM library.',
+      actions: const <ContentAction>[],
+      facts: const <ContentFact>[],
+      factSections: <ContentFactSection>[
+        ContentFactSection(
+          title: 'Game details',
+          facts: <ContentFact>[
+            if (game.genres.isNotEmpty)
+              ContentFact(
+                label: 'Genre',
+                value: game.genres.join(', '),
+                icon: Icons.category_outlined,
+              ),
+            if (game.releaseYear != null)
+              ContentFact(
+                label: 'Released',
+                value: '${game.releaseYear}',
+                icon: Icons.calendar_today_outlined,
+              ),
+            if (game.playerCount?.isNotEmpty == true)
+              ContentFact(
+                label: 'Players',
+                value: game.playerCount!,
+                icon: Icons.people_outline_rounded,
+              ),
+            if (game.regions.isNotEmpty)
+              ContentFact(
+                label: 'Region',
+                value: game.regions.join(', '),
+                icon: Icons.public_outlined,
+              ),
+            if (game.hasManual)
+              const ContentFact(
+                label: 'Manual',
+                value: 'Available in RomM',
+                icon: Icons.menu_book_outlined,
+              ),
+          ],
+        ),
+      ],
+      galleryTitle: 'Screenshots',
+      gallery: game.screenshotPaths
+          .map(
+            (String path) => ContentGalleryItem(
+              label: '${game.title} screenshot',
+              icon: Icons.image_outlined,
+              colors: _colorsFor(game.id),
+              artworkUrl: apiClient?.retroAssetUri(path).toString(),
+              artworkHeaders: artworkHeaders,
+            ),
+          )
+          .toList(growable: false),
+    ),
+  );
 }

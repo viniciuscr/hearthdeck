@@ -192,6 +192,39 @@ void main() {
     },
   );
 
+  test('API client searches RomM games across every console when platformId is '
+      'omitted', () async {
+    final client = HearthdeckApiClient(
+      endpoint: HearthdeckEndpoint.local(),
+      token: 'test-token',
+      client: _RetroSearchHttpClient(),
+    );
+
+    final page = await client.retroGames(search: '  mario  ', limit: 24);
+
+    expect(page.items.single.title, 'Super Mario World');
+  });
+
+  test(
+    'API client omits a blank RomM search term instead of sending an empty q',
+    () async {
+      final client = HearthdeckApiClient(
+        endpoint: HearthdeckEndpoint.local(),
+        token: 'test-token',
+        client: _RetroGamesHttpClient(),
+      );
+
+      // _RetroGamesHttpClient asserts the exact query map it receives (see
+      // below); a whitespace-only search must not add a `q` entry to it.
+      await client.retroGames(
+        platformId: 2,
+        search: '   ',
+        limit: 24,
+        offset: 48,
+      );
+    },
+  );
+
   test(
     'API client saves RomM credentials without receiving them back',
     () async {
@@ -376,6 +409,28 @@ class _RetroGamesHttpClient extends http.BaseClient {
     const body = '''{
       "items":[{"id":42,"platform_id":2,"title":"Super Metroid","summary":"Explore Zebes.","cover_path":"/assets/romm/resources/roms/2/42/cover.webp","cover_url":"https://images.example.com/super-metroid.jpg","screenshot_paths":["/assets/romm/resources/roms/2/42/screenshot.webp"],"has_manual":true,"genres":["Action","Adventure"],"player_count":"1","release_year":1994,"regions":["USA"]}],
       "total":187,"limit":24,"offset":48
+    }''';
+    return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
+  }
+}
+
+class _RetroSearchHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    expect(request.method, 'GET');
+    expect(request.url.path, '/v1/retro/roms');
+    // No platformId was passed, and the search term must be trimmed: this
+    // must search across every console, not fail as a missing parameter or
+    // forward the untrimmed whitespace.
+    expect(request.url.queryParameters, <String, String>{
+      'q': 'mario',
+      'limit': '24',
+      'offset': '0',
+    });
+    expect(request.headers['authorization'], 'Bearer test-token');
+    const body = '''{
+      "items":[{"id":7,"platform_id":3,"title":"Super Mario World","summary":null,"cover_path":null,"cover_url":null,"screenshot_paths":[],"has_manual":false,"genres":[],"player_count":null,"release_year":1990,"regions":[]}],
+      "total":1,"limit":24,"offset":0
     }''';
     return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
   }
