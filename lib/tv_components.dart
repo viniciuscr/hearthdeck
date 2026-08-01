@@ -667,7 +667,7 @@ class TvArtworkVisual extends StatelessWidget {
                 borderRadius: BorderRadius.circular(6),
                 child: Image.network(
                   artworkUrl,
-                  fit: BoxFit.cover,
+                  fit: item.artworkFit,
                   headers: item.artworkHeaders,
                   errorBuilder:
                       (
@@ -686,7 +686,7 @@ class TvArtworkVisual extends StatelessWidget {
                               )
                             : Image.network(
                                 fallbackUrl,
-                                fit: BoxFit.cover,
+                                fit: item.artworkFit,
                                 errorBuilder:
                                     (
                                       BuildContext context,

@@ -141,6 +141,8 @@ class _RetroPageState extends State<RetroPage> {
       artworkUrl: artworkUrl,
       artworkHeaders: coverPath == null ? null : artworkHeaders,
       artworkFallbackUrl: coverPath == null ? null : game.coverUrl,
+      artworkFit: BoxFit.contain,
+      artworkAspectRatio: 0.72,
       kind: TvContentKind.game,
       details: ContentDetails(
         summary: game.summary?.trim().isNotEmpty == true

@@ -83,6 +83,34 @@ void main() {
     );
   });
 
+  testWidgets('RomM box art is contained in portrait tiles', (
+    WidgetTester tester,
+  ) async {
+    const artwork = DashboardItem(
+      id: 'romm-box-art',
+      title: 'Box art',
+      icon: Icons.sports_esports_rounded,
+      colors: <Color>[Color(0xFF000000), Color(0xFF111111)],
+      artworkUrl: 'https://example.org/box-art.png',
+      artworkFit: BoxFit.contain,
+      artworkAspectRatio: 0.72,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 180,
+          height: 250,
+          child: TvArtworkVisual(item: artwork, shape: TvTileShape.square),
+        ),
+      ),
+    );
+
+    final image = tester.widget<Image>(find.byType(Image));
+
+    expect(image.fit, BoxFit.contain);
+    expect(artwork.artworkAspectRatio, 0.72);
+  });
+
   testWidgets('settings opens the RomM connection form', (
     WidgetTester tester,
   ) async {

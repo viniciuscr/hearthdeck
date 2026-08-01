@@ -100,6 +100,8 @@ class DashboardItem {
     this.artworkUrl,
     this.artworkHeaders,
     this.artworkFallbackUrl,
+    this.artworkFit = BoxFit.cover,
+    this.artworkAspectRatio = 1,
     this.kind = TvContentKind.application,
     this.details,
   });
@@ -113,6 +115,8 @@ class DashboardItem {
   final String? artworkUrl;
   final Map<String, String>? artworkHeaders;
   final String? artworkFallbackUrl;
+  final BoxFit artworkFit;
+  final double artworkAspectRatio;
   final TvContentKind kind;
   final ContentDetails? details;
 }

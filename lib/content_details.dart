@@ -202,7 +202,7 @@ class _DetailsHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final artwork = SizedBox(
-      width: layout.artworkExtent,
+      width: layout.artworkExtent * item.artworkAspectRatio,
       height: layout.artworkExtent,
       child: Hero(
         tag: contentArtworkHeroTag(item),
