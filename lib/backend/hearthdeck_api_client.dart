@@ -704,6 +704,8 @@ class HearthdeckRetroGame {
     required this.id,
     required this.platformId,
     required this.title,
+    required this.screenshotPaths,
+    required this.hasManual,
     required this.genres,
     required this.regions,
     this.summary,
@@ -719,6 +721,11 @@ class HearthdeckRetroGame {
         title: json['title'] as String,
         summary: json['summary'] as String?,
         coverPath: json['cover_path'] as String?,
+        screenshotPaths:
+            (json['screenshot_paths'] as List<dynamic>? ?? const <dynamic>[])
+                .whereType<String>()
+                .toList(growable: false),
+        hasManual: json['has_manual'] as bool? ?? false,
         genres: (json['genres'] as List<dynamic>? ?? const <dynamic>[])
             .whereType<String>()
             .toList(growable: false),
@@ -734,6 +741,8 @@ class HearthdeckRetroGame {
   final String title;
   final String? summary;
   final String? coverPath;
+  final List<String> screenshotPaths;
+  final bool hasManual;
   final List<String> genres;
   final String? playerCount;
   final int? releaseYear;

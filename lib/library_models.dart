@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'dashboard_models.dart';
 
-enum LibraryCategory { games, apps, groups, history }
+enum LibraryCategory { games, consoleGames, apps, groups, history }
 
 class LibraryCategoryDefinition {
   const LibraryCategoryDefinition({
@@ -50,6 +50,11 @@ const List<LibraryCategoryDefinition> libraryCategories =
         category: LibraryCategory.games,
         label: 'PC games',
         icon: Icons.computer_rounded,
+      ),
+      LibraryCategoryDefinition(
+        category: LibraryCategory.consoleGames,
+        label: 'Console games',
+        icon: Icons.videogame_asset_rounded,
       ),
       LibraryCategoryDefinition(
         category: LibraryCategory.apps,

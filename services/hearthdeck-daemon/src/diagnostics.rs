@@ -51,6 +51,10 @@ pub struct RommGame {
     #[serde(default)]
     pub path_cover_small: Option<String>,
     #[serde(default)]
+    pub merged_screenshots: Vec<String>,
+    #[serde(default)]
+    pub path_manual: Option<String>,
+    #[serde(default)]
     pub metadatum: RommGameMetadata,
     #[serde(default)]
     pub regions: Vec<String>,
@@ -306,7 +310,7 @@ fn normalized_romm_asset_path(value: &str) -> anyhow::Result<String> {
     } else {
         format!("/{path}")
     };
-    if !path.starts_with("/resources/")
+    if !path.starts_with("/assets/romm/resources/")
         || path.contains("..")
         || path.contains('#')
         || path.contains("//")
@@ -559,13 +563,15 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_relative_romm_resource_paths() {
+    fn accepts_only_romm_managed_resource_paths() {
         assert_eq!(
-            super::normalized_romm_asset_path("resources/roms/1/cover.webp?ts=1").unwrap(),
-            "/resources/roms/1/cover.webp?ts=1"
+            super::normalized_romm_asset_path("/assets/romm/resources/roms/1/cover.webp?ts=1")
+                .unwrap(),
+            "/assets/romm/resources/roms/1/cover.webp?ts=1"
         );
         assert!(super::normalized_romm_asset_path("/api/roms").is_err());
+        assert!(super::normalized_romm_asset_path("/resources/roms/1/cover.webp").is_err());
         assert!(super::normalized_romm_asset_path("https://example.com/cover.webp").is_err());
-        assert!(super::normalized_romm_asset_path("/resources/../secret").is_err());
+        assert!(super::normalized_romm_asset_path("/assets/romm/resources/../secret").is_err());
     }
 }

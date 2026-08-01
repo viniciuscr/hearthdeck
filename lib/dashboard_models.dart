@@ -56,11 +56,15 @@ class ContentGalleryItem {
     required this.label,
     required this.icon,
     required this.colors,
+    this.artworkUrl,
+    this.artworkHeaders,
   });
 
   final String label;
   final IconData icon;
   final List<Color> colors;
+  final String? artworkUrl;
+  final Map<String, String>? artworkHeaders;
 }
 
 class ContentDetails {

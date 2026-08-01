@@ -121,7 +121,7 @@ paths:
         - name: path
           in: query
           required: true
-          description: A RomM /resources image path returned by listRetroRoms
+          description: A RomM /assets/romm/resources image path returned by listRetroRoms
           schema: { type: string }
       responses:
         '200':
@@ -479,13 +479,17 @@ components:
         offset: { type: integer, minimum: 0 }
     RetroGame:
       type: object
-      required: [id, platform_id, title, genres, regions]
+      required: [id, platform_id, title, screenshot_paths, has_manual, genres, regions]
       properties:
         id: { type: integer }
         platform_id: { type: integer }
         title: { type: string }
         summary: { type: [string, 'null'] }
         cover_path: { type: [string, 'null'] }
+        screenshot_paths:
+          type: array
+          items: { type: string }
+        has_manual: { type: boolean }
         genres:
           type: array
           items: { type: string }

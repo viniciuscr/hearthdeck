@@ -692,6 +692,23 @@ class _GalleryCard extends StatelessWidget {
             ),
             child: Stack(
               children: <Widget>[
+                if (item.artworkUrl case final String artworkUrl)
+                  Positioned.fill(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(
+                        artworkUrl,
+                        fit: BoxFit.cover,
+                        headers: item.artworkHeaders,
+                        errorBuilder:
+                            (
+                              BuildContext context,
+                              Object error,
+                              StackTrace? stackTrace,
+                            ) => const SizedBox.shrink(),
+                      ),
+                    ),
+                  ),
                 Center(
                   child: Icon(
                     item.icon,

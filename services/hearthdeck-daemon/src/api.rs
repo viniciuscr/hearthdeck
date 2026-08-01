@@ -644,6 +644,8 @@ struct RetroGame {
     title: String,
     summary: Option<String>,
     cover_path: Option<String>,
+    screenshot_paths: Vec<String>,
+    has_manual: bool,
     genres: Vec<String>,
     player_count: Option<String>,
     release_year: Option<i32>,
@@ -671,6 +673,11 @@ impl From<&RommGame> for RetroGame {
             title,
             summary: game.summary.clone(),
             cover_path: game.path_cover_small.clone(),
+            screenshot_paths: game.merged_screenshots.clone(),
+            has_manual: game
+                .path_manual
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty()),
             genres: game.metadatum.genres.clone(),
             player_count,
             release_year,

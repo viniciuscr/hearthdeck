@@ -11,6 +11,7 @@ import 'content_details.dart';
 import 'dashboard_models.dart';
 import 'library_filters.dart';
 import 'library_models.dart';
+import 'retro.dart';
 import 'search.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
@@ -41,6 +42,7 @@ class _FullLibraryPageState extends State<FullLibraryPage> {
 
   List<CatalogSource> get _sources => switch (_category) {
     LibraryCategory.games => _catalog?.gameSources ?? const <CatalogSource>[],
+    LibraryCategory.consoleGames => const <CatalogSource>[],
     LibraryCategory.apps => _catalog?.appSources ?? const <CatalogSource>[],
     LibraryCategory.groups => const <CatalogSource>[],
     LibraryCategory.history => const <CatalogSource>[],
@@ -228,27 +230,31 @@ class _FullLibraryPageState extends State<FullLibraryPage> {
                           compact: layout.isRailCompact,
                           onSelect: _selectCategory,
                         ),
-                        content: _LibraryContent(
-                          category: _category,
-                          isLoading: _catalog == null && _catalogError == null,
-                          loadError: _catalogError,
-                          sources: _sources,
-                          selectedSourceIndex: _sourceIndex,
-                          items: _items,
-                          features: _features,
-                          layout: layout,
-                          isAscending: _isAscending,
-                          filters: _filters,
-                          onSourceSelected: _selectSource,
-                          onSortChanged: () =>
-                              setState(() => _isAscending = !_isAscending),
-                          onFilterRequested: () {
-                            _scaffoldKey.currentState?.openEndDrawer();
-                          },
-                          onRefreshRequested: _loadCatalog,
-                          onRescanRequested: _requestRescan,
-                          onOpen: _openItemDetails,
-                        ),
+                        content: _category == LibraryCategory.consoleGames
+                            ? const RetroPage(embedded: true)
+                            : _LibraryContent(
+                                category: _category,
+                                isLoading:
+                                    _catalog == null && _catalogError == null,
+                                loadError: _catalogError,
+                                sources: _sources,
+                                selectedSourceIndex: _sourceIndex,
+                                items: _items,
+                                features: _features,
+                                layout: layout,
+                                isAscending: _isAscending,
+                                filters: _filters,
+                                onSourceSelected: _selectSource,
+                                onSortChanged: () => setState(
+                                  () => _isAscending = !_isAscending,
+                                ),
+                                onFilterRequested: () {
+                                  _scaffoldKey.currentState?.openEndDrawer();
+                                },
+                                onRefreshRequested: _loadCatalog,
+                                onRescanRequested: _requestRescan,
+                                onOpen: _openItemDetails,
+                              ),
                       ),
                     ],
                   ),
@@ -410,6 +416,7 @@ class _LibraryContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final title = switch (category) {
       LibraryCategory.games => 'PC games',
+      LibraryCategory.consoleGames => 'Console games',
       LibraryCategory.apps => 'Apps library',
       LibraryCategory.groups => 'Custom groups',
       LibraryCategory.history => 'Recently used',

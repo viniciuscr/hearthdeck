@@ -11,9 +11,10 @@ import 'tv_theme.dart';
 import 'virtual_keyboard.dart';
 
 class RetroPage extends StatefulWidget {
-  const RetroPage({super.key, this.apiClient});
+  const RetroPage({super.key, this.apiClient, this.embedded = false});
 
   final HearthdeckApiClient? apiClient;
+  final bool embedded;
 
   @override
   State<RetroPage> createState() => _RetroPageState();
@@ -129,6 +130,7 @@ class _RetroPageState extends State<RetroPage> {
   DashboardItem _dashboardItem(HearthdeckRetroGame game) {
     final apiClient = _connectedApiClient;
     final coverPath = game.coverPath;
+    final artworkHeaders = apiClient?.authorizationHeaders;
     return DashboardItem(
       id: 'romm:${game.id}',
       title: game.title,
@@ -138,9 +140,7 @@ class _RetroPageState extends State<RetroPage> {
       artworkUrl: apiClient == null || coverPath == null
           ? null
           : apiClient.retroAssetUri(coverPath).toString(),
-      artworkHeaders: apiClient == null || coverPath == null
-          ? null
-          : apiClient.authorizationHeaders,
+      artworkHeaders: coverPath == null ? null : artworkHeaders,
       kind: TvContentKind.game,
       details: ContentDetails(
         summary: game.summary?.trim().isNotEmpty == true
@@ -176,11 +176,27 @@ class _RetroPageState extends State<RetroPage> {
                   value: game.regions.join(', '),
                   icon: Icons.public_outlined,
                 ),
+              if (game.hasManual)
+                const ContentFact(
+                  label: 'Manual',
+                  value: 'Available in RomM',
+                  icon: Icons.menu_book_outlined,
+                ),
             ],
           ),
         ],
         galleryTitle: 'Screenshots',
-        gallery: const <ContentGalleryItem>[],
+        gallery: game.screenshotPaths
+            .map(
+              (String path) => ContentGalleryItem(
+                label: '${game.title} screenshot',
+                icon: Icons.image_outlined,
+                colors: _colorsFor(game.id),
+                artworkUrl: apiClient?.retroAssetUri(path).toString(),
+                artworkHeaders: artworkHeaders,
+              ),
+            )
+            .toList(growable: false),
       ),
     );
   }
@@ -215,82 +231,76 @@ class _RetroPageState extends State<RetroPage> {
             }
             return KeyEventResult.ignored;
           },
-          child: Scaffold(
-            body: SafeArea(
-              child: Stack(
-                children: <Widget>[
-                  const Positioned.fill(child: _RetroBackdrop()),
-                  FutureBuilder<List<HearthdeckRetroConsole>>(
-                    future: _consoles,
-                    builder:
-                        (
-                          BuildContext context,
-                          AsyncSnapshot<List<HearthdeckRetroConsole>> snapshot,
-                        ) {
-                          final consoles = snapshot.data;
-                          if (snapshot.connectionState !=
-                              ConnectionState.done) {
-                            return const Center(
-                              child: CircularProgressIndicator(),
-                            );
-                          }
-                          if (snapshot.hasError || consoles == null) {
-                            return const _RetroState(
-                              icon: Icons.link_off_rounded,
-                              title: 'RomM unavailable',
-                              message:
-                                  'Configure the local RomM connection in Hearthdeck and try again.',
-                            );
-                          }
-                          if (consoles.isEmpty) {
-                            return const _RetroState(
-                              icon: Icons.sports_esports_outlined,
-                              title: 'No consoles found',
-                              message: 'Scan games in RomM, then reopen Retro.',
-                            );
-                          }
-                          final selected = _selectedConsole ?? consoles.first;
-                          if (_selectedConsole == null) {
-                            WidgetsBinding.instance.addPostFrameCallback(
-                              (_) => _selectConsole(selected),
-                            );
-                          }
-                          return _RetroContent(
-                            consoles: consoles,
-                            selectedConsole: selected,
-                            games: _games,
-                            gamesError: _gamesError,
-                            isLoadingGames: _isLoadingGames,
-                            isLoadingMore: _isLoadingMore,
-                            onConsoleSelected: _selectConsole,
-                            onLoadMore: _loadMore,
-                            onRefresh: _refresh,
-                            gameItemFor: _dashboardItem,
-                            onOpenGame: (DashboardItem item) {
-                              Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                  settings: RouteSettings(
-                                    name: '/retro/${item.id}',
-                                  ),
-                                  builder: (BuildContext context) =>
-                                      ContentDetailsPage(
-                                        item: item,
-                                        sourceShape: TvTileShape.square,
-                                      ),
-                                ),
-                              );
-                            },
-                          );
-                        },
-                  ),
-                ],
-              ),
-            ),
-          ),
+          child: widget.embedded
+              ? _consoleBrowser()
+              : Scaffold(body: SafeArea(child: _consoleBrowser())),
         ),
       ),
     );
   }
+
+  Widget _consoleBrowser() => Stack(
+    children: <Widget>[
+      const Positioned.fill(child: _RetroBackdrop()),
+      FutureBuilder<List<HearthdeckRetroConsole>>(
+        future: _consoles,
+        builder:
+            (
+              BuildContext context,
+              AsyncSnapshot<List<HearthdeckRetroConsole>> snapshot,
+            ) {
+              final consoles = snapshot.data;
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.hasError || consoles == null) {
+                return const _RetroState(
+                  icon: Icons.link_off_rounded,
+                  title: 'RomM unavailable',
+                  message:
+                      'Configure the local RomM connection in Hearthdeck and try again.',
+                );
+              }
+              if (consoles.isEmpty) {
+                return const _RetroState(
+                  icon: Icons.sports_esports_outlined,
+                  title: 'No consoles found',
+                  message: 'Scan games in RomM, then reopen Retro.',
+                );
+              }
+              final selected = _selectedConsole ?? consoles.first;
+              if (_selectedConsole == null) {
+                WidgetsBinding.instance.addPostFrameCallback(
+                  (_) => _selectConsole(selected),
+                );
+              }
+              return _RetroContent(
+                consoles: consoles,
+                selectedConsole: selected,
+                games: _games,
+                gamesError: _gamesError,
+                isLoadingGames: _isLoadingGames,
+                isLoadingMore: _isLoadingMore,
+                onConsoleSelected: _selectConsole,
+                onLoadMore: _loadMore,
+                onRefresh: _refresh,
+                gameItemFor: _dashboardItem,
+                onOpenGame: (DashboardItem item) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      settings: RouteSettings(name: '/retro/${item.id}'),
+                      builder: (BuildContext context) => ContentDetailsPage(
+                        item: item,
+                        sourceShape: TvTileShape.square,
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+      ),
+    ],
+  );
 }
 
 class _RetroContent extends StatelessWidget {

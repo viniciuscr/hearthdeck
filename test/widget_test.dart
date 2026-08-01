@@ -52,6 +52,19 @@ void main() {
     expect(find.text('All games'), findsOneWidget);
   });
 
+  testWidgets('full library exposes Console games in its primary rail', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(const HearthdeckApp());
+    await tester.tap(find.bySemanticsLabel('Full library'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.bySemanticsLabel('Console games'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('RomM unavailable'), findsOneWidget);
+  });
+
   testWidgets('Retro opens the configured RomM console browser', (
     WidgetTester tester,
   ) async {
@@ -865,7 +878,7 @@ class _RetroHttpClient extends http.BaseClient {
       ]''',
       '/v1/retro/roms' =>
         '''{
-        "items":[{"id":12,"platform_id":1,"title":"Metroid","summary":"An action adventure.","cover_path":null,"genres":["Adventure"],"player_count":"1","release_year":1986,"regions":["USA"]}],
+        "items":[{"id":12,"platform_id":1,"title":"Metroid","summary":"An action adventure.","cover_path":null,"screenshot_paths":[],"has_manual":false,"genres":["Adventure"],"player_count":"1","release_year":1986,"regions":["USA"]}],
         "total":341,"limit":48,"offset":0
       }''',
       _ => throw StateError('Unexpected request: ${request.url}'),
