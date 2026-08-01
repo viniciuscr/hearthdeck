@@ -514,7 +514,7 @@ class _ProviderRefreshButton extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Icon(Icons.refresh_rounded, size: 18, color: style.foreground),
+              Icon(Icons.refresh_rounded, size: 22, color: style.foreground),
               const SizedBox(width: 7),
               Text(
                 label,
@@ -570,7 +570,10 @@ class _RommDiagnosticCard extends StatelessWidget {
                   const SizedBox(height: 5),
                   Text(
                     'Checked ${_formatTimestamp(diagnostic.checkedAt)}',
-                    style: TextStyle(color: tv.secondaryText, fontSize: 12),
+                    style: TextStyle(
+                      color: tv.secondaryText,
+                      fontSize: TvTheme.labelSmallSize,
+                    ),
                   ),
                 ],
               ),
@@ -672,7 +675,7 @@ class _LogEntryRow extends StatelessWidget {
                         entry.level.toUpperCase(),
                         style: TextStyle(
                           color: color,
-                          fontSize: 11,
+                          fontSize: TvTheme.labelSmallSize,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
@@ -681,7 +684,10 @@ class _LogEntryRow extends StatelessWidget {
                         entry.timestamp == null
                             ? ''
                             : _formatTime(entry.timestamp!),
-                        style: TextStyle(color: tv.secondaryText, fontSize: 12),
+                        style: TextStyle(
+                          color: tv.secondaryText,
+                          fontSize: TvTheme.labelSmallSize,
+                        ),
                       ),
                     ],
                   ),

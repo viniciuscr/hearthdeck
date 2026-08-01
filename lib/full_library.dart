@@ -792,7 +792,7 @@ class _FeatureShelf extends StatelessWidget {
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                fontSize: 12,
+                                fontSize: TvTheme.labelSmallSize,
                                 color: tv.secondaryText,
                               ),
                             ),

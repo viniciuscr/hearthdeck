@@ -380,7 +380,10 @@ class _ProfileSummary extends StatelessWidget {
               SizedBox(height: 2),
               Text(
                 '12,480 points',
-                style: TextStyle(fontSize: 12, color: tv.secondaryText),
+                style: TextStyle(
+                  fontSize: TvTheme.labelSmallSize,
+                  color: tv.secondaryText,
+                ),
               ),
             ],
           ),
@@ -401,16 +404,19 @@ class _SystemStatus extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
         if (!compact) ...<Widget>[
-          const Icon(Icons.mic_off_outlined, size: 18),
+          const Icon(Icons.mic_off_outlined, size: 22),
           const SizedBox(width: 14),
-          const Icon(Icons.wifi_rounded, size: 18),
+          const Icon(Icons.wifi_rounded, size: 22),
           const SizedBox(width: 14),
         ],
-        const Icon(Icons.battery_full_rounded, size: 20),
+        const Icon(Icons.battery_full_rounded, size: 24),
         const SizedBox(width: 8),
         Text(
           compact ? '4:55' : '4:55 PM',
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          style: const TextStyle(
+            fontSize: TvTheme.titleSmallSize,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ],
     );
@@ -723,13 +729,13 @@ class TvArtworkVisual extends StatelessWidget {
                 ),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 7,
+                    horizontal: 8,
                     vertical: 4,
                   ),
                   child: Text(
                     badge.toUpperCase(),
                     style: const TextStyle(
-                      fontSize: 10,
+                      fontSize: TvTheme.labelSmallSize,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.5,
                     ),
@@ -804,7 +810,10 @@ class _ArtworkCaption extends StatelessWidget {
                       item.description!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, color: tv.secondaryText),
+                      style: TextStyle(
+                        fontSize: TvTheme.labelSmallSize,
+                        color: tv.secondaryText,
+                      ),
                     ),
                   ],
                 ],
@@ -813,7 +822,7 @@ class _ArtworkCaption extends StatelessWidget {
             if (isFocused && shape == TvTileShape.landscape)
               const Padding(
                 padding: EdgeInsets.only(left: 8),
-                child: Icon(Icons.arrow_forward_rounded, size: 18),
+                child: Icon(Icons.arrow_forward_rounded, size: 22),
               ),
           ],
         ),

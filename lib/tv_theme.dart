@@ -45,6 +45,25 @@ abstract final class TvTheme {
   static const Duration focusDuration = Duration(milliseconds: 140);
   static const Curve focusCurve = Curves.easeOutCubic;
 
+  // Comfortable-reading-distance type scale for a 10-foot / TV interface.
+  // Roughly 1.4-1.5x the stock Material 3 sizes so text stays legible from
+  // a couch without looking oversized up close.
+  static const double displayLargeSize = 64;
+  static const double displayMediumSize = 52;
+  static const double displaySmallSize = 44;
+  static const double headlineLargeSize = 40;
+  static const double headlineMediumSize = 36;
+  static const double headlineSmallSize = 32;
+  static const double titleLargeSize = 30;
+  static const double titleMediumSize = 24;
+  static const double titleSmallSize = 20;
+  static const double labelLargeSize = 20;
+  static const double labelMediumSize = 18;
+  static const double labelSmallSize = 16;
+  static const double bodyLargeSize = 24;
+  static const double bodyMediumSize = 20;
+  static const double bodySmallSize = 18;
+
   static ThemeData data(ColorScheme colors, TvPalette palette) {
     return ThemeData(
       useMaterial3: true,
@@ -53,13 +72,32 @@ abstract final class TvTheme {
       scaffoldBackgroundColor: palette.canvas,
       extensions: <ThemeExtension<dynamic>>[palette],
       textTheme: TextTheme(
-        bodyMedium: TextStyle(color: palette.primaryText),
-        bodySmall: TextStyle(color: palette.secondaryText),
+        displayLarge: const TextStyle(fontSize: displayLargeSize),
+        displayMedium: const TextStyle(fontSize: displayMediumSize),
+        displaySmall: const TextStyle(fontSize: displaySmallSize),
+        headlineLarge: const TextStyle(fontSize: headlineLargeSize),
+        headlineMedium: const TextStyle(fontSize: headlineMediumSize),
+        headlineSmall: const TextStyle(fontSize: headlineSmallSize),
+        titleSmall: const TextStyle(fontSize: titleSmallSize),
+        labelLarge: const TextStyle(fontSize: labelLargeSize),
+        labelMedium: const TextStyle(fontSize: labelMediumSize),
+        labelSmall: const TextStyle(fontSize: labelSmallSize),
+        bodyLarge: const TextStyle(fontSize: bodyLargeSize),
+        bodyMedium: TextStyle(
+          fontSize: bodyMediumSize,
+          color: palette.primaryText,
+        ),
+        bodySmall: TextStyle(
+          fontSize: bodySmallSize,
+          color: palette.secondaryText,
+        ),
         titleMedium: TextStyle(
+          fontSize: titleMediumSize,
           color: palette.primaryText,
           fontWeight: FontWeight.w600,
         ),
         titleLarge: TextStyle(
+          fontSize: titleLargeSize,
           color: palette.primaryText,
           fontWeight: FontWeight.w700,
         ),

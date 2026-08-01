@@ -588,7 +588,7 @@ class _CategoryChip extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Icon(icon, size: 18, color: style.foreground),
+              Icon(icon, size: 22, color: style.foreground),
               const SizedBox(width: 8),
               Text(
                 label,

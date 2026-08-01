@@ -269,7 +269,7 @@ class _StatusChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(icon, size: 17, color: color),
+            Icon(icon, size: 20, color: color),
             const SizedBox(width: 6),
             Text(
               label,
@@ -377,7 +377,7 @@ class _BackdropChoiceCard extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: TvTheme.labelSmallSize,
                           color: isSelected || isFocused
                               ? style.foreground.withValues(alpha: 0.78)
                               : tv.secondaryText,

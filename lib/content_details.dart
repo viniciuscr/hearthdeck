@@ -345,7 +345,7 @@ class _ContentKindLabel extends StatelessWidget {
       label.toUpperCase(),
       style: TextStyle(
         color: tv.accent,
-        fontSize: 12,
+        fontSize: TvTheme.labelSmallSize,
         fontWeight: FontWeight.w700,
         letterSpacing: 1.2,
       ),
@@ -457,7 +457,7 @@ class _DescriptionPanel extends StatelessWidget {
               'DESCRIPTION',
               style: TextStyle(
                 color: tv.secondaryText,
-                fontSize: 12,
+                fontSize: TvTheme.labelSmallSize,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 0.8,
               ),
@@ -496,7 +496,7 @@ class _DetailHighlight extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(fact.icon, size: 18, color: tv.accent),
+            Icon(fact.icon, size: 22, color: tv.accent),
             const SizedBox(width: 7),
             Text(
               fact.label,
@@ -556,7 +556,7 @@ class _MetadataPanel extends StatelessWidget {
                 visibleSections[index].title.toUpperCase(),
                 style: TextStyle(
                   color: tv.secondaryText,
-                  fontSize: 12,
+                  fontSize: TvTheme.labelSmallSize,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 0.8,
                 ),
@@ -609,7 +609,7 @@ class _CompactFact extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Icon(fact.icon, size: 18, color: tv.accent),
+        Icon(fact.icon, size: 22, color: tv.accent),
         const SizedBox(width: 9),
         Expanded(
           child: Column(
