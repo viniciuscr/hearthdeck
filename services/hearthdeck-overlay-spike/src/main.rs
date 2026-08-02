@@ -13,12 +13,12 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
+use x11rb::COPY_DEPTH_FROM_PARENT;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, PropMode, WindowClass,
 };
 use x11rb::wrapper::ConnectionExt as _;
-use x11rb::COPY_DEPTH_FROM_PARENT;
 
 const RUN_SECONDS: u64 = 120;
 // Loud magenta so it's unmistakable against Hearthdeck's own UI.
