@@ -774,6 +774,14 @@ void main() {
     await tester.tap(find.text('Steam'));
     await tester.pumpAndSettle();
 
+    // Index 1 is FullLibraryPage's main vertical CustomScrollView; index 0
+    // is an unrelated zero-extent Scrollable, and later indexes are the
+    // horizontal source-tab/feature-shelf rows.
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey<String>('library-tile-ember-steam')),
+      240,
+      scrollable: find.byType(Scrollable).at(1),
+    );
     expect(
       find.byKey(const ValueKey<String>('library-tile-ember-steam')),
       findsOneWidget,
@@ -814,6 +822,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Filter (1)'), findsOneWidget);
+    // See the comment on the equivalent scrollUntilVisible call in the
+    // "library source selection" test above for why index 1.
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey<String>('library-tile-citadel')),
+      240,
+      scrollable: find.byType(Scrollable).at(1),
+    );
     expect(
       find.byKey(const ValueKey<String>('library-tile-citadel')),
       findsOneWidget,
@@ -851,6 +866,11 @@ void main() {
 
     expect(find.byType(ContentDetailsPage), findsOneWidget);
     expect(find.text('YOUR GAME STATS'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Recent captures'),
+      240,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('Recent captures'), findsOneWidget);
     expect(find.text('Play'), findsOneWidget);
   });

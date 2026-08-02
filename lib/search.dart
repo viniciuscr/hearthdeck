@@ -579,7 +579,7 @@ class _CategoryChip extends StatelessWidget {
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: style.background,
             borderRadius: BorderRadius.circular(22),
@@ -588,13 +588,15 @@ class _CategoryChip extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Icon(icon, size: 22, color: style.foreground),
+              Icon(icon, size: 18, color: style.foreground),
               const SizedBox(width: 8),
               Text(
                 label,
                 style: TextStyle(
                   color: style.foreground,
                   fontWeight: FontWeight.w700,
+                  fontSize: TvTheme.labelMediumSize,
+                  height: 1,
                 ),
               ),
             ],

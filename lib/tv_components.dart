@@ -293,11 +293,11 @@ class TvTopBar extends StatelessWidget {
       child: Row(
         children: <Widget>[
           _ProfileSummary(compact: metrics.isCompact),
-          SizedBox(width: metrics.gap * 2),
+          SizedBox(width: metrics.gap),
           Expanded(
             child: Center(
               child: Wrap(
-                spacing: metrics.gap,
+                spacing: metrics.gap / 2,
                 children: <Widget>[
                   TvIconAction(
                     label: 'Home',
@@ -334,7 +334,7 @@ class TvTopBar extends StatelessWidget {
               ),
             ),
           ),
-          SizedBox(width: metrics.gap * 2),
+          SizedBox(width: metrics.gap),
           _SystemStatus(compact: metrics.isCompact),
         ],
       ),
@@ -375,14 +375,19 @@ class _ProfileSummary extends StatelessWidget {
             children: <Widget>[
               Text(
                 'Alex Morgan',
-                style: TextStyle(fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: TvTheme.labelMediumSize,
+                  height: 1,
+                ),
               ),
-              SizedBox(height: 2),
+              const SizedBox(height: 2),
               Text(
                 '12,480 points',
                 style: TextStyle(
                   fontSize: TvTheme.labelSmallSize,
                   color: tv.secondaryText,
+                  height: 1,
                 ),
               ),
             ],
@@ -414,8 +419,9 @@ class _SystemStatus extends StatelessWidget {
         Text(
           compact ? '4:55' : '4:55 PM',
           style: const TextStyle(
-            fontSize: TvTheme.titleSmallSize,
+            fontSize: TvTheme.labelMediumSize,
             fontWeight: FontWeight.w600,
+            height: 1,
           ),
         ),
       ],
@@ -454,8 +460,8 @@ class TvIconAction extends StatelessWidget {
         return AnimatedContainer(
           duration: TvTheme.focusDuration,
           curve: TvTheme.focusCurve,
-          width: iconSize + 18,
-          height: iconSize + 18,
+          width: iconSize + 12,
+          height: iconSize + 12,
           decoration: BoxDecoration(
             color: style.background,
             border: Border.all(color: style.border, width: 2),

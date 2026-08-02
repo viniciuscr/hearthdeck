@@ -725,6 +725,8 @@ class TvLibraryControl extends StatelessWidget {
                 style: TextStyle(
                   color: style.foreground,
                   fontWeight: FontWeight.w700,
+                  fontSize: TvTheme.labelMediumSize,
+                  height: 1,
                 ),
               ),
             ],
@@ -784,6 +786,7 @@ class _FeatureShelf extends StatelessWidget {
                               feature.title,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
+                                height: 1,
                               ),
                             ),
                             const SizedBox(height: 4),
@@ -794,6 +797,7 @@ class _FeatureShelf extends StatelessWidget {
                               style: TextStyle(
                                 fontSize: TvTheme.labelSmallSize,
                                 color: tv.secondaryText,
+                                height: 1.15,
                               ),
                             ),
                           ],
