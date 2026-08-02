@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'backend/hearthdeck_api_client.dart';
 import 'catalog/catalog_repository.dart';
 import 'catalog/catalog_repository_factory.dart';
+import 'frontend_log.dart';
 import 'tv_components.dart';
 import 'tv_theme.dart';
 
@@ -70,6 +71,7 @@ class _SystemHealthPageState extends State<SystemHealthPage> {
         });
       }
     } catch (error) {
+      FrontendLog.instance.warning('Could not read service diagnostics: $error');
       if (mounted && (showLoading || _health == null)) {
         setState(() {
           _error = error;
@@ -221,12 +223,12 @@ class _SystemHealthPageState extends State<SystemHealthPage> {
                             child: _SectionTitle(
                               title: 'Recent service events',
                               subtitle:
-                                  'Latest 30 events from the Hearthdeck daemon and bridge journals, updating every 5 seconds',
+                                  'A live terminal for daemon, service API, bridge, RomM, and frontend events',
                             ),
                           ),
                           const SliverToBoxAdapter(child: SizedBox(height: 14)),
                           SliverToBoxAdapter(
-                            child: _LogTailCard(logs: _diagnostics!.logs),
+                            child: _LogTerminalSection(logs: _diagnostics!.logs),
                           ),
                         ],
                       ],
@@ -586,125 +588,389 @@ class _RommDiagnosticCard extends StatelessWidget {
   }
 }
 
-class _LogTailCard extends StatelessWidget {
-  const _LogTailCard({required this.logs});
+/// A source tab shown in the log terminal's left rail.
+class _LogSourceDef {
+  const _LogSourceDef(this.id, this.label, this.icon);
+
+  final String id;
+  final String label;
+  final IconData icon;
+}
+
+const _logSourceTabs = <_LogSourceDef>[
+  _LogSourceDef('all', 'All', Icons.dvr_outlined),
+  _LogSourceDef('daemon', 'Daemon', Icons.dns_outlined),
+  _LogSourceDef('api', 'Service API', Icons.http_rounded),
+  _LogSourceDef('bridge', 'Bridge', Icons.cable_rounded),
+  _LogSourceDef('romm', 'RomM', Icons.videogame_asset_outlined),
+  _LogSourceDef('frontend', 'Frontend', Icons.smartphone_rounded),
+];
+
+/// A single normalized line for the terminal, merging the backend's
+/// daemon/api/bridge/romm log tail with this running app's own in-memory
+/// [FrontendLog] entries into one timeline.
+class _TerminalLine {
+  const _TerminalLine({
+    required this.timestamp,
+    required this.source,
+    required this.level,
+    required this.message,
+  });
+
+  factory _TerminalLine.fromBackend(HearthdeckLogEntry entry) =>
+      _TerminalLine(
+        timestamp: entry.timestamp == null
+            ? null
+            : DateTime.tryParse(entry.timestamp!)?.toLocal(),
+        source: entry.source,
+        level: entry.level,
+        message: entry.message,
+      );
+
+  factory _TerminalLine.fromFrontend(FrontendLogEntry entry) => _TerminalLine(
+    timestamp: entry.timestamp,
+    source: 'frontend',
+    level: entry.level,
+    message: entry.message,
+  );
+
+  final DateTime? timestamp;
+  final String source;
+  final String level;
+  final String message;
+}
+
+List<_TerminalLine> _combinedLogLines(HearthdeckLogTail logs) {
+  final lines = <_TerminalLine>[
+    ...logs.entries.map(_TerminalLine.fromBackend),
+    ...FrontendLog.instance.entries.map(_TerminalLine.fromFrontend),
+  ];
+  lines.sort((a, b) {
+    if (a.timestamp == null && b.timestamp == null) {
+      return 0;
+    }
+    if (a.timestamp == null) {
+      return 1;
+    }
+    if (b.timestamp == null) {
+      return -1;
+    }
+    return b.timestamp!.compareTo(a.timestamp!);
+  });
+  return lines;
+}
+
+/// Replaces the old bordered-card log list with a single, fast terminal
+/// view: a left rail to switch between log sources, and a monospace
+/// scrolling pane on the right that auto-follows new lines unless the user
+/// has scrolled up to read something older.
+class _LogTerminalSection extends StatefulWidget {
+  const _LogTerminalSection({required this.logs});
 
   final HearthdeckLogTail logs;
 
   @override
-  Widget build(BuildContext context) {
-    final tv = TvPalette.of(context);
-    if (!logs.available) {
-      return _DiagnosticsEmptyState(
-        icon: Icons.article_outlined,
-        message: logs.error ?? 'No recent service events are available.',
-      );
-    }
-    if (logs.entries.isEmpty) {
-      return const _DiagnosticsEmptyState(
-        icon: Icons.check_circle_outline_rounded,
-        message: 'No recent daemon or bridge events to show.',
-      );
-    }
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: tv.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: tv.borderSubtle),
-      ),
-      child: Column(
-        children: logs.entries
-            .map(
-              (entry) => _LogEntryRow(
-                entry: entry,
-                isLast: entry == logs.entries.last,
-              ),
-            )
-            .toList(growable: false),
-      ),
-    );
-  }
+  State<_LogTerminalSection> createState() => _LogTerminalSectionState();
 }
 
-class _LogEntryRow extends StatelessWidget {
-  const _LogEntryRow({required this.entry, required this.isLast});
+class _LogTerminalSectionState extends State<_LogTerminalSection> {
+  String _selectedSource = 'all';
+  final _scrollController = ScrollController();
+  var _followLatest = true;
 
-  final HearthdeckLogEntry entry;
-  final bool isLast;
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_handleScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_handleScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _handleScroll() {
+    if (!_scrollController.hasClients) {
+      return;
+    }
+    final position = _scrollController.position;
+    final atBottom = position.pixels >= position.maxScrollExtent - 24;
+    if (atBottom != _followLatest) {
+      setState(() => _followLatest = atBottom);
+    }
+  }
+
+  void _scheduleAutoScroll() {
+    if (!_followLatest) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) {
+        return;
+      }
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+    });
+  }
+
+  String? _emptyMessage(List<_TerminalLine> filtered) {
+    if (filtered.isNotEmpty) {
+      return null;
+    }
+    if (_selectedSource == 'frontend') {
+      return 'No frontend events yet.';
+    }
+    if (!widget.logs.available) {
+      return widget.logs.error ?? 'No recent service events are available.';
+    }
+    return switch (_selectedSource) {
+      'daemon' => 'No recent daemon events.',
+      'api' => 'No recent service API requests.',
+      'bridge' => 'No recent bridge events.',
+      'romm' => 'No RomM connectivity events yet.',
+      _ => 'No recent events to show.',
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
     final tv = TvPalette.of(context);
-    final color = switch (entry.level) {
-      'error' => tv.warning,
-      'warning' => tv.warning,
-      'debug' => tv.secondaryText,
-      _ => tv.info,
-    };
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        border: isLast
-            ? null
-            : Border(bottom: BorderSide(color: tv.borderSubtle)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Icon(
-              entry.level == 'error' || entry.level == 'warning'
-                  ? Icons.error_outline_rounded
-                  : Icons.info_outline_rounded,
-              color: color,
-              size: 20,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+    return ListenableBuilder(
+      listenable: FrontendLog.instance,
+      builder: (BuildContext context, Widget? _) {
+        final combined = _combinedLogLines(widget.logs);
+        final filtered = _selectedSource == 'all'
+            ? combined
+            : combined
+                  .where((line) => line.source == _selectedSource)
+                  .toList(growable: false);
+        final display = filtered.reversed.toList(growable: false);
+        _scheduleAutoScroll();
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            color: tv.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: tv.borderSubtle),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: SizedBox(
+              height: 420,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      Text(
-                        entry.service,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        entry.level.toUpperCase(),
-                        style: TextStyle(
-                          color: color,
-                          fontSize: TvTheme.labelSmallSize,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        entry.timestamp == null
-                            ? ''
-                            : _formatTime(entry.timestamp!),
-                        style: TextStyle(
-                          color: tv.secondaryText,
-                          fontSize: TvTheme.labelSmallSize,
-                        ),
-                      ),
-                    ],
+                  _LogSourceRail(
+                    selected: _selectedSource,
+                    onSelected: (String id) =>
+                        setState(() => _selectedSource = id),
                   ),
-                  const SizedBox(height: 5),
-                  Text(
-                    entry.message,
-                    style: TextStyle(color: tv.secondaryText),
+                  Expanded(
+                    child: _LogTerminalViewport(
+                      lines: display,
+                      scrollController: _scrollController,
+                      emptyMessage: _emptyMessage(filtered),
+                    ),
                   ),
                 ],
               ),
             ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LogSourceRail extends StatelessWidget {
+  const _LogSourceRail({required this.selected, required this.onSelected});
+
+  final String selected;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(right: BorderSide(color: tv.borderSubtle)),
+      ),
+      child: SizedBox(
+        width: 172,
+        child: ListView(
+          padding: const EdgeInsets.all(10),
+          children: <Widget>[
+            for (final tab in _logSourceTabs) ...<Widget>[
+              _LogSourceTabButton(
+                tab: tab,
+                isSelected: tab.id == selected,
+                onActivate: () => onSelected(tab.id),
+              ),
+              const SizedBox(height: 6),
+            ],
           ],
         ),
       ),
     );
   }
 }
+
+class _LogSourceTabButton extends StatelessWidget {
+  const _LogSourceTabButton({
+    required this.tab,
+    required this.isSelected,
+    required this.onActivate,
+  });
+
+  final _LogSourceDef tab;
+  final bool isSelected;
+  final VoidCallback onActivate;
+
+  @override
+  Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
+    return TvFocusable(
+      semanticLabel: '${tab.label} logs',
+      onActivate: onActivate,
+      builder: (BuildContext context, bool isFocused) {
+        final style = TvControlStyle.resolve(
+          tv,
+          variant: TvControlVariant.selectable,
+          isFocused: isFocused,
+          isSelected: isSelected,
+        );
+        return AnimatedContainer(
+          duration: TvTheme.focusDuration,
+          curve: TvTheme.focusCurve,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: style.background,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: style.border, width: 2),
+          ),
+          child: Row(
+            children: <Widget>[
+              Icon(tab.icon, size: 18, color: style.foreground),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  tab.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: style.foreground,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LogTerminalViewport extends StatelessWidget {
+  const _LogTerminalViewport({
+    required this.lines,
+    required this.scrollController,
+    required this.emptyMessage,
+  });
+
+  final List<_TerminalLine> lines;
+  final ScrollController scrollController;
+  final String? emptyMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
+    if (emptyMessage case final String message) {
+      return ColoredBox(
+        color: tv.canvas,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: tv.secondaryText,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return ColoredBox(
+      color: tv.canvas,
+      child: ListView.builder(
+        controller: scrollController,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        itemCount: lines.length,
+        itemBuilder: (BuildContext context, int index) =>
+            _TerminalLineRow(line: lines[index]),
+      ),
+    );
+  }
+}
+
+class _TerminalLineRow extends StatelessWidget {
+  const _TerminalLineRow({required this.line});
+
+  final _TerminalLine line;
+
+  @override
+  Widget build(BuildContext context) {
+    final tv = TvPalette.of(context);
+    final color = switch (line.level) {
+      'error' || 'warning' => tv.warning,
+      'debug' => tv.secondaryText,
+      _ => tv.info,
+    };
+    const monospace = TextStyle(fontFamily: 'monospace', fontSize: 13);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            line.timestamp == null ? '--:--:--' : _formatClock(line.timestamp!),
+            style: monospace.copyWith(color: tv.secondaryText),
+          ),
+          const SizedBox(width: 10),
+          SizedBox(
+            width: 58,
+            child: Text(
+              line.level.toUpperCase(),
+              style: monospace.copyWith(color: color, fontWeight: FontWeight.w700),
+            ),
+          ),
+          SizedBox(
+            width: 74,
+            child: Text(
+              line.source,
+              overflow: TextOverflow.ellipsis,
+              style: monospace.copyWith(color: tv.secondaryText),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              line.message,
+              style: monospace.copyWith(color: tv.primaryText),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatClock(DateTime value) =>
+    '${value.hour.toString().padLeft(2, '0')}:'
+    '${value.minute.toString().padLeft(2, '0')}:'
+    '${value.second.toString().padLeft(2, '0')}';
 
 class _DiagnosticsEmptyState extends StatelessWidget {
   const _DiagnosticsEmptyState({required this.icon, required this.message});
@@ -923,5 +1189,3 @@ String _formatTimestamp(String value) {
   }
   return '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}';
 }
-
-String _formatTime(String value) => _formatTimestamp(value);

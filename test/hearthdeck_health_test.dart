@@ -51,7 +51,7 @@ void main() {
         'entries': <Map<String, dynamic>>[
           <String, dynamic>{
             'timestamp': '2026-01-01T00:00:00Z',
-            'service': 'Daemon',
+            'source': 'daemon',
             'level': 'info',
             'message': 'RomM console check completed (console_count=12)',
           },
@@ -61,6 +61,6 @@ void main() {
 
     expect(diagnostics.services.single.state, 'active');
     expect(diagnostics.romm.consoleCount, 12);
-    expect(diagnostics.logs.entries.single.service, 'Daemon');
+    expect(diagnostics.logs.entries.single.source, 'daemon');
   });
 }

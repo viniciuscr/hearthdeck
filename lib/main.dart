@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_gamepads/flutter_gamepads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'frontend_log.dart';
 import 'settings/user_settings_repository.dart';
 import 'tv_dashboard.dart';
 import 'tv_gamepad.dart';
@@ -14,6 +15,8 @@ import 'virtual_keyboard.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  installFrontendLogErrorHooks();
+  FrontendLog.instance.info('Hearthdeck UI started');
   final preferences = await SharedPreferences.getInstance();
   final settingsRepository = await createUserSettingsRepository(preferences);
   runApp(HearthdeckApp(settingsRepository: settingsRepository));

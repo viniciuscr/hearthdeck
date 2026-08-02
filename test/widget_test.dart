@@ -1214,7 +1214,7 @@ class _HealthCatalogRepository extends MockCatalogRepository {
           entries: <HearthdeckLogEntry>[
             HearthdeckLogEntry(
               timestamp: '2026-01-01T00:00:00Z',
-              service: 'Daemon',
+              source: 'daemon',
               level: 'info',
               message: 'RomM console check completed (console_count=12)',
             ),

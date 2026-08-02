@@ -494,10 +494,13 @@ class HearthdeckLogTail {
   final List<HearthdeckLogEntry> entries;
 }
 
+/// [source] is a stable id (`daemon`, `api`, `bridge`, `romm`) used to group
+/// entries into the health page's log source tabs; it is not meant for
+/// direct display (see `_logSourceLabel` in system_health.dart).
 class HearthdeckLogEntry {
   const HearthdeckLogEntry({
     required this.timestamp,
-    required this.service,
+    required this.source,
     required this.level,
     required this.message,
   });
@@ -505,13 +508,13 @@ class HearthdeckLogEntry {
   factory HearthdeckLogEntry.fromJson(Map<String, dynamic> json) =>
       HearthdeckLogEntry(
         timestamp: json['timestamp'] as String?,
-        service: json['service'] as String,
+        source: json['source'] as String,
         level: json['level'] as String,
         message: json['message'] as String,
       );
 
   final String? timestamp;
-  final String service;
+  final String source;
   final String level;
   final String message;
 }

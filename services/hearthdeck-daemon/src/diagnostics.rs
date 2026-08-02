@@ -1,4 +1,8 @@
-use std::process::Stdio;
+use std::{
+    collections::VecDeque,
+    process::Stdio,
+    sync::{Mutex, OnceLock},
+};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -7,8 +11,9 @@ use tokio::process::Command;
 
 use crate::settings::{RommCredentials, SettingsRepository};
 
-const LOG_LINE_LIMIT: usize = 30;
+const LOG_LINE_LIMIT: usize = 200;
 const LOG_MESSAGE_LIMIT: usize = 600;
+const ROMM_LOG_LIMIT: usize = 40;
 
 #[derive(Debug)]
 pub enum RommQueryError {
@@ -114,10 +119,17 @@ pub struct LogTail {
     pub entries: Vec<LogEntry>,
 }
 
+/// Stable identifier for where a log line came from. The Flutter client
+/// groups the diagnostics log tail into tabs keyed on this value: `daemon`
+/// and `bridge` come from their respective systemd journals, `api` is the
+/// daemon's own per-request access log (normally noisy, so it's split out
+/// of the general `daemon` tab instead of being dropped), and `romm` is
+/// synthesized locally from the periodic RomM connectivity check since RomM
+/// itself is an external server with no journal we can tail.
 #[derive(Serialize)]
 pub struct LogEntry {
     pub timestamp: Option<String>,
-    pub service: String,
+    pub source: String,
     pub level: String,
     pub message: String,
 }
@@ -242,17 +254,20 @@ async fn romm_diagnostic(settings: &SettingsRepository) -> RommDiagnostic {
     let configured = match settings.romm().await {
         Ok(configured) => configured,
         Err(error) => {
+            let message = format!("Could not read RomM settings: {error}");
+            push_romm_log("error", message.clone());
             return RommDiagnostic {
                 configured: false,
                 status: "degraded",
                 base_url: None,
                 console_count: None,
                 checked_at,
-                error: Some(format!("Could not read RomM settings: {error}")),
+                error: Some(message),
             };
         }
     };
     let Some(configured) = configured else {
+        push_romm_log("info", "RomM is not configured.".to_owned());
         return RommDiagnostic {
             configured: false,
             status: "not_configured",
@@ -263,26 +278,87 @@ async fn romm_diagnostic(settings: &SettingsRepository) -> RommDiagnostic {
         };
     };
     match romm_platforms(settings).await {
-        Ok(platforms) => RommDiagnostic {
-            configured: true,
-            status: "ready",
-            base_url: Some(configured.base_url),
-            console_count: Some(platforms.len()),
-            checked_at,
-            error: None,
-        },
-        Err(error) => RommDiagnostic {
-            configured: true,
-            status: "degraded",
-            base_url: Some(configured.base_url),
-            console_count: None,
-            checked_at,
-            error: Some(match error {
+        Ok(platforms) => {
+            push_romm_log(
+                "info",
+                format!(
+                    "Connected to {} ({} consoles available)",
+                    configured.base_url,
+                    platforms.len()
+                ),
+            );
+            RommDiagnostic {
+                configured: true,
+                status: "ready",
+                base_url: Some(configured.base_url),
+                console_count: Some(platforms.len()),
+                checked_at,
+                error: None,
+            }
+        }
+        Err(error) => {
+            let message = match error {
                 RommQueryError::NotConfigured => "RomM is not configured".to_owned(),
                 RommQueryError::Failed(error) => error.to_string(),
-            }),
-        },
+            };
+            push_romm_log(
+                "error",
+                format!("Could not reach {}: {message}", configured.base_url),
+            );
+            RommDiagnostic {
+                configured: true,
+                status: "degraded",
+                base_url: Some(configured.base_url),
+                console_count: None,
+                checked_at,
+                error: Some(message),
+            }
+        }
     }
+}
+
+fn romm_log_buffer() -> &'static Mutex<VecDeque<LogEntry>> {
+    static BUFFER: OnceLock<Mutex<VecDeque<LogEntry>>> = OnceLock::new();
+    BUFFER.get_or_init(|| Mutex::new(VecDeque::with_capacity(ROMM_LOG_LIMIT)))
+}
+
+/// Records an event from the periodic RomM connectivity check so the
+/// diagnostics log tail has real content for the "RomM" tab, even though
+/// RomM runs as an external server with no local journal to tail. Repeated
+/// identical messages (e.g. "still connected" on every 5s poll) collapse
+/// into the existing entry instead of flooding the tab with duplicates.
+fn push_romm_log(level: &str, message: String) {
+    let Ok(mut buffer) = romm_log_buffer().lock() else {
+        return;
+    };
+    if buffer.back().is_some_and(|entry| entry.message == message) {
+        return;
+    }
+    if buffer.len() >= ROMM_LOG_LIMIT {
+        buffer.pop_front();
+    }
+    buffer.push_back(LogEntry {
+        timestamp: Some(Utc::now().to_rfc3339()),
+        source: "romm".to_owned(),
+        level: level.to_owned(),
+        message,
+    });
+}
+
+fn recent_romm_logs() -> Vec<LogEntry> {
+    let Ok(buffer) = romm_log_buffer().lock() else {
+        return Vec::new();
+    };
+    buffer
+        .iter()
+        .rev()
+        .map(|entry| LogEntry {
+            timestamp: entry.timestamp.clone(),
+            source: entry.source.clone(),
+            level: entry.level.clone(),
+            message: entry.message.clone(),
+        })
+        .collect()
 }
 
 async fn query_romm(
@@ -392,13 +468,14 @@ async fn service_status(id: &'static str, unit: &'static str, on_demand: bool) -
 }
 
 async fn recent_logs() -> LogTail {
+    let romm_logs = recent_romm_logs();
     let output = Command::new("journalctl")
         .args([
             "--user",
             "--no-pager",
             "--output=json",
             "--reverse",
-            "--lines=120",
+            "--lines=400",
             "--unit=hearthdeck-daemon.service",
             "--unit=hearthdeck-bridge.service",
         ])
@@ -406,25 +483,28 @@ async fn recent_logs() -> LogTail {
         .output()
         .await;
     let Ok(output) = output else {
+        // The journal itself is unavailable, but RomM connectivity events are
+        // synthesized locally and don't depend on it, so they still show up
+        // in their own tab.
         return LogTail {
             available: false,
             error: Some("Could not start journalctl for Hearthdeck services.".to_owned()),
-            entries: Vec::new(),
+            entries: romm_logs,
         };
     };
     if !output.status.success() {
         return LogTail {
             available: false,
             error: Some("The user journal is unavailable for Hearthdeck services.".to_owned()),
-            entries: Vec::new(),
+            entries: romm_logs,
         };
     }
-    let entries = String::from_utf8_lossy(&output.stdout)
+    let mut entries: Vec<LogEntry> = String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(parse_journal_entry)
-        .filter(|entry| entry.message != "request completed")
         .take(LOG_LINE_LIMIT)
         .collect();
+    entries.extend(romm_logs);
     LogTail {
         available: true,
         error: None,
@@ -435,6 +515,10 @@ async fn recent_logs() -> LogTail {
 fn parse_journal_entry(line: &str) -> Option<LogEntry> {
     let record = serde_json::from_str::<Value>(line).ok()?;
     let raw_message = record.get("MESSAGE")?.as_str()?;
+    let unit = record
+        .get("_SYSTEMD_UNIT")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let message = display_message(raw_message);
     let timestamp = record
         .get("__REALTIME_TIMESTAMP")
@@ -442,11 +526,7 @@ fn parse_journal_entry(line: &str) -> Option<LogEntry> {
         .and_then(|value| value.parse::<i64>().ok())
         .and_then(DateTime::from_timestamp_micros)
         .map(|timestamp| timestamp.to_rfc3339());
-    let service = record
-        .get("_SYSTEMD_UNIT")
-        .and_then(Value::as_str)
-        .map(service_label)
-        .unwrap_or_else(|| "Service".to_owned());
+    let source = log_source(unit, raw_message);
     let level = record
         .get("PRIORITY")
         .and_then(Value::as_str)
@@ -454,7 +534,7 @@ fn parse_journal_entry(line: &str) -> Option<LogEntry> {
         .unwrap_or_else(|| "info".to_owned());
     Some(LogEntry {
         timestamp,
-        service,
+        source,
         level,
         message,
     })
@@ -498,12 +578,27 @@ fn value_to_text(value: &Value) -> String {
         .unwrap_or_else(|| value.to_string())
 }
 
-fn service_label(unit: &str) -> String {
+/// Assigns a stable source id per journal line. The daemon's own per-request
+/// access log (`"request completed"`, previously dropped entirely as noise)
+/// is split into its own `api` source instead of being merged with general
+/// `daemon` events, so the two can be viewed as separate log tabs.
+fn log_source(unit: &str, raw_message: &str) -> String {
     match unit {
-        "hearthdeck-daemon.service" => "Daemon".to_owned(),
-        "hearthdeck-bridge.service" => "Bridge".to_owned(),
-        _ => "Service".to_owned(),
+        "hearthdeck-bridge.service" => "bridge",
+        _ if structured_message(raw_message).as_deref() == Some("request completed") => "api",
+        _ => "daemon",
     }
+    .to_owned()
+}
+
+fn structured_message(raw: &str) -> Option<String> {
+    let Value::Object(event) = serde_json::from_str::<Value>(raw).ok()? else {
+        return None;
+    };
+    event
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 fn priority_label(priority: &str) -> String {
@@ -551,12 +646,32 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(entry.service, "Daemon");
+        assert_eq!(entry.source, "daemon");
         assert_eq!(entry.level, "info");
         assert_eq!(
             entry.message,
             "discovery completed (source_id=heroic, record_count=2)"
         );
+    }
+
+    #[test]
+    fn splits_request_access_lines_into_their_own_api_source() {
+        let entry = super::parse_journal_entry(
+            r#"{"MESSAGE":"{\"level\":\"INFO\",\"message\":\"request completed\",\"status_code\":200}","PRIORITY":"6","_SYSTEMD_UNIT":"hearthdeck-daemon.service","__REALTIME_TIMESTAMP":"1760000000000000"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(entry.source, "api");
+    }
+
+    #[test]
+    fn labels_bridge_journal_lines_with_the_bridge_source() {
+        let entry = super::parse_journal_entry(
+            r#"{"MESSAGE":"{\"level\":\"INFO\",\"message\":\"bridge ready\"}","PRIORITY":"6","_SYSTEMD_UNIT":"hearthdeck-bridge.service","__REALTIME_TIMESTAMP":"1760000000000000"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(entry.source, "bridge");
     }
 
     #[test]
