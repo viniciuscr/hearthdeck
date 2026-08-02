@@ -13,8 +13,17 @@ export XDG_SESSION_TYPE=wayland
 # not a desktop shell. Starting them here (in addition to the global
 # default.target enablement) guarantees they are up before Hearthdeck makes
 # its first request, even on a from-cold-boot autologin.
-systemctl --user daemon-reload >/dev/null 2>&1 || true
-systemctl --user start hearthdeck.target >/dev/null 2>&1 || true
+#
+# hearthdeck-kiosk.target is this session's single, dedicated hook for
+# everything it needs started before Hearthdeck launches (see that unit's own
+# description for why it exists separately from hearthdeck.target). Real
+# failures must stay visible in the journal here: do not redirect this
+# output to /dev/null. The trailing `|| true` is intentional and different
+# from hiding the failure - Hearthdeck still launches either way so its own
+# system-health screen can show the user what's wrong, rather than the whole
+# session refusing to start on a backend hiccup.
+systemctl --user daemon-reload || true
+systemctl --user start hearthdeck-kiosk.target || true
 
 # --backend drm:     run directly on the DRM/KMS seat; no outer Wayland/X11
 #                     session required.

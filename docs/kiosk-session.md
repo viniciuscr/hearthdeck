@@ -14,11 +14,26 @@ Display manager (SDDM/GDM/greetd/...)
   -> reads /usr/share/wayland-sessions/hearthdeck.desktop
   -> Exec = /usr/lib/hearthdeck/hearthdeck-session
        -> systemctl --user daemon-reload
-       -> systemctl --user start hearthdeck.target
+       -> systemctl --user start hearthdeck-kiosk.target
+            -> Requires=/After= hearthdeck.target
+                 -> Wants= hearthdeck-bridge.socket, hearthdeck-daemon.service
        -> exec gamescope --backend drm --fullscreen --force-grab-cursor -- \
             /opt/hearthdeck/hearthdeck
             -> Hearthdeck is Gamescope's ONLY child process
 ```
+
+`hearthdeck-kiosk.target` exists as this session's single, dedicated,
+documented hook for everything it needs started before Gamescope launches
+Hearthdeck — see that unit file's own description. `hearthdeck.target`
+itself stays the general-purpose target enabled for any session (COSMIC
+included); the Kiosk session's own additional startup dependencies (a future
+gamepad input daemon, network/Bluetooth adapters, etc.) get added to
+`hearthdeck-kiosk.target`, never to the session script itself. The session
+script's `systemctl --user start` call intentionally still ends in `|| true`
+— Hearthdeck launches either way so its own system-health screen can report
+a backend problem, rather than the whole session refusing to start over a
+service hiccup — but its output must never be redirected to `/dev/null`; see
+"Do not" below.
 
 That's the whole session: one script, one `exec`, three gamescope flags,
 one app. Nothing else. No desktop compositor, no panel/dock/launcher, no
@@ -159,9 +174,12 @@ style preferences.
   `ConditionEnvironment=XDG_CURRENT_DESKTOP=hearthdeck:COSMIC`. When a
   systemd `Condition*=` fails, the unit is skipped silently: no error, no
   obvious symptom, `systemctl status` just shows it never ran.
-- **Do not background (`&`) the `systemctl --user start hearthdeck.target`
+- **Do not background (`&`) the `systemctl --user start hearthdeck-kiosk.target`
   call**, and do not swallow its output with `>/dev/null 2>&1`. Real
-  failures need to be visible in the journal, not hidden.
+  failures need to be visible in the journal, not hidden. (The script did
+  exactly this for a time despite this rule already being written down here
+  — check the actual file before trusting this document's own description
+  of it.)
 - **Do not run Hearthdeck as a systemd unit that is a sibling of Gamescope.**
   Hearthdeck must be Gamescope's literal child
   (`gamescope ... -- /opt/hearthdeck/hearthdeck`), not a separately
