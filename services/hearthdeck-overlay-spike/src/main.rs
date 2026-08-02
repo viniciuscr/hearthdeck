@@ -1,11 +1,14 @@
-// Disposable spike, not a shipped Hearthdeck component (see Cargo.toml).
-// Confirms, on real hardware, that a plain Xwayland client marking itself
-// with the GAMESCOPE_EXTERNAL_OVERLAY=1 property is composited on top by
-// Gamescope without resizing/shrinking whatever else is running (Hearthdeck
-// itself, or a bridge-launched app), and disappears cleanly on exit.
+// Disposable spike, shipped temporarily so it can be run on kiosk hardware
+// with just `sudo pacman -Syu` (see packaging/arch/PKGBUILD) — not a real,
+// permanent Hearthdeck component. Confirms, on real hardware, that a plain
+// Xwayland client marking itself with the GAMESCOPE_EXTERNAL_OVERLAY=1
+// property is composited on top by Gamescope without resizing/shrinking
+// whatever else is running (Hearthdeck itself, or a bridge-launched app),
+// and disappears cleanly on exit.
 //
 // Once the finding is confirmed either way, delete this crate directory and
-// remove "hearthdeck-overlay-spike" from services/Cargo.toml's members.
+// remove references to it from services/Cargo.toml's members,
+// packaging/arch/PKGBUILD's package(), and docs/arch-package.md.
 
 use std::thread;
 use std::time::{Duration, Instant};

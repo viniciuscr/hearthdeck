@@ -33,6 +33,10 @@ package() {
   install -Dm755 packaging/arch/hearthdeck "$pkgdir/usr/bin/hearthdeck"
   install -Dm755 services/target/release/hearthdeck-bridge "$pkgdir/usr/lib/hearthdeck/hearthdeck-bridge"
   install -Dm755 services/target/release/hearthdeck-daemon "$pkgdir/usr/lib/hearthdeck/hearthdeck-daemon"
+  # Disposable Gamescope external-overlay spike (see
+  # services/hearthdeck-overlay-spike and docs/kiosk-session.md). Remove this
+  # line, and the crate, once the finding is confirmed either way.
+  install -Dm755 services/target/release/hearthdeck-overlay-spike "$pkgdir/usr/bin/hearthdeck-overlay-spike"
   install -Dm644 packaging/arch/hearthdeck.target "$pkgdir/usr/lib/systemd/user/hearthdeck.target"
   install -Dm644 packaging/arch/hearthdeck-bridge.socket "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.socket"
   install -Dm644 packaging/arch/hearthdeck-bridge.service "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.service"

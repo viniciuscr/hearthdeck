@@ -12,6 +12,11 @@ CachyOS. It installs:
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck.desktop`: the minimal Hearthdeck
   Kiosk session shown by compatible display managers.
+- `/usr/bin/hearthdeck-overlay-spike`: **temporary**, not a real feature.
+  Disposable hardware-verification tool for an in-progress investigation
+  into a system-wide overlay menu; see `services/hearthdeck-overlay-spike`
+  and `docs/kiosk-session.md`. Remove this bullet once that crate is
+  deleted.
 
 ## Install
 
