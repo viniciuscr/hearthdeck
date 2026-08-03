@@ -251,7 +251,7 @@ hearthdeck-daemon
 hearthdeck-bridge (Linux, socket activated)
   desktop-entry discovery, validation, supervised launch/session control
        |
-host desktop entries, transient systemd user services, on-demand nested Gamescope
+host desktop entries, transient systemd user services, direct-connect or (Heroic only) nested Gamescope
 ```
 
 The daemon owns the public contract, persistent state, and background work. It

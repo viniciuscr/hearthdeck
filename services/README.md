@@ -45,12 +45,16 @@ being folded into the daemon.
 
 In the Hearthdeck Kiosk session, the session script starts Gamescope directly
 on the DRM/KMS seat as the sole compositor, with Hearthdeck as its only child;
-there is no separate desktop compositor to publish the socket first. The
-bridge wraps registered desktop applications in a separate, on-demand nested
-Gamescope instance, so each app receives its own Gamescope Xwayland and
-Wayland environment without competing with the outer Kiosk session for the
-seat. PipeWire/WirePlumber audio, NetworkManager networking, and BlueZ
-Bluetooth remain host services outside the Hearthdeck process tree.
+there is no separate desktop compositor to publish the socket first. Launched
+desktop applications and RetroArch games connect directly to that same
+session (its embedded Xwayland `DISPLAY`, or its Wayland socket) as ordinary
+clients, rather than getting a nested Gamescope instance of their own -
+confirmed on real hardware that a second Gamescope process joining this
+session as a Wayland peer is composited but never actually shown, while a
+plain client is shown automatically the same way Hearthdeck itself is (see
+`docs/kiosk-session.md`). PipeWire/WirePlumber audio, NetworkManager
+networking, and BlueZ Bluetooth remain host services outside the Hearthdeck
+process tree.
 
 Heroic game launches go through its own URI handler (`heroic://launch?...`)
 rather than an exec'd binary, so the bridge tracks *Heroic itself* as one
@@ -59,12 +63,15 @@ unit per launch: Electron's single-instance lock means any launch after the
 first is handled by whichever Heroic process is already running, not a new
 one, so a fresh-unit-per-launch model would lose track of every game after
 the first. The bridge checks whether that unit is already active before
-deciding whether to start it (cold start, wrapped in a `--keep-alive`
-Gamescope instance so the display survives past `xdg-open` handing off and
-exiting) or just ask the already-running instance to launch the next game
-directly. Heroic is intentionally left running between games - faster
-subsequent launches, at the cost of some idle memory - and closing it (and
-whatever game it's running) is `systemctl --user stop
+deciding whether to start it (cold start, wrapped in its own nested
+Gamescope instance using the SDL backend - connecting through this session's
+`DISPLAY` and presenting as an ordinary X11 client, the one launch that keeps
+a nested instance at all, specifically so its games can still get their own
+internal resolution/upscaling; `--keep-alive` so the display survives past
+`xdg-open` handing off and exiting) or just ask the already-running instance
+to launch the next game directly. Heroic is intentionally left running
+between games - faster subsequent launches, at the cost of some idle memory
+- and closing it (and whatever game it's running) is `systemctl --user stop
 hearthdeck-heroic.service`, which reliably kills the whole process tree via
 its cgroup even though Heroic never exits on its own.
 
@@ -75,8 +82,10 @@ Desktop apps, Heroic, and RetroArch (`hearthdeck-bridge/src/platform/linux.rs`,
 future launcher should fit the same shape rather than reinvent it:
 
 1. **`launch_with_systemd`**: the one place that calls `systemd-run`. Takes a
-   unit name, a command, a working directory, and two independent flags
-   (`wrap_in_gamescope`, `keep_gamescope_alive`) - nothing launcher-specific.
+   unit name, a command, and a working directory - nothing launcher-specific,
+   and no gamescope-wrapping logic of its own. It forwards the display/session
+   environment (`DISPLAY`, `WAYLAND_DISPLAY`, etc.) the launched process needs
+   to connect to whatever session Hearthdeck itself is running in.
 2. **`register_launch`**: the one place that builds an `ApplicationSession`,
    persists it, and inserts it into the in-memory session map, rolling the
    launch back (`stop_application`) if persistence fails. Every launcher's
@@ -87,8 +96,11 @@ future launcher should fit the same shape rather than reinvent it:
    validate the desktop entry before building a command; RetroArch validates
    the resolved core/rom paths and sets up its config directory; Heroic
    checks whether its stable unit is already running to decide between a
-   cold start and an already-running hand-off. None of that belongs in
-   layers 1 or 2, and none of layers 1/2's job belongs duplicated here.
+   cold start (which it wraps in its own nested Gamescope command before
+   handing to `launch_with_systemd`) and an already-running hand-off. None of
+   that belongs in layers 1 or 2, and none of layers 1/2's job belongs
+   duplicated here.
+
 
 A launcher that finds itself re-implementing session bookkeeping instead of
 calling `register_launch`, or shelling out to `systemd-run` directly instead

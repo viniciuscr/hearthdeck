@@ -179,10 +179,12 @@ Install and enable `hearthdeck.target` from the systemd **user** units in
 `deploy/systemd/`. A user service owns graphical application launches. The
 Hearthdeck Kiosk session's script execs Gamescope directly on the DRM/KMS seat
 with the Flutter client as its only child; there is no separate desktop
-compositor in front of it. The bridge launches registered desktop applications
-in a separate, on-demand nested Gamescope instance so they remain isolated
-from Hearthdeck without the outer session ever sharing DRM ownership with
-another compositor.
+compositor in front of it. The bridge launches registered desktop
+applications and RetroArch games as direct clients of that same session
+(confirmed on real hardware that a second Gamescope process joining it as a
+peer is never shown - see `docs/kiosk-session.md`); Heroic is the one
+exception, kept in its own nested Gamescope instance so its games can still
+get their own internal resolution/upscaling.
 Configure LAN TLS through
 `~/.config/hearthdeck/daemon.env`; see `deploy/systemd/daemon.env.example`.
 

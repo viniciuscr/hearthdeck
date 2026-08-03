@@ -85,19 +85,26 @@ compositor to initialize first, and no other process for Gamescope to share
 the seat with. Exiting Hearthdeck ends Gamescope and returns to the display
 manager's login screen; there is no underlying desktop to fall back to.
 
-Hearthdeck launches registered desktop applications in a separate, on-demand
-nested Gamescope instance. That nested instance is unrelated to the outer
-Kiosk session compositor above: it is started by the bridge only when a game
-or app launch is requested, uses no DRM or memory until then, and is torn down
-when the launch ends. X11-only apps use the nested Gamescope's Xwayland
-server; Wayland apps use its exposed inner Wayland socket.
+Hearthdeck launches registered desktop applications and RetroArch games as
+direct clients of that same outer Kiosk session compositor - its embedded
+Xwayland `DISPLAY` for X11 apps, its Wayland socket for native-Wayland apps -
+rather than a nested Gamescope instance of their own. That used to be the
+default and was confirmed, on real hardware, to never actually get shown: a
+second Gamescope process joining this session as a Wayland peer is
+composited but never focused/displayed, while a plain client is shown
+automatically the same way Hearthdeck itself is. See
+`docs/kiosk-session.md` for the full account.
 
 Heroic game launches work in Kiosk mode too, but Heroic itself - not each
 individual game - is the resource being managed: the bridge tracks it under
 one stable, reused systemd unit (`hearthdeck-heroic.service`) instead of a
 fresh one per launch, because Electron's single-instance lock means any
 launch after the first is handled by the same already-running Heroic process
-rather than a new one. Heroic is left running between games on purpose
+rather than a new one. Heroic is the one launch that keeps a nested Gamescope
+instance of its own - using the SDL backend, connecting through this
+session's `DISPLAY` and presenting as an ordinary X11 client rather than a
+Wayland peer, specifically so its games can still get their own internal
+resolution/upscaling. Heroic is left running between games on purpose
 (faster subsequent launches, at the cost of some idle memory); closing it -
 and whatever game it's currently running - is a single `systemctl --user
 stop hearthdeck-heroic.service`, which reliably tears down the whole process

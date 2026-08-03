@@ -95,11 +95,49 @@ static gboolean my_application_local_command_line(GApplication* application,
   return TRUE;
 }
 
+// In the Hearthdeck Kiosk session, Gamescope execs this process directly and
+// assigns DISPLAY/WAYLAND_DISPLAY only to this process's own environment -
+// never to the systemd --user manager's shared activation environment, and
+// never to hearthdeck-session's own script (it hands off control via `exec
+// gamescope` before Gamescope even creates these), so this is the only place
+// that ever legitimately has the correct values. Importing them here, the
+// same way hearthdeck-session already imports XDG_CURRENT_DESKTOP and
+// friends, is what lets hearthdeck-bridge forward a real, working display
+// connection to every app/game it launches (see launch_with_systemd in
+// hearthdeck-bridge's linux.rs) instead of guessing or going without.
+// Harmless (and redundant, since a normal desktop session already has these
+// correctly) outside the Kiosk session too, so this always runs
+// unconditionally rather than trying to detect which case this is.
+static void import_display_environment() {
+  g_autoptr(GError) error = nullptr;
+  if (!g_spawn_command_line_async(
+          "systemctl --user import-environment DISPLAY WAYLAND_DISPLAY",
+          &error)) {
+    g_warning("Failed to import DISPLAY/WAYLAND_DISPLAY into systemd --user: %s",
+              error->message);
+  }
+
+  // hearthdeck-bridge.service is socket-activated and may not have started
+  // yet at this point - in which case its first activation naturally picks
+  // up the environment just imported above, no restart needed. This is
+  // cheap insurance against it having started earlier with a stale
+  // pre-import environment, mirroring hearthdeck-session's own
+  // try-restart-after-import step for the same reason.
+  g_autoptr(GError) restart_error = nullptr;
+  if (!g_spawn_command_line_async(
+          "systemctl --user try-restart hearthdeck-bridge.service",
+          &restart_error)) {
+    g_warning("Failed to restart hearthdeck-bridge.service after importing "
+              "display environment: %s",
+              restart_error->message);
+  }
+}
+
 // Implements GApplication::startup.
 static void my_application_startup(GApplication* application) {
   // MyApplication* self = MY_APPLICATION(object);
 
-  // Perform any actions required at application startup.
+  import_display_environment();
 
   G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
 }

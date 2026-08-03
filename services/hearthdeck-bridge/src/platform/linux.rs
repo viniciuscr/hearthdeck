@@ -89,14 +89,7 @@ pub async fn launch_application(
     let path = desktop_entry_path(source_id, application_id).await?;
     let launch = command_for_desktop_entry(&path).await?;
     let unit_name = format!("hearthdeck-app-{session_id}.service");
-    launch_with_systemd(
-        &unit_name,
-        launch.command,
-        launch.working_directory,
-        true,
-        false,
-    )
-    .await
+    launch_with_systemd(&unit_name, launch.command, launch.working_directory).await
 }
 
 /// Heroic itself - not a specific game - is the resource Hearthdeck manages
@@ -148,19 +141,40 @@ pub async fn launch_heroic_game(
     }
 
     // Cold start: nothing is tracking Heroic yet, so this becomes the one
-    // fresh instance. `keep_gamescope_alive` matters specifically here (and
-    // only here): xdg-open exits almost immediately once it has handed off
-    // the URI, well before Heroic itself has even started the game, so
-    // Gamescope's default "shut down when the wrapped process dies" behavior
-    // would tear down the display before anything renders.
-    launch_with_systemd(
-        HEROIC_UNIT_NAME,
-        vec![OsString::from("xdg-open"), OsString::from(uri)],
-        None,
-        true,
-        true,
-    )
-    .await
+    // fresh instance, wrapped in its own nested Gamescope. That nested
+    // instance uses the SDL backend, connecting through the Kiosk session's
+    // embedded Xwayland (DISPLAY) rather than the Wayland backend connecting
+    // to its exposed Wayland socket: a second Gamescope process joining the
+    // session as a native Wayland client is never shown by the outer
+    // compositor (confirmed on real hardware - see docs/kiosk-session.md),
+    // while a plain X11 client connecting through the embedded Xwayland is
+    // shown automatically by its window manager, and Gamescope's own
+    // backend auto-detection already prefers exactly this SDL/X11 nesting
+    // mode when DISPLAY is set instead of WAYLAND_DISPLAY. This nested
+    // instance still gets Heroic's games their own internal
+    // resolution/upscaling for free if ever wanted (`-w`/`-h`/`-W`/`-H`/
+    // `-S`/`-F`; omitted here, which defaults to the output resolution -
+    // no scaling - until a specific game needs it).
+    // --keep-alive matters specifically here: xdg-open exits almost
+    // immediately once it has handed off the URI, well before Heroic itself
+    // has started the game, so Gamescope's default "shut down when the
+    // wrapped process dies" behavior would tear down the display before
+    // anything renders. --expose-wayland lets Heroic's own Electron process
+    // connect to this nested instance over native Wayland instead of
+    // Xwayland, if it prefers to.
+    let command = vec![
+        OsString::from("gamescope"),
+        OsString::from("--backend"),
+        OsString::from("sdl"),
+        OsString::from("--expose-wayland"),
+        OsString::from("--force-windows-fullscreen"),
+        OsString::from("-f"),
+        OsString::from("--keep-alive"),
+        OsString::from("--"),
+        OsString::from("xdg-open"),
+        OsString::from(uri),
+    ];
+    launch_with_systemd(HEROIC_UNIT_NAME, command, None).await
 }
 
 /// Directories pacman installs libretro cores into on Arch. A core path must
@@ -200,8 +214,6 @@ pub async fn launch_retro_game(
             rom_path.into_os_string(),
         ],
         None,
-        true,
-        false,
     )
     .await
 }
@@ -280,8 +292,6 @@ async fn launch_with_systemd(
     unit_name: &str,
     application_command: Vec<OsString>,
     working_directory: Option<PathBuf>,
-    wrap_in_gamescope: bool,
-    keep_gamescope_alive: bool,
 ) -> Result<LaunchedApplication> {
     let mut command = Command::new("systemd-run");
     command
@@ -295,47 +305,40 @@ async fn launch_with_systemd(
         .arg(unit_name)
         .arg("--working-directory")
         .arg(working_directory.unwrap_or_else(|| PathBuf::from("/")));
-    let kiosk_session = is_kiosk_session();
-    if kiosk_session {
+    if is_kiosk_session() {
         command.arg("--slice=hearthdeck-kiosk.slice");
     }
-    if !kiosk_session {
-        for name in [
-            "DISPLAY",
-            "WAYLAND_DISPLAY",
-            "GAMESCOPE_WAYLAND_DISPLAY",
-            "XAUTHORITY",
-            "GDK_BACKEND",
-            "SDL_VIDEODRIVER",
-            "XDG_CURRENT_DESKTOP",
-            "XDG_SESSION_DESKTOP",
-            "XDG_SESSION_TYPE",
-            "DBUS_SESSION_BUS_ADDRESS",
-        ] {
-            if let Some(value) = env::var_os(name) {
-                command
-                    .arg("--setenv")
-                    .arg(format!("{name}={}", value.to_string_lossy()));
-            }
+    // Forward the display/session environment the launched process needs to
+    // connect to whatever session Hearthdeck itself is running in -
+    // `systemd-run` does not inherit the caller's environment, and a
+    // `systemd --user` unit's own default environment can be stale or
+    // missing these entirely (Gamescope only ever assigns DISPLAY/
+    // WAYLAND_DISPLAY to its own direct child - Hearthdeck itself - which is
+    // why Hearthdeck's own startup imports them into systemd --user; see
+    // linux/runner/my_application.cc). Reading them from the bridge's own
+    // process environment and forwarding them explicitly is correct both
+    // inside and outside the Kiosk session, so this no longer branches on
+    // is_kiosk_session() the way it used to.
+    for name in [
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "GAMESCOPE_WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "GDK_BACKEND",
+        "SDL_VIDEODRIVER",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "XDG_SESSION_TYPE",
+        "DBUS_SESSION_BUS_ADDRESS",
+    ] {
+        if let Some(value) = env::var_os(name) {
+            command
+                .arg("--setenv")
+                .arg(format!("{name}={}", value.to_string_lossy()));
         }
     }
-    command.arg("--");
-    if kiosk_session && wrap_in_gamescope {
-        command.args([
-            "/usr/bin/gamescope",
-            "--backend",
-            "wayland",
-            "--expose-wayland",
-            "--force-windows-fullscreen",
-            "-f",
-        ]);
-        if keep_gamescope_alive {
-            command.arg("--keep-alive");
-        }
-        command.arg("--");
-    }
+    command.arg("--").args(application_command);
     let status = command
-        .args(application_command)
         .status()
         .await
         .context("could not start supervised application launch")?;

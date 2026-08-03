@@ -64,17 +64,19 @@ arguments. Query `GET /v1/sessions/active` after launch, then use
 Select **Hearthdeck Kiosk** in the display manager. Confirm Hearthdeck opens
 fullscreen with no desktop shell behind it (no panel, wallpaper, or other
 window ever appears), then launch a graphical application and verify it opens
-inside a separate nested Gamescope instance. Exit Hearthdeck Kiosk and confirm
-its managed application services stop and the session returns to the display
-manager's login screen.
+and fills the screen, connected directly to this same session (not a nested
+Gamescope instance - see `docs/kiosk-session.md` for why that changed). Exit
+Hearthdeck Kiosk and confirm its managed application services stop and the
+session returns to the display manager's login screen.
 
 Confirm gamepad D-pad, A, B, and sticks navigate Hearthdeck. Confirm existing
 audio works through PipeWire/WirePlumber. Confirm preconfigured NetworkManager
 and BlueZ connections remain available. Wi-Fi, Bluetooth, and audio-routing
 configuration screens are not part of the current Kiosk session.
 
-Launch a Heroic game (Epic or GOG). Confirm it opens inside a nested Gamescope
-instance the same as any other launched app. Return to Hearthdeck and launch a
+Launch a Heroic game (Epic or GOG). Confirm it opens inside its own nested
+Gamescope instance (the one launch path that still uses one - see
+`services/README.md`) and fills the screen. Return to Hearthdeck and launch a
 *different* Heroic game: confirm it also opens correctly (this specifically
 exercises the reused-Heroic-instance path, not just the first, cold-start
 launch - the two behave differently, so testing only the first launch does

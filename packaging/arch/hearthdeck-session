@@ -18,12 +18,9 @@ export XDG_SESSION_TYPE=wayland
 # this import it would see the systemd user manager's original login
 # environment - almost certainly missing XDG_CURRENT_DESKTOP entirely - and
 # would incorrectly conclude every launch is happening outside the Kiosk
-# session. That silently breaks two things at once: launched apps/games no
-# longer get wrapped in a nested Gamescope instance or assigned to
-# hearthdeck-kiosk.slice (see launch_with_systemd in linux.rs), and Heroic
-# game launches - meant to be rejected only in the Kiosk session - would be
-# wrongly allowed to proceed and then misbehave (there is no desktop Heroic
-# window to hand a game off to in this session).
+# session. That silently breaks Kiosk-specific launch behavior in
+# launch_with_systemd (linux.rs): the `hearthdeck-kiosk.slice` cgroup
+# assignment for every launched app/game.
 systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE || true
 
 # The local API daemon and Linux bridge are lightweight background services,
@@ -53,11 +50,33 @@ systemctl --user try-restart hearthdeck-bridge.service || true
 #                     session required.
 # --fullscreen:      cover the full output mode.
 # --force-grab-cursor: keep the cursor confined to Hearthdeck's surface.
-# Nested application launches (games, other desktop entries) run in their own
-# separate, on-demand Gamescope instance started by the bridge; this outer
-# Gamescope only ever hosts Hearthdeck itself.
+# --force-windows-fullscreen: stretch every client this session ever shows -
+#                     Hearthdeck itself, or a launched desktop app/RetroArch
+#                     game connecting directly to this same session - to fill
+#                     the screen, regardless of what size it asked for. Most
+#                     launched apps don't manage their own fullscreen state
+#                     (a plain X11 client like xterm just opens at its
+#                     default terminal size otherwise); this makes "fills the
+#                     screen" the session's job, not each app's, so nothing
+#                     needs per-app configuration. Hearthdeck already
+#                     requests its own fullscreen too (see
+#                     linux/runner/my_application.cc), so this is reinforcing,
+#                     not new behavior, for Hearthdeck's own window.
+#
+# Desktop apps and RetroArch launches connect directly to this same
+# instance (see launch_with_systemd/launch_application/launch_retro_game in
+# hearthdeck-bridge's linux.rs) rather than getting their own nested
+# Gamescope: a second Gamescope process joining this session as a native
+# Wayland client was confirmed, on real hardware, to never get shown by this
+# outer compositor (see docs/kiosk-session.md); a plain client connecting
+# through this session's own DISPLAY/WAYLAND_DISPLAY is shown correctly, the
+# same way Hearthdeck itself is. Heroic keeps a nested Gamescope instance of
+# its own (SDL backend, connecting through this session's DISPLAY rather
+# than joining as a Wayland peer) specifically so its games can still get
+# their own internal resolution/upscaling - see launch_heroic_game.
 exec gamescope \
   --backend drm \
   --fullscreen \
   --force-grab-cursor \
+  --force-windows-fullscreen \
   -- /opt/hearthdeck/hearthdeck
