@@ -18,6 +18,11 @@ use tokio::{
 };
 use tracing::{Instrument, error, info, info_span, warn};
 
+/// Stable session identity for Heroic launches - see
+/// `platform::linux::HEROIC_UNIT_NAME`'s own docs for why Heroic is tracked
+/// as one reused resource rather than a fresh session per game launch.
+const HEROIC_SESSION_ID: &str = "heroic";
+
 #[tokio::main]
 async fn main() -> Result<()> {
     hearthdeck_observability::init("hearthdeck-bridge", "hearthdeck_bridge=info");
@@ -139,30 +144,15 @@ async fn handle_request(
             session_id,
         } => match platform::launch_application(&source_id, &application_id, &session_id).await {
             Ok(launched) => {
-                let session = hearthdeck_protocol::ApplicationSession {
-                    id: session_id.clone(),
-                    source_id: source_id.clone(),
-                    application_id: application_id.clone(),
-                    state: hearthdeck_protocol::ApplicationSessionState::Running,
-                };
-                let managed = ManagedSession {
-                    session: session.clone(),
-                    unit_name: launched.unit_name,
-                };
-                if let Err(error) = save_managed_session(session_directory, &managed).await {
-                    let _ = platform::stop_application(managed.unit_name.as_deref()).await;
-                    warn!(source_id, application_id, %error, "could not persist managed application session");
-                    return BridgeResponse::Error {
-                        code: BridgeErrorCode::LaunchFailed,
-                        message: "could not persist managed application session".to_owned(),
-                    };
-                }
-                sessions.lock().await.insert(session_id, managed);
-                info!(
+                register_launch(
+                    sessions,
+                    session_directory,
                     source_id,
-                    application_id, "registered application launch accepted"
-                );
-                BridgeResponse::LaunchAccepted { session }
+                    application_id,
+                    session_id,
+                    launched,
+                )
+                .await
             }
             Err(error) => {
                 warn!(source_id, application_id, %error, "registered application launch rejected");
@@ -175,15 +165,22 @@ async fn handle_request(
         BridgeRequest::LaunchHeroicGame {
             runner,
             application_id,
-            session_id,
-        } => match platform::launch_heroic_game(runner, &application_id, &session_id).await {
+            session_id: _,
+        } => match platform::launch_heroic_game(runner, &application_id).await {
             Ok(launched) => {
+                // Heroic is a shared, reused resource (see HEROIC_UNIT_NAME's
+                // own docs), not a fresh session per launch, so this
+                // deliberately ignores the daemon-generated session_id above
+                // and always registers/overwrites the same stable session
+                // record - the second game launched through an already-running
+                // Heroic replaces the first's record rather than leaking a
+                // second, orphaned one that nothing will ever stop on its own.
                 register_launch(
                     sessions,
                     session_directory,
                     "heroic".to_owned(),
                     application_id,
-                    session_id,
+                    HEROIC_SESSION_ID.to_owned(),
                     launched,
                 )
                 .await

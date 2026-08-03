@@ -92,9 +92,17 @@ or app launch is requested, uses no DRM or memory until then, and is torn down
 when the launch ends. X11-only apps use the nested Gamescope's Xwayland
 server; Wayland apps use its exposed inner Wayland socket.
 
-Heroic game URI launches are unavailable in Kiosk mode because an existing
-Heroic process can accept a URI and detach the game from Hearthdeck's managed
-Gamescope lifecycle.
+Heroic game launches work in Kiosk mode too, but Heroic itself - not each
+individual game - is the resource being managed: the bridge tracks it under
+one stable, reused systemd unit (`hearthdeck-heroic.service`) instead of a
+fresh one per launch, because Electron's single-instance lock means any
+launch after the first is handled by the same already-running Heroic process
+rather than a new one. Heroic is left running between games on purpose
+(faster subsequent launches, at the cost of some idle memory); closing it -
+and whatever game it's currently running - is a single `systemctl --user
+stop hearthdeck-heroic.service`, which reliably tears down the whole process
+tree via its cgroup even though Heroic never exits on its own. See
+`services/README.md` for the full reasoning.
 
 Controller input is Hearthdeck's direct Linux joystick reader; there is no
 desktop shell input stack to coordinate with. PipeWire/WirePlumber provide

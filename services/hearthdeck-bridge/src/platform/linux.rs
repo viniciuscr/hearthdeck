@@ -88,19 +88,37 @@ pub async fn launch_application(
 ) -> Result<LaunchedApplication> {
     let path = desktop_entry_path(source_id, application_id).await?;
     let launch = command_for_desktop_entry(&path).await?;
-    launch_with_systemd(launch.command, launch.working_directory, session_id, true).await
+    let unit_name = format!("hearthdeck-app-{session_id}.service");
+    launch_with_systemd(
+        &unit_name,
+        launch.command,
+        launch.working_directory,
+        true,
+        false,
+    )
+    .await
 }
 
+/// Heroic itself - not a specific game - is the resource Hearthdeck manages
+/// here, under one stable (not per-launch) unit name. Electron single-instance
+/// locking means a second `heroic://launch` URI while Heroic is still running
+/// is handled by that *same* already-running process, not a fresh one we'd
+/// separately track; reusing one unit name (and checking whether it's already
+/// active before deciding whether to start it) is what keeps every launch
+/// attributable to a unit Hearthdeck can reliably stop later, regardless of
+/// how many games have been launched through it. Heroic is left running
+/// between games on purpose (faster subsequent launches); closing it (and
+/// whatever game it's running) is `stop_application(Some(HEROIC_UNIT_NAME))`,
+/// which - being cgroup-based via `systemctl --user stop` - reliably tears
+/// down the whole tree even though Heroic never exits on its own.
+pub const HEROIC_UNIT_NAME: &str = "hearthdeck-heroic.service";
+
 /// Delegate game startup to Heroic so its configured Wine, Proton, UMU,
-/// wrappers, and per-game launch options remain authoritative.
+/// wrappers, save sync, and per-game launch options remain authoritative.
 pub async fn launch_heroic_game(
     runner: HeroicRunner,
     application_id: &str,
-    session_id: &str,
 ) -> Result<LaunchedApplication> {
-    if is_kiosk_session() {
-        anyhow::bail!("Heroic game launches are unavailable in the Hearthdeck Kiosk session")
-    }
     if !valid_heroic_application_id(application_id) {
         anyhow::bail!("Heroic application identifier is invalid")
     }
@@ -109,11 +127,38 @@ pub async fn launch_heroic_game(
         HeroicRunner::Gog => "gog",
     };
     let uri = format!("heroic://launch?appName={application_id}&runner={runner}&gui=false");
+
+    if super::application_is_running(Some(HEROIC_UNIT_NAME)).await? {
+        // Heroic is already up and holds Electron's single-instance lock:
+        // xdg-open hands the URI straight to it over its own IPC. Wrapping
+        // this in a fresh systemd-run would only track a `xdg-open` call that
+        // exits almost immediately - the actual game launches under the
+        // already-running (and already-tracked) HEROIC_UNIT_NAME instead.
+        let status = Command::new("xdg-open")
+            .arg(&uri)
+            .status()
+            .await
+            .context("could not ask the running Heroic instance to launch the game")?;
+        if !status.success() {
+            anyhow::bail!("xdg-open rejected the Heroic launch request")
+        }
+        return Ok(LaunchedApplication {
+            unit_name: Some(HEROIC_UNIT_NAME.to_owned()),
+        });
+    }
+
+    // Cold start: nothing is tracking Heroic yet, so this becomes the one
+    // fresh instance. `keep_gamescope_alive` matters specifically here (and
+    // only here): xdg-open exits almost immediately once it has handed off
+    // the URI, well before Heroic itself has even started the game, so
+    // Gamescope's default "shut down when the wrapped process dies" behavior
+    // would tear down the display before anything renders.
     launch_with_systemd(
+        HEROIC_UNIT_NAME,
         vec![OsString::from("xdg-open"), OsString::from(uri)],
         None,
-        session_id,
-        false,
+        true,
+        true,
     )
     .await
 }
@@ -143,7 +188,9 @@ pub async fn launch_retro_game(
         .await
         .context("could not create Hearthdeck's RetroArch config directory")?;
     let config_path = config_directory.join("retroarch.cfg");
+    let unit_name = format!("hearthdeck-app-{session_id}.service");
     launch_with_systemd(
+        &unit_name,
         vec![
             OsString::from("retroarch"),
             OsString::from("-c"),
@@ -153,8 +200,8 @@ pub async fn launch_retro_game(
             rom_path.into_os_string(),
         ],
         None,
-        session_id,
         true,
+        false,
     )
     .await
 }
@@ -230,12 +277,12 @@ fn validate_retro_rom_path_in(rom_path: &str, cache_root: &Path) -> Result<PathB
 }
 
 async fn launch_with_systemd(
+    unit_name: &str,
     application_command: Vec<OsString>,
     working_directory: Option<PathBuf>,
-    session_id: &str,
     wrap_in_gamescope: bool,
+    keep_gamescope_alive: bool,
 ) -> Result<LaunchedApplication> {
-    let unit_name = format!("hearthdeck-app-{session_id}.service");
     let mut command = Command::new("systemd-run");
     command
         .args([
@@ -245,7 +292,7 @@ async fn launch_with_systemd(
             "--service-type=exec",
             "--unit",
         ])
-        .arg(&unit_name)
+        .arg(unit_name)
         .arg("--working-directory")
         .arg(working_directory.unwrap_or_else(|| PathBuf::from("/")));
     let kiosk_session = is_kiosk_session();
@@ -281,8 +328,11 @@ async fn launch_with_systemd(
             "--expose-wayland",
             "--force-windows-fullscreen",
             "-f",
-            "--",
         ]);
+        if keep_gamescope_alive {
+            command.arg("--keep-alive");
+        }
+        command.arg("--");
     }
     let status = command
         .args(application_command)
@@ -293,7 +343,7 @@ async fn launch_with_systemd(
         anyhow::bail!("systemd user manager rejected application launch")
     }
     Ok(LaunchedApplication {
-        unit_name: Some(unit_name),
+        unit_name: Some(unit_name.to_owned()),
     })
 }
 

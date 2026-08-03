@@ -52,8 +52,47 @@ Wayland environment without competing with the outer Kiosk session for the
 seat. PipeWire/WirePlumber audio, NetworkManager networking, and BlueZ
 Bluetooth remain host services outside the Hearthdeck process tree.
 
-Heroic game URI launches are rejected in Kiosk mode because the running Heroic
-process can detach a game from the transient service that Hearthdeck tracks.
+Heroic game launches go through its own URI handler (`heroic://launch?...`)
+rather than an exec'd binary, so the bridge tracks *Heroic itself* as one
+stable, reused systemd unit (`hearthdeck-heroic.service`) instead of a fresh
+unit per launch: Electron's single-instance lock means any launch after the
+first is handled by whichever Heroic process is already running, not a new
+one, so a fresh-unit-per-launch model would lose track of every game after
+the first. The bridge checks whether that unit is already active before
+deciding whether to start it (cold start, wrapped in a `--keep-alive`
+Gamescope instance so the display survives past `xdg-open` handing off and
+exiting) or just ask the already-running instance to launch the next game
+directly. Heroic is intentionally left running between games - faster
+subsequent launches, at the cost of some idle memory - and closing it (and
+whatever game it's running) is `systemctl --user stop
+hearthdeck-heroic.service`, which reliably kills the whole process tree via
+its cgroup even though Heroic never exits on its own.
+
+### The launch pipeline shape
+
+Desktop apps, Heroic, and RetroArch (`hearthdeck-bridge/src/platform/linux.rs`,
+`main.rs`) share two layers and diverge only in the third, on purpose - a
+future launcher should fit the same shape rather than reinvent it:
+
+1. **`launch_with_systemd`**: the one place that calls `systemd-run`. Takes a
+   unit name, a command, a working directory, and two independent flags
+   (`wrap_in_gamescope`, `keep_gamescope_alive`) - nothing launcher-specific.
+2. **`register_launch`**: the one place that builds an `ApplicationSession`,
+   persists it, and inserts it into the in-memory session map, rolling the
+   launch back (`stop_application`) if persistence fails. Every launcher's
+   success path ends by calling this, not by re-deriving its own version of
+   it.
+3. **Launcher-specific decision logic**, on top of the two shared layers,
+   is where launchers are expected to differ: desktop apps re-discover and
+   validate the desktop entry before building a command; RetroArch validates
+   the resolved core/rom paths and sets up its config directory; Heroic
+   checks whether its stable unit is already running to decide between a
+   cold start and an already-running hand-off. None of that belongs in
+   layers 1 or 2, and none of layers 1/2's job belongs duplicated here.
+
+A launcher that finds itself re-implementing session bookkeeping instead of
+calling `register_launch`, or shelling out to `systemd-run` directly instead
+of calling `launch_with_systemd`, has drifted from this shape.
 
 `GET /v1/health` reports every discovery and metadata provider as `starting`,
 `ready`, or `degraded`, with the last successful record count and safe error

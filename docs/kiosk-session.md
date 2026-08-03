@@ -45,12 +45,12 @@ what every unit it starts actually inherits. `hearthdeck-bridge` reads
 `XDG_CURRENT_DESKTOP` from its own process environment to decide whether
 it's running inside the Kiosk session at all (`is_kiosk_session()` in
 `services/hearthdeck-bridge/src/platform/linux.rs`), and that decision gates
-two real behaviors: whether a launched app/game gets wrapped in its own
-nested Gamescope instance and assigned to `hearthdeck-kiosk.slice`, and
-whether Heroic game launches are rejected (they must be, in this session —
-see `services/README.md` for why). Without the import, the bridge would
-silently believe it's running outside the Kiosk session — even while
-genuinely inside it — misconfiguring both.
+whether a launched app/game (including Heroic's own, which reuses one
+stable, tracked systemd unit rather than getting one per launch - see
+`services/README.md` for why) gets wrapped in its own nested Gamescope
+instance and assigned to `hearthdeck-kiosk.slice`. Without the import, the
+bridge would silently believe it's running outside the Kiosk session — even
+while genuinely inside it — and skip that wrapping/assignment.
 
 That's the whole session: one script, one `exec`, three gamescope flags,
 one app. Nothing else. No desktop compositor, no panel/dock/launcher, no
@@ -215,9 +215,8 @@ style preferences.
   by socket activation, possibly well after this script exits) actually
   inherits. Removing it silently breaks `is_kiosk_session()` — the bridge
   would believe every launch is happening outside the Kiosk session, so
-  apps/games stop getting wrapped in their own nested Gamescope instance,
-  and Heroic launches (meant to be rejected here) would be wrongly allowed
-  through instead.
+  apps/games (including Heroic's) stop getting wrapped in their own nested
+  Gamescope instance and assigned to `hearthdeck-kiosk.slice`.
 - **Do not trust a chat confirmation as proof a specific commit works.**
   See "The real lesson" above. Check CI for the exact SHA.
 
@@ -262,5 +261,5 @@ style preferences.
 | Hearthdeck renders into a small, centered, blurry fraction of the screen | Something else is a second Wayland client of this outer Gamescope instance (see the incident above), or the installed `gamescope` package itself changed behavior (check `gamescope --version` and whether the same box's non-Hearthdeck compositor, e.g. a normal desktop session, still fills the screen correctly — if it does, the regression is specific to this session, not the display/driver) | `journalctl --user -b`; confirm no other process connects to `$WAYLAND_DISPLAY` during the session; re-read "Do not" above |
 | Session starts then immediately returns to login | Hearthdeck (the Flutter binary) crashed on launch | `journalctl --user -b` around the session's start time; run `/opt/hearthdeck/hearthdeck` directly from a TTY inside a manually started `gamescope --backend drm --fullscreen -- bash` shell to isolate Gamescope vs. the app |
 | App loads but library/pairing calls fail | `hearthdeck.target` didn't reach ready in time, or bridge/daemon crashed | `systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-daemon.service`; `journalctl --user -u hearthdeck-daemon.service -u hearthdeck-bridge.service --since '10 minutes ago'` |
-| Launched apps/games have no display, aren't in `hearthdeck-kiosk.slice`, or Heroic launches unexpectedly proceed instead of being rejected | `hearthdeck-bridge` doesn't see `XDG_CURRENT_DESKTOP=hearthdeck` in its own environment, so `is_kiosk_session()` returns false even though this genuinely is the Kiosk session | `systemctl --user show-environment \| grep XDG_CURRENT_DESKTOP`; confirm the `import-environment` line in `hearthdeck-session` still runs and still lists all three variables |
+| Launched apps/games have no display or aren't in `hearthdeck-kiosk.slice` | `hearthdeck-bridge` doesn't see `XDG_CURRENT_DESKTOP=hearthdeck` in its own environment, so `is_kiosk_session()` returns false even though this genuinely is the Kiosk session | `systemctl --user show-environment \| grep XDG_CURRENT_DESKTOP`; confirm the `import-environment` line in `hearthdeck-session` still runs and still lists all three variables |
 | CI passes but the session doesn't work on hardware, or vice versa | These are different claims (see "The real lesson"). CI only proves the code compiles and packages; it never runs the graphical session | Always confirm on real hardware separately, and never conflate the two when reporting something as "working" |

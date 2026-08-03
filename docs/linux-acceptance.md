@@ -73,8 +73,19 @@ audio works through PipeWire/WirePlumber. Confirm preconfigured NetworkManager
 and BlueZ connections remain available. Wi-Fi, Bluetooth, and audio-routing
 configuration screens are not part of the current Kiosk session.
 
-Heroic game URI launches are intentionally unavailable in Kiosk mode. If
-`gamepad-osk` is installed, confirm it is running in daemon mode with access to
+Launch a Heroic game (Epic or GOG). Confirm it opens inside a nested Gamescope
+instance the same as any other launched app. Return to Hearthdeck and launch a
+*different* Heroic game: confirm it also opens correctly (this specifically
+exercises the reused-Heroic-instance path, not just the first, cold-start
+launch - the two behave differently, so testing only the first launch does
+not confirm the second works). Confirm `systemctl --user status
+hearthdeck-heroic.service` remains active after the game exits (Heroic itself
+stays running by design). Finally, close/stop the session from Hearthdeck and
+confirm `systemctl --user status hearthdeck-heroic.service` shows the unit
+fully stopped, with no lingering Heroic or game process still running
+(`ps -u $USER -o pid,cmd | grep -i heroic`).
+
+If `gamepad-osk` is installed, confirm it is running in daemon mode with access to
 the controller input and `/dev/uinput`. Its evdev grab cannot reliably suppress
 Hearthdeck's direct joystick reader, so OSK input isolation is not guaranteed.
 

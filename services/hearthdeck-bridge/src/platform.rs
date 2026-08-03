@@ -64,7 +64,6 @@ pub async fn application_is_running(_unit_name: Option<&str>) -> Result<bool> {
 pub async fn launch_heroic_game(
     _runner: HeroicRunner,
     _application_id: &str,
-    _session_id: &str,
 ) -> Result<LaunchedApplication> {
     anyhow::bail!("Heroic game launch is unsupported on this platform")
 }

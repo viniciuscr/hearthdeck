@@ -32,12 +32,15 @@ Gamescope with the smallest possible memory/CPU footprint.
   down when the game ends, never resident when nothing is playing.
 - RetroArch must be **directly supervised by the transient systemd unit**,
   not handed off via a URI/IPC scheme to some other already-running process.
-  This is the one thing to explicitly *not* copy from Heroic:
-  `services/README.md:55` documents that Heroic launches are rejected in
-  Kiosk mode because the URI hand-off detaches the game from the unit
-  Hearthdeck tracks. RetroArch has no such indirection problem if we exec it
-  directly as the unit's main process — so, unlike Heroic, RetroArch
-  launches should work fine in Kiosk mode from day one.
+  This is the one thing to explicitly *not* copy from Heroic's launch path:
+  `services/README.md` documents that Heroic's `heroic://launch` URI hands
+  off to whichever Heroic process is already running rather than exec'ing
+  the game directly, which is why Heroic itself (not each game) has to be
+  tracked as one stable, reused unit instead of a fresh one per launch.
+  RetroArch has no such indirection problem if we exec it directly as the
+  unit's main process — so, unlike Heroic, a RetroArch launch is fully torn
+  down (and its unit garbage-collected) the moment the game exits, with no
+  extra bookkeeping needed to reuse or explicitly close anything afterward.
 
 ## Current state (baseline, as of this doc)
 
