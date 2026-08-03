@@ -50,18 +50,20 @@ systemctl --user try-restart hearthdeck-bridge.service || true
 #                     session required.
 # --fullscreen:      cover the full output mode.
 # --force-grab-cursor: keep the cursor confined to Hearthdeck's surface.
-# --force-windows-fullscreen: stretch every client this session ever shows -
-#                     Hearthdeck itself, or a launched desktop app/RetroArch
-#                     game connecting directly to this same session - to fill
-#                     the screen, regardless of what size it asked for. Most
-#                     launched apps don't manage their own fullscreen state
-#                     (a plain X11 client like xterm just opens at its
-#                     default terminal size otherwise); this makes "fills the
-#                     screen" the session's job, not each app's, so nothing
-#                     needs per-app configuration. Hearthdeck already
-#                     requests its own fullscreen too (see
-#                     linux/runner/my_application.cc), so this is reinforcing,
-#                     not new behavior, for Hearthdeck's own window.
+#
+# --force-windows-fullscreen was added here to make direct-connected apps
+# that don't manage their own fullscreen state (e.g. a plain `xterm`) fill
+# the screen automatically. REVERTED: caused a black screen after login on
+# real hardware, not caught before pushing because this flag's own
+# documentation talks about "the nested display", suggesting it may not
+# behave the same way against `--backend drm` standalone mode as it does in
+# genuinely nested mode. Hearthdeck itself never needed this flag - it
+# already requests its own fullscreen via GTK (see
+# linux/runner/my_application.cc) - so removing it from this outer instance
+# does not affect Hearthdeck's own display. Apps that don't request their
+# own fullscreen will go back to opening at whatever size they ask for until
+# this is investigated and fixed properly on real hardware; that's a real
+# regression, but a much smaller one than an unusable black screen.
 #
 # Desktop apps and RetroArch launches connect directly to this same
 # instance (see launch_with_systemd/launch_application/launch_retro_game in
@@ -78,5 +80,4 @@ exec gamescope \
   --backend drm \
   --fullscreen \
   --force-grab-cursor \
-  --force-windows-fullscreen \
   -- /opt/hearthdeck/hearthdeck

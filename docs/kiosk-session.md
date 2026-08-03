@@ -20,8 +20,8 @@ Display manager (SDDM/GDM/greetd/...)
             -> Requires=/After= hearthdeck.target
                  -> Wants= hearthdeck-bridge.socket, hearthdeck-daemon.service
        -> systemctl --user try-restart hearthdeck-bridge.service
-       -> exec gamescope --backend drm --fullscreen --force-grab-cursor \
-            --force-windows-fullscreen -- /opt/hearthdeck/hearthdeck
+       -> exec gamescope --backend drm --fullscreen --force-grab-cursor -- \
+            /opt/hearthdeck/hearthdeck
             -> Hearthdeck is Gamescope's ONLY child process
             -> Hearthdeck's own startup (my_application.cc) imports
                DISPLAY/WAYLAND_DISPLAY into systemd --user too, and
@@ -65,7 +65,7 @@ import, every launched app/game would have no display to connect to at all
 (confirmed on real hardware: `hearthdeck-bridge` had no `WAYLAND_DISPLAY` in
 its own environment during the Kiosk session, at all, until this was added).
 
-That's the whole session: one script, one `exec`, four gamescope flags, one
+That's the whole session: one script, one `exec`, three gamescope flags, one
 app. Nothing else runs *as the outer compositor* — no desktop compositor, no
 panel/dock/launcher. Launched apps, RetroArch, and every other current
 launcher connect directly to this same session as ordinary clients (see
@@ -87,9 +87,16 @@ this session as an independent Wayland client is composited but never
 focused/displayed by the outer instance. A plain client (X11, via this
 session's embedded Xwayland `DISPLAY`) *is* shown automatically, the same
 way Hearthdeck itself is — that's the mechanism this now relies on.
-`--force-windows-fullscreen` on the outer Gamescope invocation is what makes
-a plain client (which doesn't necessarily request fullscreen itself, e.g. a
-bare `xterm`) fill the screen without needing per-app configuration.
+Making a plain client that doesn't manage its own fullscreen state (e.g. a
+bare `xterm`) fill the screen without per-app configuration is still an open
+problem: `--force-windows-fullscreen` on the outer Gamescope invocation was
+tried and **caused a black screen after login on real hardware** (all
+expected processes stayed alive - Hearthdeck, Gamescope, Xwayland - nothing
+crashed, but nothing rendered either), so it was reverted. Its own
+documentation talks about "the nested display", which may mean it doesn't
+behave the same way against `--backend drm` standalone mode as it does in
+genuinely nested mode; this needs a real fix, tested on hardware, not
+another blind flag addition.
 
 Heroic is the one exception, and keeps a nested Gamescope instance of its
 own (see `services/README.md`) — not because a second Gamescope can be shown
@@ -240,7 +247,12 @@ style preferences.
   Gamescope invocation without first proving on real hardware — not just
   in CI — that Hearthdeck still fills the entire screen afterward.** A
   passing CI build only proves the code compiles; it says nothing about
-  what the session actually looks like on a monitor.
+  what the session actually looks like on a monitor. This rule was violated
+  once already: `--force-windows-fullscreen` was added here, reasoned
+  through carefully, shipped with clippy/tests/fmt all green, and produced a
+  black screen on the first real-hardware boot (every process stayed alive
+  - Hearthdeck, Gamescope, Xwayland - nothing rendered). Green CI and sound
+  reasoning are not what this rule asks for.
 - **Do not put another compositor, window manager, or session manager in
   front of Gamescope.** No COSMIC, no labwc, no sway, no Xorg, no Xwayland
   forcing (`GDK_BACKEND=x11`) *for Hearthdeck itself*. Gamescope must be the
