@@ -42,7 +42,11 @@ class FrontendLog extends ChangeNotifier {
 
   void _add(String level, String message) {
     _entries.addLast(
-      FrontendLogEntry(timestamp: DateTime.now(), level: level, message: message),
+      FrontendLogEntry(
+        timestamp: DateTime.now(),
+        level: level,
+        message: message,
+      ),
     );
     while (_entries.length > _limit) {
       _entries.removeFirst();

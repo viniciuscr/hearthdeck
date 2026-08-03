@@ -71,7 +71,9 @@ class _SystemHealthPageState extends State<SystemHealthPage> {
         });
       }
     } catch (error) {
-      FrontendLog.instance.warning('Could not read service diagnostics: $error');
+      FrontendLog.instance.warning(
+        'Could not read service diagnostics: $error',
+      );
       if (mounted && (showLoading || _health == null)) {
         setState(() {
           _error = error;
@@ -228,7 +230,9 @@ class _SystemHealthPageState extends State<SystemHealthPage> {
                           ),
                           const SliverToBoxAdapter(child: SizedBox(height: 14)),
                           SliverToBoxAdapter(
-                            child: _LogTerminalSection(logs: _diagnostics!.logs),
+                            child: _LogTerminalSection(
+                              logs: _diagnostics!.logs,
+                            ),
                           ),
                         ],
                       ],
@@ -617,15 +621,14 @@ class _TerminalLine {
     required this.message,
   });
 
-  factory _TerminalLine.fromBackend(HearthdeckLogEntry entry) =>
-      _TerminalLine(
-        timestamp: entry.timestamp == null
-            ? null
-            : DateTime.tryParse(entry.timestamp!)?.toLocal(),
-        source: entry.source,
-        level: entry.level,
-        message: entry.message,
-      );
+  factory _TerminalLine.fromBackend(HearthdeckLogEntry entry) => _TerminalLine(
+    timestamp: entry.timestamp == null
+        ? null
+        : DateTime.tryParse(entry.timestamp!)?.toLocal(),
+    source: entry.source,
+    level: entry.level,
+    message: entry.message,
+  );
 
   factory _TerminalLine.fromFrontend(FrontendLogEntry entry) => _TerminalLine(
     timestamp: entry.timestamp,
@@ -944,7 +947,10 @@ class _TerminalLineRow extends StatelessWidget {
             width: 58,
             child: Text(
               line.level.toUpperCase(),
-              style: monospace.copyWith(color: color, fontWeight: FontWeight.w700),
+              style: monospace.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
           SizedBox(
