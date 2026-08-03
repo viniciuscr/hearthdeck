@@ -491,13 +491,19 @@ fn normalized_romm_asset_path(value: &str) -> anyhow::Result<String> {
 }
 
 async fn service_statuses() -> Vec<ServiceStatus> {
-    let (session, daemon, bridge_socket, bridge) = tokio::join!(
+    let (session, daemon, bridge_socket, bridge, romm_container) = tokio::join!(
         service_status("session", "hearthdeck.target", false),
         service_status("daemon", "hearthdeck-daemon.service", false),
         service_status("bridge_socket", "hearthdeck-bridge.socket", false),
         service_status("bridge", "hearthdeck-bridge.service", true),
+        // Optional: only present if the user has installed
+        // deploy/systemd/romm.service.example. `service_status` already
+        // reports "unavailable" for an unknown unit, the same neutral state
+        // it reports if the user service manager itself can't be reached, so
+        // this is safe to query unconditionally.
+        service_status("romm_container", "romm.service", false),
     );
-    vec![session, daemon, bridge_socket, bridge]
+    vec![session, daemon, bridge_socket, bridge, romm_container]
 }
 
 async fn service_status(id: &'static str, unit: &'static str, on_demand: bool) -> ServiceStatus {

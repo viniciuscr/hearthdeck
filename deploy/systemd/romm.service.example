@@ -1,0 +1,42 @@
+# Starts the RomM podman-compose stack alongside the Hearthdeck local
+# session, instead of a manual `podman-compose up` after every login/reboot.
+#
+# RomM is not part of the Hearthdeck package: its compose project lives
+# wherever you deployed it (bind mount, external drive, etc.), so this is a
+# template, not something the package installs or enables for you.
+#
+# Setup:
+#   1. Edit WorkingDirectory below to your RomM compose project directory
+#      (the one containing docker-compose.yml/podman-compose.yml).
+#   2. cp deploy/systemd/romm.service.example ~/.config/systemd/user/romm.service
+#   3. systemctl --user daemon-reload
+#   4. systemctl --user enable --now romm.service
+#
+# Once installed, Hearthdeck's own diagnostics view (Settings > System >
+# Service status) reports this unit's state next to the daemon and bridge,
+# the same way it already reports every other local service; no separate
+# place to go looking for whether RomM is up.
+#
+# podman-compose auto-detects the compose file by its default name in
+# WorkingDirectory. If yours has a non-standard name, add it explicitly:
+#   ExecStart=podman-compose -f your-compose-file.yml up -d
+#   ExecStop=podman-compose -f your-compose-file.yml down
+
+[Unit]
+Description=RomM (podman-compose)
+After=network-online.target
+Wants=network-online.target
+Wants=hearthdeck.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/change-me-to-your-romm-compose-directory
+ExecStart=podman-compose up -d
+ExecStop=podman-compose down
+TimeoutStartSec=300
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=hearthdeck.target

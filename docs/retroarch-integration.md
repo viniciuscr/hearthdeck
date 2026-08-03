@@ -193,6 +193,54 @@ disagrees.
    — building that abstraction for one case would be guessing at its
    shape.
 
+## Starting the RomM server itself
+
+RomM is an external self-hosted server (commonly a podman/docker-compose
+stack), not something Hearthdeck packages or manages the lifecycle of.
+Whoever runs it needs it started before it's useful — at session start or at
+boot, not by hand after every login.
+
+**Decided: this is a systemd unit, not daemon code.** Every other
+"start/stop/supervise a host process" concern in this project is a systemd
+unit (`hearthdeck.target`, `hearthdeck-bridge.socket`, the Kiosk session
+scripts) — never an imperative shell-out embedded in the daemon or bridge.
+`docs/product-foundations.md`'s own rule is explicit: "the daemon... must not
+contain host-specific command construction." Wrapping `podman-compose up -d`
+in a daemon startup routine would be exactly that, plus it would reinvent
+what systemd already does correctly for free: restart-on-failure, proper
+start/stop ordering, and boot/session integration.
+
+`deploy/systemd/romm.service.example` is a `systemd --user` oneshot unit
+(`RemainAfterExit=yes`) wrapping `podman-compose up -d`/`down` in the user's
+own compose project directory, `WantedBy=hearthdeck.target` — so it starts
+at the same point `hearthdeck.target` already does ("starts for users at
+their next login", per the README), not tied to system boot. Rootless
+podman wants the user's session (runtime dir, D-Bus) anyway, so tying it to
+the user-session target instead of `multi-user.target` avoids fighting
+rootless podman's own expectations. It is a `.example` template, not
+auto-installed by the Arch package: the compose project's location
+(`/mnt/external/romM/` or wherever) is specific to each install, the same
+reason `daemon.env.example` is shipped as documentation rather than a live
+config.
+
+**"A place in the UI to do this kind of stuff":** rather than build a new
+control surface, `service_statuses()` in `diagnostics.rs` — the same
+function that already reports `hearthdeck.target`/daemon/bridge status via
+`systemctl --user show` — now also queries `romm.service`. If the unit isn't
+installed, it reports the same neutral `unavailable` state the function
+already returns for any unit the user's systemd instance doesn't know about,
+so this is safe to query unconditionally. Once the template is installed,
+RomM's container-stack status shows up in Settings' existing service status
+view next to the daemon and bridge — no new screen, no separate place to go
+looking for whether it's up.
+
+Not done: a start/stop/restart control from within Hearthdeck's own UI.
+`systemctl --user {start,stop,restart} romm.service` would be simple to add
+as a narrowly typed, allowlisted action (fixed unit name, no arbitrary
+input), the same discipline as the existing install-request boundary — worth
+doing if watching a status line without a restart button turns out to be
+insufficient in practice.
+
 ## Open questions (need a decision before/at the relevant phase)
 
 1. **Install-request privilege model.** Turning the current stub
