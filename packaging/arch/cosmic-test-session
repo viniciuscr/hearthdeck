@@ -1,0 +1,66 @@
+#!/usr/bin/bash
+# Bare-minimum COSMIC test session: runs cosmic-comp (the compositor)
+# directly, with Hearthdeck as its sole client, and no cosmic-session
+# session manager - so no cosmic-panel, no cosmic-dock, no
+# cosmic-settings-daemon, and no notifications daemon.
+#
+# This intentionally bypasses cosmic-session rather than trying to configure
+# it down to nothing: cosmic-session's own src/main.rs hardcodes starting
+# cosmic-settings-daemon, cosmic-notifications, and cosmic-panel - there is
+# no flag or env var to suppress them. Bypassing it is the only way to get a
+# genuinely bare compositor-only session.
+#
+# Known limitations vs. a real cosmic-session-managed session (test only,
+# not a daily-driver replacement):
+#   - No systemd `graphical-session.target` start/stop signaling.
+#   - No lock-screen/idle integration with cosmic-greeter.
+#   - No xdg-desktop-portal-cosmic / cosmic-settings-daemon-backed features
+#     (a11y, global shortcuts, etc.).
+#
+# This session is entirely independent of the Hearthdeck Kiosk session
+# (packaging/arch/hearthdeck-session): it does not start, require, or affect
+# hearthdeck-kiosk.target or the Gamescope-based kiosk script at all. It does
+# rely on the same, session-agnostic hearthdeck.target (enabled globally by
+# hearthdeck.install for every session, COSMIC included).
+#
+# Hearthdeck itself is run as cosmic-comp's own kiosk child (any positional
+# argument after cosmic-comp's flags is spawned as its one child process and
+# handed WAYLAND_DISPLAY/etc. directly - see cosmic-comp's src/lib.rs
+# `kiosk_command` handling) rather than as an ordinary desktop app launched
+# some other way, so there is exactly one client of this bare compositor,
+# the same "one compositor, one app" shape as the real Kiosk session.
+set -Euo pipefail
+
+# XDG_CURRENT_DESKTOP is set to "hearthdeck:COSMIC", not just "COSMIC":
+# hearthdeck-bridge's is_kiosk_session() (services/hearthdeck-bridge/src/
+# platform/linux.rs) only checks for a "hearthdeck" entry in this
+# colon-separated list, and its own test suite
+# (recognizes_hearthdeck_cosmic_kiosk_desktop_names) already documents this
+# exact combined value as the expected way to signal "Hearthdeck running
+# under a COSMIC-based session" - it lets is_kiosk_session() keep working
+# (hearthdeck-kiosk.slice assignment for anything Hearthdeck launches from
+# here) while OnlyShowIn=COSMIC/NotShowIn=COSMIC desktop-entry filtering also
+# still sees "COSMIC" as expected.
+export XDG_CURRENT_DESKTOP=hearthdeck:COSMIC
+export XDG_SESSION_DESKTOP=hearthdeck
+export XDG_SESSION_TYPE=wayland
+
+# Same reasoning as hearthdeck-session's own import-environment call (see
+# docs/kiosk-session.md): a plain `export` only changes this script's own
+# process environment, not the systemd --user manager's activation
+# environment that hearthdeck-bridge.service (socket-activated) actually
+# inherits when it lazily starts.
+systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE || true
+
+# hearthdeck.target is already enabled globally (hearthdeck.install) and
+# starts at any login via default.target, but that's a race against this
+# script exec'ing straight into cosmic-comp/Hearthdeck. Starting it here
+# too, and restarting the socket-activated bridge, is the same defensive
+# belt-and-suspenders hearthdeck-session itself does - and, per that
+# script's own comments, must stay visible in the journal (`|| true`, never
+# `>/dev/null`) and must not run in the background.
+systemctl --user daemon-reload || true
+systemctl --user start hearthdeck.target || true
+systemctl --user try-restart hearthdeck-bridge.service || true
+
+exec cosmic-comp /opt/hearthdeck/hearthdeck

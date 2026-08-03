@@ -24,6 +24,7 @@ optdepends=(
   'libretro-beetle-psx: RetroArch core for PlayStation'
   'libretro-desmume: RetroArch core for Nintendo DS'
   'libretro-flycast: RetroArch core for Sega Dreamcast'
+  'cosmic-comp: bare-minimum "COSMIC (Test)" session, unrelated to the Hearthdeck Kiosk session'
 )
 install="${pkgname}.install"
 backup=('etc/pacman.d/hearthdeck.conf')
@@ -66,6 +67,11 @@ package() {
   install -Dm644 packaging/arch/hearthdeck.desktop "$pkgdir/usr/share/applications/io.github.viniciuscr.hearthdeck.desktop"
   install -Dm644 packaging/arch/hearthdeck-session.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck.desktop"
   install -Dm755 packaging/arch/hearthdeck-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-session"
+  # Bare-minimum "COSMIC (Test)" session: independent of, and not required by,
+  # the Hearthdeck Kiosk session above. See packaging/arch/cosmic-test-session
+  # for what it does and does not do.
+  install -Dm644 packaging/arch/cosmic-test-session.desktop "$pkgdir/usr/share/wayland-sessions/cosmic-test.desktop"
+  install -Dm755 packaging/arch/cosmic-test-session "$pkgdir/usr/lib/hearthdeck/cosmic-test-session"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
