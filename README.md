@@ -151,7 +151,9 @@ Hearthdeck can list consoles from a local RomM instance in the **Retro**
 section. Open **Settings > System > Retro & RomM** and enter the local server
 URL plus a RomM client token with the `platforms.read` permission. The token is
 stored in the Hearthdeck daemon and is never returned through the paired API.
-Game listing and launch integration will follow in a later step.
+Game listing and launch integration will follow in a later step. The design
+and phased roadmap for launching RomM games through RetroArch is tracked in
+`docs/retroarch-integration.md`.
 
 ## Shared Screens
 

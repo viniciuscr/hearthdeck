@@ -23,6 +23,18 @@ pub enum BridgeRequest {
         application_id: String,
         session_id: String,
     },
+    /// Launches a RetroArch core against a locally cached ROM. The daemon
+    /// resolves the platform-to-core mapping and fetches/caches the ROM from
+    /// RomM (RomM credentials never leave the daemon); this request only
+    /// carries the resolved local paths. The bridge re-validates both paths
+    /// itself (core is under an allowlisted cores directory, ROM is under
+    /// Hearthdeck's own cache directory) before launch, the same way it
+    /// re-discovers a desktop entry rather than trusting the daemon's copy.
+    LaunchRetroGame {
+        core_path: String,
+        rom_path: String,
+        session_id: String,
+    },
     ActiveApplicationSession,
     StopApplicationSession {
         session_id: String,
@@ -149,6 +161,28 @@ mod tests {
 
         assert_eq!(serialized["type"], "launch_heroic_game");
         assert_eq!(serialized["runner"], "legendary");
+        assert!(serialized.get("command").is_none());
+        assert!(serialized.get("url").is_none());
+    }
+
+    #[test]
+    fn retro_launch_serialization_carries_only_resolved_paths() {
+        let request = BridgeRequest::LaunchRetroGame {
+            core_path: "/usr/lib/libretro/snes9x_libretro.so".to_owned(),
+            rom_path: "/home/user/.cache/hearthdeck/romm/42.sfc".to_owned(),
+            session_id: "session-1".to_owned(),
+        };
+        let serialized = serde_json::to_value(request).unwrap();
+
+        assert_eq!(serialized["type"], "launch_retro_game");
+        assert_eq!(
+            serialized["core_path"],
+            "/usr/lib/libretro/snes9x_libretro.so"
+        );
+        assert_eq!(
+            serialized["rom_path"],
+            "/home/user/.cache/hearthdeck/romm/42.sfc"
+        );
         assert!(serialized.get("command").is_none());
         assert!(serialized.get("url").is_none());
     }

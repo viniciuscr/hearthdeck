@@ -7,6 +7,7 @@ mod database;
 mod diagnostics;
 mod discovery;
 mod enrichment;
+mod retro;
 mod settings;
 mod state;
 

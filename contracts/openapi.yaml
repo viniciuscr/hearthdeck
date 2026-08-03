@@ -118,6 +118,32 @@ paths:
                 $ref: '#/components/schemas/RetroGamePage'
         '503':
           description: RomM is not configured
+  /v1/retro/roms/{id}/launch:
+    post:
+      operationId: launchRetroRom
+      description: >-
+        Launches a RomM ROM through RetroArch. Not the generic launchApp
+        path: RomM is not a catalog/DiscoveryProvider source, so this takes
+        RomM's own rom ID directly.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: RomM rom ID
+          schema: { type: integer }
+      responses:
+        '200':
+          description: RetroArch launch accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationSession'
+        '501':
+          description: No RetroArch core is configured for the rom's platform
+        '503':
+          description: RomM is not configured, or the mapped RetroArch core is not installed
   /v1/retro/assets:
     get:
       operationId: getRetroAsset
@@ -316,11 +342,12 @@ components:
           $ref: '#/components/schemas/HostCapabilities'
     HostCapabilities:
       type: object
-      required: [launch, application_sessions, install_requests]
+      required: [launch, application_sessions, install_requests, retro_launch]
       properties:
         launch: { type: boolean }
         application_sessions: { type: boolean }
         install_requests: { type: boolean }
+        retro_launch: { type: boolean }
     Diagnostics:
       type: object
       required: [generated_at, services, romm, logs]

@@ -7,8 +7,24 @@ pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
 license=('MIT')
-depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'sqlite' 'systemd' 'xorg-xwayland')
+depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'retroarch' 'sqlite' 'systemd' 'xorg-xwayland')
 makedepends=('clang' 'cmake' 'just' 'ninja' 'pkgconf' 'rust' 'sqlite')
+# RetroArch runs no emulator without a libretro core. Cores are separate
+# packages upstream (docs.libretro.com/guides/download-cores: distro-packaged
+# RetroArch expects cores from the package manager, not its own downloader).
+# This is a starter set covering common consoles; see
+# docs/retroarch-integration.md decision 3/open question 2 for the plan to
+# make this on-demand instead of a fixed list.
+optdepends=(
+  'libretro-fceumm: RetroArch core for NES/Famicom'
+  'libretro-snes9x: RetroArch core for SNES/Super Famicom'
+  'libretro-genesis-plus-gx: RetroArch core for Sega Genesis/Mega Drive'
+  'libretro-mgba: RetroArch core for Game Boy/Color/Advance'
+  'libretro-mupen64plus-next: RetroArch core for Nintendo 64'
+  'libretro-beetle-psx: RetroArch core for PlayStation'
+  'libretro-desmume: RetroArch core for Nintendo DS'
+  'libretro-flycast: RetroArch core for Sega Dreamcast'
+)
 install="${pkgname}.install"
 backup=('etc/pacman.d/hearthdeck.conf')
 options=('!strip' '!lto')

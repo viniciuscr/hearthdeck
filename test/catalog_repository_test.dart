@@ -225,6 +225,16 @@ void main() {
     },
   );
 
+  test('API client launches a RomM rom through RetroArch', () async {
+    final client = HearthdeckApiClient(
+      endpoint: HearthdeckEndpoint.local(),
+      token: 'test-token',
+      client: _LaunchRetroRomHttpClient(),
+    );
+
+    await client.launchRetroRom(42);
+  });
+
   test(
     'API client saves RomM credentials without receiving them back',
     () async {
@@ -433,6 +443,16 @@ class _RetroSearchHttpClient extends http.BaseClient {
       "total":1,"limit":24,"offset":0
     }''';
     return http.StreamedResponse(Stream<List<int>>.value(body.codeUnits), 200);
+  }
+}
+
+class _LaunchRetroRomHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    expect(request.method, 'POST');
+    expect(request.url.path, '/v1/retro/roms/42/launch');
+    expect(request.headers['authorization'], 'Bearer test-token');
+    return http.StreamedResponse(Stream<List<int>>.value('{}'.codeUnits), 200);
   }
 }
 

@@ -118,6 +118,117 @@ pub async fn launch_heroic_game(
     .await
 }
 
+/// Directories pacman installs libretro cores into on Arch. A core path must
+/// resolve under one of these before the bridge will exec it; this is the
+/// on-demand/curated-core-install question (see
+/// docs/retroarch-integration.md) staying out of the bridge's trust
+/// boundary regardless of how a core got there.
+const RETRO_CORE_DIRECTORIES: [&str; 1] = ["/usr/lib/libretro"];
+
+/// Launches a RetroArch core against a ROM the daemon has already resolved
+/// and cached locally. Mirrors `launch_application`'s discipline: the bridge
+/// re-validates both paths itself rather than trusting the daemon's copy,
+/// and RetroArch is exec'd directly as the transient unit's main process
+/// (not handed off through a URI/IPC scheme the way Heroic is), so Kiosk
+/// session tracking works the same way it does for desktop apps.
+pub async fn launch_retro_game(
+    core_path: &str,
+    rom_path: &str,
+    session_id: &str,
+) -> Result<LaunchedApplication> {
+    let core_path = validate_retro_core_path(core_path)?;
+    let rom_path = validate_retro_rom_path(rom_path)?;
+    let config_directory = retro_config_directory();
+    tokio::fs::create_dir_all(&config_directory)
+        .await
+        .context("could not create Hearthdeck's RetroArch config directory")?;
+    let config_path = config_directory.join("retroarch.cfg");
+    launch_with_systemd(
+        vec![
+            OsString::from("retroarch"),
+            OsString::from("-c"),
+            config_path.into_os_string(),
+            OsString::from("-L"),
+            core_path.into_os_string(),
+            rom_path.into_os_string(),
+        ],
+        None,
+        session_id,
+        true,
+    )
+    .await
+}
+
+/// Hearthdeck's own RetroArch config directory, never the user's default
+/// `~/.config/retroarch`. Keeping it separate means RetroAchievements login,
+/// input configuration, and video settings persist across every launch
+/// without fighting a separately configured desktop RetroArch installation
+/// on a dual-purpose machine.
+fn retro_config_directory() -> PathBuf {
+    let config_home = env::var_os("XDG_CONFIG_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|path| PathBuf::from(path).join(".config")));
+    config_home
+        .unwrap_or_else(|| PathBuf::from(".config"))
+        .join("hearthdeck/retroarch")
+}
+
+/// The directory Hearthdeck caches ROMs fetched from RomM into. The bridge
+/// only launches ROM files that resolve under this directory; the nested
+/// layout inside it is the daemon's concern.
+fn retro_rom_cache_directory() -> PathBuf {
+    let cache_home = env::var_os("XDG_CACHE_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|path| PathBuf::from(path).join(".cache")));
+    cache_home
+        .unwrap_or_else(|| PathBuf::from(".cache"))
+        .join("hearthdeck/romm")
+}
+
+fn validate_retro_core_path(core_path: &str) -> Result<PathBuf> {
+    let allowed_directories: Vec<&Path> = RETRO_CORE_DIRECTORIES.iter().map(Path::new).collect();
+    validate_retro_core_path_in(core_path, &allowed_directories)
+}
+
+fn validate_retro_core_path_in(core_path: &str, allowed_directories: &[&Path]) -> Result<PathBuf> {
+    let path = Path::new(core_path);
+    anyhow::ensure!(path.is_absolute(), "retro core path must be absolute");
+    let canonical = fs::canonicalize(path).context("retro core does not exist")?;
+    anyhow::ensure!(
+        canonical
+            .extension()
+            .is_some_and(|extension| extension == "so"),
+        "retro core must be a shared library"
+    );
+    anyhow::ensure!(
+        allowed_directories
+            .iter()
+            .filter_map(|directory| fs::canonicalize(directory).ok())
+            .any(|directory| canonical.starts_with(directory)),
+        "retro core is not in an allowlisted cores directory"
+    );
+    Ok(canonical)
+}
+
+fn validate_retro_rom_path(rom_path: &str) -> Result<PathBuf> {
+    let cache_root = fs::canonicalize(retro_rom_cache_directory())
+        .context("Hearthdeck rom cache directory does not exist")?;
+    validate_retro_rom_path_in(rom_path, &cache_root)
+}
+
+fn validate_retro_rom_path_in(rom_path: &str, cache_root: &Path) -> Result<PathBuf> {
+    let path = Path::new(rom_path);
+    anyhow::ensure!(path.is_absolute(), "rom path must be absolute");
+    let canonical = fs::canonicalize(path).context("cached rom does not exist")?;
+    anyhow::ensure!(
+        canonical.starts_with(cache_root),
+        "rom path is not inside the Hearthdeck rom cache"
+    );
+    Ok(canonical)
+}
+
 async fn launch_with_systemd(
     application_command: Vec<OsString>,
     working_directory: Option<PathBuf>,
@@ -540,7 +651,8 @@ mod tests {
 
     use super::{
         desktop_entry_directories_for, parse_desktop_entry, parse_exec,
-        valid_heroic_application_id, visible_in_desktop,
+        valid_heroic_application_id, validate_retro_core_path_in, validate_retro_rom_path_in,
+        visible_in_desktop,
     };
 
     #[tokio::test]
@@ -670,5 +782,90 @@ mod tests {
         assert!(valid_heroic_application_id("1091500"));
         assert!(!valid_heroic_application_id("Fortnite&runner=gog"));
         assert!(!valid_heroic_application_id("../Fortnite"));
+    }
+
+    #[test]
+    fn accepts_a_core_inside_an_allowlisted_directory() {
+        let cores_directory = tempfile::tempdir().unwrap();
+        let core_path = cores_directory.path().join("snes9x_libretro.so");
+        std::fs::write(&core_path, b"").unwrap();
+
+        let resolved =
+            validate_retro_core_path_in(core_path.to_str().unwrap(), &[cores_directory.path()])
+                .unwrap();
+
+        assert_eq!(
+            resolved,
+            std::fs::canonicalize(&core_path).unwrap(),
+            "resolved core path should match the canonicalized input"
+        );
+    }
+
+    #[test]
+    fn rejects_a_core_outside_every_allowlisted_directory() {
+        let cores_directory = tempfile::tempdir().unwrap();
+        let other_directory = tempfile::tempdir().unwrap();
+        let core_path = other_directory.path().join("snes9x_libretro.so");
+        std::fs::write(&core_path, b"").unwrap();
+
+        assert!(
+            validate_retro_core_path_in(core_path.to_str().unwrap(), &[cores_directory.path()])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_a_core_that_is_not_a_shared_library() {
+        let cores_directory = tempfile::tempdir().unwrap();
+        let core_path = cores_directory.path().join("snes9x_libretro.txt");
+        std::fs::write(&core_path, b"").unwrap();
+
+        assert!(
+            validate_retro_core_path_in(core_path.to_str().unwrap(), &[cores_directory.path()])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_a_core_path_that_does_not_exist() {
+        let cores_directory = tempfile::tempdir().unwrap();
+        let core_path = cores_directory.path().join("missing_libretro.so");
+
+        assert!(
+            validate_retro_core_path_in(core_path.to_str().unwrap(), &[cores_directory.path()])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn accepts_a_rom_inside_the_hearthdeck_cache_directory() {
+        let cache_directory = tempfile::tempdir().unwrap();
+        let rom_path = cache_directory.path().join("42.sfc");
+        std::fs::write(&rom_path, b"").unwrap();
+        let cache_root = std::fs::canonicalize(cache_directory.path()).unwrap();
+
+        let resolved = validate_retro_rom_path_in(rom_path.to_str().unwrap(), &cache_root).unwrap();
+
+        assert_eq!(resolved, std::fs::canonicalize(&rom_path).unwrap());
+    }
+
+    #[test]
+    fn rejects_a_rom_outside_the_hearthdeck_cache_directory() {
+        let cache_directory = tempfile::tempdir().unwrap();
+        let other_directory = tempfile::tempdir().unwrap();
+        let rom_path = other_directory.path().join("42.sfc");
+        std::fs::write(&rom_path, b"").unwrap();
+        let cache_root = std::fs::canonicalize(cache_directory.path()).unwrap();
+
+        assert!(validate_retro_rom_path_in(rom_path.to_str().unwrap(), &cache_root).is_err());
+    }
+
+    #[test]
+    fn rejects_a_rom_path_that_does_not_exist() {
+        let cache_directory = tempfile::tempdir().unwrap();
+        let rom_path = cache_directory.path().join("missing.sfc");
+        let cache_root = std::fs::canonicalize(cache_directory.path()).unwrap();
+
+        assert!(validate_retro_rom_path_in(rom_path.to_str().unwrap(), &cache_root).is_err());
     }
 }

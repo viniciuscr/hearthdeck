@@ -127,6 +127,36 @@ class _RetroPageState extends State<RetroPage> {
     await _selectConsole(console, force: true);
   }
 
+  Future<void> _launchGame(DashboardItem item) async {
+    final apiClient = _connectedApiClient ?? await _apiClient;
+    if (apiClient == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No Hearthdeck backend is connected.')),
+        );
+      }
+      return;
+    }
+    final romId = int.tryParse(item.id.split(':').last);
+    if (romId == null) {
+      return;
+    }
+    try {
+      await apiClient.launchRetroRom(romId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${item.title} launch requested.')),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not launch ${item.title}: $error')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Escape/back is handled globally (see main.dart's HardwareKeyboard
@@ -208,6 +238,7 @@ class _RetroPageState extends State<RetroPage> {
                       builder: (BuildContext context) => ContentDetailsPage(
                         item: item,
                         sourceShape: TvTileShape.square,
+                        onPrimaryAction: _launchGame,
                       ),
                     ),
                   );
@@ -617,7 +648,14 @@ DashboardItem retroGameToDashboardItem(
       summary: game.summary?.trim().isNotEmpty == true
           ? game.summary!.trim()
           : 'Metadata supplied by your local RomM library.',
-      actions: const <ContentAction>[],
+      actions: const <ContentAction>[
+        ContentAction(
+          id: 'launch',
+          label: 'Play',
+          icon: Icons.play_arrow_rounded,
+          isPrimary: true,
+        ),
+      ],
       facts: const <ContentFact>[],
       factSections: <ContentFactSection>[
         ContentFactSection(

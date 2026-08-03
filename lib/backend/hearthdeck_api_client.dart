@@ -188,6 +188,19 @@ class HearthdeckApiClient {
     }
   }
 
+  /// Launches a RomM rom through RetroArch. Not the generic [launch]: RomM
+  /// roms are not catalog items, so this takes RomM's own rom ID directly
+  /// (see docs/retroarch-integration.md decision 6).
+  Future<void> launchRetroRom(int romId) async {
+    final response = await _client.post(
+      endpoint.api('retro/roms/$romId/launch'),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 200) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+  }
+
   Future<HearthdeckApplicationSession?> activeApplicationSession() async {
     final response = await _client.get(
       endpoint.api('sessions/active'),
@@ -351,6 +364,7 @@ class HearthdeckHealth {
       launch: false,
       applicationSessions: false,
       installRequests: false,
+      retroLaunch: false,
     ),
   });
 
@@ -381,6 +395,7 @@ class HearthdeckHostCapabilities {
     required this.launch,
     required this.applicationSessions,
     required this.installRequests,
+    required this.retroLaunch,
   });
 
   factory HearthdeckHostCapabilities.fromJson(Map<String, dynamic> json) =>
@@ -388,11 +403,13 @@ class HearthdeckHostCapabilities {
         launch: json['launch'] as bool? ?? false,
         applicationSessions: json['application_sessions'] as bool? ?? false,
         installRequests: json['install_requests'] as bool? ?? false,
+        retroLaunch: json['retro_launch'] as bool? ?? false,
       );
 
   final bool launch;
   final bool applicationSessions;
   final bool installRequests;
+  final bool retroLaunch;
 }
 
 class HearthdeckDiagnostics {

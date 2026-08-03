@@ -51,6 +51,11 @@ pub struct RommGame {
     pub name: Option<String>,
     #[serde(default)]
     pub fs_name_no_tags: String,
+    /// Filename actually stored on RomM's disk, including tags/extension.
+    /// Used to build the ROM content download URL for a RetroArch launch;
+    /// distinct from `fs_name_no_tags`, which is only for display.
+    #[serde(default)]
+    pub fs_name: Option<String>,
     #[serde(default)]
     pub summary: Option<String>,
     #[serde(default)]
@@ -201,6 +206,82 @@ pub async fn romm_games(
     response
         .json::<RommGamePage>()
         .await
+        .map_err(|error| RommQueryError::Failed(error.into()))
+}
+
+/// Fetches a single ROM by ID, for the RetroArch launch path: `romm_games`
+/// only returns the fields needed for browsing, and does not carry the
+/// on-disk filename a launch needs to build a download URL.
+pub async fn romm_rom(
+    settings: &SettingsRepository,
+    rom_id: i64,
+) -> std::result::Result<RommGame, RommQueryError> {
+    let credentials = settings
+        .romm_credentials()
+        .await
+        .map_err(RommQueryError::Failed)?
+        .ok_or(RommQueryError::NotConfigured)?;
+    let response = reqwest::Client::new()
+        .get(format!("{}/api/roms/{rom_id}", credentials.base_url))
+        .header(reqwest::header::ACCEPT, "application/json")
+        .bearer_auth(&credentials.token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(RommQueryError::Failed(anyhow::anyhow!("rom not found")));
+    }
+    if !status.is_success() {
+        return Err(RommQueryError::Failed(anyhow::anyhow!(
+            "RomM returned {status}"
+        )));
+    }
+    response
+        .json::<RommGame>()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))
+}
+
+/// Downloads a ROM's content bytes for local caching ahead of a RetroArch
+/// launch. Multi-file ROMs (discs, `.m3u` sets) are out of scope for now;
+/// this fetches the single content file named by `fs_name`.
+pub async fn romm_rom_content(
+    settings: &SettingsRepository,
+    rom_id: i64,
+    fs_name: &str,
+) -> std::result::Result<Vec<u8>, RommQueryError> {
+    let credentials = settings
+        .romm_credentials()
+        .await
+        .map_err(RommQueryError::Failed)?
+        .ok_or(RommQueryError::NotConfigured)?;
+    let base = reqwest::Url::parse(&format!(
+        "{}/api/roms/{rom_id}/content/",
+        credentials.base_url
+    ))
+    .map_err(|error| RommQueryError::Failed(error.into()))?;
+    let url = base
+        .join(fs_name)
+        .map_err(|error| RommQueryError::Failed(error.into()))?;
+    let response = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(&credentials.token)
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(RommQueryError::Failed(anyhow::anyhow!(
+            "RomM returned {status} downloading rom content"
+        )));
+    }
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
         .map_err(|error| RommQueryError::Failed(error.into()))
 }
 

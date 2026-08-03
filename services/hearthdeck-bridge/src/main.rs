@@ -196,6 +196,30 @@ async fn handle_request(
                 }
             }
         },
+        BridgeRequest::LaunchRetroGame {
+            core_path,
+            rom_path,
+            session_id,
+        } => match platform::launch_retro_game(&core_path, &rom_path, &session_id).await {
+            Ok(launched) => {
+                register_launch(
+                    sessions,
+                    session_directory,
+                    "retroarch".to_owned(),
+                    rom_path,
+                    session_id,
+                    launched,
+                )
+                .await
+            }
+            Err(error) => {
+                warn!(%error, "RetroArch game launch rejected");
+                BridgeResponse::Error {
+                    code: BridgeErrorCode::LaunchFailed,
+                    message: error.to_string(),
+                }
+            }
+        },
         BridgeRequest::ActiveApplicationSession => {
             let candidates = {
                 sessions

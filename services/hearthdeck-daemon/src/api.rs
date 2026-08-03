@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::{
     diagnostics::{self, RommGame, RommPlatform, RommQueryError},
+    retro::RetroLaunchError,
     settings::{
         BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
     },
@@ -32,6 +33,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/library", get(list_library))
         .route("/v1/retro/consoles", get(list_retro_consoles))
         .route("/v1/retro/roms", get(list_retro_roms))
+        .route("/v1/retro/roms/{id}/launch", post(launch_retro_rom))
         .route("/v1/retro/assets", get(retro_asset))
         .route(
             "/v1/retro/settings",
@@ -79,6 +81,7 @@ fn host_capabilities() -> HostCapabilities {
         launch: true,
         application_sessions: true,
         install_requests: true,
+        retro_launch: true,
     }
 }
 
@@ -88,6 +91,7 @@ fn host_capabilities() -> HostCapabilities {
         launch: true,
         application_sessions: false,
         install_requests: true,
+        retro_launch: false,
     }
 }
 
@@ -97,6 +101,7 @@ fn host_capabilities() -> HostCapabilities {
         launch: false,
         application_sessions: false,
         install_requests: false,
+        retro_launch: false,
     }
 }
 
@@ -194,6 +199,42 @@ async fn list_retro_roms(
         limit: games.limit,
         offset: games.offset,
     }))
+}
+
+/// Launches a RomM ROM through RetroArch. Deliberately not the generic
+/// `/v1/apps/{id}/launch` path: RomM is not a `DiscoveryProvider`/
+/// `CatalogRecord` source (see docs/retroarch-integration.md decision 6),
+/// so this takes RomM's own rom ID directly and reuses only the
+/// source-agnostic session/bridge machinery the generic route also uses.
+async fn launch_retro_rom(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(rom_id): Path<i64>,
+) -> Result<Json<ApplicationSession>, ApiError> {
+    authenticate(&state, &headers).await?;
+    if !host_capabilities().retro_launch {
+        return Err(ApiError::capability_unavailable("retro game launch"));
+    }
+    let plan = crate::retro::prepare_launch(&state.settings, rom_id)
+        .await
+        .map_err(ApiError::retro_launch)?;
+    let session_id = Uuid::new_v4().to_string();
+    let request = BridgeRequest::LaunchRetroGame {
+        core_path: plan.core_path.to_string_lossy().into_owned(),
+        rom_path: plan.rom_path.to_string_lossy().into_owned(),
+        session_id,
+    };
+    let response = crate::bridge::request(&state.config.bridge_socket_path, request)
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    let BridgeResponse::LaunchAccepted { session } = response else {
+        return Err(ApiError::bad_gateway("bridge rejected retro game launch"));
+    };
+    info!(rom_id, "retro game launch accepted");
+    let _ = state.events.send(ServerEvent::ApplicationSessionChanged {
+        session: Some(session.clone()),
+    });
+    Ok(Json(session))
 }
 
 async fn retro_asset(
@@ -586,6 +627,7 @@ struct HostCapabilities {
     launch: bool,
     application_sessions: bool,
     install_requests: bool,
+    retro_launch: bool,
 }
 
 #[derive(Deserialize)]
@@ -818,6 +860,30 @@ impl ApiError {
         match error {
             RommQueryError::NotConfigured => Self::romm_unavailable(),
             RommQueryError::Failed(error) => Self::bad_gateway(error),
+        }
+    }
+
+    fn retro_launch(error: RetroLaunchError) -> Self {
+        let message = error.to_string();
+        match error {
+            RetroLaunchError::Romm(error) => Self::romm_query(error),
+            RetroLaunchError::PlatformNotFound => Self::not_found(),
+            RetroLaunchError::UnsupportedPlatform { .. } => Self {
+                status: StatusCode::NOT_IMPLEMENTED,
+                message,
+                settings: None,
+            },
+            RetroLaunchError::CoreNotInstalled { .. } => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                message,
+                settings: None,
+            },
+            RetroLaunchError::RomHasNoContentFile => Self {
+                status: StatusCode::BAD_GATEWAY,
+                message,
+                settings: None,
+            },
+            RetroLaunchError::Cache(_) => Self::internal(message),
         }
     }
 

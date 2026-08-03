@@ -12,7 +12,7 @@ pub const MACOS_APPS_SOURCE: &str = "macos-apps";
 #[cfg(any(target_os = "linux", test))]
 mod linux;
 #[cfg(any(target_os = "linux", test))]
-pub use linux::{discover_applications, launch_application, launch_heroic_game};
+pub use linux::{discover_applications, launch_application, launch_heroic_game, launch_retro_game};
 
 #[cfg(all(target_os = "macos", not(test)))]
 mod macos;
@@ -67,6 +67,15 @@ pub async fn launch_heroic_game(
     _session_id: &str,
 ) -> Result<LaunchedApplication> {
     anyhow::bail!("Heroic game launch is unsupported on this platform")
+}
+
+#[cfg(all(not(target_os = "linux"), not(test)))]
+pub async fn launch_retro_game(
+    _core_path: &str,
+    _rom_path: &str,
+    _session_id: &str,
+) -> Result<LaunchedApplication> {
+    anyhow::bail!("RetroArch game launch is unsupported on this platform")
 }
 
 #[cfg(all(not(any(target_os = "linux", target_os = "macos")), not(test)))]
