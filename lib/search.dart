@@ -245,6 +245,39 @@ class _TvSearchPageState extends State<TvSearchPage> {
     }
   }
 
+  /// Results are either regular catalog items (PC games/apps, launched
+  /// through [CatalogRepository]) or RomM console games (identified by the
+  /// `romm:<id>` id format `retroGameToDashboardItem` uses, launched through
+  /// the same dedicated RomM endpoint `retro.dart` uses) - this dispatches
+  /// to whichever one actually produced the tapped result.
+  Future<void> _launchItem(DashboardItem item) async {
+    final rommId = item.id.startsWith('romm:')
+        ? int.tryParse(item.id.substring('romm:'.length))
+        : null;
+    try {
+      if (rommId != null) {
+        final apiClient = _connectedApiClient ?? await _apiClient;
+        if (apiClient == null) {
+          throw StateError('No Hearthdeck backend is connected.');
+        }
+        await apiClient.launchRetroRom(rommId);
+      } else {
+        await _catalogRepository.launch(item);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${item.title} launch requested.')),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not launch ${item.title}: $error')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final results = _results;
@@ -375,6 +408,7 @@ class _TvSearchPageState extends State<TvSearchPage> {
                                                   item: item,
                                                   sourceShape:
                                                       TvTileShape.square,
+                                                  onPrimaryAction: _launchItem,
                                                 ),
                                           ),
                                         ),

@@ -300,7 +300,16 @@ class _DetailsInformation extends StatelessWidget {
                           )),
                   onActivate: () async {
                     final action = entry.value;
-                    if (action.id == 'launch' && onPrimaryAction != null) {
+                    // The primary action is "launch/play/open this item" -
+                    // whatever a given DashboardItem source labels and IDs
+                    // it as (contentDetailsFor's generic fallback uses
+                    // 'play' for games, 'open' for media/system, 'launch'
+                    // for applications; ApiCatalogRepository and RomM's
+                    // retroGameToDashboardItem both happen to use 'launch'
+                    // too, but that's a coincidence, not a contract). Keying
+                    // dispatch off isPrimary instead of a specific id string
+                    // is what actually makes it generic across every source.
+                    if (action.isPrimary && onPrimaryAction != null) {
                       await onPrimaryAction!(item);
                     } else if (action.url case final String url) {
                       try {

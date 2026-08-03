@@ -290,10 +290,9 @@ void main() {
     tester.view
       ..devicePixelRatio = 1
       ..physicalSize = const Size(1280, 900);
+    final catalogRepository = _LaunchSpyCatalogRepository();
     await tester.pumpWidget(
-      MaterialApp(
-        home: FullLibraryPage(catalogRepository: const MockCatalogRepository()),
-      ),
+      MaterialApp(home: FullLibraryPage(catalogRepository: catalogRepository)),
     );
     await tester.pump();
 
@@ -305,6 +304,13 @@ void main() {
 
     expect(find.byType(ContentDetailsPage), findsOneWidget);
     expect(find.text('Play'), findsOneWidget);
+    expect(catalogRepository.launched, isEmpty);
+
+    await tester.tap(find.text('Play'));
+    await tester.pumpAndSettle();
+
+    expect(catalogRepository.launched, hasLength(1));
+    expect(catalogRepository.launched.single.id, 'orbit-library');
   });
 
   testWidgets('content details open an external metadata link', (
@@ -800,6 +806,64 @@ void main() {
     expect(find.text('Stream'), findsNothing);
   });
 
+  testWidgets('search dispatches a catalog launch for a PC game/app result', (
+    WidgetTester tester,
+  ) async {
+    final catalogRepository = _LaunchSpyCatalogRepository();
+    await tester.pumpWidget(
+      MaterialApp(home: TvSearchPage(catalogRepository: catalogRepository)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Orbit'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ContentDetailsPage), findsOneWidget);
+    await tester.tap(find.text('Play'));
+    await tester.pumpAndSettle();
+
+    expect(catalogRepository.launched, hasLength(1));
+    expect(catalogRepository.launched.single.id, 'orbit-library');
+  });
+
+  testWidgets('search dispatches a RomM launch for a console games result', (
+    WidgetTester tester,
+  ) async {
+    final httpClient = _RetroHttpClient();
+    final client = HearthdeckApiClient(
+      endpoint: HearthdeckEndpoint.local(),
+      token: 'test-token',
+      client: httpClient,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TvSearchPage(
+          initialCategory: LibraryCategory.consoleGames,
+          apiClient: client,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey<String>('search-input')),
+      'metroid',
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Metroid'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ContentDetailsPage), findsOneWidget);
+    expect(httpClient.launchedRomIds, isEmpty);
+
+    await tester.tap(find.text('Play'));
+    await tester.pumpAndSettle();
+
+    expect(httpClient.launchedRomIds, <String>['12']);
+  });
+
   testWidgets('library source selection updates its item grid', (
     WidgetTester tester,
   ) async {
@@ -1136,6 +1200,39 @@ class _EventFailingCatalogRepository implements CatalogRepository {
       Stream<CatalogEvent>.error(StateError('event feed unavailable'));
 }
 
+class _LaunchSpyCatalogRepository implements CatalogRepository {
+  final List<DashboardItem> launched = <DashboardItem>[];
+
+  @override
+  Future<HearthdeckHealth> health() => const MockCatalogRepository().health();
+
+  @override
+  Future<HearthdeckDiagnostics> diagnostics() =>
+      const MockCatalogRepository().diagnostics();
+
+  @override
+  Future<CatalogData> load() => const MockCatalogRepository().load();
+
+  @override
+  Future<void> launch(DashboardItem item) async {
+    launched.add(item);
+  }
+
+  @override
+  Future<void> requestRescan() async {}
+
+  @override
+  Future<void> requestProviderRefresh(
+    HearthdeckProviderHealth provider,
+  ) async {}
+
+  @override
+  Future<void> restartRommService() async {}
+
+  @override
+  Stream<CatalogEvent> watch() => const Stream<CatalogEvent>.empty();
+}
+
 class _ThrowingCatalogRepository implements CatalogRepository {
   @override
   Future<HearthdeckHealth> health() => const MockCatalogRepository().health();
@@ -1300,8 +1397,15 @@ class _RommServiceCatalogRepository extends MockCatalogRepository {
 }
 
 class _RetroHttpClient extends http.BaseClient {
+  final List<String> launchedRomIds = <String>[];
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    if (request.method == 'POST' &&
+        RegExp(r'^/v1/retro/roms/\d+/launch$').hasMatch(request.url.path)) {
+      launchedRomIds.add(request.url.path.split('/')[4]);
+      return http.StreamedResponse(const Stream<List<int>>.empty(), 200);
+    }
     final body = switch (request.url.path) {
       '/v1/retro/consoles' =>
         '''[
