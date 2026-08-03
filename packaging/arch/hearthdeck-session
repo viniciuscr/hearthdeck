@@ -9,6 +9,23 @@ export XDG_CURRENT_DESKTOP=hearthdeck
 export XDG_SESSION_DESKTOP=hearthdeck
 export XDG_SESSION_TYPE=wayland
 
+# A plain shell `export` only changes this script's own process environment.
+# It does NOT reach the systemd --user manager's own activation environment,
+# which is what every unit it starts (including hearthdeck-bridge.service,
+# lazily socket-activated on the first launch request) actually inherits.
+# hearthdeck-bridge's is_kiosk_session() check reads XDG_CURRENT_DESKTOP from
+# its own process environment (see linux.rs's current_desktops()), so without
+# this import it would see the systemd user manager's original login
+# environment - almost certainly missing XDG_CURRENT_DESKTOP entirely - and
+# would incorrectly conclude every launch is happening outside the Kiosk
+# session. That silently breaks two things at once: launched apps/games no
+# longer get wrapped in a nested Gamescope instance or assigned to
+# hearthdeck-kiosk.slice (see launch_with_systemd in linux.rs), and Heroic
+# game launches - meant to be rejected only in the Kiosk session - would be
+# wrongly allowed to proceed and then misbehave (there is no desktop Heroic
+# window to hand a game off to in this session).
+systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE || true
+
 # The local API daemon and Linux bridge are lightweight background services,
 # not a desktop shell. Starting them here (in addition to the global
 # default.target enablement) guarantees they are up before Hearthdeck makes
@@ -24,6 +41,13 @@ export XDG_SESSION_TYPE=wayland
 # session refusing to start on a backend hiccup.
 systemctl --user daemon-reload || true
 systemctl --user start hearthdeck-kiosk.target || true
+
+# hearthdeck-bridge.service is socket-activated and normally hasn't started
+# yet at this point in a cold boot, so it will pick up the environment
+# imported above the first time a launch request activates it. Restarting it
+# here too (a no-op if it isn't running) is cheap insurance against it
+# somehow having started earlier with the stale pre-import environment.
+systemctl --user try-restart hearthdeck-bridge.service || true
 
 # --backend drm:     run directly on the DRM/KMS seat; no outer Wayland/X11
 #                     session required.

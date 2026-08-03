@@ -13,10 +13,13 @@ overlay.
 Display manager (SDDM/GDM/greetd/...)
   -> reads /usr/share/wayland-sessions/hearthdeck.desktop
   -> Exec = /usr/lib/hearthdeck/hearthdeck-session
+       -> export XDG_CURRENT_DESKTOP/XDG_SESSION_DESKTOP/XDG_SESSION_TYPE
+       -> systemctl --user import-environment (same three variables)
        -> systemctl --user daemon-reload
        -> systemctl --user start hearthdeck-kiosk.target
             -> Requires=/After= hearthdeck.target
                  -> Wants= hearthdeck-bridge.socket, hearthdeck-daemon.service
+       -> systemctl --user try-restart hearthdeck-bridge.service
        -> exec gamescope --backend drm --fullscreen --force-grab-cursor -- \
             /opt/hearthdeck/hearthdeck
             -> Hearthdeck is Gamescope's ONLY child process
@@ -34,6 +37,20 @@ script's `systemctl --user start` call intentionally still ends in `|| true`
 a backend problem, rather than the whole session refusing to start over a
 service hiccup — but its output must never be redirected to `/dev/null`; see
 "Do not" below.
+
+The `import-environment`/`try-restart` pair exists because a plain shell
+`export` only changes this script's own process environment — it never
+reaches the systemd `--user` manager's own activation environment, which is
+what every unit it starts actually inherits. `hearthdeck-bridge` reads
+`XDG_CURRENT_DESKTOP` from its own process environment to decide whether
+it's running inside the Kiosk session at all (`is_kiosk_session()` in
+`services/hearthdeck-bridge/src/platform/linux.rs`), and that decision gates
+two real behaviors: whether a launched app/game gets wrapped in its own
+nested Gamescope instance and assigned to `hearthdeck-kiosk.slice`, and
+whether Heroic game launches are rejected (they must be, in this session —
+see `services/README.md` for why). Without the import, the bridge would
+silently believe it's running outside the Kiosk session — even while
+genuinely inside it — misconfiguring both.
 
 That's the whole session: one script, one `exec`, three gamescope flags,
 one app. Nothing else. No desktop compositor, no panel/dock/launcher, no
@@ -188,8 +205,19 @@ style preferences.
   nested inside another Wayland/X11 session, which does not exist here.
 - **Do not merge this outer Gamescope with the bridge's nested Gamescope.**
   The bridge spawns a separate, on-demand Gamescope instance only when the
-  user launches a game/app from inside Hearthdeck. That instance is
-  unrelated to this session's compositor.
+   user launches a game/app from inside Hearthdeck. That instance is
+   unrelated to this session's compositor.
+- **Do not remove the `systemctl --user import-environment` call, or "simplify"
+  it away as redundant with the `export` lines above it.** It looks
+  redundant; it is not. The `export`s only affect this script's own process;
+  the import is what actually reaches the systemd `--user` manager's
+  activation environment, which is what `hearthdeck-bridge` (lazily started
+  by socket activation, possibly well after this script exits) actually
+  inherits. Removing it silently breaks `is_kiosk_session()` — the bridge
+  would believe every launch is happening outside the Kiosk session, so
+  apps/games stop getting wrapped in their own nested Gamescope instance,
+  and Heroic launches (meant to be rejected here) would be wrongly allowed
+  through instead.
 - **Do not trust a chat confirmation as proof a specific commit works.**
   See "The real lesson" above. Check CI for the exact SHA.
 
@@ -197,8 +225,8 @@ style preferences.
 
 1. Read this file fully.
 2. Make the smallest possible change. The session script should stay a
-   short, linear sequence: environment exports, one blocking service-start
-   call, one final `exec`.
+   short, linear sequence: environment exports, importing them into
+   systemd `--user`, one blocking service-start call, one final `exec`.
 3. Test by running the script directly from a TTY, not just by
    re-logging-in through the display manager, so you see stdout/stderr
    immediately:
@@ -234,4 +262,5 @@ style preferences.
 | Hearthdeck renders into a small, centered, blurry fraction of the screen | Something else is a second Wayland client of this outer Gamescope instance (see the incident above), or the installed `gamescope` package itself changed behavior (check `gamescope --version` and whether the same box's non-Hearthdeck compositor, e.g. a normal desktop session, still fills the screen correctly — if it does, the regression is specific to this session, not the display/driver) | `journalctl --user -b`; confirm no other process connects to `$WAYLAND_DISPLAY` during the session; re-read "Do not" above |
 | Session starts then immediately returns to login | Hearthdeck (the Flutter binary) crashed on launch | `journalctl --user -b` around the session's start time; run `/opt/hearthdeck/hearthdeck` directly from a TTY inside a manually started `gamescope --backend drm --fullscreen -- bash` shell to isolate Gamescope vs. the app |
 | App loads but library/pairing calls fail | `hearthdeck.target` didn't reach ready in time, or bridge/daemon crashed | `systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-daemon.service`; `journalctl --user -u hearthdeck-daemon.service -u hearthdeck-bridge.service --since '10 minutes ago'` |
+| Launched apps/games have no display, aren't in `hearthdeck-kiosk.slice`, or Heroic launches unexpectedly proceed instead of being rejected | `hearthdeck-bridge` doesn't see `XDG_CURRENT_DESKTOP=hearthdeck` in its own environment, so `is_kiosk_session()` returns false even though this genuinely is the Kiosk session | `systemctl --user show-environment \| grep XDG_CURRENT_DESKTOP`; confirm the `import-environment` line in `hearthdeck-session` still runs and still lists all three variables |
 | CI passes but the session doesn't work on hardware, or vice versa | These are different claims (see "The real lesson"). CI only proves the code compiles and packages; it never runs the graphical session | Always confirm on real hardware separately, and never conflate the two when reporting something as "working" |
