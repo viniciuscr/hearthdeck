@@ -144,6 +144,20 @@ paths:
           description: No RetroArch core is configured for the rom's platform
         '503':
           description: RomM is not configured, or the mapped RetroArch core is not installed
+  /v1/retro/service/restart:
+    post:
+      operationId: restartRommService
+      description: >-
+        Restarts the fixed romm.service systemd user unit (see
+        deploy/systemd/romm.service.example), if the user has installed it.
+        The unit name is not a request parameter.
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: Restart requested
+        '502':
+          description: systemd rejected the restart, or the unit is not installed
   /v1/retro/assets:
     get:
       operationId: getRetroAsset

@@ -201,6 +201,19 @@ class HearthdeckApiClient {
     }
   }
 
+  /// Restarts the fixed `romm.service` systemd unit (see
+  /// deploy/systemd/romm.service.example), if installed. Not a generic
+  /// "restart any unit" call: there is no unit name parameter.
+  Future<void> restartRommService() async {
+    final response = await _client.post(
+      endpoint.api('retro/service/restart'),
+      headers: _authorizationHeaders(),
+    );
+    if (response.statusCode != 202) {
+      throw HearthdeckApiException(response.statusCode, response.body);
+    }
+  }
+
   Future<HearthdeckApplicationSession?> activeApplicationSession() async {
     final response = await _client.get(
       endpoint.api('sessions/active'),

@@ -234,12 +234,18 @@ RomM's container-stack status shows up in Settings' existing service status
 view next to the daemon and bridge — no new screen, no separate place to go
 looking for whether it's up.
 
-Not done: a start/stop/restart control from within Hearthdeck's own UI.
-`systemctl --user {start,stop,restart} romm.service` would be simple to add
-as a narrowly typed, allowlisted action (fixed unit name, no arbitrary
-input), the same discipline as the existing install-request boundary — worth
-doing if watching a status line without a restart button turns out to be
-insufficient in practice.
+**Done: a restart control from within Hearthdeck's own UI.**
+`POST /v1/retro/service/restart` runs `systemctl --user restart
+romm.service` — the unit name is a fixed constant in
+`diagnostics::restart_romm_service`, never a request parameter, so this is
+one narrowly scoped action, not a generic "restart any unit" capability
+(same discipline as the existing install-request boundary). Threaded
+through `CatalogRepository.restartRommService()` and surfaced as a
+**Restart** button directly on the RomM card in Settings' existing service
+status view, next to the daemon/bridge cards — reusing
+`_refresh()`/snackbar UX already established for the library-rescan and
+provider-refresh controls on the same screen. Only shown/wired for the
+`romm_container` card; every other service card is unaffected.
 
 ## Open questions (need a decision before/at the relevant phase)
 

@@ -74,6 +74,9 @@ class ApiCatalogRepository implements CatalogRepository {
   }
 
   @override
+  Future<void> restartRommService() => _apiClient.restartRommService();
+
+  @override
   Stream<CatalogEvent> watch() async* {
     await for (final event in eventStream ?? _apiClient.watchEvents()) {
       if (event is HearthdeckLibraryChanged) {

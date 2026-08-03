@@ -554,6 +554,29 @@ async fn service_status(id: &'static str, unit: &'static str, on_demand: bool) -
     }
 }
 
+/// Restarts the optional RomM systemd unit
+/// (`deploy/systemd/romm.service.example`). The unit name is a fixed
+/// constant, never caller-supplied: this is a narrowly scoped action on one
+/// specific service, not a generic "restart any unit" capability. A missing
+/// unit fails the same way `systemctl` itself reports it, surfaced to the
+/// caller rather than silently ignored.
+pub async fn restart_romm_service() -> anyhow::Result<()> {
+    let output = Command::new("systemctl")
+        .args(["--user", "restart", "romm.service"])
+        .stdin(Stdio::null())
+        .output()
+        .await?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(if message.is_empty() {
+            anyhow::anyhow!("systemd rejected the romm.service restart")
+        } else {
+            anyhow::anyhow!("systemd rejected the romm.service restart: {message}")
+        });
+    }
+    Ok(())
+}
+
 async fn recent_logs() -> LogTail {
     let romm_logs = recent_romm_logs();
     let output = Command::new("journalctl")
@@ -788,5 +811,13 @@ mod tests {
         assert!(super::normalized_romm_asset_path("/resources/roms/1/cover.webp").is_err());
         assert!(super::normalized_romm_asset_path("https://example.com/cover.webp").is_err());
         assert!(super::normalized_romm_asset_path("/assets/romm/resources/../secret").is_err());
+    }
+
+    #[tokio::test]
+    async fn restart_romm_service_fails_safely_when_the_unit_is_unavailable() {
+        // No systemd user session (or no romm.service unit) is available in
+        // the test/CI environment; this only asserts the call surfaces a
+        // failure instead of panicking or hanging.
+        assert!(super::restart_romm_service().await.is_err());
     }
 }

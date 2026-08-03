@@ -42,6 +42,11 @@ class LocalCatalogRepository implements CatalogRepository {
       );
 
   @override
+  Future<void> restartRommService() => _request(
+    (ApiCatalogRepository repository) => repository.restartRommService(),
+  );
+
+  @override
   Stream<CatalogEvent> watch() async* {
     try {
       yield* (await _getRepository()).watch();

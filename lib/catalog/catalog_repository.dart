@@ -14,6 +14,11 @@ abstract interface class CatalogRepository {
 
   Future<void> requestProviderRefresh(HearthdeckProviderHealth provider);
 
+  /// Restarts the fixed `romm.service` systemd unit, if the user has
+  /// installed `deploy/systemd/romm.service.example`. No-op on repositories
+  /// that don't back onto a real Hearthdeck daemon.
+  Future<void> restartRommService();
+
   Stream<CatalogEvent> watch();
 }
 

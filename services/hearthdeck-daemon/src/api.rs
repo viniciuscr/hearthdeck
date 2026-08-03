@@ -34,6 +34,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/retro/consoles", get(list_retro_consoles))
         .route("/v1/retro/roms", get(list_retro_roms))
         .route("/v1/retro/roms/{id}/launch", post(launch_retro_rom))
+        .route("/v1/retro/service/restart", post(restart_romm_service))
         .route("/v1/retro/assets", get(retro_asset))
         .route(
             "/v1/retro/settings",
@@ -235,6 +236,22 @@ async fn launch_retro_rom(
         session: Some(session.clone()),
     });
     Ok(Json(session))
+}
+
+/// Restarts the fixed `romm.service` systemd unit
+/// (`deploy/systemd/romm.service.example`), if the user has installed it.
+/// Not a generic "restart any unit" endpoint: the unit name is hardcoded in
+/// `diagnostics::restart_romm_service`, never taken from the request.
+async fn restart_romm_service(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    diagnostics::restart_romm_service()
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    info!("romm.service restart requested");
+    Ok(StatusCode::ACCEPTED)
 }
 
 async fn retro_asset(

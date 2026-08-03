@@ -29,6 +29,7 @@ class _SystemHealthPageState extends State<SystemHealthPage> {
   Timer? _refreshTimer;
   var _refreshInFlight = false;
   var _isLoading = true;
+  var _isRestartingRommService = false;
 
   @override
   void initState() {
@@ -114,6 +115,29 @@ class _SystemHealthPageState extends State<SystemHealthPage> {
     }
   }
 
+  Future<void> _restartRommService() async {
+    setState(() => _isRestartingRommService = true);
+    try {
+      await _catalogRepository.restartRommService();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('RomM restart requested.')),
+        );
+        await _refresh();
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not restart RomM: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isRestartingRommService = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Escape/back is handled globally (see main.dart's HardwareKeyboard
@@ -172,6 +196,12 @@ class _SystemHealthPageState extends State<SystemHealthPage> {
                             itemBuilder: (BuildContext context, int index) =>
                                 _ServiceStatusCard(
                                   service: _diagnostics!.services[index],
+                                  onRestart:
+                                      _diagnostics!.services[index].id ==
+                                          'romm_container'
+                                      ? _restartRommService
+                                      : null,
+                                  isRestarting: _isRestartingRommService,
                                 ),
                           ),
                           const SliverToBoxAdapter(child: SizedBox(height: 34)),
@@ -374,9 +404,15 @@ class _SectionTitle extends StatelessWidget {
 }
 
 class _ServiceStatusCard extends StatelessWidget {
-  const _ServiceStatusCard({required this.service});
+  const _ServiceStatusCard({
+    required this.service,
+    this.onRestart,
+    this.isRestarting = false,
+  });
 
   final HearthdeckServiceStatus service;
+  final VoidCallback? onRestart;
+  final bool isRestarting;
 
   @override
   Widget build(BuildContext context) {
@@ -390,30 +426,46 @@ class _ServiceStatusCard extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.all(18),
-        child: Row(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Icon(status.icon, color: status.color, size: 30),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    _serviceName(service.id),
-                    style: Theme.of(context).textTheme.titleMedium,
+            Row(
+              children: <Widget>[
+                Icon(status.icon, color: status.color, size: 30),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        _serviceName(service.id),
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        service.detail,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: tv.secondaryText),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    service.detail,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: tv.secondaryText),
-                  ),
-                ],
-              ),
+                ),
+                _StatusPill(label: status.label, color: status.color),
+              ],
             ),
-            _StatusPill(label: status.label, color: status.color),
+            if (onRestart != null) ...<Widget>[
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: _ProviderRefreshButton(
+                  label: isRestarting ? 'Restarting...' : 'Restart',
+                  onActivate: isRestarting ? null : onRestart,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -1172,6 +1224,7 @@ String _serviceName(String id) => switch (id) {
   'daemon' => 'Hearthdeck daemon',
   'bridge_socket' => 'Bridge socket',
   'bridge' => 'Host bridge',
+  'romm_container' => 'RomM',
   _ => _labelFor(id),
 };
 

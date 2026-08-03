@@ -70,5 +70,8 @@ class MockCatalogRepository implements CatalogRepository {
   ) async {}
 
   @override
+  Future<void> restartRommService() async {}
+
+  @override
   Stream<CatalogEvent> watch() => const Stream<CatalogEvent>.empty();
 }

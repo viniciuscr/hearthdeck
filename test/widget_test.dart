@@ -593,6 +593,42 @@ void main() {
     );
   });
 
+  testWidgets(
+    'Service status offers a restart control for an installed RomM service',
+    (WidgetTester tester) async {
+      final repository = _RommServiceCatalogRepository();
+      await tester.pumpWidget(
+        MaterialApp(home: SettingsPage(catalogRepository: repository)),
+      );
+
+      await tester.tap(find.bySemanticsLabel('System'));
+      await tester.pumpAndSettle();
+      final serviceStatus = find.byKey(
+        const ValueKey<String>('settings-option-service-status'),
+      );
+      await tester.scrollUntilVisible(
+        serviceStatus,
+        240,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.tap(serviceStatus);
+      await tester.pumpAndSettle();
+
+      expect(find.text('RomM'), findsOneWidget);
+      final restartControl = find.text('Restart');
+      await tester.scrollUntilVisible(
+        restartControl,
+        240,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.tap(restartControl);
+      await tester.pumpAndSettle();
+
+      expect(repository.restartRequested, isTrue);
+      expect(find.text('RomM restart requested.'), findsOneWidget);
+    },
+  );
+
   testWidgets('dashboard search opens a focused native text field', (
     WidgetTester tester,
   ) async {
@@ -1093,6 +1129,9 @@ class _EventFailingCatalogRepository implements CatalogRepository {
   ) async {}
 
   @override
+  Future<void> restartRommService() async {}
+
+  @override
   Stream<CatalogEvent> watch() =>
       Stream<CatalogEvent>.error(StateError('event feed unavailable'));
 }
@@ -1120,6 +1159,9 @@ class _ThrowingCatalogRepository implements CatalogRepository {
   Future<void> requestProviderRefresh(
     HearthdeckProviderHealth provider,
   ) async {}
+
+  @override
+  Future<void> restartRommService() async {}
 
   @override
   Stream<CatalogEvent> watch() => const Stream<CatalogEvent>.empty();
@@ -1221,6 +1263,40 @@ class _HealthCatalogRepository extends MockCatalogRepository {
           ],
         ),
       );
+}
+
+class _RommServiceCatalogRepository extends MockCatalogRepository {
+  _RommServiceCatalogRepository();
+
+  var restartRequested = false;
+
+  @override
+  Future<HearthdeckDiagnostics> diagnostics() async =>
+      const HearthdeckDiagnostics(
+        generatedAt: '2026-01-01T00:00:00Z',
+        services: <HearthdeckServiceStatus>[
+          HearthdeckServiceStatus(
+            id: 'romm_container',
+            unit: 'romm.service',
+            state: 'active',
+            detail: 'active (exited)',
+          ),
+        ],
+        romm: HearthdeckRommDiagnostic(
+          configured: false,
+          status: 'not_configured',
+          baseUrl: null,
+          consoleCount: null,
+          checkedAt: '2026-01-01T00:00:00Z',
+          error: null,
+        ),
+        logs: HearthdeckLogTail(available: true, error: null, entries: []),
+      );
+
+  @override
+  Future<void> restartRommService() async {
+    restartRequested = true;
+  }
 }
 
 class _RetroHttpClient extends http.BaseClient {
