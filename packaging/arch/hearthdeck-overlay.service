@@ -1,0 +1,19 @@
+[Unit]
+Description=Hearthdeck quick-menu overlay for the COSMIC (Test) session
+Documentation=file:///usr/share/doc/hearthdeck/KIOSK-SESSION.md
+
+[Service]
+Type=exec
+ExecStart=/usr/lib/hearthdeck/hearthdeck-overlay
+# cosmic-comp only imports WAYLAND_DISPLAY/DISPLAY into the systemd --user
+# activation environment once it's ready (see cosmic-comp's own src/
+# systemd.rs), which happens after this service's first start attempt in
+# packaging/arch/cosmic-test-session (it starts this unit before exec'ing
+# into cosmic-comp). Restart-on-failure with a short delay lets it keep
+# retrying until that environment is actually available, rather than
+# needing a separate polling mechanism here.
+Restart=on-failure
+RestartSec=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hearthdeck-overlay
