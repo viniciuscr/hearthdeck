@@ -588,6 +588,12 @@ async fn recent_logs() -> LogTail {
             "--lines=400",
             "--unit=hearthdeck-daemon.service",
             "--unit=hearthdeck-bridge.service",
+            // Optional: only present if the user installed
+            // deploy/systemd/romm.service.example. journalctl silently
+            // returns no lines for a unit that has never logged anything,
+            // the same as it already does for the units above before their
+            // first run.
+            "--unit=romm.service",
         ])
         .stdin(Stdio::null())
         .output()
@@ -629,14 +635,26 @@ fn parse_journal_entry(line: &str) -> Option<LogEntry> {
         .get("_SYSTEMD_UNIT")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let message = display_message(raw_message);
+    let source = log_source(unit, raw_message);
+    // display_message's redaction is tuned for Hearthdeck's own structured
+    // JSON log lines, where a stray local path or bearer token in an error
+    // string would be an accidental leak. romm.service's lines are plain
+    // podman-compose/podman output: paths, image references, and container
+    // names are the entire point of reading them, not secrets, and that
+    // process never has access to Hearthdeck's own tokens. Redacting them
+    // the same way would turn the one tab meant to show a real
+    // WorkingDirectory/image-pull error into a wall of "[path]".
+    let message = if source == "romm" {
+        truncate_plain(raw_message)
+    } else {
+        display_message(raw_message)
+    };
     let timestamp = record
         .get("__REALTIME_TIMESTAMP")
         .and_then(Value::as_str)
         .and_then(|value| value.parse::<i64>().ok())
         .and_then(DateTime::from_timestamp_micros)
         .map(|timestamp| timestamp.to_rfc3339());
-    let source = log_source(unit, raw_message);
     let level = record
         .get("PRIORITY")
         .and_then(Value::as_str)
@@ -648,6 +666,17 @@ fn parse_journal_entry(line: &str) -> Option<LogEntry> {
         level,
         message,
     })
+}
+
+fn truncate_plain(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() > LOG_MESSAGE_LIMIT {
+        let mut truncated = trimmed.chars().take(LOG_MESSAGE_LIMIT).collect::<String>();
+        truncated.push_str("...");
+        truncated
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 fn display_message(raw: &str) -> String {
@@ -691,10 +720,16 @@ fn value_to_text(value: &Value) -> String {
 /// Assigns a stable source id per journal line. The daemon's own per-request
 /// access log (`"request completed"`, previously dropped entirely as noise)
 /// is split into its own `api` source instead of being merged with general
-/// `daemon` events, so the two can be viewed as separate log tabs.
+/// `daemon` events, so the two can be viewed as separate log tabs. Lines
+/// from the optional `romm.service` unit (deploy/systemd/romm.service.example,
+/// podman-compose's own start/stop output) join the same `romm` tab the
+/// synthesized RomM connectivity-check messages already use (`push_romm_log`),
+/// rather than getting a separate tab, since both are "what's going on with
+/// RomM" from the user's point of view.
 fn log_source(unit: &str, raw_message: &str) -> String {
     match unit {
         "hearthdeck-bridge.service" => "bridge",
+        "romm.service" => "romm",
         _ if structured_message(raw_message).as_deref() == Some("request completed") => "api",
         _ => "daemon",
     }
@@ -782,6 +817,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(entry.source, "bridge");
+    }
+
+    #[test]
+    fn labels_romm_service_journal_lines_with_the_romm_source_unredacted() {
+        // Plain podman-compose stdout, not Hearthdeck's own structured JSON
+        // log shape - and full of legitimate paths/image refs that a real
+        // failure (like a bad WorkingDirectory) needs to stay readable.
+        let entry = super::parse_journal_entry(
+            r#"{"MESSAGE":"Error: WorkingDirectory '/home/alex/mnt/external/romM' not found","PRIORITY":"3","_SYSTEMD_UNIT":"romm.service","__REALTIME_TIMESTAMP":"1760000000000000"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(entry.source, "romm");
+        assert_eq!(
+            entry.message,
+            "Error: WorkingDirectory '/home/alex/mnt/external/romM' not found"
+        );
     }
 
     #[test]
