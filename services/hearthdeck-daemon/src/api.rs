@@ -956,8 +956,14 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
-    use hearthdeck_protocol::HeroicRunner;
-    use tokio::time::timeout;
+    use hearthdeck_protocol::{
+        ApplicationSession, ApplicationSessionState, BridgeRequest, BridgeResponse, HeroicRunner,
+    };
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::UnixListener,
+        time::timeout,
+    };
     use tower::ServiceExt;
 
     use super::{local_router, router};
@@ -978,6 +984,33 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json = serde_json::from_slice(&body).unwrap();
         (status, json)
+    }
+
+    /// Accepts exactly one connection on `socket_path` (standing in for
+    /// `hearthdeck-bridge`), hands the decoded request to `respond` (which
+    /// should assert whatever it expects and build the reply - e.g. using
+    /// the request's own freshly generated `session_id`, which the caller
+    /// can't know in advance), and writes back whatever it returns. Panics
+    /// (via the awaited `JoinHandle`) on a failed assertion inside
+    /// `respond`, rather than a silent hang.
+    fn spawn_fake_bridge(
+        socket_path: std::path::PathBuf,
+        respond: impl FnOnce(BridgeRequest) -> BridgeResponse + Send + 'static,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let listener = UnixListener::bind(&socket_path).unwrap();
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let received: BridgeRequest = serde_json::from_str(&line).unwrap();
+            let response = respond(received);
+            let payload = serde_json::to_string(&response).unwrap();
+            writer.write_all(payload.as_bytes()).await.unwrap();
+            writer.write_all(b"\n").await.unwrap();
+            writer.flush().await.unwrap();
+        })
     }
 
     struct ApiTestProvider;
@@ -1236,7 +1269,7 @@ mod tests {
         assert!(health["providers"][0]["last_attempt_at"].is_string());
 
         let (status, library) = response_json(
-            router(state),
+            router(state.clone()),
             Request::get("/v1/library")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
@@ -1245,6 +1278,57 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(library[0]["id"], "test:app");
+
+        // Nothing exercised the actual launch endpoints before this: launch
+        // dispatch (daemon -> bridge socket -> LaunchAccepted -> response)
+        // had zero route-level coverage. `test:app`'s launch_id ("test.app")
+        // and source_id ("test-apps") come from ApiTestProvider/discovery
+        // above.
+        let bridge = spawn_fake_bridge(state.config.bridge_socket_path.clone(), |request| {
+            let BridgeRequest::LaunchApplication {
+                source_id,
+                application_id,
+                session_id,
+            } = request
+            else {
+                panic!("expected a LaunchApplication request, got {request:?}");
+            };
+            assert_eq!(source_id, "test-apps");
+            assert_eq!(application_id, "test.app");
+            BridgeResponse::LaunchAccepted {
+                session: ApplicationSession {
+                    id: session_id,
+                    source_id,
+                    application_id,
+                    state: ApplicationSessionState::Running,
+                },
+            }
+        });
+        let (status, launched) = response_json(
+            router(state.clone()),
+            Request::post("/v1/apps/test:app/launch")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(launched["source_id"], "test-apps");
+        assert_eq!(launched["application_id"], "test.app");
+        assert_eq!(launched["state"], "running");
+        assert!(launched["id"].as_str().is_some_and(|id| !id.is_empty()));
+        bridge.await.unwrap();
+
+        let launch_unknown_item = router(state)
+            .oneshot(
+                Request::post("/v1/apps/does-not-exist/launch")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(launch_unknown_item.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
