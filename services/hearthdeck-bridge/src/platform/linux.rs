@@ -123,57 +123,45 @@ pub async fn launch_heroic_game(
 
     if super::application_is_running(Some(HEROIC_UNIT_NAME)).await? {
         // Heroic is already up and holds Electron's single-instance lock:
-        // xdg-open hands the URI straight to it over its own IPC. Wrapping
-        // this in a fresh systemd-run would only track a `xdg-open` call that
-        // exits almost immediately - the actual game launches under the
-        // already-running (and already-tracked) HEROIC_UNIT_NAME instead.
-        let status = Command::new("xdg-open")
+        // xdg-open hands the URI straight to it over its own IPC. This must
+        // NOT be awaited to completion. Confirmed on real hardware: xdg-open
+        // does not reliably "exit almost immediately" here - when Electron's
+        // single-instance detection fails to kick in, xdg-open falls back to
+        // running Heroic directly as its own child and blocks until *that*
+        // process exits, which can be many minutes into a play session.
+        // Awaiting that hung this entire HTTP request for the length of the
+        // game session; any client-side retry fired during that hang then
+        // piled up additional concurrent Heroic/game processes on top of it.
+        // Spawn-and-forget instead, matching the cold-start branch's
+        // fast-return semantics - tokio reaps orphaned children in the
+        // background, so this does not leak zombie processes.
+        Command::new("xdg-open")
             .arg(&uri)
-            .status()
-            .await
+            .spawn()
             .context("could not ask the running Heroic instance to launch the game")?;
-        if !status.success() {
-            anyhow::bail!("xdg-open rejected the Heroic launch request")
-        }
         return Ok(LaunchedApplication {
             unit_name: Some(HEROIC_UNIT_NAME.to_owned()),
         });
     }
 
     // Cold start: nothing is tracking Heroic yet, so this becomes the one
-    // fresh instance, wrapped in its own nested Gamescope. That nested
-    // instance uses the SDL backend, connecting through the Kiosk session's
-    // embedded Xwayland (DISPLAY) rather than the Wayland backend connecting
-    // to its exposed Wayland socket: a second Gamescope process joining the
-    // session as a native Wayland client is never shown by the outer
-    // compositor (confirmed on real hardware - see docs/kiosk-session.md),
-    // while a plain X11 client connecting through the embedded Xwayland is
-    // shown automatically by its window manager, and Gamescope's own
-    // backend auto-detection already prefers exactly this SDL/X11 nesting
-    // mode when DISPLAY is set instead of WAYLAND_DISPLAY. This nested
-    // instance still gets Heroic's games their own internal
-    // resolution/upscaling for free if ever wanted (`-w`/`-h`/`-W`/`-H`/
-    // `-S`/`-F`; omitted here, which defaults to the output resolution -
-    // no scaling - until a specific game needs it).
-    // --keep-alive matters specifically here: xdg-open exits almost
-    // immediately once it has handed off the URI, well before Heroic itself
-    // has started the game, so Gamescope's default "shut down when the
+    // fresh instance - a plain `xdg-open`, not wrapped in a nested Gamescope
+    // of its own. That nested-instance wrapping existed only for
+    // `--keep-alive`: without it, Gamescope's default "shut down when the
     // wrapped process dies" behavior would tear down the display before
-    // anything renders. --expose-wayland lets Heroic's own Electron process
-    // connect to this nested instance over native Wayland instead of
-    // Xwayland, if it prefers to.
-    let command = vec![
-        OsString::from("gamescope"),
-        OsString::from("--backend"),
-        OsString::from("sdl"),
-        OsString::from("--expose-wayland"),
-        OsString::from("--force-windows-fullscreen"),
-        OsString::from("-f"),
-        OsString::from("--keep-alive"),
-        OsString::from("--"),
-        OsString::from("xdg-open"),
-        OsString::from(uri),
-    ];
+    // Heroic (started by xdg-open handing off the URI) had a chance to
+    // render, since xdg-open itself exits almost immediately. That concern
+    // only applies to something a Gamescope instance is actually wrapping;
+    // plain `xdg-open` here isn't wrapped in any compositor at all, so there
+    // is nothing to tear down. Heroic's own Electron process, once it
+    // starts, connects directly to the Kiosk session the same way desktop
+    // apps and RetroArch do (confirmed on real hardware to work - see
+    // docs/kiosk-session.md) - no nested Gamescope needed. This also removes
+    // a real, measured performance cost: a nested Gamescope instance means
+    // the outer (DRM, direct-scanout) Gamescope compositing the nested one
+    // (SDL backend) compositing the actual game - two GPU compositing
+    // passes instead of one, confirmed to matter on weaker hardware.
+    let command = vec![OsString::from("xdg-open"), OsString::from(uri)];
     launch_with_systemd(HEROIC_UNIT_NAME, command, None).await
 }
 

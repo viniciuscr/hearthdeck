@@ -1,0 +1,36 @@
+services:
+  hearthdeck:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    platform: linux/amd64
+    ports:
+      # Open http://localhost:6080/vnc.html to watch/drive the app.
+      - "6080:6080"
+    volumes:
+      # Bind-mount the repo so edits on the host are picked up without
+      # rebuilding the image.
+      - ..:/workspace
+      # Named volumes for build outputs and caches. Kept separate from the
+      # host's own directories (even though services/target, build/, and
+      # .dart_tool/ are already gitignored) because this container builds
+      # Linux binaries/artifacts, which must not mix with any macOS ones you
+      # already have on disk from running the project natively.
+      - services-target:/workspace/services/target
+      - flutter-build:/workspace/build
+      - dart-tool:/workspace/.dart_tool
+      - pub-cache:/root/.pub-cache
+      - cargo-registry:/root/.cargo/registry
+      - cargo-git:/root/.cargo/git
+    environment:
+      HEARTHDECK_DOCKER_MODE: "${HEARTHDECK_DOCKER_MODE:-dev}"
+    stdin_open: true
+    tty: true
+
+volumes:
+  services-target:
+  flutter-build:
+  dart-tool:
+  pub-cache:
+  cargo-registry:
+  cargo-git:

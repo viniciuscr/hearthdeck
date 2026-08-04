@@ -12,6 +12,12 @@ CachyOS. It installs:
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck.desktop`: the minimal Hearthdeck
   Kiosk session shown by compatible display managers.
+- `/usr/lib/hearthdeck/hearthdeck-overlay` and
+  `/usr/lib/systemd/user/hearthdeck-overlay.service`: Guide-button-toggled
+  quick-menu overlay, started only by the separate **COSMIC (Test)** session;
+  it is never started in the Hearthdeck Kiosk (Gamescope) session. The session
+  installs a COSMIC custom shortcut, `Super+Shift+H`, which runs
+  `hearthdeck-overlay --toggle`. It does not replace an existing user binding.
 - `/usr/bin/hearthdeck-overlay-spike`: **temporary**, not a real feature.
   Disposable hardware-verification tool for an in-progress investigation
   into a system-wide overlay menu; see `services/hearthdeck-overlay-spike`

@@ -1,0 +1,12 @@
+[global]
+# Only needed if your network blocks direct PyPI downloads (see
+# docker/README.md -- this repo hit Zscaler doing that for
+# files.pythonhosted.org while building this image). If so, copy your
+# working pip config here:
+#
+#   cp ~/.config/pip/pip.conf docker/pip.conf     # Linux
+#   cp ~/.pip/pip.conf docker/pip.conf            # macOS (older pip)
+#
+# `docker/pip.conf` is gitignored (it typically embeds a mirror auth token)
+# -- only this `.example` template is committed.
+index-url = https://your-internal-pypi-mirror.example/simple/

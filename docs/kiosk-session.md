@@ -98,15 +98,22 @@ behave the same way against `--backend drm` standalone mode as it does in
 genuinely nested mode; this needs a real fix, tested on hardware, not
 another blind flag addition.
 
-Heroic is the one exception, and keeps a nested Gamescope instance of its
-own (see `services/README.md`) — not because a second Gamescope can be shown
-this way in general (it can't, per above), but because that nested instance
-now uses the SDL backend, connecting through this session's `DISPLAY` and
-presenting itself as an ordinary X11 client rather than a Wayland peer,
-which is exactly the mechanism confirmed to work. It keeps its own nested
-instance (rather than direct-connecting like other apps) specifically so
-Heroic's games can still get their own internal resolution/upscaling if a
-game ever needs it.
+Heroic used to keep a nested Gamescope instance of its own for its cold-start
+launch (SDL backend, presenting as an ordinary X11 client the way this whole
+approach relies on) - **reverted**: it added a second real GPU-compositing
+pass (outer Gamescope compositing the nested one compositing the actual
+game) on top of the direct-scanout path the outer instance already provides,
+and was confirmed on real hardware to make game performance noticeably
+worse than the same game launched from a normal desktop session. Its only
+actual justification, `--keep-alive` preventing Gamescope from tearing down
+the display when its wrapped `xdg-open` child exits almost immediately,
+doesn't apply once nothing is wrapping `xdg-open` in a Gamescope instance at
+all - so Heroic's cold start is now a plain `xdg-open`, direct-connecting to
+this session exactly like every other launch (see `services/README.md`).
+Custom per-game internal resolution/upscaling, the one thing the nested
+instance would have provided, is not available today as a result; it would
+need a real answer to the same performance question before being
+reintroduced, not just re-added and hoped for.
 
 **Not yet verified on hardware:** whether a genuinely native-Wayland client
 (no Xwayland involved) connecting directly via `WAYLAND_DISPLAY` is shown
@@ -278,14 +285,16 @@ style preferences.
   started/tracked process.
 - **Do not remove `--backend drm`.** Without it, Gamescope tries to run
   nested inside another Wayland/X11 session, which does not exist here.
-- **Do not add a nested Gamescope instance for desktop app/RetroArch
-  launches.** This used to be the default and was confirmed, on real
-  hardware, to never actually show anything (see "Launching apps and games"
-  above) — direct connection is not a shortcut taken for convenience, it's
-  the thing that was proven to work after the wrapped version was proven not
-  to. Heroic is the sole, deliberate exception, and its nested instance uses
-  the SDL backend specifically because that presents it as an ordinary X11
-  client rather than a Wayland peer.
+- **Do not add a nested Gamescope instance for any launch, including
+  Heroic.** This used to be the default for every launch, then specifically
+  for Heroic's cold start, and both were tried and reverted: neither
+  actually got composited content shown reliably (desktop apps/RetroArch),
+  and the Heroic case additionally measured a real, noticeable performance
+  regression from the extra GPU-compositing pass, on top of not being
+  needed at all once nothing wraps `xdg-open` in a compositor to begin with.
+  Direct connection is not a shortcut taken for convenience - it's the
+  thing proven to work, twice now, after the nested version was proven not
+  to (or proven worse).
 - **Do not remove the `systemctl --user import-environment` call, or "simplify"
   it away as redundant with the `export` lines above it.** It looks
   redundant; it is not. The `export`s only affect this script's own process;

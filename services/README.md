@@ -63,17 +63,20 @@ unit per launch: Electron's single-instance lock means any launch after the
 first is handled by whichever Heroic process is already running, not a new
 one, so a fresh-unit-per-launch model would lose track of every game after
 the first. The bridge checks whether that unit is already active before
-deciding whether to start it (cold start, wrapped in its own nested
-Gamescope instance using the SDL backend - connecting through this session's
-`DISPLAY` and presenting as an ordinary X11 client, the one launch that keeps
-a nested instance at all, specifically so its games can still get their own
-internal resolution/upscaling; `--keep-alive` so the display survives past
-`xdg-open` handing off and exiting) or just ask the already-running instance
-to launch the next game directly. Heroic is intentionally left running
-between games - faster subsequent launches, at the cost of some idle memory
-- and closing it (and whatever game it's running) is `systemctl --user stop
-hearthdeck-heroic.service`, which reliably kills the whole process tree via
-its cgroup even though Heroic never exits on its own.
+deciding whether to start it (cold start: a plain `xdg-open`, connecting
+directly to the Kiosk session the same way every other launch does - not
+wrapped in a nested Gamescope instance of its own, which was tried and
+reverted: it added a real, measured second GPU-compositing pass on top of
+the outer session's own, and its only actual justification - `--keep-alive`
+preventing Gamescope from tearing down the display when its wrapped
+`xdg-open` child exits almost immediately - doesn't apply to something no
+Gamescope instance is wrapping in the first place) or just ask the
+already-running instance to launch the next game directly. Heroic is
+intentionally left running between games - faster subsequent launches, at
+the cost of some idle memory - and closing it (and whatever game it's
+running) is `systemctl --user stop hearthdeck-heroic.service`, which
+reliably kills the whole process tree via its cgroup even though Heroic
+never exits on its own.
 
 ### The launch pipeline shape
 

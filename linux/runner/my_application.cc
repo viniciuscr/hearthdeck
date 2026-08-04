@@ -41,7 +41,18 @@ static void my_application_activate(GApplication* application) {
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
   gtk_window_set_title(window, "hearthdeck");
   gtk_window_set_decorated(window, FALSE);
-  gtk_window_fullscreen(window);
+  // Xvfb plus a minimal, non-compositing window manager (this repo's
+  // docker/ visual test sandbox) can leave gtk_window_fullscreen()'s async
+  // round-trip to the WM never completing, so the GL area never learns its
+  // target size and the engine waits forever for a first frame that never
+  // renders. Real hardware doesn't hit this -- Gamescope owns the whole DRM
+  // output and sizes the window synchronously -- so only bypass fullscreen
+  // for that specific sandbox, never for a real session.
+  if (g_getenv("HEARTHDECK_DOCKER_SANDBOX") != nullptr) {
+    gtk_window_set_default_size(window, 1920, 1080);
+  } else {
+    gtk_window_fullscreen(window);
+  }
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(

@@ -7,8 +7,8 @@ pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
 license=('MIT')
-depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'retroarch' 'sqlite' 'systemd' 'xorg-xwayland')
-makedepends=('clang' 'cmake' 'just' 'ninja' 'pkgconf' 'rust' 'sqlite')
+depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'libxkbcommon' 'retroarch' 'sqlite' 'systemd' 'xorg-xwayland')
+makedepends=('clang' 'cmake' 'just' 'libxkbcommon' 'ninja' 'pkgconf' 'rust' 'sqlite')
 # RetroArch runs no emulator without a libretro core. Cores are separate
 # packages upstream (docs.libretro.com/guides/download-cores: distro-packaged
 # RetroArch expects cores from the package manager, not its own downloader).
@@ -38,6 +38,7 @@ build() {
   just ci-check
   flutter build linux --release --dart-define=HEARTHDECK_USE_LOCAL_CATALOG=true
   cargo build --manifest-path services/Cargo.toml --workspace --release
+  cargo build --manifest-path services/hearthdeck-overlay/Cargo.toml --release
 }
 
 package() {
@@ -54,6 +55,7 @@ package() {
   # services/hearthdeck-overlay-spike and docs/kiosk-session.md). Remove this
   # line, and the crate, once the finding is confirmed either way.
   install -Dm755 services/target/release/hearthdeck-overlay-spike "$pkgdir/usr/bin/hearthdeck-overlay-spike"
+  install -Dm755 services/hearthdeck-overlay/target/release/hearthdeck-overlay "$pkgdir/usr/lib/hearthdeck/hearthdeck-overlay"
   install -Dm644 packaging/arch/hearthdeck.target "$pkgdir/usr/lib/systemd/user/hearthdeck.target"
   install -Dm644 packaging/arch/hearthdeck-kiosk.target "$pkgdir/usr/lib/systemd/user/hearthdeck-kiosk.target"
   install -Dm644 packaging/arch/hearthdeck-bridge.socket "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.socket"
@@ -73,6 +75,7 @@ package() {
   install -Dm644 packaging/arch/cosmic-test-session.desktop "$pkgdir/usr/share/wayland-sessions/cosmic-test.desktop"
   install -Dm755 packaging/arch/cosmic-test-session "$pkgdir/usr/lib/hearthdeck/cosmic-test-session"
   install -Dm644 packaging/arch/hearthdeck-cosmic-test.target "$pkgdir/usr/lib/systemd/user/hearthdeck-cosmic-test.target"
+  install -Dm644 packaging/arch/hearthdeck-overlay.service "$pkgdir/usr/lib/systemd/user/hearthdeck-overlay.service"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

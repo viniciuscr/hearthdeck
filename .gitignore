@@ -79,3 +79,8 @@ app.*.map.json
 .env.*
 !.env.example
 /coverage/lcov.info
+
+# Machine/employer-specific network config for the docker/ test sandbox
+# (e.g. an internal PyPI mirror with embedded credentials). See
+# docker/pip.conf.example.
+/docker/pip.conf
