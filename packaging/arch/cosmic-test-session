@@ -4,6 +4,16 @@
 # sole client. Independent of the Hearthdeck Kiosk (Gamescope) session.
 set -Euo pipefail
 
+# Writes straight to the system journal regardless of how this session was
+# launched (greetd/cosmic-greeter's own output capture is unreliable to find
+# - see the "Address already in use" investigation). Find these with:
+#   journalctl -t cosmic-test-session
+log() {
+  logger -t cosmic-test-session -- "$1" || true
+}
+
+log "starting"
+
 export XDG_CURRENT_DESKTOP=hearthdeck:COSMIC
 export XDG_SESSION_DESKTOP=hearthdeck
 export XDG_SESSION_TYPE=wayland
@@ -11,7 +21,8 @@ export XDG_SESSION_TYPE=wayland
 systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE || true
 
 systemctl --user daemon-reload || true
-systemctl --user start hearthdeck.target || true
+log "starting hearthdeck-cosmic-test.target"
+systemctl --user start hearthdeck-cosmic-test.target || true
 systemctl --user try-restart hearthdeck-bridge.service || true
 
 # hearthdeck-overlay.service's own Restart=on-failure/RestartSec=1 absorbs
@@ -19,4 +30,5 @@ systemctl --user try-restart hearthdeck-bridge.service || true
 # which cosmic-comp only imports into systemd --user once it's ready).
 systemctl --user start hearthdeck-overlay.service || true
 
+log "exec cosmic-comp"
 exec cosmic-comp /opt/hearthdeck/hearthdeck

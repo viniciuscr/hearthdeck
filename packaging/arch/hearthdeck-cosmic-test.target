@@ -1,0 +1,14 @@
+[Unit]
+Description=Hearthdeck COSMIC (Test) session prerequisites
+Documentation=file:///usr/share/doc/hearthdeck/KIOSK-SESSION.md
+# Same reasoning as hearthdeck-kiosk.target: this session must never call
+# `systemctl --user start hearthdeck.target` directly, because that target
+# is also independently, automatically started by systemd's own
+# WantedBy=default.target at any login - two independent triggers racing to
+# start the exact same unit caused hearthdeck-daemon.service to fail with
+# "Address already in use" (a second bind attempt against the automatic
+# path's own, already-starting instance). Requiring hearthdeck.target here
+# instead is a no-op if it's already active/activating, matching the Kiosk
+# session's own, proven-working structure exactly.
+Requires=hearthdeck.target
+After=hearthdeck.target

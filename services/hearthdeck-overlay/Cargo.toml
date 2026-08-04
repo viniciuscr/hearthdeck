@@ -1,8 +1,10 @@
+[workspace]
+
 [package]
 name = "hearthdeck-overlay"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
 publish = false
 description = """
 Quick-menu overlay for the "COSMIC (Test)" session (see
@@ -15,18 +17,27 @@ cosmic-comp is a different, real multi-surface Wayland compositor (the same
 mechanism cosmic-panel/cosmic-launcher themselves use) where this is
 architecturally sound. UNTESTED against a real Linux/Wayland toolchain -
 first build must happen on real hardware.
+
+Deliberately NOT a member of services/Cargo.toml's workspace: libcosmic
+pulls in iced/wgpu/winit/smithay-client-toolkit, a dependency tree large
+enough that `cargo build --workspace` (what packaging/arch/PKGBUILD and
+`just ci-check` both run) went from ~3 minutes to ~25 building it every
+time. Build/test this crate on its own instead:
+  cargo build --manifest-path services/hearthdeck-overlay/Cargo.toml --release
+It is not built or installed by PKGBUILD; install the resulting binary and
+packaging/arch/hearthdeck-overlay.service manually when testing.
 """
 
 [dependencies]
 evdev = { version = "0.13", features = ["tokio"] }
 futures-channel = "0.3"
-futures-util.workspace = true
+futures-util = "0.3"
 libcosmic = { git = "https://github.com/pop-os/libcosmic/", features = [
   "wayland",
   "winit",
   "tokio",
 ] }
 nix = { version = "0.29", features = ["signal"] }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
-tracing.workspace = true
-tracing-subscriber.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

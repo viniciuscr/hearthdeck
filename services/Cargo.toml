@@ -5,7 +5,6 @@ members = [
   "hearthdeck-daemon",
   "hearthdeck-bridge",
   "hearthdeck-overlay-spike",
-  "hearthdeck-overlay",
 ]
 resolver = "3"
 

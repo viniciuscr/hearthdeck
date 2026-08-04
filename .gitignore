@@ -46,6 +46,10 @@ app.*.map.json
 
 # Rust build artifacts
 /services/target/
+# hearthdeck-overlay is deliberately its own standalone Cargo workspace (see
+# services/hearthdeck-overlay/Cargo.toml), not a member of services/, so its
+# build output lands in its own nested target/ instead of /services/target/.
+/services/hearthdeck-overlay/target/
 
 # Local Hearthdeck service state and diagnostics
 /data/
