@@ -17,6 +17,7 @@ use cosmic::iced::runtime::core::layout::Limits;
 use cosmic::iced::runtime::platform_specific::wayland::CornerRadius;
 use cosmic::iced::runtime::platform_specific::wayland::layer_surface::IcedMargin;
 use cosmic::iced::stream;
+use cosmic::iced::futures::channel::mpsc::Sender;
 use cosmic::iced::{Alignment, Color, Length, Subscription, window};
 use cosmic::surface::action::{LiveSettings, app_layer_shell};
 use cosmic::widget::{button, column, container, text};
@@ -206,7 +207,7 @@ impl cosmic::Application for Overlay {
 
 fn toggle_subscription() -> Subscription<()> {
     Subscription::run(|| {
-        stream::channel(8, |mut output| async move {
+        stream::channel(8, |mut output: Sender<()>| async move {
             let path = socket_path();
             if let Err(err) = std::fs::remove_file(&path)
                 && err.kind() != io::ErrorKind::NotFound

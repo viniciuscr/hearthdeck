@@ -2,7 +2,7 @@ use std::error::Error;
 
 use cosmic_config::{Config, ConfigGet, ConfigSet};
 use cosmic_settings_config::Binding;
-use cosmic_settings_config::shortcuts::{Action, Modifiers};
+use cosmic_settings_config::shortcuts::{Action, Modifiers, Shortcuts};
 
 const SHORTCUT_CONFIG_ID: &str = "com.system76.CosmicSettings.Shortcuts";
 const SHORTCUT_CONFIG_VERSION: u64 = 1;
@@ -12,7 +12,7 @@ const TOGGLE_COMMAND: &str = "/usr/lib/hearthdeck/hearthdeck-overlay --toggle";
 /// Adds Hearthdeck's default shortcut without replacing a user-owned binding.
 pub fn install() -> Result<(), Box<dyn Error>> {
     let config = Config::new(SHORTCUT_CONFIG_ID, SHORTCUT_CONFIG_VERSION)?;
-    let mut shortcuts = config.get_local(SHORTCUT_KEY).unwrap_or_default();
+    let mut shortcuts: Shortcuts = config.get_local(SHORTCUT_KEY).unwrap_or_default();
     let binding = Binding {
         modifiers: Modifiers::new().logo().shift(),
         key: Some(xkbcommon::xkb::Keysym::from_char('h')),
