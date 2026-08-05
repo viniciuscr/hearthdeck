@@ -4,8 +4,6 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixDatagram as StdUnixDatagram, UnixStream as StdUnixStream};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -120,20 +118,28 @@ enum Message {
     ToggleOverlay,
     ResumeApp,
     CloseApp,
+    /// Reported by the background task started for `CloseApp`, once
+    /// `stop_active_application` returns. `Err` carries a display-formatted
+    /// message (not the original `io::Error`) since `Message` must be
+    /// `Clone` for iced/cosmic's event loop, and `io::Error` isn't.
+    CloseFinished(Result<(), String>),
+}
+
+/// What `view_window` renders while the overlay is visible. Not used while
+/// hidden. Separate from `Overlay::visible` because closing keeps the
+/// surface up (with different content) until `stop_active_application`
+/// actually finishes - unlike toggling/resuming, which hide immediately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Status {
+    Menu,
+    Closing,
 }
 
 struct Overlay {
     core: Core,
     window_id: window::Id,
     visible: bool,
-    // Guards against a single "Close App" press somehow resulting in more
-    // than one in-flight stop_active_application() call - each call asks the
-    // bridge "what's active *right now*?", so a second call starting before
-    // the first finishes could end up closing a completely different app
-    // once the first one's stop has already removed it from the bridge's
-    // tracking. Shared with the spawned closing thread via Arc since Overlay
-    // itself only lives on the iced event loop's thread.
-    closing: Arc<AtomicBool>,
+    status: Status,
 }
 
 impl cosmic::Application for Overlay {
@@ -155,7 +161,7 @@ impl cosmic::Application for Overlay {
             core,
             window_id: window::Id::unique(),
             visible: false,
-            closing: Arc::new(AtomicBool::new(false)),
+            status: Status::Menu,
         };
         (app, Task::none())
     }
@@ -170,7 +176,12 @@ impl cosmic::Application for Overlay {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ToggleOverlay => {
-                if self.visible {
+                // Ignore toggles while a close is in progress rather than
+                // tearing down the "Closing..." surface early - the surface
+                // comes down on its own once CloseFinished arrives.
+                if self.status == Status::Closing {
+                    Task::none()
+                } else if self.visible {
                     self.hide()
                 } else {
                     self.show()
@@ -178,24 +189,29 @@ impl cosmic::Application for Overlay {
             }
             Message::ResumeApp => self.hide(),
             Message::CloseApp => {
-                let hide = self.hide();
-                if self.closing.swap(true, Ordering::SeqCst) {
-                    // A close is already running; ignore this extra press
-                    // instead of asking the bridge "what's active *now*?"
-                    // and closing whatever that happens to be next.
-                    return hide;
+                if self.status == Status::Closing {
+                    // Already closing from an earlier press; asking the
+                    // bridge "what's active *now*?" again could close a
+                    // different app once the first close has already
+                    // removed the first one from its tracking.
+                    return Task::none();
                 }
-                let closing = Arc::clone(&self.closing);
-                thread::spawn(move || {
-                    if let Err(err) = stop_active_application() {
-                        error!(
-                            ?err,
-                            "hearthdeck-overlay: failed to stop active application"
-                        );
-                    }
-                    closing.store(false, Ordering::SeqCst);
-                });
-                hide
+                self.status = Status::Closing;
+                cosmic::task::future(async {
+                    Message::CloseFinished(
+                        tokio::task::spawn_blocking(stop_active_application)
+                            .await
+                            .map_err(|err| err.to_string())
+                            .and_then(|result| result.map_err(|err| err.to_string())),
+                    )
+                })
+            }
+            Message::CloseFinished(result) => {
+                if let Err(err) = result {
+                    error!(%err, "hearthdeck-overlay: failed to stop active application");
+                }
+                self.status = Status::Menu;
+                self.hide()
             }
         }
     }
@@ -209,15 +225,22 @@ impl cosmic::Application for Overlay {
             return text("").into();
         }
 
-        let menu = column(vec![
-            text::title2("Hearthdeck").into(),
-            button::suggested("Resume")
-                .on_press(Message::ResumeApp)
-                .into(),
-            button::destructive("Close App")
-                .on_press(Message::CloseApp)
-                .into(),
-        ])
+        let menu = match self.status {
+            Status::Menu => column(vec![
+                text::title2("Hearthdeck").into(),
+                button::suggested("Resume")
+                    .on_press(Message::ResumeApp)
+                    .into(),
+                button::destructive("Close App")
+                    .on_press(Message::CloseApp)
+                    .into(),
+            ]),
+            // No buttons while closing: the pending stop_active_application
+            // call is already committed to whatever was active when
+            // CloseApp was pressed, and re-pressing Resume/Close here
+            // wouldn't affect it either way.
+            Status::Closing => column(vec![text::title2("Closing app\u{2026}").into()]),
+        }
         .spacing(12)
         .align_x(Alignment::Center);
 
