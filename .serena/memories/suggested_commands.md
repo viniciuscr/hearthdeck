@@ -1,0 +1,9 @@
+- `just setup` — install toolchains and fetch Flutter deps.
+- `just app` / `just app-live ...` / `just dev` — run the client, live backend mode, or combined local dev flow.
+- `just check` — format + backend checks/tests + Flutter tests.
+- `just check-services` — Rust backend check/test/clippy only.
+- `just test-app` — Flutter analyze + tests.
+- `just build-services` / `just build-services-debug` — release/debug backend builds.
+- `just install-services` — install Linux user units into `~/.config/systemd/user` for source-checkout testing.
+- `just services-status`, `just logs-daemon`, `just logs-bridge`, `just logs-errors` — backend service inspection.
+- Linux service commands use `systemctl --user ...`; pair with `journalctl --user ...` for logs.

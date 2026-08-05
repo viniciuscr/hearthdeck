@@ -1,0 +1,7 @@
+- `hearthdeck-daemon`: paired HTTP/WebSocket API, SQLite state, discovery/enrichment scheduling, health snapshot, pairing records.
+- `hearthdeck-bridge`: Linux-only desktop-entry discovery and allowlisted launches through a user-only Unix socket; socket-activated.
+- `hearthdeck.target` is the backend root user target. It owns the API daemon and bridge socket; the daemon is `Type=notify` and waits on the bridge socket.
+- Backend startup is session-driven on Linux: kiosk session imports env into systemd --user, then starts a session-specific target that pulls in `hearthdeck.target`.
+- Launches are always routed through transient systemd user units; Heroic is tracked as one stable `hearthdeck-heroic.service` unit.
+- Provider health is exposed through `GET /v1/health`; source scans are independent so one provider failure cannot erase another source's catalog.
+- Useful refs: `services/README.md`, `docs/backend-architecture.md`, `docs/observability.md`, `docs/kiosk-session.md`.

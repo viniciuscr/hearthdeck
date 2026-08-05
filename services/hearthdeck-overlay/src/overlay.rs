@@ -21,26 +21,10 @@ use cosmic::iced::stream;
 use cosmic::iced::{Alignment, Color, Length, Subscription, window};
 use cosmic::surface::action::{LiveSettings, app_layer_shell};
 use cosmic::widget::{button, column, container, text};
-use cosmic_client_toolkit::{
-    cosmic_protocols::{
-        toplevel_info::v1::client::zcosmic_toplevel_handle_v1,
-        toplevel_management::v1::client::zcosmic_toplevel_manager_v1,
-    },
-    toplevel_info::{ToplevelInfoHandler, ToplevelInfoState},
-    toplevel_management::{ToplevelManagerHandler, ToplevelManagerState},
-};
+use evdev::{EventType, InputEvent, KeyCode};
 use futures_util::SinkExt;
-use sctk::{
-    output::{OutputHandler, OutputState},
-    registry::{ProvidesRegistryState, RegistryState},
-};
-use smithay_client_toolkit as sctk;
 use tokio::net::UnixDatagram;
 use tracing::{error, info, warn};
-use wayland_client::{
-    Connection, QueueHandle, WEnum, globals::registry_queue_init, protocol::wl_output,
-};
-use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1;
 
 use crate::input;
 use crate::shortcut;
@@ -135,114 +119,10 @@ enum Message {
     CloseApp,
 }
 
-struct ToplevelProbe {
-    output_state: OutputState,
-    registry_state: RegistryState,
-    toplevel_info_state: ToplevelInfoState,
-    toplevel_manager_state: ToplevelManagerState,
-    close_supported: bool,
-}
-
-impl ProvidesRegistryState for ToplevelProbe {
-    fn registry(&mut self) -> &mut RegistryState {
-        &mut self.registry_state
-    }
-
-    sctk::registry_handlers!(OutputState);
-}
-
-impl OutputHandler for ToplevelProbe {
-    fn output_state(&mut self) -> &mut OutputState {
-        &mut self.output_state
-    }
-
-    fn new_output(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
-    ) {
-    }
-
-    fn update_output(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
-    ) {
-    }
-
-    fn output_destroyed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
-    ) {
-    }
-}
-
-impl ToplevelInfoHandler for ToplevelProbe {
-    fn toplevel_info_state(&mut self) -> &mut ToplevelInfoState {
-        &mut self.toplevel_info_state
-    }
-
-    fn new_toplevel(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
-    ) {
-    }
-
-    fn update_toplevel(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
-    ) {
-    }
-
-    fn toplevel_closed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
-    ) {
-    }
-}
-
-impl ToplevelManagerHandler for ToplevelProbe {
-    fn toplevel_manager_state(&mut self) -> &mut ToplevelManagerState {
-        &mut self.toplevel_manager_state
-    }
-
-    fn capabilities(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        capabilities: Vec<
-            WEnum<zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1>,
-        >,
-    ) {
-        self.close_supported = close_is_supported(&capabilities);
-    }
-}
-
-cosmic_client_toolkit::delegate_toplevel_info!(ToplevelProbe);
-cosmic_client_toolkit::delegate_toplevel_manager!(ToplevelProbe);
-sctk::delegate_output!(ToplevelProbe);
-sctk::delegate_registry!(ToplevelProbe);
-
 struct Overlay {
     core: Core,
     window_id: window::Id,
     visible: bool,
-    // ponytail: identifier of the app that was focused right before we grabbed
-    // keyboard input. The overlay's own layer surface uses
-    // KeyboardInteractivity::Exclusive, which clears the underlying toplevel's
-    // Activated state as soon as the overlay opens - so "Close App" can no
-    // longer find it by activation state at click time. Capture it up front.
-    active_before_overlay: Option<String>,
 }
 
 impl cosmic::Application for Overlay {
@@ -264,7 +144,6 @@ impl cosmic::Application for Overlay {
             core,
             window_id: window::Id::unique(),
             visible: false,
-            active_before_overlay: None,
         };
         (app, Task::none())
     }
@@ -287,19 +166,16 @@ impl cosmic::Application for Overlay {
             }
             Message::ResumeApp => self.hide(),
             Message::CloseApp => {
-                let Some(identifier) = self.active_before_overlay.clone() else {
-                    warn!("hearthdeck-overlay: no app was focused before the overlay opened");
-                    return self.hide();
-                };
-                thread::spawn(move || {
-                    if let Err(err) = close_toplevel(&identifier) {
+                let hide = self.hide();
+                thread::spawn(|| {
+                    if let Err(err) = send_close_shortcut() {
                         error!(
                             ?err,
-                            "hearthdeck-overlay: failed to close active application"
+                            "hearthdeck-overlay: failed to send close shortcut"
                         );
                     }
                 });
-                self.hide()
+                hide
             }
         }
     }
@@ -378,121 +254,52 @@ fn toggle_subscription() -> Subscription<()> {
     })
 }
 
-fn probe_toplevels() -> io::Result<(Connection, ToplevelProbe)> {
-    let conn = Connection::connect_to_env().map_err(io::Error::other)?;
-    let (globals, mut event_queue) = registry_queue_init(&conn).map_err(io::Error::other)?;
-    let qh = event_queue.handle();
-    let registry_state = RegistryState::new(&globals);
-    let toplevel_info_state =
-        ToplevelInfoState::try_new(&registry_state, &qh).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Unsupported, "toplevel list is unavailable")
-        })?;
-    let toplevel_manager_state =
-        ToplevelManagerState::try_new(&registry_state, &qh).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Unsupported, "toplevel close is unavailable")
-        })?;
-    let mut probe = ToplevelProbe {
-        output_state: OutputState::new(&globals, &qh),
-        registry_state,
-        toplevel_info_state,
-        toplevel_manager_state,
-        close_supported: false,
-    };
-    event_queue
-        .roundtrip(&mut probe)
-        .map_err(io::Error::other)?;
-    Ok((conn, probe))
-}
+/// Simulates an Alt+F4 keypress via a synthetic uinput keyboard, using
+/// whatever app currently has focus - i.e. the app the overlay was covering,
+/// once its own keyboard grab is released by `hide()`.
+///
+/// ponytail: COSMIC's native toplevel-close protocol (zcosmic_toplevel_manager_v1)
+/// looked like the "correct" fix and passed every check we could run, but
+/// didn't actually close anything on real hardware - likely because many
+/// apps/games don't wire up a close-request handler for that protocol event,
+/// while Alt+F4 is a close shortcut every desktop app and window manager
+/// already honors. Simulating the keypress is the boring, reliable path.
+/// Upgrade to a protocol-based close if/when we confirm which apps ignore it
+/// and need something gentler than Alt+F4's forced-quit semantics.
+fn send_close_shortcut() -> io::Result<()> {
+    // Give the compositor a moment to return keyboard focus to the
+    // now-uncovered app after hide() destroys the overlay's layer surface.
+    thread::sleep(Duration::from_millis(200));
 
-/// Identifier of the single activated toplevel, if any. Meant to be called
-/// before the overlay grabs keyboard input - see `Overlay::active_before_overlay`.
-fn activated_toplevel_identifier() -> io::Result<Option<String>> {
-    let (_conn, probe) = probe_toplevels()?;
-    let mut activated = probe.toplevel_info_state.toplevels().filter(|toplevel| {
-        toplevel
-            .state
-            .contains(&zcosmic_toplevel_handle_v1::State::Activated)
-    });
-    let Some(active) = activated.next() else {
-        return Ok(None);
-    };
-    if activated.next().is_some() {
-        return Err(io::Error::other("more than one toplevel is activated"));
-    }
-    Ok(Some(active.identifier.clone()))
-}
+    let mut keys = evdev::AttributeSet::<KeyCode>::new();
+    keys.insert(KeyCode::KEY_LEFTALT);
+    keys.insert(KeyCode::KEY_F4);
 
-/// Requests that the compositor close the toplevel matching `identifier`.
-/// Matching by identifier (not activation state) because by the time this
-/// runs, the overlay's own keyboard grab has already cleared Activated on the
-/// underlying toplevel.
-fn close_toplevel(identifier: &str) -> io::Result<()> {
-    let (conn, probe) = probe_toplevels()?;
-    if !probe.close_supported {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "compositor does not support closing toplevels",
-        ));
-    }
-    let target = probe
-        .toplevel_info_state
-        .toplevels()
-        .find(|toplevel| toplevel.identifier == identifier)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "tracked toplevel is no longer open",
-            )
-        })?;
-    let toplevel = target
-        .cosmic_toplevel
-        .clone()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "toplevel cannot be closed"))?;
-    let app_id = target.app_id.clone();
-    let title = target.title.clone();
+    let mut device = evdev::uinput::VirtualDevice::builder()?
+        .name("hearthdeck-overlay-close-shortcut")
+        .with_keys(&keys)?
+        .build()?;
 
-    probe.toplevel_manager_state.manager.close(&toplevel);
-    conn.flush().map_err(io::Error::other)?;
-    info!(
-        %app_id,
-        %title,
-        %identifier,
-        "hearthdeck-overlay: requested close for tracked toplevel"
-    );
+    // Give the compositor time to notice the new input device before we
+    // emit events on it.
+    thread::sleep(Duration::from_millis(100));
+
+    device.emit(&[
+        InputEvent::new(EventType::KEY.0, KeyCode::KEY_LEFTALT.0, 1),
+        InputEvent::new(EventType::KEY.0, KeyCode::KEY_F4.0, 1),
+    ])?;
+    thread::sleep(Duration::from_millis(50));
+    device.emit(&[
+        InputEvent::new(EventType::KEY.0, KeyCode::KEY_F4.0, 0),
+        InputEvent::new(EventType::KEY.0, KeyCode::KEY_LEFTALT.0, 0),
+    ])?;
+
+    info!("hearthdeck-overlay: sent Alt+F4 close shortcut");
     Ok(())
-}
-
-fn close_is_supported(
-    capabilities: &[WEnum<
-        zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1,
-    >],
-) -> bool {
-    capabilities.iter().any(|capability| {
-        matches!(
-            capability,
-            WEnum::Value(
-                zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::Close
-            )
-        )
-    })
 }
 
 impl Overlay {
     fn show(&mut self) -> Task<Message> {
-        // Capture identity before we grab keyboard input below - once the
-        // overlay has exclusive keyboard interactivity, the compositor clears
-        // the underlying toplevel's Activated state and it can no longer be
-        // found that way.
-        self.active_before_overlay = match activated_toplevel_identifier() {
-            Ok(identifier) => identifier,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    "hearthdeck-overlay: failed to read activated toplevel"
-                );
-                None
-            }
-        };
         self.visible = true;
         cosmic::surface::surface_task(app_layer_shell(
             |_app: &Overlay| LiveSettings {
@@ -518,18 +325,5 @@ impl Overlay {
     fn hide(&mut self) -> Task<Message> {
         self.visible = false;
         destroy_layer_surface(self.window_id)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{WEnum, close_is_supported, zcosmic_toplevel_manager_v1};
-
-    #[test]
-    fn requires_the_close_capability() {
-        use zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::Close;
-
-        assert!(close_is_supported(&[WEnum::Value(Close)]));
-        assert!(!close_is_supported(&[WEnum::Unknown(0)]));
     }
 }

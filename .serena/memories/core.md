@@ -1,0 +1,8 @@
+- Flutter client + Rust services repo.
+- Linux backend lives under `services/`; paired API daemon and Linux-only bridge are the main host-side pieces.
+- `hearthdeck.target` is the systemd user-session root for the backend; it owns the daemon and bridge socket.
+- Kiosk session = Gamescope on DRM/KMS with Hearthdeck as only child.
+- COSMIC (Test) session = cosmic-comp + Hearthdeck overlay, separate from Kiosk.
+- LAN access is opt-in via `HEARTHDECK_LAN_ENABLED=true` plus TLS cert/key env vars.
+- Pairing code creation stays on loopback admin port `127.0.0.1:38401`.
+- Read `mem:backend/core` for service/startup graph, `mem:frontend/core` for Flutter behavior, and the other project memories for commands, stack, conventions, and task completion.

@@ -1,0 +1,4 @@
+- Frontend-only changes: `just test-app`.
+- Backend-only changes: `just check-services`.
+- Cross-cutting changes: `just check`.
+- Linux packaging/session changes: also verify the relevant systemd units or session scripts still start the backend target and service logs look sane.

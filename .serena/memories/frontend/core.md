@@ -1,0 +1,6 @@
+- Flutter catalog UI is repository-driven.
+- macOS/tests use `MockCatalogRepository`; live API only when both `HEARTHDECK_BACKEND_URL` and `HEARTHDECK_PAIRING_TOKEN` are provided (see `just app-live`).
+- `FullLibraryPage` is the main live-catalog surface; dashboard/search stay fixture-backed until explicitly replaced.
+- Navigation is controller-first: Back is a global contract, focus is the cursor, and per-screen Escape handlers should not be reintroduced.
+- Reuse the shared `Tv*` controls/layouts (`TvFocusable`, `TvDirectionalFocusNavigation`, `TvTwoPaneLayout`, etc.) before adding new UI machinery.
+- Native/standard Flutter behavior is preferred over custom wrappers when possible.
