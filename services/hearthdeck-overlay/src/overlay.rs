@@ -237,6 +237,12 @@ struct Overlay {
     core: Core,
     window_id: window::Id,
     visible: bool,
+    // ponytail: identifier of the app that was focused right before we grabbed
+    // keyboard input. The overlay's own layer surface uses
+    // KeyboardInteractivity::Exclusive, which clears the underlying toplevel's
+    // Activated state as soon as the overlay opens - so "Close App" can no
+    // longer find it by activation state at click time. Capture it up front.
+    active_before_overlay: Option<String>,
 }
 
 impl cosmic::Application for Overlay {
@@ -258,6 +264,7 @@ impl cosmic::Application for Overlay {
             core,
             window_id: window::Id::unique(),
             visible: false,
+            active_before_overlay: None,
         };
         (app, Task::none())
     }
@@ -280,8 +287,12 @@ impl cosmic::Application for Overlay {
             }
             Message::ResumeApp => self.hide(),
             Message::CloseApp => {
-                thread::spawn(|| {
-                    if let Err(err) = close_active_app() {
+                let Some(identifier) = self.active_before_overlay.clone() else {
+                    warn!("hearthdeck-overlay: no app was focused before the overlay opened");
+                    return self.hide();
+                };
+                thread::spawn(move || {
+                    if let Err(err) = close_toplevel(&identifier) {
                         error!(
                             ?err,
                             "hearthdeck-overlay: failed to close active application"
@@ -367,7 +378,7 @@ fn toggle_subscription() -> Subscription<()> {
     })
 }
 
-fn close_active_app() -> io::Result<()> {
+fn probe_toplevels() -> io::Result<(Connection, ToplevelProbe)> {
     let conn = Connection::connect_to_env().map_err(io::Error::other)?;
     let (globals, mut event_queue) = registry_queue_init(&conn).map_err(io::Error::other)?;
     let qh = event_queue.handle();
@@ -390,40 +401,55 @@ fn close_active_app() -> io::Result<()> {
     event_queue
         .roundtrip(&mut probe)
         .map_err(io::Error::other)?;
+    Ok((conn, probe))
+}
+
+/// Identifier of the single activated toplevel, if any. Meant to be called
+/// before the overlay grabs keyboard input - see `Overlay::active_before_overlay`.
+fn activated_toplevel_identifier() -> io::Result<Option<String>> {
+    let (_conn, probe) = probe_toplevels()?;
+    let mut activated = probe.toplevel_info_state.toplevels().filter(|toplevel| {
+        toplevel
+            .state
+            .contains(&zcosmic_toplevel_handle_v1::State::Activated)
+    });
+    let Some(active) = activated.next() else {
+        return Ok(None);
+    };
+    if activated.next().is_some() {
+        return Err(io::Error::other("more than one toplevel is activated"));
+    }
+    Ok(Some(active.identifier.clone()))
+}
+
+/// Requests that the compositor close the toplevel matching `identifier`.
+/// Matching by identifier (not activation state) because by the time this
+/// runs, the overlay's own keyboard grab has already cleared Activated on the
+/// underlying toplevel.
+fn close_toplevel(identifier: &str) -> io::Result<()> {
+    let (conn, probe) = probe_toplevels()?;
     if !probe.close_supported {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "compositor does not support closing toplevels",
         ));
     }
-    let (toplevel, app_id, title, identifier) = {
-        let mut activated = probe.toplevel_info_state.toplevels().filter(|toplevel| {
-            toplevel
-                .state
-                .contains(&zcosmic_toplevel_handle_v1::State::Activated)
-        });
-        let Some(active) = activated.next() else {
-            return Err(io::Error::new(
+    let target = probe
+        .toplevel_info_state
+        .toplevels()
+        .find(|toplevel| toplevel.identifier == identifier)
+        .ok_or_else(|| {
+            io::Error::new(
                 io::ErrorKind::NotFound,
-                "no activated toplevel is available",
-            ));
-        };
-        if activated.next().is_some() {
-            return Err(io::Error::other("more than one toplevel is activated"));
-        }
-        let Some(toplevel) = active.cosmic_toplevel.clone() else {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "activated toplevel cannot be closed",
-            ));
-        };
-        (
-            toplevel,
-            active.app_id.clone(),
-            active.title.clone(),
-            active.identifier.clone(),
-        )
-    };
+                "tracked toplevel is no longer open",
+            )
+        })?;
+    let toplevel = target
+        .cosmic_toplevel
+        .clone()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "toplevel cannot be closed"))?;
+    let app_id = target.app_id.clone();
+    let title = target.title.clone();
 
     probe.toplevel_manager_state.manager.close(&toplevel);
     conn.flush().map_err(io::Error::other)?;
@@ -431,7 +457,7 @@ fn close_active_app() -> io::Result<()> {
         %app_id,
         %title,
         %identifier,
-        "hearthdeck-overlay: requested close for activated toplevel"
+        "hearthdeck-overlay: requested close for tracked toplevel"
     );
     Ok(())
 }
@@ -451,21 +477,22 @@ fn close_is_supported(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{WEnum, close_is_supported, zcosmic_toplevel_manager_v1};
-
-    #[test]
-    fn requires_the_close_capability() {
-        use zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::Close;
-
-        assert!(close_is_supported(&[WEnum::Value(Close)]));
-        assert!(!close_is_supported(&[WEnum::Unknown(0)]));
-    }
-}
-
 impl Overlay {
     fn show(&mut self) -> Task<Message> {
+        // Capture identity before we grab keyboard input below - once the
+        // overlay has exclusive keyboard interactivity, the compositor clears
+        // the underlying toplevel's Activated state and it can no longer be
+        // found that way.
+        self.active_before_overlay = match activated_toplevel_identifier() {
+            Ok(identifier) => identifier,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    "hearthdeck-overlay: failed to read activated toplevel"
+                );
+                None
+            }
+        };
         self.visible = true;
         cosmic::surface::surface_task(app_layer_shell(
             |_app: &Overlay| LiveSettings {
@@ -491,5 +518,18 @@ impl Overlay {
     fn hide(&mut self) -> Task<Message> {
         self.visible = false;
         destroy_layer_surface(self.window_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WEnum, close_is_supported, zcosmic_toplevel_manager_v1};
+
+    #[test]
+    fn requires_the_close_capability() {
+        use zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::Close;
+
+        assert!(close_is_supported(&[WEnum::Value(Close)]));
+        assert!(!close_is_supported(&[WEnum::Unknown(0)]));
     }
 }
