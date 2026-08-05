@@ -1,0 +1,130 @@
+name: Code Quality & CI Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-rust:
+    name: Rust Code Quality
+    runs-on: ubuntu-latest
+    container: ghcr.io/archlinux/archlinux:base-devel
+    strategy:
+      fail-fast: true
+    
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Arch dependencies
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman --sync --refresh --sysupgrade --noconfirm
+          pacman --sync --noconfirm clang cmake curl git gtk3 jq just ninja pacman-contrib pkgconf sqlite unzip xz
+          pacman --sync --noconfirm wayland wayland-protocols libxkbcommon
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: clippy,rustfmt
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.8
+          cache: true
+
+      - name: Restore Rust build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            services/target
+          key: check-rust-${{ runner.arch }}-rust-1.97.1-${{ hashFiles('services/Cargo.lock') }}
+          restore-keys: |
+            check-rust-${{ runner.arch }}-rust-1.97.1-
+
+      - name: Check Rust formatting
+        run: |
+          cargo fmt --manifest-path services/Cargo.toml --all -- --check
+        continue-on-error: false
+
+      - name: Check Rust (debug mode)
+        run: |
+          cargo check --manifest-path services/Cargo.toml --workspace
+        continue-on-error: false
+
+      - name: Run Rust tests
+        run: |
+          cargo test --manifest-path services/Cargo.toml --workspace
+        continue-on-error: false
+
+      - name: Run Clippy (release mode with strict linting)
+        run: |
+          cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets --release -- -D warnings
+        continue-on-error: false
+
+      - name: Save Rust build cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            services/target
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+
+  check-flutter:
+    name: Flutter Code Quality
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.8
+          cache: true
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Check Dart formatting
+        run: |
+          dart format --output=none --set-exit-if-changed lib test
+        continue-on-error: false
+
+      - name: Analyze Flutter code
+        run: flutter analyze
+        continue-on-error: false
+
+      - name: Run Flutter tests
+        run: flutter test
+        continue-on-error: false
+
+  validate-ci-readiness:
+    name: CI Readiness Check
+    needs: [check-rust, check-flutter]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check if all quality gates passed
+        run: |
+          if [ "${{ needs.check-rust.result }}" != "success" ]; then
+            echo "❌ Rust code quality checks failed"
+            exit 1
+          fi
+          if [ "${{ needs.check-flutter.result }}" != "success" ]; then
+            echo "❌ Flutter code quality checks failed"
+            exit 1
+          fi
+          echo "✅ All code quality gates passed"

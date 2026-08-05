@@ -1,0 +1,86 @@
+#!/bin/bash
+# Pre-push hook: Validate code before pushing to remote
+# Prevents CI failures by catching formatting, build, and clippy issues locally
+#
+# This hook runs automatically when you push (after: git config core.hooksPath .githooks)
+# To skip this hook for a specific push, use: git push --no-verify
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo -e "${YELLOW}=== Pre-Push Validation ===${NC}"
+echo "Running local checks before push..."
+echo ""
+
+# Track failures
+FAILED=0
+
+# 1. Check Rust formatting
+echo -e "${YELLOW}[1/3] Checking Rust code formatting...${NC}"
+if cargo fmt --manifest-path services/Cargo.toml --all -- --check > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ Formatting check passed${NC}"
+else
+    echo -e "${RED}✗ Formatting check failed${NC}"
+    echo ""
+    echo "Fix formatting with:"
+    echo "  cargo fmt --manifest-path services/Cargo.toml --all"
+    echo ""
+    echo "Then stage and commit:"
+    echo "  git add services/"
+    echo "  git commit -m 'chore: apply rustfmt formatting'"
+    echo ""
+    FAILED=1
+fi
+
+# 2. Build all services in release mode
+echo -e "${YELLOW}[2/3] Building services in release mode...${NC}"
+if cargo build --manifest-path services/Cargo.toml --workspace --release > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ Release build passed${NC}"
+else
+    echo -e "${RED}✗ Release build failed${NC}"
+    echo ""
+    echo "Build failed. Check output:"
+    echo "  cargo build --manifest-path services/Cargo.toml --workspace --release"
+    echo ""
+    echo "Common fixes:"
+    echo "  - Missing import: Add 'use' statement for types from other modules"
+    echo "  - Missing wayland-protocols: Install development headers on Linux"
+    echo "  - See CONTRIBUTING.md for more details"
+    echo ""
+    FAILED=1
+fi
+
+# 3. Check for clippy warnings in release mode
+echo -e "${YELLOW}[3/3] Running Clippy lint checks (release mode)...${NC}"
+if cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets --release -- -D warnings > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ Clippy check passed${NC}"
+else
+    echo -e "${RED}✗ Clippy found warnings${NC}"
+    echo ""
+    echo "Fix warnings with Clippy's suggestions:"
+    echo "  cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets --release"
+    echo ""
+    echo "Then stage and commit the fixes:"
+    echo "  git add services/"
+    echo "  git commit -m 'refactor: address clippy warnings'"
+    echo ""
+    FAILED=1
+fi
+
+echo ""
+if [ $FAILED -eq 0 ]; then
+    echo -e "${GREEN}=== All checks passed! Push will proceed. ===${NC}"
+    exit 0
+else
+    echo -e "${RED}=== Validation failed. Fix issues above and try again. ===${NC}"
+    echo ""
+    echo "To skip this check (not recommended):"
+    echo "  git push --no-verify"
+    echo ""
+    exit 1
+fi

@@ -90,6 +90,25 @@ refresh-metadata url token provider="appstream-local":
 # Run all portable project checks.
 check: format check-services test-app
 
+# Validate code before pushing: format check, release build, and clippy lint.
+pre-push-check:
+  @echo "=== Pre-Push Validation ==="
+  @echo "Running local checks before push..."
+  @echo ""
+  @echo "⏳ [1/3] Checking Rust code formatting..."
+  mise exec -- cargo fmt --manifest-path services/Cargo.toml --all -- --check
+  @echo "✅ Formatting check passed"
+  @echo ""
+  @echo "⏳ [2/3] Building services in release mode..."
+  mise exec -- cargo build --manifest-path services/Cargo.toml --workspace --release
+  @echo "✅ Release build passed"
+  @echo ""
+  @echo "⏳ [3/3] Running Clippy lint checks (release mode)..."
+  mise exec -- cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets --release -- -D warnings
+  @echo "✅ Clippy check passed"
+  @echo ""
+  @echo "✨ All checks passed! Push when ready."
+
 # Run source validation in CI after Flutter and Rust have been installed.
 ci-check:
   flutter pub get
