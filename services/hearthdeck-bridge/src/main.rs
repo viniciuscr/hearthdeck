@@ -282,11 +282,20 @@ async fn handle_request(
         BridgeRequest::StopApplicationSession { session_id } => {
             let managed = sessions.lock().await.get(&session_id).cloned();
             let Some(managed) = managed else {
+                warn!(
+                    session_id,
+                    "stop requested for a session the bridge is not tracking"
+                );
                 return BridgeResponse::Error {
                     code: BridgeErrorCode::NotFound,
                     message: "application session is not running".to_owned(),
                 };
             };
+            info!(
+                session_id,
+                unit_name = managed.unit_name.as_deref().unwrap_or("<none>"),
+                "stopping application session"
+            );
             match platform::stop_application(managed.unit_name.as_deref()).await {
                 Ok(()) => {
                     sessions.lock().await.remove(&session_id);
@@ -294,6 +303,7 @@ async fn handle_request(
                     {
                         warn!(session_id, %error, "could not remove stopped application session record");
                     }
+                    info!(session_id, "application session stopped");
                     BridgeResponse::StopAccepted { session_id }
                 }
                 Err(error) => BridgeResponse::Error {

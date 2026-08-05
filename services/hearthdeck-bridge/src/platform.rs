@@ -70,12 +70,43 @@ pub async fn stop_application(unit_name: Option<&str>) -> Result<()> {
 /// hardcoding "heroic".
 #[cfg(any(target_os = "linux", test))]
 async fn stop_heroic_app_scopes() {
+    let matched = tokio::process::Command::new("systemctl")
+        .args([
+            "--user",
+            "list-units",
+            "--no-legend",
+            "--no-pager",
+            "--plain",
+            "app-heroic-*",
+        ])
+        .output()
+        .await;
+    match &matched {
+        Ok(output) if output.status.success() => {
+            let listing = String::from_utf8_lossy(&output.stdout);
+            tracing::info!(
+                matched_units = %listing.trim(),
+                "checked for leftover app-heroic-*.scope units after closing Heroic"
+            );
+        }
+        Ok(output) => tracing::warn!(
+            status = ?output.status,
+            "could not list app-heroic-*.scope units before stopping them"
+        ),
+        Err(error) => tracing::warn!(
+            %error,
+            "could not run systemctl to list app-heroic-*.scope units"
+        ),
+    }
+
     match tokio::process::Command::new("systemctl")
         .args(["--user", "stop", "app-heroic-*.scope"])
         .status()
         .await
     {
-        Ok(status) if status.success() => {}
+        Ok(status) if status.success() => {
+            tracing::info!("stopped any leftover app-heroic-*.scope units after closing Heroic");
+        }
         Ok(status) => tracing::warn!(
             ?status,
             "could not stop leftover app-heroic-*.scope units after closing Heroic"
