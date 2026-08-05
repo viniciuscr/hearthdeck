@@ -1,8 +1,6 @@
 use std::error::Error;
-use std::io::{self, Read, Write};
-use std::net::Shutdown;
+use std::io;
 use std::os::unix::net::UnixDatagram as StdUnixDatagram;
-use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
@@ -11,6 +9,7 @@ use std::time::Duration;
 use cosmic::Element;
 use cosmic::app::{Core, Settings, Task};
 use cosmic::cctk::sctk::shell::wlr_layer::Layer;
+use cosmic::iced::futures::channel::mpsc::Sender;
 use cosmic::iced::platform_specific::runtime::wayland::layer_surface::SctkLayerSurfaceSettings;
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
     Anchor, KeyboardInteractivity, destroy_layer_surface,
@@ -19,26 +18,29 @@ use cosmic::iced::runtime::core::layout::Limits;
 use cosmic::iced::runtime::platform_specific::wayland::CornerRadius;
 use cosmic::iced::runtime::platform_specific::wayland::layer_surface::IcedMargin;
 use cosmic::iced::stream;
-use cosmic::iced::futures::channel::mpsc::Sender;
 use cosmic::iced::{Alignment, Color, Length, Subscription, window};
 use cosmic::surface::action::{LiveSettings, app_layer_shell};
 use cosmic::widget::{button, column, container, text};
-use cosmic_client_toolkit::toplevel_info::{ToplevelInfoHandler, ToplevelInfoState};
+use cosmic_client_toolkit::{
+    cosmic_protocols::{
+        toplevel_info::v1::client::zcosmic_toplevel_handle_v1,
+        toplevel_management::v1::client::zcosmic_toplevel_manager_v1,
+    },
+    toplevel_info::{ToplevelInfoHandler, ToplevelInfoState},
+    toplevel_management::{ToplevelManagerHandler, ToplevelManagerState},
+};
 use futures_util::SinkExt;
-use hearthdeck_protocol::{BridgeRequest, BridgeResponse};
-use smithay_client_toolkit as sctk;
 use sctk::{
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
 };
+use smithay_client_toolkit as sctk;
 use tokio::net::UnixDatagram;
+use tracing::{error, info, warn};
 use wayland_client::{
-    Connection, QueueHandle,
-    globals::registry_queue_init,
-    protocol::wl_output,
+    Connection, QueueHandle, WEnum, globals::registry_queue_init, protocol::wl_output,
 };
 use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1;
-use tracing::{error, info, warn};
 
 use crate::input;
 use crate::shortcut;
@@ -133,17 +135,12 @@ enum Message {
     CloseApp,
 }
 
-#[derive(Debug)]
-struct VisibleApp {
-    app_id: String,
-    title: String,
-    identifier: String,
-}
-
 struct ToplevelProbe {
     output_state: OutputState,
     registry_state: RegistryState,
     toplevel_info_state: ToplevelInfoState,
+    toplevel_manager_state: ToplevelManagerState,
+    close_supported: bool,
 }
 
 impl ProvidesRegistryState for ToplevelProbe {
@@ -214,7 +211,25 @@ impl ToplevelInfoHandler for ToplevelProbe {
     }
 }
 
+impl ToplevelManagerHandler for ToplevelProbe {
+    fn toplevel_manager_state(&mut self) -> &mut ToplevelManagerState {
+        &mut self.toplevel_manager_state
+    }
+
+    fn capabilities(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        capabilities: Vec<
+            WEnum<zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1>,
+        >,
+    ) {
+        self.close_supported = close_is_supported(&capabilities);
+    }
+}
+
 cosmic_client_toolkit::delegate_toplevel_info!(ToplevelProbe);
+cosmic_client_toolkit::delegate_toplevel_manager!(ToplevelProbe);
 sctk::delegate_output!(ToplevelProbe);
 sctk::delegate_registry!(ToplevelProbe);
 
@@ -267,7 +282,10 @@ impl cosmic::Application for Overlay {
             Message::CloseApp => {
                 thread::spawn(|| {
                     if let Err(err) = close_active_app() {
-                        error!(?err, "hearthdeck-overlay: failed to stop active application");
+                        error!(
+                            ?err,
+                            "hearthdeck-overlay: failed to close active application"
+                        );
                     }
                 });
                 self.hide()
@@ -350,122 +368,100 @@ fn toggle_subscription() -> Subscription<()> {
 }
 
 fn close_active_app() -> io::Result<()> {
-    let visible_app = visible_active_toplevel()?;
-    let Some(visible_app) = visible_app else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "no visible app is active",
-        ));
-    };
-    let response = bridge_request(BridgeRequest::ActiveApplicationSession)?;
-    let BridgeResponse::ApplicationSession { session: Some(session) } = response else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "no managed application session is active",
-        ));
-    };
-    if !visible_app_matches_session(&visible_app, &session) {
-        return Err(io::Error::other(format!(
-            "focused app does not match managed session (visible_app_id={}, visible_title={}, session_source={}, session_application_id={})",
-            visible_app.app_id,
-            visible_app.title,
-            session.source_id,
-            session.application_id
-        )));
-    }
-    info!(
-        app_id = %visible_app.app_id,
-        title = %visible_app.title,
-        identifier = %visible_app.identifier,
-        session_id = %session.id,
-        "hearthdeck-overlay: stopping visible active session"
-    );
-    match bridge_request(BridgeRequest::StopApplicationSession {
-        session_id: session.id,
-    })? {
-        BridgeResponse::StopAccepted { .. } => Ok(()),
-        BridgeResponse::Error { message, .. } => Err(io::Error::other(message)),
-        response => Err(io::Error::other(format!(
-            "unexpected bridge response: {response:?}"
-        ))),
-    }
-}
-
-fn visible_active_toplevel() -> io::Result<Option<VisibleApp>> {
     let conn = Connection::connect_to_env().map_err(io::Error::other)?;
     let (globals, mut event_queue) = registry_queue_init(&conn).map_err(io::Error::other)?;
     let qh = event_queue.handle();
     let registry_state = RegistryState::new(&globals);
-    let toplevel_info_state = ToplevelInfoState::new(&registry_state, &qh);
+    let toplevel_info_state =
+        ToplevelInfoState::try_new(&registry_state, &qh).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Unsupported, "toplevel list is unavailable")
+        })?;
+    let toplevel_manager_state =
+        ToplevelManagerState::try_new(&registry_state, &qh).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Unsupported, "toplevel close is unavailable")
+        })?;
     let mut probe = ToplevelProbe {
         output_state: OutputState::new(&globals, &qh),
         registry_state,
         toplevel_info_state,
+        toplevel_manager_state,
+        close_supported: false,
     };
     event_queue
         .roundtrip(&mut probe)
         .map_err(io::Error::other)?;
-    let active = probe
-        .toplevel_info_state
-        .toplevels()
-        .next()
-        .map(|toplevel| VisibleApp {
-            app_id: toplevel.app_id.clone(),
-            title: toplevel.title.clone(),
-            identifier: toplevel.identifier.clone(),
-        });
-    Ok(active)
-}
-
-fn visible_app_matches_session(visible_app: &VisibleApp, session: &hearthdeck_protocol::ApplicationSession) -> bool {
-        let visible_app_id = visible_app.app_id.trim().to_ascii_lowercase();
-        let visible_title = visible_app.title.trim().to_ascii_lowercase();
-        let session_application_id = session.application_id.trim().to_ascii_lowercase();
-        match session.source_id.as_str() {
-            "desktop-apps" => visible_app_id == session_application_id,
-            "retroarch" => {
-                visible_app_id == "retroarch"
-                    || visible_title.contains("retroarch")
-                    || visible_title.contains(&session_application_id)
-            }
-            "heroic" => {
-                visible_app_id == "heroic"
-                    || visible_app_id == "gamescope"
-                    || visible_title.contains("heroic")
-                    || visible_title.contains(&session_application_id)
-            }
-            _ => visible_app_id == session_application_id || visible_title.contains(&session_application_id),
-        }
-}
-
-fn bridge_request(request: BridgeRequest) -> io::Result<BridgeResponse> {
-    let mut stream = StdUnixStream::connect(bridge_socket_path())?;
-    let payload = serde_json::to_string(&request).map_err(io::Error::other)?;
-    stream.write_all(payload.as_bytes())?;
-    stream.write_all(b"\n")?;
-    stream.shutdown(Shutdown::Write)?;
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response)?;
-    if response.trim().is_empty() {
+    if !probe.close_supported {
         return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "bridge closed connection without a response",
+            io::ErrorKind::Unsupported,
+            "compositor does not support closing toplevels",
         ));
     }
-    serde_json::from_str(&response).map_err(io::Error::other)
+    let (toplevel, app_id, title, identifier) = {
+        let mut activated = probe.toplevel_info_state.toplevels().filter(|toplevel| {
+            toplevel
+                .state
+                .contains(&zcosmic_toplevel_handle_v1::State::Activated)
+        });
+        let Some(active) = activated.next() else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "no activated toplevel is available",
+            ));
+        };
+        if activated.next().is_some() {
+            return Err(io::Error::other("more than one toplevel is activated"));
+        }
+        let Some(toplevel) = active.cosmic_toplevel.clone() else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "activated toplevel cannot be closed",
+            ));
+        };
+        (
+            toplevel,
+            active.app_id.clone(),
+            active.title.clone(),
+            active.identifier.clone(),
+        )
+    };
+
+    probe.toplevel_manager_state.manager.close(&toplevel);
+    conn.flush().map_err(io::Error::other)?;
+    info!(
+        %app_id,
+        %title,
+        %identifier,
+        "hearthdeck-overlay: requested close for activated toplevel"
+    );
+    Ok(())
 }
 
-fn bridge_socket_path() -> PathBuf {
-    std::env::var_os("HEARTHDECK_BRIDGE_SOCKET")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join("hearthdeck/bridge.sock")
-        })
+fn close_is_supported(
+    capabilities: &[WEnum<
+        zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1,
+    >],
+) -> bool {
+    capabilities.iter().any(|capability| {
+        matches!(
+            capability,
+            WEnum::Value(
+                zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::Close
+            )
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WEnum, close_is_supported, zcosmic_toplevel_manager_v1};
+
+    #[test]
+    fn requires_the_close_capability() {
+        use zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1::Close;
+
+        assert!(close_is_supported(&[WEnum::Value(Close)]));
+        assert!(!close_is_supported(&[WEnum::Unknown(0)]));
+    }
 }
 
 impl Overlay {

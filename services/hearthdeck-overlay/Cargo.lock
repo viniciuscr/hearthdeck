@@ -2043,9 +2043,7 @@ dependencies = [
  "evdev",
  "futures-channel",
  "futures-util",
- "hearthdeck-protocol",
  "libcosmic",
- "serde_json",
  "smithay-client-toolkit",
  "tokio",
  "tracing",
@@ -2053,15 +2051,6 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "xkbcommon 0.9.0",
-]
-
-[[package]]
-name = "hearthdeck-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.19",
 ]
 
 [[package]]
