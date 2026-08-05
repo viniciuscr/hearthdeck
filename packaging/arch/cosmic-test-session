@@ -20,6 +20,10 @@ export XDG_SESSION_TYPE=wayland
 
 systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE || true
 
+# Critical: daemon-reload must come after import-environment to make systemd re-read
+# units with the new environment. Without it, hearthdeck.target and its services
+# won't see XDG_CURRENT_DESKTOP and XDG_SESSION_TYPE, breaking environment-dependent
+# logic like is_kiosk_session().
 systemctl --user daemon-reload || true
 log "starting hearthdeck-cosmic-test.target"
 if ! systemctl --user start hearthdeck-cosmic-test.target; then
