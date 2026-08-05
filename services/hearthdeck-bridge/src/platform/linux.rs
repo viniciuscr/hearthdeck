@@ -102,8 +102,9 @@ pub async fn launch_application(
 /// how many games have been launched through it. Heroic is left running
 /// between games on purpose (faster subsequent launches); closing it (and
 /// whatever game it's running) is `stop_application(Some(HEROIC_UNIT_NAME))`,
-/// which - being cgroup-based via `systemctl --user stop` - reliably tears
-/// down the whole tree even though Heroic never exits on its own.
+/// which is cgroup-based via `systemctl --user stop` - see `launch_heroic_game`
+/// below for why Heroic must be exec'd directly (not via `xdg-open`) for that
+/// stop to actually reach the running game, not just Heroic's own launcher.
 pub const HEROIC_UNIT_NAME: &str = "hearthdeck-heroic.service";
 
 /// Delegate game startup to Heroic so its configured Wine, Proton, UMU,
@@ -122,20 +123,15 @@ pub async fn launch_heroic_game(
     let uri = format!("heroic://launch?appName={application_id}&runner={runner}&gui=false");
 
     if super::application_is_running(Some(HEROIC_UNIT_NAME)).await? {
-        // Heroic is already up and holds Electron's single-instance lock:
-        // xdg-open hands the URI straight to it over its own IPC. This must
-        // NOT be awaited to completion. Confirmed on real hardware: xdg-open
-        // does not reliably "exit almost immediately" here - when Electron's
-        // single-instance detection fails to kick in, xdg-open falls back to
-        // running Heroic directly as its own child and blocks until *that*
-        // process exits, which can be many minutes into a play session.
-        // Awaiting that hung this entire HTTP request for the length of the
-        // game session; any client-side retry fired during that hang then
-        // piled up additional concurrent Heroic/game processes on top of it.
-        // Spawn-and-forget instead, matching the cold-start branch's
-        // fast-return semantics - tokio reaps orphaned children in the
-        // background, so this does not leak zombie processes.
-        Command::new("xdg-open")
+        // Heroic is already up and holds Electron's single-instance lock: a
+        // direct `heroic <uri>` invocation here is detected as a second
+        // instance and forwards this argv to the running primary over
+        // Electron's own (non-D-Bus) IPC, then exits - matching the
+        // cold-start branch's fast-return semantics below. Spawn, don't
+        // await: tokio reaps the exited relay process in the background, so
+        // this does not leak zombies.
+        Command::new("heroic")
+            .arg("--no-gui")
             .arg(&uri)
             .spawn()
             .context("could not ask the running Heroic instance to launch the game")?;
@@ -144,24 +140,30 @@ pub async fn launch_heroic_game(
         });
     }
 
-    // Cold start: nothing is tracking Heroic yet, so this becomes the one
-    // fresh instance - a plain `xdg-open`, not wrapped in a nested Gamescope
-    // of its own. That nested-instance wrapping existed only for
-    // `--keep-alive`: without it, Gamescope's default "shut down when the
-    // wrapped process dies" behavior would tear down the display before
-    // Heroic (started by xdg-open handing off the URI) had a chance to
-    // render, since xdg-open itself exits almost immediately. That concern
-    // only applies to something a Gamescope instance is actually wrapping;
-    // plain `xdg-open` here isn't wrapped in any compositor at all, so there
-    // is nothing to tear down. Heroic's own Electron process, once it
-    // starts, connects directly to the Kiosk session the same way desktop
-    // apps and RetroArch do (confirmed on real hardware to work - see
-    // docs/kiosk-session.md) - no nested Gamescope needed. This also removes
-    // a real, measured performance cost: a nested Gamescope instance means
-    // the outer (DRM, direct-scanout) Gamescope compositing the nested one
-    // (SDL backend) compositing the actual game - two GPU compositing
-    // passes instead of one, confirmed to matter on weaker hardware.
-    let command = vec![OsString::from("xdg-open"), OsString::from(uri)];
+    // Cold start: exec the `heroic` binary directly - NOT `xdg-open`.
+    // Confirmed on real hardware (see docs/arch-package.md): `xdg-open
+    // heroic://...` resolves this custom URI scheme through `gio
+    // open`/`gio launch` (GLib's desktop-file launcher), which has its own
+    // systemd integration (https://systemd.io/DESKTOP_ENVIRONMENTS/) and
+    // unconditionally starts registered .desktop apps in a *new*
+    // `app-<name>-<pid>.scope` under app.slice - migrating Heroic, and
+    // everything it spawns (wineserver, the game itself), out of whatever
+    // cgroup launched it. That silently orphaned the whole process tree
+    // from hearthdeck-heroic.service's cgroup: only `xdg-open` itself and a
+    // couple of early zygote helpers stayed put, so stopping the unit never
+    // reached the actual game. Heroic reads the launch URI straight from
+    // argv (see its own src/backend/protocol.ts), so it never needed
+    // xdg-open/gio at all - invoking it directly keeps the whole tree
+    // inside the cgroup we track, the same way desktop apps and RetroArch
+    // already work. `--no-gui` is Heroic's own confirmed-supported CLI flag
+    // for suppressing its window (belt-and-suspenders with the URL's
+    // `gui=false`, and it also makes Heroic exit itself once the game
+    // exits, instead of only the `gui=false` query param's window-hide).
+    let command = vec![
+        OsString::from("heroic"),
+        OsString::from("--no-gui"),
+        OsString::from(uri),
+    ];
     launch_with_systemd(HEROIC_UNIT_NAME, command, None).await
 }
 

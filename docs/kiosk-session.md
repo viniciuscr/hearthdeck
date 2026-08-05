@@ -106,14 +106,16 @@ game) on top of the direct-scanout path the outer instance already provides,
 and was confirmed on real hardware to make game performance noticeably
 worse than the same game launched from a normal desktop session. Its only
 actual justification, `--keep-alive` preventing Gamescope from tearing down
-the display when its wrapped `xdg-open` child exits almost immediately,
-doesn't apply once nothing is wrapping `xdg-open` in a Gamescope instance at
-all - so Heroic's cold start is now a plain `xdg-open`, direct-connecting to
-this session exactly like every other launch (see `services/README.md`).
-Custom per-game internal resolution/upscaling, the one thing the nested
-instance would have provided, is not available today as a result; it would
-need a real answer to the same performance question before being
-reintroduced, not just re-added and hoped for.
+the display when a wrapped `heroic` cold-start process exits almost
+immediately, doesn't apply once nothing is wrapping it in a Gamescope
+instance at all - so Heroic's cold start is now `heroic --no-gui` exec'd
+directly (not via `xdg-open` - see `services/README.md` for why that
+specifically broke the overlay's close button), direct-connecting to
+this session exactly like every other launch. Custom per-game internal
+resolution/upscaling, the one thing the nested instance would have
+provided, is not available today as a result; it would need a real answer
+to the same performance question before being reintroduced, not just
+re-added and hoped for.
 
 **Not yet verified on hardware:** whether a genuinely native-Wayland client
 (no Xwayland involved) connecting directly via `WAYLAND_DISPLAY` is shown
@@ -291,10 +293,24 @@ style preferences.
   actually got composited content shown reliably (desktop apps/RetroArch),
   and the Heroic case additionally measured a real, noticeable performance
   regression from the extra GPU-compositing pass, on top of not being
-  needed at all once nothing wraps `xdg-open` in a compositor to begin with.
+  needed at all once nothing wraps the cold-start `heroic` process in a
+  compositor to begin with.
   Direct connection is not a shortcut taken for convenience - it's the
   thing proven to work, twice now, after the nested version was proven not
   to (or proven worse).
+- **Do not launch Heroic via `xdg-open`.** Tried, and confirmed on real
+  hardware to silently break the overlay's close button: `xdg-open`
+  resolves the custom `heroic://` scheme through `gio open`/`gio launch`,
+  which has its own systemd integration
+  (https://systemd.io/DESKTOP_ENVIRONMENTS/) and unconditionally starts
+  registered `.desktop` apps in a *new* `app-<name>-<pid>.scope` under
+  `app.slice` - migrating Heroic, and everything it spawns (wineserver, the
+  game itself), out of `hearthdeck-heroic.service`'s cgroup entirely.
+  `systemctl --user stop hearthdeck-heroic.service` then only ever reached
+  `xdg-open` itself and a couple of early zygote helpers, never the actual
+  game. Exec the `heroic` binary directly instead (see
+  `services/README.md`); Heroic reads the launch URI from its own argv, so
+  it never needed `xdg-open`/`gio` in the first place.
 - **Do not remove the `systemctl --user import-environment` call, or "simplify"
   it away as redundant with the `export` lines above it.** It looks
   redundant; it is not. The `export`s only affect this script's own process;

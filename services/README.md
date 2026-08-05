@@ -57,26 +57,33 @@ networking, and BlueZ Bluetooth remain host services outside the Hearthdeck
 process tree.
 
 Heroic game launches go through its own URI handler (`heroic://launch?...`)
-rather than an exec'd binary, so the bridge tracks *Heroic itself* as one
-stable, reused systemd unit (`hearthdeck-heroic.service`) instead of a fresh
-unit per launch: Electron's single-instance lock means any launch after the
-first is handled by whichever Heroic process is already running, not a new
-one, so a fresh-unit-per-launch model would lose track of every game after
-the first. The bridge checks whether that unit is already active before
-deciding whether to start it (cold start: a plain `xdg-open`, connecting
-directly to the Kiosk session the same way every other launch does - not
-wrapped in a nested Gamescope instance of its own, which was tried and
-reverted: it added a real, measured second GPU-compositing pass on top of
-the outer session's own, and its only actual justification - `--keep-alive`
-preventing Gamescope from tearing down the display when its wrapped
-`xdg-open` child exits almost immediately - doesn't apply to something no
-Gamescope instance is wrapping in the first place) or just ask the
-already-running instance to launch the next game directly. Heroic is
-intentionally left running between games - faster subsequent launches, at
-the cost of some idle memory - and closing it (and whatever game it's
-running) is `systemctl --user stop hearthdeck-heroic.service`, which
-reliably kills the whole process tree via its cgroup even though Heroic
-never exits on its own.
+passed directly on Heroic's own command line, so the bridge tracks *Heroic
+itself* as one stable, reused systemd unit (`hearthdeck-heroic.service`)
+instead of a fresh unit per launch: Electron's single-instance lock means any
+launch after the first is handled by whichever Heroic process is already
+running, not a new one, so a fresh-unit-per-launch model would lose track of
+every game after the first. The bridge checks whether that unit is already
+active before deciding whether to start it (cold start: `heroic --no-gui
+"heroic://launch?..."` exec'd directly, connecting to the Kiosk session the
+same way every other launch does - not wrapped in a nested Gamescope instance
+of its own, which was tried and reverted: it added a real, measured second
+GPU-compositing pass on top of the outer session's own) or just ask the
+already-running instance to launch the next game directly, the same way.
+**Do not launch Heroic via `xdg-open`.** That was tried first and confirmed,
+on real hardware, to silently break the close button: `xdg-open` resolves
+the custom `heroic://` scheme through `gio open`/`gio launch`, which has its
+own systemd integration (https://systemd.io/DESKTOP_ENVIRONMENTS/) and
+unconditionally starts registered `.desktop` apps in a *new*
+`app-<name>-<pid>.scope` under `app.slice` - migrating Heroic, and everything
+it spawns (wineserver, the game itself), straight out of
+`hearthdeck-heroic.service`'s cgroup. Only `xdg-open` itself and a couple of
+early zygote helpers were left behind for the bridge to actually stop. Heroic
+reads the launch URI straight from its own argv, so it never needed
+`xdg-open`/`gio` at all. Heroic is intentionally left running between games -
+faster subsequent launches, at the cost of some idle memory - and closing it
+(and whatever game it's running) is `systemctl --user stop
+hearthdeck-heroic.service`, which reliably kills the whole process tree via
+its cgroup now that Heroic is actually inside it.
 
 ### The launch pipeline shape
 
