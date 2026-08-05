@@ -4,6 +4,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixDatagram as StdUnixDatagram, UnixStream as StdUnixStream};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -124,6 +126,14 @@ struct Overlay {
     core: Core,
     window_id: window::Id,
     visible: bool,
+    // Guards against a single "Close App" press somehow resulting in more
+    // than one in-flight stop_active_application() call - each call asks the
+    // bridge "what's active *right now*?", so a second call starting before
+    // the first finishes could end up closing a completely different app
+    // once the first one's stop has already removed it from the bridge's
+    // tracking. Shared with the spawned closing thread via Arc since Overlay
+    // itself only lives on the iced event loop's thread.
+    closing: Arc<AtomicBool>,
 }
 
 impl cosmic::Application for Overlay {
@@ -145,6 +155,7 @@ impl cosmic::Application for Overlay {
             core,
             window_id: window::Id::unique(),
             visible: false,
+            closing: Arc::new(AtomicBool::new(false)),
         };
         (app, Task::none())
     }
@@ -168,13 +179,21 @@ impl cosmic::Application for Overlay {
             Message::ResumeApp => self.hide(),
             Message::CloseApp => {
                 let hide = self.hide();
-                thread::spawn(|| {
+                if self.closing.swap(true, Ordering::SeqCst) {
+                    // A close is already running; ignore this extra press
+                    // instead of asking the bridge "what's active *now*?"
+                    // and closing whatever that happens to be next.
+                    return hide;
+                }
+                let closing = Arc::clone(&self.closing);
+                thread::spawn(move || {
                     if let Err(err) = stop_active_application() {
                         error!(
                             ?err,
                             "hearthdeck-overlay: failed to stop active application"
                         );
                     }
+                    closing.store(false, Ordering::SeqCst);
                 });
                 hide
             }
