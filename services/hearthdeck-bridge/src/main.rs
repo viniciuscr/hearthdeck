@@ -112,6 +112,51 @@ struct ManagedSession {
     unit_name: Option<String>,
 }
 
+/// Hearthdeck is a single-focus console launcher, not a multitasking
+/// desktop: exactly one desktop app, Heroic game, or RetroArch game should be
+/// running at a time. Enforcing that here - stopping whatever is currently
+/// tracked before starting something new - is what makes "the active
+/// session" unambiguous everywhere else that asks (the overlay's close
+/// button, the daemon's `GET .../sessions/active`): there is structurally at
+/// most one tracked session, never a choice between several launched at
+/// different times. This replaces trying to detect "the one in focus" via
+/// compositor/window APIs, which - see the overlay's own history - proved
+/// fragile and unreliable in practice even when implemented correctly
+/// against the real protocol. The one deliberate exception: launching a
+/// second Heroic game while Heroic is already the active session does NOT
+/// stop it first - Heroic is intentionally kept running between games (see
+/// `HEROIC_UNIT_NAME`'s own docs) rather than treated as something to close
+/// and relaunch on every game switch.
+async fn stop_other_active_sessions(
+    new_source_id: &str,
+    sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
+    session_directory: &Path,
+) {
+    let Some((session_id, managed)) = active_managed_session(sessions, session_directory).await
+    else {
+        return;
+    };
+    if !should_replace_active_session(new_source_id, &managed.session.source_id) {
+        return;
+    }
+    if let Err(error) = platform::stop_application(managed.unit_name.as_deref()).await {
+        warn!(session_id, %error, "could not stop previous application session before launching a new one");
+        return;
+    }
+    sessions.lock().await.remove(&session_id);
+    if let Err(error) = remove_managed_session(session_directory, &session_id).await {
+        warn!(session_id, %error, "could not remove stopped application session record");
+    }
+}
+
+/// Whether launching `new_source_id` should first stop the currently active
+/// session (from `active_source_id`). The only case it should not: a second
+/// Heroic game while Heroic is already the active session - see
+/// `stop_other_active_sessions`'s own docs for why.
+fn should_replace_active_session(new_source_id: &str, active_source_id: &str) -> bool {
+    !(new_source_id == "heroic" && active_source_id == "heroic")
+}
+
 async fn handle_request(
     request: BridgeRequest,
     sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
@@ -144,81 +189,90 @@ async fn handle_request(
             source_id,
             application_id,
             session_id,
-        } => match platform::launch_application(&source_id, &application_id, &session_id).await {
-            Ok(launched) => {
-                register_launch(
-                    sessions,
-                    session_directory,
-                    source_id,
-                    application_id,
-                    session_id,
-                    launched,
-                )
-                .await
-            }
-            Err(error) => {
-                warn!(source_id, application_id, %error, "registered application launch rejected");
-                BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
+        } => {
+            stop_other_active_sessions(&source_id, sessions, session_directory).await;
+            match platform::launch_application(&source_id, &application_id, &session_id).await {
+                Ok(launched) => {
+                    register_launch(
+                        sessions,
+                        session_directory,
+                        source_id,
+                        application_id,
+                        session_id,
+                        launched,
+                    )
+                    .await
+                }
+                Err(error) => {
+                    warn!(source_id, application_id, %error, "registered application launch rejected");
+                    BridgeResponse::Error {
+                        code: BridgeErrorCode::LaunchFailed,
+                        message: error.to_string(),
+                    }
                 }
             }
-        },
+        }
         BridgeRequest::LaunchHeroicGame {
             runner,
             application_id,
             session_id: _,
-        } => match platform::launch_heroic_game(runner, &application_id).await {
-            Ok(launched) => {
-                // Heroic is a shared, reused resource (see HEROIC_UNIT_NAME's
-                // own docs), not a fresh session per launch, so this
-                // deliberately ignores the daemon-generated session_id above
-                // and always registers/overwrites the same stable session
-                // record - the second game launched through an already-running
-                // Heroic replaces the first's record rather than leaking a
-                // second, orphaned one that nothing will ever stop on its own.
-                register_launch(
-                    sessions,
-                    session_directory,
-                    "heroic".to_owned(),
-                    application_id,
-                    HEROIC_SESSION_ID.to_owned(),
-                    launched,
-                )
-                .await
-            }
-            Err(error) => {
-                warn!(%error, "Heroic game launch rejected");
-                BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
+        } => {
+            stop_other_active_sessions("heroic", sessions, session_directory).await;
+            match platform::launch_heroic_game(runner, &application_id).await {
+                Ok(launched) => {
+                    // Heroic is a shared, reused resource (see HEROIC_UNIT_NAME's
+                    // own docs), not a fresh session per launch, so this
+                    // deliberately ignores the daemon-generated session_id above
+                    // and always registers/overwrites the same stable session
+                    // record - the second game launched through an already-running
+                    // Heroic replaces the first's record rather than leaking a
+                    // second, orphaned one that nothing will ever stop on its own.
+                    register_launch(
+                        sessions,
+                        session_directory,
+                        "heroic".to_owned(),
+                        application_id,
+                        HEROIC_SESSION_ID.to_owned(),
+                        launched,
+                    )
+                    .await
+                }
+                Err(error) => {
+                    warn!(%error, "Heroic game launch rejected");
+                    BridgeResponse::Error {
+                        code: BridgeErrorCode::LaunchFailed,
+                        message: error.to_string(),
+                    }
                 }
             }
-        },
+        }
         BridgeRequest::LaunchRetroGame {
             core_path,
             rom_path,
             session_id,
-        } => match platform::launch_retro_game(&core_path, &rom_path, &session_id).await {
-            Ok(launched) => {
-                register_launch(
-                    sessions,
-                    session_directory,
-                    "retroarch".to_owned(),
-                    rom_path,
-                    session_id,
-                    launched,
-                )
-                .await
-            }
-            Err(error) => {
-                warn!(%error, "RetroArch game launch rejected");
-                BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
+        } => {
+            stop_other_active_sessions("retroarch", sessions, session_directory).await;
+            match platform::launch_retro_game(&core_path, &rom_path, &session_id).await {
+                Ok(launched) => {
+                    register_launch(
+                        sessions,
+                        session_directory,
+                        "retroarch".to_owned(),
+                        rom_path,
+                        session_id,
+                        launched,
+                    )
+                    .await
+                }
+                Err(error) => {
+                    warn!(%error, "RetroArch game launch rejected");
+                    BridgeResponse::Error {
+                        code: BridgeErrorCode::LaunchFailed,
+                        message: error.to_string(),
+                    }
                 }
             }
-        },
+        }
         BridgeRequest::ActiveApplicationSession => {
             let session = active_managed_session(sessions, session_directory)
                 .await
@@ -434,7 +488,7 @@ fn bridge_socket_path() -> Result<PathBuf> {
 mod tests {
     use super::{
         ManagedSession, load_managed_sessions, managed_session_path, save_managed_session,
-        select_active_session,
+        select_active_session, should_replace_active_session,
     };
     use hearthdeck_protocol::{ApplicationSession, ApplicationSessionState};
     use std::time::{Duration, SystemTime};
@@ -499,5 +553,17 @@ mod tests {
         assert!(
             matches!(selected, Some((session_id, session)) if session_id == "session-2" && session.session.id == "session-2")
         );
+    }
+
+    #[test]
+    fn replaces_the_active_session_for_a_different_source() {
+        assert!(should_replace_active_session("desktop-apps", "retroarch"));
+        assert!(should_replace_active_session("retroarch", "heroic"));
+        assert!(should_replace_active_session("heroic", "desktop-apps"));
+    }
+
+    #[test]
+    fn keeps_heroic_running_for_a_second_heroic_game() {
+        assert!(!should_replace_active_session("heroic", "heroic"));
     }
 }
