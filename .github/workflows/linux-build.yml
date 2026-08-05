@@ -58,9 +58,9 @@ jobs:
             services/target
             .dart_tool
             build/linux
-          key: arch-package-${{ runner.arch }}-rust-1.97.1-flutter-3.44.8-${{ hashFiles('services/Cargo.lock', 'pubspec.lock') }}-${{ github.sha }}
+          key: arch-package-${{ runner.arch }}-rust-1.97.1-flutter-3.44.8-${{ hashFiles('services/Cargo.lock', 'pubspec.lock') }}
           restore-keys: |
-            arch-package-${{ runner.arch }}-rust-1.97.1-flutter-3.44.8-${{ hashFiles('services/Cargo.lock', 'pubspec.lock') }}-
+            arch-package-${{ runner.arch }}-rust-1.97.1-flutter-3.44.8-
 
       - name: Make restored cache writable
         run: |
