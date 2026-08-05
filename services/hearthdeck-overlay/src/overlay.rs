@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::io;
-use std::os::unix::net::UnixDatagram as StdUnixDatagram;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixDatagram as StdUnixDatagram, UnixStream as StdUnixStream};
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
@@ -21,8 +22,8 @@ use cosmic::iced::stream;
 use cosmic::iced::{Alignment, Color, Length, Subscription, window};
 use cosmic::surface::action::{LiveSettings, app_layer_shell};
 use cosmic::widget::{button, column, container, text};
-use evdev::{EventType, InputEvent, KeyCode};
 use futures_util::SinkExt;
+use hearthdeck_protocol::{BridgeRequest, BridgeResponse};
 use tokio::net::UnixDatagram;
 use tracing::{error, info, warn};
 
@@ -168,10 +169,10 @@ impl cosmic::Application for Overlay {
             Message::CloseApp => {
                 let hide = self.hide();
                 thread::spawn(|| {
-                    if let Err(err) = send_close_shortcut() {
+                    if let Err(err) = stop_active_application() {
                         error!(
                             ?err,
-                            "hearthdeck-overlay: failed to send close shortcut"
+                            "hearthdeck-overlay: failed to stop active application"
                         );
                     }
                 });
@@ -254,47 +255,78 @@ fn toggle_subscription() -> Subscription<()> {
     })
 }
 
-/// Simulates an Alt+F4 keypress via a synthetic uinput keyboard, using
-/// whatever app currently has focus - i.e. the app the overlay was covering,
-/// once its own keyboard grab is released by `hide()`.
+/// Path to the bridge's Unix control socket. Mirrors
+/// `hearthdeck-bridge::bridge_socket_path()`'s primary branch; skips its
+/// `ProjectDirs` fallback (needs the `directories` crate) since that only
+/// matters when `XDG_RUNTIME_DIR` is unset, which doesn't happen in a real
+/// systemd user session. Keep in sync if the bridge's default ever changes.
+fn bridge_socket_path() -> PathBuf {
+    std::env::var_os("HEARTHDECK_BRIDGE_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join("hearthdeck/bridge.sock")
+        })
+}
+
+/// Sends one JSON-lines request to the bridge and reads its response.
+/// Mirrors `hearthdeck-daemon::bridge::request`, using a blocking
+/// `UnixStream` instead of tokio's since this runs on a plain spawned
+/// thread, not inside an async runtime.
+fn bridge_request(request: &BridgeRequest) -> io::Result<BridgeResponse> {
+    let mut stream = StdUnixStream::connect(bridge_socket_path())?;
+    let payload = serde_json::to_string(request).map_err(io::Error::other)?;
+    stream.write_all(payload.as_bytes())?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
+
+    let mut line = String::new();
+    BufReader::new(&stream).read_line(&mut line)?;
+    if line.is_empty() {
+        return Err(io::Error::other(
+            "bridge closed connection without a response",
+        ));
+    }
+    serde_json::from_str(&line).map_err(io::Error::other)
+}
+
+/// Asks the bridge which application session it is currently tracking as
+/// active, then asks it to stop that session.
 ///
-/// ponytail: COSMIC's native toplevel-close protocol (zcosmic_toplevel_manager_v1)
-/// looked like the "correct" fix and passed every check we could run, but
-/// didn't actually close anything on real hardware - likely because many
-/// apps/games don't wire up a close-request handler for that protocol event,
-/// while Alt+F4 is a close shortcut every desktop app and window manager
-/// already honors. Simulating the keypress is the boring, reliable path.
-/// Upgrade to a protocol-based close if/when we confirm which apps ignore it
-/// and need something gentler than Alt+F4's forced-quit semantics.
-fn send_close_shortcut() -> io::Result<()> {
-    // Give the compositor a moment to return keyboard focus to the
-    // now-uncovered app after hide() destroys the overlay's layer surface.
-    thread::sleep(Duration::from_millis(200));
+/// ponytail: this reuses the daemon's own session-stop path (see
+/// hearthdeck-bridge/src/platform.rs::stop_application) instead of
+/// reinventing app-liveness/focus detection here. The bridge already tracks
+/// exactly one thing as "the active session" - the most recent launch that's
+/// still running, no window-matching heuristics involved - and stops it via
+/// `systemctl --user stop`, which is cgroup-based and tears down the whole
+/// process tree regardless of whether the app implements any Wayland close
+/// protocol, is nested in Gamescope, or ignores synthetic key presses.
+/// Earlier attempts here (COSMIC toplevel-manager close, then synthetic
+/// Alt+F4) both depended on details Hearthdeck doesn't control; this doesn't.
+fn stop_active_application() -> io::Result<()> {
+    let BridgeResponse::ApplicationSession { session } =
+        bridge_request(&BridgeRequest::ActiveApplicationSession)?
+    else {
+        return Err(io::Error::other("bridge rejected active-session lookup"));
+    };
+    let Some(session) = session else {
+        warn!("hearthdeck-overlay: no application session is active");
+        return Ok(());
+    };
 
-    let mut keys = evdev::AttributeSet::<KeyCode>::new();
-    keys.insert(KeyCode::KEY_LEFTALT);
-    keys.insert(KeyCode::KEY_F4);
-
-    let mut device = evdev::uinput::VirtualDevice::builder()?
-        .name("hearthdeck-overlay-close-shortcut")
-        .with_keys(&keys)?
-        .build()?;
-
-    // Give the compositor time to notice the new input device before we
-    // emit events on it.
-    thread::sleep(Duration::from_millis(100));
-
-    device.emit(&[
-        InputEvent::new(EventType::KEY.0, KeyCode::KEY_LEFTALT.0, 1),
-        InputEvent::new(EventType::KEY.0, KeyCode::KEY_F4.0, 1),
-    ])?;
-    thread::sleep(Duration::from_millis(50));
-    device.emit(&[
-        InputEvent::new(EventType::KEY.0, KeyCode::KEY_F4.0, 0),
-        InputEvent::new(EventType::KEY.0, KeyCode::KEY_LEFTALT.0, 0),
-    ])?;
-
-    info!("hearthdeck-overlay: sent Alt+F4 close shortcut");
+    let response = bridge_request(&BridgeRequest::StopApplicationSession {
+        session_id: session.id.clone(),
+    })?;
+    if !matches!(response, BridgeResponse::StopAccepted { .. }) {
+        return Err(io::Error::other("bridge rejected application-session stop"));
+    }
+    info!(
+        session_id = %session.id,
+        application_id = %session.application_id,
+        "hearthdeck-overlay: stopped active application session"
+    );
     Ok(())
 }
 
@@ -325,5 +357,55 @@ impl Overlay {
     fn hide(&mut self) -> Task<Message> {
         self.visible = false;
         destroy_layer_surface(self.window_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    use super::stop_active_application;
+
+    #[test]
+    fn stops_the_session_the_bridge_reports_as_active() {
+        let socket_path = std::env::temp_dir().join(format!(
+            "hearthdeck-overlay-test-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path).expect("bind test socket");
+        // SAFETY: no other test in this crate touches this env var.
+        unsafe {
+            std::env::set_var("HEARTHDECK_BRIDGE_SOCKET", &socket_path);
+        }
+
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().expect("accept test connection");
+                let mut reader = BufReader::new(&stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read test request");
+
+                let response = if line.contains("active_application_session") {
+                    r#"{"type":"application_session","session":{"id":"abc","source_id":"desktop-apps","application_id":"foo","state":"running"}}"#
+                } else {
+                    assert!(
+                        line.contains(r#""session_id":"abc""#),
+                        "expected a stop request for the reported session, got: {line}"
+                    );
+                    r#"{"type":"stop_accepted","session_id":"abc"}"#
+                };
+                let mut stream = &stream;
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write test response");
+                stream.write_all(b"\n").expect("write test response");
+            }
+        });
+
+        stop_active_application().expect("stop_active_application should succeed");
+        server.join().expect("test bridge thread should not panic");
+        let _ = std::fs::remove_file(&socket_path);
     }
 }
