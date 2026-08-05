@@ -916,7 +916,7 @@ dependencies = [
 [[package]]
 name = "cosmic-client-toolkit"
 version = "0.2.0"
-source = "git+https://github.com/pop-os/cosmic-protocols?rev=32283d7#32283d76a8d0342da74c4cc022a533c52dcf378f"
+source = "git+https://github.com/pop-os/cosmic-protocols/?rev=32283d7#32283d76a8d0342da74c4cc022a533c52dcf378f"
 dependencies = [
  "bitflags 2.13.1",
  "cosmic-protocols",
@@ -973,7 +973,7 @@ dependencies = [
 [[package]]
 name = "cosmic-protocols"
 version = "0.2.0"
-source = "git+https://github.com/pop-os/cosmic-protocols?rev=32283d7#32283d76a8d0342da74c4cc022a533c52dcf378f"
+source = "git+https://github.com/pop-os/cosmic-protocols/?rev=32283d7#32283d76a8d0342da74c4cc022a533c52dcf378f"
 dependencies = [
  "bitflags 2.13.1",
  "wayland-backend",
@@ -2037,17 +2037,31 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 name = "hearthdeck-overlay"
 version = "0.1.0"
 dependencies = [
+ "cosmic-client-toolkit",
  "cosmic-config",
  "cosmic-settings-config",
  "evdev",
  "futures-channel",
  "futures-util",
+ "hearthdeck-protocol",
  "libcosmic",
- "nix",
+ "serde_json",
+ "smithay-client-toolkit",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols",
  "xkbcommon 0.9.0",
+]
+
+[[package]]
+name = "hearthdeck-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

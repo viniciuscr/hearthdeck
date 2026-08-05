@@ -1,11 +1,13 @@
 mod platform;
 
 use std::{
+    cmp::Ordering,
     collections::HashMap,
     env,
     os::unix::{fs::PermissionsExt, io::FromRawFd, net::UnixListener as StdUnixListener},
     path::{Path, PathBuf},
     sync::Arc,
+    time::SystemTime,
 };
 
 use anyhow::{Context, Result};
@@ -218,34 +220,10 @@ async fn handle_request(
             }
         },
         BridgeRequest::ActiveApplicationSession => {
-            let candidates = {
-                sessions
-                    .lock()
-                    .await
-                    .values()
-                    .map(|managed| (managed.session.id.clone(), managed.unit_name.clone()))
-                    .collect::<Vec<_>>()
-            };
-            for (session_id, unit_name) in candidates {
-                if !platform::application_is_running(unit_name.as_deref())
-                    .await
-                    .unwrap_or(false)
-                {
-                    sessions.lock().await.remove(&session_id);
-                    if let Err(error) = remove_managed_session(session_directory, &session_id).await
-                    {
-                        warn!(session_id, %error, "could not remove inactive application session record");
-                    }
-                }
-            }
-            BridgeResponse::ApplicationSession {
-                session: sessions
-                    .lock()
-                    .await
-                    .values()
-                    .next()
-                    .map(|managed| managed.session.clone()),
-            }
+            let session = active_managed_session(sessions, session_directory)
+                .await
+                .map(|(_, managed)| managed.session);
+            BridgeResponse::ApplicationSession { session }
         }
         BridgeRequest::StopApplicationSession { session_id } => {
             let managed = sessions.lock().await.get(&session_id).cloned();
@@ -305,6 +283,72 @@ async fn register_launch(
         application_id, "registered application launch accepted"
     );
     BridgeResponse::LaunchAccepted { session }
+}
+
+async fn active_managed_session(
+    sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
+    session_directory: &Path,
+) -> Option<(String, ManagedSession)> {
+    let candidates = {
+        sessions
+            .lock()
+            .await
+            .iter()
+            .map(|(session_id, managed)| (session_id.clone(), managed.clone()))
+            .collect::<Vec<_>>()
+    };
+    let mut running = Vec::new();
+
+    for (session_id, managed) in candidates {
+        if !platform::application_is_running(managed.unit_name.as_deref())
+            .await
+            .unwrap_or(false)
+        {
+            sessions.lock().await.remove(&session_id);
+            if let Err(error) = remove_managed_session(session_directory, &session_id).await {
+                warn!(session_id, %error, "could not remove inactive application session record");
+            }
+            continue;
+        }
+        let modified_at = managed_session_modified_at(session_directory, &session_id).await;
+        running.push((session_id, managed, modified_at));
+    }
+
+    select_active_session(running)
+}
+
+fn select_active_session(
+    candidates: Vec<(String, ManagedSession, SystemTime)>,
+) -> Option<(String, ManagedSession)> {
+    candidates
+        .into_iter()
+        .max_by(
+            |left, right| match left.2.partial_cmp(&right.2).unwrap_or(Ordering::Equal) {
+                Ordering::Equal => left.0.cmp(&right.0),
+                other => other,
+            },
+        )
+        .map(|(session_id, managed, _)| (session_id, managed))
+}
+
+async fn managed_session_modified_at(session_directory: &Path, session_id: &str) -> SystemTime {
+    let Ok(path) = managed_session_path(session_directory, session_id) else {
+        warn!(
+            session_id,
+            "could not resolve managed application session record path"
+        );
+        return SystemTime::UNIX_EPOCH;
+    };
+    match tokio::fs::metadata(&path)
+        .await
+        .and_then(|metadata| metadata.modified())
+    {
+        Ok(modified_at) => modified_at,
+        Err(error) => {
+            warn!(session_id, %error, "could not read managed application session record timestamp");
+            SystemTime::UNIX_EPOCH
+        }
+    }
 }
 
 fn bridge_session_directory(socket_path: &Path) -> PathBuf {
@@ -390,8 +434,10 @@ fn bridge_socket_path() -> Result<PathBuf> {
 mod tests {
     use super::{
         ManagedSession, load_managed_sessions, managed_session_path, save_managed_session,
+        select_active_session,
     };
     use hearthdeck_protocol::{ApplicationSession, ApplicationSessionState};
+    use std::time::{Duration, SystemTime};
 
     fn managed_session() -> ManagedSession {
         ManagedSession {
@@ -422,5 +468,36 @@ mod tests {
     #[test]
     fn rejects_unsafe_session_identifiers() {
         assert!(managed_session_path(std::path::Path::new("/tmp"), "../../scope").is_err());
+    }
+
+    #[test]
+    fn selects_the_newest_running_session_as_active() {
+        let older = managed_session();
+        let newer = ManagedSession {
+            session: ApplicationSession {
+                id: "session-2".to_owned(),
+                source_id: "retroarch".to_owned(),
+                application_id: "rom-1".to_owned(),
+                state: ApplicationSessionState::Running,
+            },
+            unit_name: Some("hearthdeck-app-session-2.service".to_owned()),
+        };
+
+        let selected = select_active_session(vec![
+            (
+                older.session.id.clone(),
+                older,
+                SystemTime::UNIX_EPOCH + Duration::from_secs(1),
+            ),
+            (
+                newer.session.id.clone(),
+                newer.clone(),
+                SystemTime::UNIX_EPOCH + Duration::from_secs(2),
+            ),
+        ]);
+
+        assert!(
+            matches!(selected, Some((session_id, session)) if session_id == "session-2" && session.session.id == "session-2")
+        );
     }
 }

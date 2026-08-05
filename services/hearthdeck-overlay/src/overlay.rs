@@ -1,6 +1,8 @@
 use std::error::Error;
-use std::io;
+use std::io::{self, Read, Write};
+use std::net::Shutdown;
 use std::os::unix::net::UnixDatagram as StdUnixDatagram;
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
@@ -21,8 +23,21 @@ use cosmic::iced::futures::channel::mpsc::Sender;
 use cosmic::iced::{Alignment, Color, Length, Subscription, window};
 use cosmic::surface::action::{LiveSettings, app_layer_shell};
 use cosmic::widget::{button, column, container, text};
+use cosmic_client_toolkit::toplevel_info::{ToplevelInfoHandler, ToplevelInfoState};
 use futures_util::SinkExt;
+use hearthdeck_protocol::{BridgeRequest, BridgeResponse};
+use smithay_client_toolkit as sctk;
+use sctk::{
+    output::{OutputHandler, OutputState},
+    registry::{ProvidesRegistryState, RegistryState},
+};
 use tokio::net::UnixDatagram;
+use wayland_client::{
+    Connection, QueueHandle,
+    globals::registry_queue_init,
+    protocol::wl_output,
+};
+use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1;
 use tracing::{error, info, warn};
 
 use crate::input;
@@ -118,6 +133,91 @@ enum Message {
     CloseApp,
 }
 
+#[derive(Debug)]
+struct VisibleApp {
+    app_id: String,
+    title: String,
+    identifier: String,
+}
+
+struct ToplevelProbe {
+    output_state: OutputState,
+    registry_state: RegistryState,
+    toplevel_info_state: ToplevelInfoState,
+}
+
+impl ProvidesRegistryState for ToplevelProbe {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+
+    sctk::registry_handlers!(OutputState);
+}
+
+impl OutputHandler for ToplevelProbe {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl ToplevelInfoHandler for ToplevelProbe {
+    fn toplevel_info_state(&mut self) -> &mut ToplevelInfoState {
+        &mut self.toplevel_info_state
+    }
+
+    fn new_toplevel(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
+    ) {
+    }
+
+    fn update_toplevel(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
+    ) {
+    }
+
+    fn toplevel_closed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
+    ) {
+    }
+}
+
+cosmic_client_toolkit::delegate_toplevel_info!(ToplevelProbe);
+sctk::delegate_output!(ToplevelProbe);
+sctk::delegate_registry!(ToplevelProbe);
+
 struct Overlay {
     core: Core,
     window_id: window::Id,
@@ -165,7 +265,11 @@ impl cosmic::Application for Overlay {
             }
             Message::ResumeApp => self.hide(),
             Message::CloseApp => {
-                close_hearthdeck();
+                thread::spawn(|| {
+                    if let Err(err) = close_active_app() {
+                        error!(?err, "hearthdeck-overlay: failed to stop active application");
+                    }
+                });
                 self.hide()
             }
         }
@@ -245,6 +349,125 @@ fn toggle_subscription() -> Subscription<()> {
     })
 }
 
+fn close_active_app() -> io::Result<()> {
+    let visible_app = visible_active_toplevel()?;
+    let Some(visible_app) = visible_app else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no visible app is active",
+        ));
+    };
+    let response = bridge_request(BridgeRequest::ActiveApplicationSession)?;
+    let BridgeResponse::ApplicationSession { session: Some(session) } = response else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no managed application session is active",
+        ));
+    };
+    if !visible_app_matches_session(&visible_app, &session) {
+        return Err(io::Error::other(format!(
+            "focused app does not match managed session (visible_app_id={}, visible_title={}, session_source={}, session_application_id={})",
+            visible_app.app_id,
+            visible_app.title,
+            session.source_id,
+            session.application_id
+        )));
+    }
+    info!(
+        app_id = %visible_app.app_id,
+        title = %visible_app.title,
+        identifier = %visible_app.identifier,
+        session_id = %session.id,
+        "hearthdeck-overlay: stopping visible active session"
+    );
+    match bridge_request(BridgeRequest::StopApplicationSession {
+        session_id: session.id,
+    })? {
+        BridgeResponse::StopAccepted { .. } => Ok(()),
+        BridgeResponse::Error { message, .. } => Err(io::Error::other(message)),
+        response => Err(io::Error::other(format!(
+            "unexpected bridge response: {response:?}"
+        ))),
+    }
+}
+
+fn visible_active_toplevel() -> io::Result<Option<VisibleApp>> {
+    let conn = Connection::connect_to_env().map_err(io::Error::other)?;
+    let (globals, mut event_queue) = registry_queue_init(&conn).map_err(io::Error::other)?;
+    let qh = event_queue.handle();
+    let registry_state = RegistryState::new(&globals);
+    let toplevel_info_state = ToplevelInfoState::new(&registry_state, &qh);
+    let mut probe = ToplevelProbe {
+        output_state: OutputState::new(&globals, &qh),
+        registry_state,
+        toplevel_info_state,
+    };
+    event_queue
+        .roundtrip(&mut probe)
+        .map_err(io::Error::other)?;
+    let active = probe
+        .toplevel_info_state
+        .toplevels()
+        .next()
+        .map(|toplevel| VisibleApp {
+            app_id: toplevel.app_id.clone(),
+            title: toplevel.title.clone(),
+            identifier: toplevel.identifier.clone(),
+        });
+    Ok(active)
+}
+
+fn visible_app_matches_session(visible_app: &VisibleApp, session: &hearthdeck_protocol::ApplicationSession) -> bool {
+        let visible_app_id = visible_app.app_id.trim().to_ascii_lowercase();
+        let visible_title = visible_app.title.trim().to_ascii_lowercase();
+        let session_application_id = session.application_id.trim().to_ascii_lowercase();
+        match session.source_id.as_str() {
+            "desktop-apps" => visible_app_id == session_application_id,
+            "retroarch" => {
+                visible_app_id == "retroarch"
+                    || visible_title.contains("retroarch")
+                    || visible_title.contains(&session_application_id)
+            }
+            "heroic" => {
+                visible_app_id == "heroic"
+                    || visible_app_id == "gamescope"
+                    || visible_title.contains("heroic")
+                    || visible_title.contains(&session_application_id)
+            }
+            _ => visible_app_id == session_application_id || visible_title.contains(&session_application_id),
+        }
+}
+
+fn bridge_request(request: BridgeRequest) -> io::Result<BridgeResponse> {
+    let mut stream = StdUnixStream::connect(bridge_socket_path())?;
+    let payload = serde_json::to_string(&request).map_err(io::Error::other)?;
+    stream.write_all(payload.as_bytes())?;
+    stream.write_all(b"\n")?;
+    stream.shutdown(Shutdown::Write)?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    if response.trim().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "bridge closed connection without a response",
+        ));
+    }
+    serde_json::from_str(&response).map_err(io::Error::other)
+}
+
+fn bridge_socket_path() -> PathBuf {
+    std::env::var_os("HEARTHDECK_BRIDGE_SOCKET")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join("hearthdeck/bridge.sock")
+        })
+}
+
 impl Overlay {
     fn show(&mut self) -> Task<Message> {
         self.visible = true;
@@ -273,38 +496,4 @@ impl Overlay {
         self.visible = false;
         destroy_layer_surface(self.window_id)
     }
-}
-
-/// Sends SIGTERM to the Hearthdeck process, matched by exact
-/// `/proc/<pid>/comm` name - it's cosmic-comp's kiosk_command child, not a
-/// systemd unit this could `systemctl stop`. cosmic-comp itself ends its
-/// whole event loop once this child exits, so this bare session's only way
-/// back to the greeter is to stop that child.
-fn close_hearthdeck() {
-    match find_hearthdeck_pid() {
-        Some(pid) => {
-            if let Err(err) = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM) {
-                error!(?err, "hearthdeck-overlay: failed to signal Hearthdeck");
-            }
-        }
-        None => warn!("hearthdeck-overlay: could not find a running Hearthdeck process"),
-    }
-}
-
-fn find_hearthdeck_pid() -> Option<nix::unistd::Pid> {
-    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        let Ok(pid) = name.parse::<i32>() else {
-            continue;
-        };
-        let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) else {
-            continue;
-        };
-        if comm.trim() == "hearthdeck" {
-            return Some(nix::unistd::Pid::from_raw(pid));
-        }
-    }
-    None
 }
