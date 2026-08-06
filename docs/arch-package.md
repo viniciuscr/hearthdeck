@@ -20,7 +20,7 @@ CachyOS. It installs:
   `hearthdeck-overlay --toggle`. It does not replace an existing user binding.
 - `/usr/lib/systemd/user/cosmic-panel.service`: real `cosmic-panel` top bar
   (time, network, Bluetooth, etc.), started only by the separate
-  **COSMIC (Test)** session alongside Hearthdeck - see
+  **COSMIC (Test)** session alongside Hearthdeck (or the spike app below) - see
   `packaging/arch/cosmic-test-session` for the config it force-applies on
   every login (`Panel` only, no `Dock`; `autohide=OnOverlap` so the bar
   hides itself behind a fullscreen game and stays visible behind
@@ -30,6 +30,9 @@ CachyOS. It installs:
   every login, deliberately, rather than seeding them once - see the
   script's own comments for why. Requires the optional `cosmic-panel`
   package; the Hearthdeck Kiosk (Gamescope) session never starts it.
+- `/usr/bin/hearthdeck-cosmic-spike`: disposable libcosmic UI spike. The
+  **COSMIC (Test)** session launcher prefers this binary when present, and
+  falls back to `/opt/hearthdeck/hearthdeck` when it is not.
 - `/usr/bin/io.github.viniciuscr.hearthdeck.AppletUser` and
   `/usr/share/applications/io.github.viniciuscr.hearthdeck.AppletUser.desktop`:
   a small `cosmic-panel` applet showing the logged-in username, added to the

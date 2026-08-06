@@ -51,6 +51,7 @@ app.*.map.json
 # build output lands in its own nested target/ instead of /services/target/.
 /services/hearthdeck-overlay/target/
 /services/hearthdeck-applet-user/target/
+/services/hearthdeck-cosmic-spike/target/
 
 # Local Hearthdeck service state and diagnostics
 /data/

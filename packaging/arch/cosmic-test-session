@@ -1,6 +1,7 @@
 #!/usr/bin/bash
 # Bare-minimum COSMIC test session: runs cosmic-comp directly (no
-# cosmic-session or settings daemon) with Hearthdeck as its sole app client.
+# cosmic-session or settings daemon), preferring the disposable
+# hearthdeck-cosmic-spike app when installed and falling back to Hearthdeck.
 # cosmic-panel runs alongside it as a real, dark, Panel-only, size-L top bar
 # (see apply_cosmic_overrides below). Independent of the Hearthdeck Kiosk
 # (Gamescope) session.
@@ -83,5 +84,10 @@ apply_cosmic_overrides() {
 apply_cosmic_overrides || log "could not apply cosmic-panel/theme config"
 systemctl --user start cosmic-panel.service || true
 
-log "exec cosmic-comp"
-exec cosmic-comp /opt/hearthdeck/hearthdeck
+launch_app="/opt/hearthdeck/hearthdeck"
+if [[ -x /usr/bin/hearthdeck-cosmic-spike ]]; then
+  launch_app="/usr/bin/hearthdeck-cosmic-spike"
+fi
+
+log "exec cosmic-comp ($launch_app)"
+exec cosmic-comp "$launch_app"
