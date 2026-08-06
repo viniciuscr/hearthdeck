@@ -1,5 +1,5 @@
-use cosmic::app::{Core, Task};
 use cosmic::Element;
+use cosmic::app::{Core, Task};
 
 const APP_ID: &str = "io.github.viniciuscr.hearthdeck.AppletUser";
 

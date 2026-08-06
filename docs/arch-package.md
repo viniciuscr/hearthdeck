@@ -19,7 +19,7 @@ CachyOS. It installs:
   installs a COSMIC custom shortcut, `Super+Shift+H`, which runs
   `hearthdeck-overlay --toggle`. It does not replace an existing user binding.
 - `/usr/lib/systemd/user/cosmic-panel.service`: real `cosmic-panel` top bar
-  (time, network, battery, etc.), started only by the separate
+  (time, network, Bluetooth, etc.), started only by the separate
   **COSMIC (Test)** session alongside Hearthdeck - see
   `packaging/arch/cosmic-test-session` for the config it force-applies on
   every login (`Panel` only, no `Dock`; `autohide=OnOverlap` so the bar

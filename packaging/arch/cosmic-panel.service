@@ -1,6 +1,6 @@
 [Unit]
 Description=COSMIC panel (top bar) for the COSMIC (Test) session
-Documentation=file:///usr/share/doc/hearthdeck/KIOSK-SESSION.md
+Documentation=file:///usr/share/doc/hearthdeck/COSMIC-PANEL-CUSTOMIZATION.md
 
 [Service]
 Type=exec
