@@ -291,7 +291,17 @@ impl cosmic::Application for Overlay {
         .align_x(Alignment::Center)
         .into();
 
-        container(menu)
+        // A fixed-width card - matching the look of COSMIC's own launcher/
+        // dialog popups (rounded corners, a subtle border and drop shadow,
+        // via the theme's own `Dialog` container preset) - centered over a
+        // full-screen dim scrim, rather than the menu floating edge-to-edge
+        // with nothing but the scrim behind it.
+        let card = container(menu)
+            .width(Length::Fixed(420.0))
+            .padding(20)
+            .class(cosmic::theme::Container::Dialog(true));
+
+        container(card)
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)
