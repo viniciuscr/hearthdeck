@@ -25,6 +25,7 @@ optdepends=(
   'libretro-desmume: RetroArch core for Nintendo DS'
   'libretro-flycast: RetroArch core for Sega Dreamcast'
   'cosmic-comp: bare-minimum "COSMIC (Test)" session, unrelated to the Hearthdeck Kiosk session'
+  'cosmic-panel: real top bar for the "COSMIC (Test)" session, unrelated to the Hearthdeck Kiosk session'
 )
 install="${pkgname}.install"
 backup=('etc/pacman.d/hearthdeck.conf')
@@ -77,6 +78,7 @@ package() {
   install -Dm755 packaging/arch/cosmic-test-session "$pkgdir/usr/lib/hearthdeck/cosmic-test-session"
   install -Dm644 deploy/systemd/hearthdeck-cosmic-test.target "$pkgdir/usr/lib/systemd/user/hearthdeck-cosmic-test.target"
   install -Dm644 packaging/arch/hearthdeck-overlay.service "$pkgdir/usr/lib/systemd/user/hearthdeck-overlay.service"
+  install -Dm644 packaging/arch/cosmic-panel.service "$pkgdir/usr/lib/systemd/user/cosmic-panel.service"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

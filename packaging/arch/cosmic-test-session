@@ -1,7 +1,8 @@
 #!/usr/bin/bash
 # Bare-minimum COSMIC test session: runs cosmic-comp directly (no
-# cosmic-session, panel, dock, or settings daemon) with Hearthdeck as its
-# sole client. Independent of the Hearthdeck Kiosk (Gamescope) session.
+# cosmic-session or settings daemon) with Hearthdeck as its sole app client.
+# cosmic-panel runs alongside it as a real top bar (see seed_panel_config
+# below). Independent of the Hearthdeck Kiosk (Gamescope) session.
 set -Euo pipefail
 
 # Writes straight to the system journal regardless of how this session was
@@ -39,6 +40,26 @@ systemctl --user try-restart hearthdeck-bridge.service || true
 # separate COSMIC test session. Its restart policy absorbs the compositor's
 # initial activation-environment race.
 systemctl --user start hearthdeck-overlay.service || true
+
+# cosmic-panel (the top bar) reads its layout/behavior from
+# $XDG_CONFIG_HOME, same as a real COSMIC session's cosmic-settings would
+# write it - there's no settings daemon here to do that, so seed it once,
+# and only touch keys that don't already exist. That keeps a user's own
+# edits (e.g. testing this session on top of an existing COSMIC config)
+# intact on every later login: Panel only (no Dock, redundant with
+# Hearthdeck's own UI), and autohide=OnOverlap so the bar hides itself
+# behind whatever's currently fullscreen (Hearthdeck maximizes instead of
+# fullscreening here - see my_application.cc - so it stays visible; a
+# launched game going fullscreen hides it).
+seed_panel_config() {
+  local entries_dir="$HOME/.config/cosmic/com.system76.CosmicPanel/v1"
+  local panel_dir="$HOME/.config/cosmic/com.system76.CosmicPanel.Panel/v1"
+  mkdir -p "$entries_dir" "$panel_dir"
+  [ -f "$entries_dir/entries" ] || printf '%s' '["Panel"]' > "$entries_dir/entries"
+  [ -f "$panel_dir/autohide" ] || printf '%s' 'OnOverlap' > "$panel_dir/autohide"
+}
+seed_panel_config || log "could not seed cosmic-panel config"
+systemctl --user start cosmic-panel.service || true
 
 log "exec cosmic-comp"
 exec cosmic-comp /opt/hearthdeck/hearthdeck

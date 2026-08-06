@@ -34,6 +34,24 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
 
+// Whether `XDG_CURRENT_DESKTOP` (colon-separated per the XDG Desktop Entry
+// spec) lists `name`, case-insensitively. Mirrors hearthdeck-bridge's
+// current_desktops()/is_kiosk_session() (services/hearthdeck-bridge/src/
+// platform/linux.rs), which parses the same variable the same way.
+static gboolean session_has_desktop_name(const char* name) {
+  const char* value = g_getenv("XDG_CURRENT_DESKTOP");
+  if (value == nullptr) {
+    return FALSE;
+  }
+  g_auto(GStrv) parts = g_strsplit(value, ":", -1);
+  for (gchar** part = parts; *part != nullptr; part++) {
+    if (g_ascii_strcasecmp(*part, name) == 0) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
@@ -50,6 +68,16 @@ static void my_application_activate(GApplication* application) {
   // for that specific sandbox, never for a real session.
   if (g_getenv("HEARTHDECK_DOCKER_SANDBOX") != nullptr) {
     gtk_window_set_default_size(window, 1920, 1080);
+  } else if (session_has_desktop_name("COSMIC")) {
+    // The COSMIC (Test) session (packaging/arch/cosmic-test-session) runs
+    // cosmic-panel as a real top bar. A fullscreen window overlaps it and
+    // trips the panel's autohide-on-overlap, hiding the bar while
+    // Hearthdeck itself is in view -- exactly backwards. Maximizing
+    // instead respects the panel's reserved screen edge; cosmic-comp sizes
+    // a maximized toplevel to the work area outside that reservation.
+    // Launched games/apps are unaffected: they still go fullscreen on
+    // their own and trigger the autohide as intended.
+    gtk_window_maximize(window);
   } else {
     gtk_window_fullscreen(window);
   }

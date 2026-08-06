@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=COSMIC (Test)
-Comment=Bare-minimum COSMIC compositor (cosmic-comp), no panel/dock/session manager, running Hearthdeck as its sole client - for testing only
+Comment=Bare-minimum COSMIC compositor (cosmic-comp) with a real cosmic-panel top bar (no dock/session manager), running Hearthdeck as its sole app client - for testing only
 Exec=/usr/lib/hearthdeck/cosmic-test-session
 Type=Application
 DesktopNames=COSMIC
