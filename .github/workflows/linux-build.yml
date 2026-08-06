@@ -49,7 +49,7 @@ jobs:
 
       - name: Restore Rust and Flutter build cache
         id: build-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6.1.0
         with:
           path: |
             /home/builder/.cargo/git
@@ -74,7 +74,7 @@ jobs:
 
       - name: Archive package build logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: hearthdeck-package-build-logs
           path: packaging/arch/*.log
@@ -96,7 +96,7 @@ jobs:
 
       - name: Save Rust and Flutter build cache
         if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6.1.0
         with:
           path: |
             /home/builder/.cargo/git
@@ -108,7 +108,7 @@ jobs:
           key: ${{ steps.build-cache.outputs.cache-primary-key }}
 
       - name: Archive pacman package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: hearthdeck-pacman-x86_64
           path: packaging/arch/hearthdeck-*.pkg.tar.zst
@@ -116,7 +116,7 @@ jobs:
           retention-days: 7
 
       - name: Archive pacman repository
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: hearthdeck-pacman-repository
           path: repository
@@ -133,16 +133,16 @@ jobs:
 
     steps:
       - name: Download pacman repository
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8.0.1
         with:
           name: hearthdeck-pacman-repository
           path: repository
 
       - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6.0.0
 
       - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: repository
 
