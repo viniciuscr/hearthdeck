@@ -21,7 +21,7 @@ use cosmic::iced::runtime::platform_specific::wayland::layer_surface::IcedMargin
 use cosmic::iced::stream;
 use cosmic::iced::{Alignment, Color, Length, Subscription, window};
 use cosmic::surface::action::{LiveSettings, app_layer_shell};
-use cosmic::widget::{button, column, container, text};
+use cosmic::widget::{column, container, list, list_column, text};
 use futures_util::SinkExt;
 use hearthdeck_protocol::{BridgeRequest, BridgeResponse};
 use tokio::net::UnixDatagram;
@@ -116,6 +116,9 @@ fn init_logging() {
 #[derive(Debug, Clone)]
 enum Message {
     ToggleOverlay,
+    NavigateUp,
+    NavigateDown,
+    Activate,
     ResumeApp,
     CloseApp,
     /// Reported by the background task started for `CloseApp`, once
@@ -135,11 +138,25 @@ enum Status {
     Closing,
 }
 
+/// The menu's entries, in on-screen order - also the order gamepad D-pad
+/// navigation cycles through. A plain array (not a widget-per-variant match)
+/// so navigation logic (index math) and rendering (map to a list row) both
+/// stay generic over "however many entries there are" instead of needing to
+/// special-case each one.
+const MENU_ITEMS: [(&str, Message); 2] = [
+    ("Resume", Message::ResumeApp),
+    ("Close App", Message::CloseApp),
+];
+
 struct Overlay {
     core: Core,
     window_id: window::Id,
     visible: bool,
     status: Status,
+    /// Index into `MENU_ITEMS` the gamepad's D-pad currently highlights.
+    /// Reset to 0 each time the overlay opens (see `show`) rather than
+    /// persisted, so it never opens with a stale/off-screen selection.
+    selected: usize,
 }
 
 impl cosmic::Application for Overlay {
@@ -162,13 +179,19 @@ impl cosmic::Application for Overlay {
             window_id: window::Id::unique(),
             visible: false,
             status: Status::Menu,
+            selected: 0,
         };
         (app, Task::none())
     }
 
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            input::subscription().map(|input::GuideButtonPressed| Message::ToggleOverlay),
+            input::subscription().map(|event| match event {
+                input::GamepadEvent::ToggleOverlay => Message::ToggleOverlay,
+                input::GamepadEvent::NavigateUp => Message::NavigateUp,
+                input::GamepadEvent::NavigateDown => Message::NavigateDown,
+                input::GamepadEvent::Activate => Message::Activate,
+            }),
             toggle_subscription().map(|()| Message::ToggleOverlay),
         ])
     }
@@ -185,6 +208,27 @@ impl cosmic::Application for Overlay {
                     self.hide()
                 } else {
                     self.show()
+                }
+            }
+            Message::NavigateUp | Message::NavigateDown => {
+                // Only meaningful while the menu itself is showing - ignored
+                // while hidden (no menu to navigate) or while closing (the
+                // surface no longer shows the item list).
+                if self.visible && self.status == Status::Menu {
+                    let len = MENU_ITEMS.len();
+                    self.selected = if matches!(message, Message::NavigateUp) {
+                        (self.selected + len - 1) % len
+                    } else {
+                        (self.selected + 1) % len
+                    };
+                }
+                Task::none()
+            }
+            Message::Activate => {
+                if self.visible && self.status == Status::Menu {
+                    self.update(MENU_ITEMS[self.selected].1.clone())
+                } else {
+                    Task::none()
                 }
             }
             Message::ResumeApp => self.hide(),
@@ -225,24 +269,27 @@ impl cosmic::Application for Overlay {
             return text("").into();
         }
 
-        let menu = match self.status {
-            Status::Menu => column(vec![
-                text::title2("Hearthdeck").into(),
-                button::suggested("Resume")
-                    .on_press(Message::ResumeApp)
-                    .into(),
-                button::destructive("Close App")
-                    .on_press(Message::CloseApp)
-                    .into(),
-            ]),
-            // No buttons while closing: the pending stop_active_application
+        let menu: Element<'_, Message> = match self.status {
+            Status::Menu => {
+                let mut items = list_column();
+                for (index, (label, message)) in MENU_ITEMS.iter().enumerate() {
+                    items = items.add(
+                        list::button(text::body(*label))
+                            .on_press(message.clone())
+                            .selected(index == self.selected),
+                    );
+                }
+                column(vec![text::title2("Hearthdeck").into(), items.into()])
+            }
+            // No menu while closing: the pending stop_active_application
             // call is already committed to whatever was active when
-            // CloseApp was pressed, and re-pressing Resume/Close here
+            // CloseApp was pressed, and navigating/activating here
             // wouldn't affect it either way.
             Status::Closing => column(vec![text::title2("Closing app\u{2026}").into()]),
         }
         .spacing(12)
-        .align_x(Alignment::Center);
+        .align_x(Alignment::Center)
+        .into();
 
         container(menu)
             .width(Length::Fill)
@@ -375,6 +422,7 @@ fn stop_active_application() -> io::Result<()> {
 impl Overlay {
     fn show(&mut self) -> Task<Message> {
         self.visible = true;
+        self.selected = 0;
         cosmic::surface::surface_task(app_layer_shell(
             |_app: &Overlay| LiveSettings {
                 padding: Some(IcedMargin::default()),
