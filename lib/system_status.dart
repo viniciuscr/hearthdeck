@@ -30,9 +30,7 @@ BatteryStatus? readBatteryStatus() {
       final percent = int.parse(
         File('${entry.path}/capacity').readAsStringSync().trim(),
       );
-      final status = File(
-        '${entry.path}/status',
-      ).readAsStringSync().trim();
+      final status = File('${entry.path}/status').readAsStringSync().trim();
       return BatteryStatus(percent: percent, charging: status == 'Charging');
     } on FileSystemException {
       continue;
