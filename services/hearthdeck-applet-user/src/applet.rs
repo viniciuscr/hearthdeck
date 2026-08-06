@@ -30,7 +30,18 @@ impl cosmic::Application for UserApplet {
         let username = std::env::var("USER")
             .or_else(|_| std::env::var("USERNAME"))
             .or_else(|_| std::env::var("LOGNAME"))
-            .unwrap_or_else(|_| "user".to_owned());
+            // Final fallback: /proc/self/status Name: field. Survives greetd
+            // sessions that strip the environment entirely.
+            .unwrap_or_else(|_| {
+                std::fs::read_to_string("/proc/self/status")
+                    .ok()
+                    .and_then(|s| {
+                        s.lines()
+                            .find(|l| l.starts_with("Name:"))
+                            .map(|l| l[5..].trim().to_owned())
+                    })
+                    .unwrap_or_else(|| "user".to_owned())
+            });
         (Self { core, username }, Task::none())
     }
 

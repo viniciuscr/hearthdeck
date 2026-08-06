@@ -14,11 +14,13 @@ Use this skill when the user wants the shortest path to a correct solution with 
 3. Skip optional internet research and exploratory scans unless explicitly requested or required.
 4. Use Serena tools first for symbol discovery and edits; avoid whole-file reads unless necessary.
 5. Keep responses short and actionable; do not add long explanations unless requested.
-6. Validate with the narrowest existing test/lint/build command that covers the change.
-7. Main model does implementation/iteration by default; use cheaper agents only for mechanical, independent, low-ambiguity work.
-8. Never force delegation globally; delegate only when it is a clear cost/time win.
-9. For commits, do zero style research: no git-log scanning.
-10. Commit message format: one short subject line stating what was implemented in this interaction.
+6. Keep reasoning compact: do not turn hidden thinking into long prose; think enough to act, then act.
+7. Prefer the shortest correct answer. If one line is enough, use one line.
+8. Validate with the narrowest existing test/lint/build command that covers the change.
+9. Main model does implementation/iteration by default; use cheaper agents only for mechanical, independent, low-ambiguity work.
+10. Never force delegation globally; delegate only when it is a clear cost/time win.
+11. For commits, do zero style research: no git-log scanning.
+12. Commit message format: one short subject line stating what was implemented in this interaction.
 
 ## Quick defaults
 

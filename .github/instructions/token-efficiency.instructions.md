@@ -6,6 +6,9 @@ description: Always-on minimal-token behavior with Serena-first execution.
 
 - Invoke the `ponytail` skill for coding tasks unless the user explicitly says `stop ponytail` or `normal mode`.
 - Keep output minimal by default: code first, then only short necessary notes unless the user asks for detail.
+- Keep internal reasoning lean too: do not expand hidden chain-of-thought into long prose; think just enough to act correctly.
+- Prefer a short direct answer over a complete narrative. No filler, no repeated context, no optional explanation.
+- If one line answers the user correctly, use one line.
 - Do not do optional work (internet research, commit-style archaeology, broad repo audits) unless the user explicitly asks for it or it is required to unblock the task.
 - Prefer Serena tools first for code navigation and edits (`find_symbol`, `get_symbols_overview`, `replace_symbol_body`, `replace_content`); use non-Serena tools only when Serena is not a fit.
 - Run only the smallest existing validation command that covers the changed behavior.

@@ -73,7 +73,7 @@ apply_cosmic_overrides() {
   # at the edge automatically). Right wing: Bluetooth, then Network (Wifi),
   # then Time (Calendar) at the very screen edge - same
   # closest-to-center-first/closest-to-edge-last convention.
-  printf '%s' 'Some((["io.github.viniciuscr.hearthdeck.AppletUser"], ["com.system76.CosmicAppletBluetooth", "com.system76.CosmicAppletNetwork", "com.system76.CosmicAppletTime"]))' > "$panel_dir/plugins_wings"
+  printf '%s' 'Some((["io.github.viniciuscr.hearthdeck.AppletUser"], ["com.system76.CosmicAppletBluetooth", "com.system76.CosmicAppletBattery", "com.system76.CosmicAppletNetwork", "com.system76.CosmicAppletTime"]))' > "$panel_dir/plugins_wings"
   printf '%s' 'None' > "$panel_dir/plugins_center"
   # Dark, and don't auto-switch with the system clock: this session should
   # always look the same, not depend on time of day.
