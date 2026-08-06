@@ -1,8 +1,8 @@
 #!/usr/bin/bash
 # Bare-minimum COSMIC test session: runs cosmic-comp directly (no
 # cosmic-session or settings daemon) with Hearthdeck as its sole app client.
-# cosmic-panel runs alongside it as a real, dark, Panel-only top bar (see
-# apply_cosmic_overrides below). Independent of the Hearthdeck Kiosk
+# cosmic-panel runs alongside it as a real, dark, Panel-only, size-L top bar
+# (see apply_cosmic_overrides below). Independent of the Hearthdeck Kiosk
 # (Gamescope) session.
 set -Euo pipefail
 
@@ -52,7 +52,8 @@ systemctl --user start hearthdeck-overlay.service || true
 # Trade-off: this always overwrites these specific keys, including any manual
 # COSMIC Settings change made to them from a real desktop session sharing the
 # same account - deliberate, since this session needs a known, reproducible
-# look every time, not "whatever was left over from last time".
+# look every time, not "whatever was left over from last time". Key meanings
+# and file-format reference: docs/cosmic-panel-customization.md.
 apply_cosmic_overrides() {
   local entries_dir="$HOME/.config/cosmic/com.system76.CosmicPanel/v1"
   local panel_dir="$HOME/.config/cosmic/com.system76.CosmicPanel.Panel/v1"
@@ -68,6 +69,14 @@ apply_cosmic_overrides() {
   # always look the same, not depend on time of day.
   printf '%s' 'true' > "$mode_dir/is_dark"
   printf '%s' 'false' > "$mode_dir/auto_switch"
+  # Larger bar/icon scale.
+  printf '%s' 'L' > "$panel_dir/size"
+  # No left-wing or center widgets. Right wing only, ordered
+  # closest-to-center-first/closest-to-edge-last per cosmic-panel's own
+  # convention: Bluetooth, then Network (Wifi), then Time (Calendar) at the
+  # very screen edge.
+  printf '%s' 'Some(([], ["com.system76.CosmicAppletBluetooth", "com.system76.CosmicAppletNetwork", "com.system76.CosmicAppletTime"]))' > "$panel_dir/plugins_wings"
+  printf '%s' 'None' > "$panel_dir/plugins_center"
 }
 apply_cosmic_overrides || log "could not apply cosmic-panel/theme config"
 systemctl --user start cosmic-panel.service || true
