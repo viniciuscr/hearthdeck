@@ -31,46 +31,74 @@ pub async fn stop_application(unit_name: Option<&str>) -> Result<()> {
     let Some(unit_name) = unit_name else {
         anyhow::bail!("application session cannot be stopped on this platform")
     };
+
+    if unit_name == HEROIC_UNIT_NAME {
+        log_heroic_app_scopes().await;
+        // The tracked hearthdeck-heroic.service and whatever escaped into
+        // app-heroic-*.scope (see stop_leftover_heroic_scope's own docs) are
+        // independent units - `systemctl stop` blocks until each unit's
+        // processes actually exit (SIGTERM, then wait for graceful
+        // shutdown), so stopping them one after another meant waiting out
+        // that exit delay twice in a row for no reason. Stopping them
+        // concurrently cuts the total wait to whichever one is slower,
+        // instead of the sum of both - this is what the overlay's "Closing
+        // app..." status waits on, so this directly shortens how long that
+        // stays on screen after a Heroic game closes.
+        let (primary, scope) = tokio::join!(stop_unit(unit_name), stop_unit("app-heroic-*.scope"));
+        match scope {
+            Ok(()) => {
+                tracing::info!(
+                    "stopped any leftover app-heroic-*.scope units after closing Heroic"
+                );
+            }
+            Err(error) => tracing::warn!(
+                %error,
+                "could not stop leftover app-heroic-*.scope units after closing Heroic"
+            ),
+        }
+        primary
+    } else {
+        stop_unit(unit_name).await
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+async fn stop_unit(unit_name: &str) -> Result<()> {
     let status = tokio::process::Command::new("systemctl")
         .args(["--user", "stop", unit_name])
         .status()
         .await?;
     if !status.success() {
-        anyhow::bail!("systemd user manager rejected application stop")
-    }
-
-    if unit_name == HEROIC_UNIT_NAME {
-        stop_heroic_app_scopes().await;
+        anyhow::bail!("systemd user manager rejected stop of {unit_name}")
     }
     Ok(())
 }
 
-/// Best-effort cleanup for a scope escaping `hearthdeck-heroic.service`'s
+/// Best-effort diagnostic for a scope escaping `hearthdeck-heroic.service`'s
 /// cgroup.
 ///
 /// ponytail: confirmed twice on real hardware, via `/proc/<pid>/cgroup`, that
 /// Heroic's own process (and whatever it launches) can end up in a
 /// `app-heroic-<pid>.scope` under `app.slice` instead of the
-/// `hearthdeck-heroic.service` cgroup `systemctl --user stop` above just
-/// killed - even after switching Heroic's own launch to a direct `exec`
-/// (see the commit removing `xdg-open`). The exact trigger inside
-/// Heroic/Electron/Wine/Proton for this specific case was not pinned down
-/// (no strace access on the target hardware) - most likely Electron's own
-/// GLib/D-Bus application registration for tray/notification support
-/// triggers the same systemd desktop-environment convention `xdg-open`/`gio
-/// launch` uses (see https://systemd.io/DESKTOP_ENVIRONMENTS/), independent
-/// of how the process was originally spawned. Rather than block on fully
-/// root-causing that, this targets the *observed, reproducible* symptom
-/// directly: stop any leftover `app-heroic-*.scope` unit after stopping the
-/// tracked service, so whatever escaped it (Heroic itself, or the Wine/Proton
-/// tree underneath it) still gets torn down. `systemctl` unit-name globs
-/// silently match zero units when none exist, so this is a no-op the rest of
-/// the time. Upgrade path if this class of bug recurs for non-Heroic
-/// launches too: capture and stop `app-*-<pid>.scope` generically instead of
-/// hardcoding "heroic".
+/// `hearthdeck-heroic.service` cgroup `stop_unit` above targets - even after
+/// switching Heroic's own launch to a direct `exec` (see the commit removing
+/// `xdg-open`). The exact trigger inside Heroic/Electron/Wine/Proton for
+/// this specific case was not pinned down (no strace access on the target
+/// hardware) - most likely Electron's own GLib/D-Bus application
+/// registration for tray/notification support triggers the same systemd
+/// desktop-environment convention `xdg-open`/`gio launch` uses (see
+/// https://systemd.io/DESKTOP_ENVIRONMENTS/), independent of how the process
+/// was originally spawned. Rather than block on fully root-causing that,
+/// `stop_application` targets the *observed, reproducible* symptom directly
+/// by also stopping `app-heroic-*.scope`; this function only logs what it
+/// found beforehand, for the next time this needs debugging. `systemctl`
+/// unit-name globs silently match zero units when none exist, so this is a
+/// no-op the rest of the time. Upgrade path if this class of bug recurs for
+/// non-Heroic launches too: capture and stop `app-*-<pid>.scope` generically
+/// instead of hardcoding "heroic".
 #[cfg(any(target_os = "linux", test))]
-async fn stop_heroic_app_scopes() {
-    let matched = tokio::process::Command::new("systemctl")
+async fn log_heroic_app_scopes() {
+    match tokio::process::Command::new("systemctl")
         .args([
             "--user",
             "list-units",
@@ -80,8 +108,8 @@ async fn stop_heroic_app_scopes() {
             "app-heroic-*",
         ])
         .output()
-        .await;
-    match &matched {
+        .await
+    {
         Ok(output) if output.status.success() => {
             let listing = String::from_utf8_lossy(&output.stdout);
             tracing::info!(
@@ -96,24 +124,6 @@ async fn stop_heroic_app_scopes() {
         Err(error) => tracing::warn!(
             %error,
             "could not run systemctl to list app-heroic-*.scope units"
-        ),
-    }
-
-    match tokio::process::Command::new("systemctl")
-        .args(["--user", "stop", "app-heroic-*.scope"])
-        .status()
-        .await
-    {
-        Ok(status) if status.success() => {
-            tracing::info!("stopped any leftover app-heroic-*.scope units after closing Heroic");
-        }
-        Ok(status) => tracing::warn!(
-            ?status,
-            "could not stop leftover app-heroic-*.scope units after closing Heroic"
-        ),
-        Err(error) => tracing::warn!(
-            %error,
-            "could not run systemctl to stop leftover app-heroic-*.scope units"
         ),
     }
 }
