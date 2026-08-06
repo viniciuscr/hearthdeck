@@ -1,6 +1,9 @@
 // Gamepad watcher for hearthdeck-overlay: the Guide/Mode button toggles the
 // overlay, and (while it's open) D-pad up/down moves the menu selection and
-// the South/A button activates it.
+// the South/A button activates it. While the overlay is visible, this also
+// grabs the gamepad exclusively (see `subscription`'s own docs) so the app
+// underneath stops receiving any controller input at all until the overlay
+// closes.
 //
 // UNTESTED on real hardware. Assumptions this needs confirming on the actual
 // target device:
@@ -44,15 +47,40 @@ const RESCAN_DELAY: Duration = Duration::from_secs(5);
 /// Emits a `GamepadEvent` each time any currently-connected gamepad reports
 /// one of the button/axis transitions the overlay cares about.
 ///
+/// `visible` controls whether every currently-connected gamepad is opened
+/// with an exclusive `EVIOCGRAB` (via `evdev`'s `Device::grab`) before being
+/// watched: reading a device's `/dev/input/eventN` node does not, by itself,
+/// stop any other process (the game/app underneath) from reading the exact
+/// same events at the same time - both are just independent listeners on the
+/// same device node. `EVIOCGRAB` is the actual kernel mechanism for
+/// exclusive input: while one file descriptor holds the grab, the kernel
+/// stops delivering that device's events to every other open descriptor -
+/// this app's own un-grabbed reads included - until the grab is released
+/// (which happens automatically when the grabbing descriptor is closed, no
+/// explicit ungrab needed). This is why the caller must pass `visible`
+/// (not just grab unconditionally at startup): grabbing is only meant to
+/// apply while the overlay's menu is actually on screen, not permanently
+/// steal the controller from whatever's running the rest of the time.
+///
+/// `visible` is threaded through as this `Subscription`'s identifying data
+/// (`Subscription::run_with`): a change in the value iced sees between calls
+/// to `Overlay::subscription` is what causes iced to tear down the previous
+/// stream (dropping its `Device`s, releasing any grab) and spawn a fresh one
+/// with the new grab state - not a channel/signal into an already-running
+/// stream. The brief gap while devices are re-enumerated and reopened across
+/// that transition is an accepted tradeoff for reusing iced's own
+/// state-driven subscription mechanism instead of hand-rolling a persistent
+/// task with its own control channel.
+///
 /// KNOWN LIMITATION: devices are enumerated once per (re)scan loop, at
 /// startup and after a device disappears; a controller plugged in while
 /// otherwise idle is not picked up until the next rescan (every
 /// `RESCAN_DELAY` while no matching device is found at all).
-pub fn subscription() -> Subscription<GamepadEvent> {
-    Subscription::run(|| {
+pub fn subscription(visible: bool) -> Subscription<GamepadEvent> {
+    Subscription::run_with(visible, |&visible| {
         stream::channel(
             8,
-            |mut output: futures_channel::mpsc::Sender<GamepadEvent>| async move {
+            move |mut output: futures_channel::mpsc::Sender<GamepadEvent>| async move {
                 loop {
                     let devices = gamepad_devices();
                     if devices.is_empty() {
@@ -74,7 +102,7 @@ pub fn subscription() -> Subscription<GamepadEvent> {
                     let mut tasks = Vec::new();
                     for device in devices {
                         let tx = tx.clone();
-                        tasks.push(tokio::spawn(watch_device(device, tx)));
+                        tasks.push(tokio::spawn(watch_device(device, tx, visible)));
                     }
                     drop(tx);
 
@@ -98,13 +126,24 @@ pub fn subscription() -> Subscription<GamepadEvent> {
 
 /// Reads one device's events until it errors out (typically: unplugged),
 /// sending the corresponding `GamepadEvent` for each button/axis transition
-/// this module cares about.
+/// this module cares about. Grabs the device first (see `subscription`'s own
+/// docs) when `grab` is set, logging a warning and continuing ungrabbed if
+/// the grab itself fails (e.g. no permission, or another process already
+/// holds it) rather than not watching the device at all.
 ///
 /// Uses the async `next_event()` API (integrates with tokio's reactor, does
 /// not block a worker thread) rather than the blocking `Device::fetch_events`
 /// or the `Stream` trait impl (which needs evdev's extra `stream-trait`
 /// feature on top of `tokio` - avoided here to keep dependencies smaller).
-async fn watch_device(device: Device, tx: mpsc::Sender<GamepadEvent>) {
+async fn watch_device(mut device: Device, tx: mpsc::Sender<GamepadEvent>, grab: bool) {
+    if grab && let Err(err) = device.grab() {
+        tracing::warn!(
+            ?err,
+            "hearthdeck-overlay: failed to grab gamepad exclusively; \
+             input will also reach whatever is running underneath the overlay"
+        );
+    }
+
     let mut stream = match device.into_event_stream() {
         Ok(stream) => stream,
         Err(err) => {

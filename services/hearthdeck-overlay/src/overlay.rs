@@ -186,7 +186,7 @@ impl cosmic::Application for Overlay {
 
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            input::subscription().map(|event| match event {
+            input::subscription(self.visible).map(|event| match event {
                 input::GamepadEvent::ToggleOverlay => Message::ToggleOverlay,
                 input::GamepadEvent::NavigateUp => Message::NavigateUp,
                 input::GamepadEvent::NavigateDown => Message::NavigateDown,
