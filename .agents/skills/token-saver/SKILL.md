@@ -17,12 +17,15 @@ Use this skill when the user wants the shortest path to a correct solution with 
 6. Validate with the narrowest existing test/lint/build command that covers the change.
 7. Main model does implementation/iteration by default; use cheaper agents only for mechanical, independent, low-ambiguity work.
 8. Never force delegation globally; delegate only when it is a clear cost/time win.
+9. For commits, do zero style research: no git-log scanning.
+10. Commit message format: one short subject line stating what was implemented in this interaction.
 
 ## Quick defaults
 
 - Default simplification mode: `ponytail full`.
 - One-question rule: ask at most one clarifying question only when blocked by ambiguity.
 - No commit-style lookup unless the user asks to commit.
+- If committing, write one short direct subject and stop.
 
 ## Example
 

@@ -12,3 +12,5 @@ description: Always-on minimal-token behavior with Serena-first execution.
 - Avoid speculative abstractions and dependency additions; reuse existing code, stdlib, and platform features first.
 - Keep edits in the main model by default; delegate to cheaper agents only for mechanical, independent, low-ambiguity tasks (e.g. search sweeps, test/lint runs, data collection).
 - Do not force delegation as policy; delegate only when it is clearly cheaper/faster than direct execution.
+- Commit workflow must be zero-research: do not inspect git history for style.
+- Commit message must be short and direct: one subject line describing what was implemented in this interaction.
