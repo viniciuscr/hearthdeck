@@ -103,7 +103,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       compact: layout.isRailCompact,
                       headerBuilder: (BuildContext context, bool compact) =>
                           TvProfileRailHeader(
-                            name: 'Alex',
+                            name: currentUsername(),
                             compact: compact,
                             icon: Icons.settings_outlined,
                           ),

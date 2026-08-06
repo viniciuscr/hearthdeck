@@ -2,6 +2,17 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+/// The logged-in OS username, for display (e.g. the dashboard profile
+/// summary). Falls back to 'Player' if the environment doesn't expose one.
+String currentUsername() {
+  final env = Platform.environment;
+  final raw = env['USER'] ?? env['USERNAME'] ?? env['LOGNAME'];
+  if (raw == null || raw.isEmpty) {
+    return 'Player';
+  }
+  return raw[0].toUpperCase() + raw.substring(1);
+}
+
 abstract interface class PlatformSession {
   bool get supportsExitToDesktop;
 

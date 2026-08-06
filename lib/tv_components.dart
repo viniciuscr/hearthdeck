@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -5,6 +6,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import 'dashboard_models.dart';
+import 'platform_session.dart';
+import 'system_status.dart';
 import 'tv_gamepad.dart';
 import 'tv_theme.dart';
 import 'virtual_keyboard.dart';
@@ -349,7 +352,6 @@ class _ProfileSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tv = TvPalette.of(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
@@ -369,28 +371,13 @@ class _ProfileSummary extends StatelessWidget {
         ),
         if (!compact) ...<Widget>[
           const SizedBox(width: 10),
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                'Alex Morgan',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: TvTheme.labelMediumSize,
-                  height: 1,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                '12,480 points',
-                style: TextStyle(
-                  fontSize: TvTheme.labelSmallSize,
-                  color: tv.secondaryText,
-                  height: 1,
-                ),
-              ),
-            ],
+          Text(
+            currentUsername(),
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: TvTheme.labelMediumSize,
+              height: 1,
+            ),
           ),
         ],
       ],
@@ -398,26 +385,66 @@ class _ProfileSummary extends StatelessWidget {
   }
 }
 
-class _SystemStatus extends StatelessWidget {
+class _SystemStatus extends StatefulWidget {
   const _SystemStatus({required this.compact});
 
   final bool compact;
 
   @override
+  State<_SystemStatus> createState() => _SystemStatusState();
+}
+
+class _SystemStatusState extends State<_SystemStatus> {
+  Timer? _timer;
+  DateTime _now = DateTime.now();
+  bool _online = true;
+  BatteryStatus? _battery;
+
+  @override
+  void initState() {
+    super.initState();
+    _battery = readBatteryStatus();
+    _refresh();
+    _timer = Timer.periodic(const Duration(seconds: 15), (_) => _refresh());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    final online = await isNetworkConnected();
+    final battery = readBatteryStatus();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _now = DateTime.now();
+      _online = online;
+      _battery = battery;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final battery = _battery;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        if (!compact) ...<Widget>[
+        if (!widget.compact) ...<Widget>[
           const Icon(Icons.mic_off_outlined, size: 22),
           const SizedBox(width: 14),
-          const Icon(Icons.wifi_rounded, size: 22),
+          Icon(_online ? Icons.wifi_rounded : Icons.wifi_off_rounded, size: 22),
           const SizedBox(width: 14),
         ],
-        const Icon(Icons.battery_full_rounded, size: 24),
-        const SizedBox(width: 8),
+        if (battery != null) ...<Widget>[
+          Icon(_batteryIcon(battery), size: 24),
+          const SizedBox(width: 8),
+        ],
         Text(
-          compact ? '4:55' : '4:55 PM',
+          _formatTime(_now, widget.compact),
           style: const TextStyle(
             fontSize: TvTheme.labelMediumSize,
             fontWeight: FontWeight.w600,
@@ -427,6 +454,29 @@ class _SystemStatus extends StatelessWidget {
       ],
     );
   }
+}
+
+IconData _batteryIcon(BatteryStatus battery) {
+  if (battery.charging) {
+    return Icons.battery_charging_full_rounded;
+  }
+  if (battery.percent >= 95) return Icons.battery_full_rounded;
+  if (battery.percent >= 80) return Icons.battery_6_bar_rounded;
+  if (battery.percent >= 65) return Icons.battery_5_bar_rounded;
+  if (battery.percent >= 50) return Icons.battery_4_bar_rounded;
+  if (battery.percent >= 35) return Icons.battery_3_bar_rounded;
+  if (battery.percent >= 20) return Icons.battery_2_bar_rounded;
+  if (battery.percent >= 10) return Icons.battery_1_bar_rounded;
+  return Icons.battery_alert_rounded;
+}
+
+/// Formats a 12-hour clock without pulling in `intl` for two lines of math.
+String _formatTime(DateTime time, bool compact) {
+  final hour24 = time.hour;
+  final period = hour24 >= 12 ? 'PM' : 'AM';
+  final hour12 = hour24 % 12 == 0 ? 12 : hour24 % 12;
+  final minute = time.minute.toString().padLeft(2, '0');
+  return compact ? '$hour12:$minute' : '$hour12:$minute $period';
 }
 
 class TvIconAction extends StatelessWidget {

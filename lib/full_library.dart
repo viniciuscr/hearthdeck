@@ -10,6 +10,7 @@ import 'content_details.dart';
 import 'dashboard_models.dart';
 import 'library_filters.dart';
 import 'library_models.dart';
+import 'platform_session.dart';
 import 'retro.dart';
 import 'search.dart';
 import 'tv_components.dart';
@@ -299,7 +300,7 @@ class _LibraryRail extends StatelessWidget {
       width: width,
       compact: compact,
       headerBuilder: (BuildContext context, bool compact) =>
-          TvProfileRailHeader(name: 'Alex', compact: compact),
+          TvProfileRailHeader(name: currentUsername(), compact: compact),
       footerBuilder: compact
           ? null
           : (BuildContext context, bool compact) => const _StorageStatus(),
