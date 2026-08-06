@@ -21,11 +21,14 @@ CachyOS. It installs:
 - `/usr/lib/systemd/user/cosmic-panel.service`: real `cosmic-panel` top bar
   (time, network, battery, etc.), started only by the separate
   **COSMIC (Test)** session alongside Hearthdeck - see
-  `packaging/arch/cosmic-test-session` for the one-time config it seeds
-  (`Panel` only, no `Dock`; `autohide=OnOverlap` so the bar hides itself
-  behind a fullscreen game and stays visible behind Hearthdeck, which
-  maximizes rather than fullscreens in this session -
-  `linux/runner/my_application.cc`). Requires the optional `cosmic-panel`
+  `packaging/arch/cosmic-test-session` for the config it force-applies on
+  every login (`Panel` only, no `Dock`; `autohide=OnOverlap` so the bar
+  hides itself behind a fullscreen game and stays visible behind
+  Hearthdeck, which maximizes rather than fullscreens in this session -
+  `linux/runner/my_application.cc`; dark theme mode, not time-of-day
+  auto-switching). This overwrites those specific COSMIC Settings keys on
+  every login, deliberately, rather than seeding them once - see the
+  script's own comments for why. Requires the optional `cosmic-panel`
   package; the Hearthdeck Kiosk (Gamescope) session never starts it.
 - `/usr/bin/hearthdeck-overlay-spike`: **temporary**, not a real feature.
   Disposable hardware-verification tool for an in-progress investigation

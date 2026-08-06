@@ -1,8 +1,9 @@
 #!/usr/bin/bash
 # Bare-minimum COSMIC test session: runs cosmic-comp directly (no
 # cosmic-session or settings daemon) with Hearthdeck as its sole app client.
-# cosmic-panel runs alongside it as a real top bar (see seed_panel_config
-# below). Independent of the Hearthdeck Kiosk (Gamescope) session.
+# cosmic-panel runs alongside it as a real, dark, Panel-only top bar (see
+# apply_cosmic_overrides below). Independent of the Hearthdeck Kiosk
+# (Gamescope) session.
 set -Euo pipefail
 
 # Writes straight to the system journal regardless of how this session was
@@ -41,24 +42,34 @@ systemctl --user try-restart hearthdeck-bridge.service || true
 # initial activation-environment race.
 systemctl --user start hearthdeck-overlay.service || true
 
-# cosmic-panel (the top bar) reads its layout/behavior from
-# $XDG_CONFIG_HOME, same as a real COSMIC session's cosmic-settings would
-# write it - there's no settings daemon here to do that, so seed it once,
-# and only touch keys that don't already exist. That keeps a user's own
-# edits (e.g. testing this session on top of an existing COSMIC config)
-# intact on every later login: Panel only (no Dock, redundant with
-# Hearthdeck's own UI), and autohide=OnOverlap so the bar hides itself
-# behind whatever's currently fullscreen (Hearthdeck maximizes instead of
-# fullscreening here - see my_application.cc - so it stays visible; a
-# launched game going fullscreen hides it).
-seed_panel_config() {
+# cosmic-panel (the top bar + dock) and cosmic-comp/cosmic-panel's own theming
+# both read plain per-key files under $XDG_CONFIG_HOME/cosmic - normally
+# written by cosmic-settings, which doesn't run in this minimal session. Force
+# the same fixed values on every login instead of seeding them once: a
+# once-only seed silently no-ops on a machine that already has a real COSMIC
+# desktop login (its own entries/theme files already exist), which is exactly
+# how the Dock ended up showing here despite the "Panel only" intent below.
+# Trade-off: this always overwrites these specific keys, including any manual
+# COSMIC Settings change made to them from a real desktop session sharing the
+# same account - deliberate, since this session needs a known, reproducible
+# look every time, not "whatever was left over from last time".
+apply_cosmic_overrides() {
   local entries_dir="$HOME/.config/cosmic/com.system76.CosmicPanel/v1"
   local panel_dir="$HOME/.config/cosmic/com.system76.CosmicPanel.Panel/v1"
-  mkdir -p "$entries_dir" "$panel_dir"
-  [ -f "$entries_dir/entries" ] || printf '%s' '["Panel"]' > "$entries_dir/entries"
-  [ -f "$panel_dir/autohide" ] || printf '%s' 'OnOverlap' > "$panel_dir/autohide"
+  local mode_dir="$HOME/.config/cosmic/com.system76.CosmicTheme.Mode/v1"
+  mkdir -p "$entries_dir" "$panel_dir" "$mode_dir"
+  # Panel only - no Dock, redundant with Hearthdeck's own UI.
+  printf '%s' '["Panel"]' > "$entries_dir/entries"
+  # Hides the bar behind whatever's currently fullscreen (Hearthdeck
+  # maximizes instead of fullscreening here - see my_application.cc - so it
+  # stays visible; a launched game going fullscreen hides it).
+  printf '%s' 'OnOverlap' > "$panel_dir/autohide"
+  # Dark, and don't auto-switch with the system clock: this session should
+  # always look the same, not depend on time of day.
+  printf '%s' 'true' > "$mode_dir/is_dark"
+  printf '%s' 'false' > "$mode_dir/auto_switch"
 }
-seed_panel_config || log "could not seed cosmic-panel config"
+apply_cosmic_overrides || log "could not apply cosmic-panel/theme config"
 systemctl --user start cosmic-panel.service || true
 
 log "exec cosmic-comp"
