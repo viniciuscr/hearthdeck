@@ -62,7 +62,7 @@ not the literal current values, to avoid this file going stale):
 | `com.system76.CosmicPanel` | `entries` | which named profiles (`Panel`, `Dock`) actually run | `["Panel"]` |
 | `com.system76.CosmicPanel.Panel` | `size` | overall bar thickness/icon scale: `XS`/`S`/`M`/`L`/`XL`, or `Custom(u32)` | `L` |
 | `com.system76.CosmicPanel.Panel` | `autohide` | `Never` / `OnOverlap` (hide behind a fullscreen window) / `Always` | `OnOverlap` |
-| `com.system76.CosmicPanel.Panel` | `plugins_wings` | `Option<(Vec<String>, Vec<String>)>` - left-edge and right-edge applet lists, by ID, ordered **closest-to-center first, closest-to-screen-edge last** | `Some(([], ["com.system76.CosmicAppletBluetooth", "com.system76.CosmicAppletNetwork", "com.system76.CosmicAppletTime"]))` |
+| `com.system76.CosmicPanel.Panel` | `plugins_wings` | `Option<(Vec<String>, Vec<String>)>` - left-edge and right-edge applet lists, by ID, ordered **closest-to-center first, closest-to-screen-edge last** | `Some((["io.github.viniciuscr.hearthdeck.AppletUser"], ["com.system76.CosmicAppletNetwork", "com.system76.CosmicAppletBattery", "com.system76.CosmicAppletTime"]))` |
 | `com.system76.CosmicPanel.Panel` | `plugins_center` | `Option<Vec<String>>` - center-anchored applets | `None` |
 | `com.system76.CosmicTheme.Mode` | `is_dark` | dark vs. light palette | `true` |
 | `com.system76.CosmicTheme.Mode` | `auto_switch` | follow the system clock's day/night schedule instead of `is_dark` | `false` |

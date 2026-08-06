@@ -41,6 +41,7 @@ build() {
   cargo build --manifest-path services/Cargo.toml --workspace --release
   # ponytail: reuse the workspace target dir so CI cache keeps libcosmic/iced builds.
   CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-overlay/Cargo.toml --release
+  CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-applet-user/Cargo.toml --release
 }
 
 package() {
@@ -79,6 +80,10 @@ package() {
   install -Dm644 deploy/systemd/hearthdeck-cosmic-test.target "$pkgdir/usr/lib/systemd/user/hearthdeck-cosmic-test.target"
   install -Dm644 packaging/arch/hearthdeck-overlay.service "$pkgdir/usr/lib/systemd/user/hearthdeck-overlay.service"
   install -Dm644 packaging/arch/cosmic-panel.service "$pkgdir/usr/lib/systemd/user/cosmic-panel.service"
+  # COSMIC panel discovers applets by app ID: the binary must be named after
+  # it and on $PATH. See apply_cosmic_overrides in cosmic-test-session for how
+  # the ID is wired into plugins_wings.
+  install -Dm755 services/target/release/hearthdeck-applet-user "$pkgdir/usr/bin/io.github.viniciuscr.hearthdeck.AppletUser"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

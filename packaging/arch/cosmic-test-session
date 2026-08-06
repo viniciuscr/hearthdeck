@@ -65,6 +65,9 @@ apply_cosmic_overrides() {
   # maximizes instead of fullscreening here - see my_application.cc - so it
   # stays visible; a launched game going fullscreen hides it).
   printf '%s' 'OnOverlap' > "$panel_dir/autohide"
+  # Left wing: username applet (closest-to-center first, screen-edge last).
+  # Right wing: standard system applets.
+  printf '%s' 'Some((["io.github.viniciuscr.hearthdeck.AppletUser"], ["com.system76.CosmicAppletNetwork", "com.system76.CosmicAppletBattery", "com.system76.CosmicAppletTime"]))' > "$panel_dir/plugins_wings"
   # Dark, and don't auto-switch with the system clock: this session should
   # always look the same, not depend on time of day.
   printf '%s' 'true' > "$mode_dir/is_dark"
