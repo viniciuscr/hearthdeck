@@ -75,6 +75,47 @@ Applet IDs are just their Flatpak-style app ID
 (`com.system76.CosmicApplet<Name>`) - the full built-in set ships in
 [`cosmic-panel`'s default `plugins_wings`/`plugins_center`](https://github.com/pop-os/cosmic-panel/blob/master/data/default_schema/com.system76.CosmicPanel.Panel/v1/plugins_wings).
 
+## A custom applet also needs a matching `.desktop` file - the ID alone isn't enough
+
+Putting a custom app ID in `plugins_wings`/`plugins_center` is not sufficient
+by itself. Both the pieces that need to recognize that ID read from
+`.desktop` files, not from the running binary's name alone:
+
+- **`cosmic-panel` itself** (the process that actually renders the bar and
+  spawns each applet) scans the standard XDG desktop-entry directories
+  (`freedesktop_desktop_entry::default_paths()`, e.g.
+  `/usr/share/applications`) for a file whose **filename (without
+  `.desktop`) equals the app ID**, then spawns whatever that file's `Exec=`
+  line says - see
+  [`cosmic-panel-bin/src/space/wrapper_space.rs`](https://github.com/pop-os/cosmic-panel/blob/master/cosmic-panel-bin/src/space/wrapper_space.rs).
+  An app ID with no matching `.desktop` file is silently dropped - no error,
+  nothing spawned, no log beyond a debug-level trace.
+- **`cosmic-settings`' own "add a widget" applet picker** (the panel settings
+  page's available-applet list) separately scans the same desktop-entry
+  directories and only lists a file if it declares the extra key
+  `X-CosmicApplet=true` - see
+  [`cosmic-settings/src/pages/desktop/panel/applets_inner.rs`](https://github.com/pop-os/cosmic-settings/blob/master/cosmic-settings/src/pages/desktop/panel/applets_inner.rs).
+  Without that key (or the file), the applet can still be made to run via
+  `plugins_wings` directly, but never appears as something a user could add
+  themselves through the GUI.
+
+So a custom applet needs, at minimum, one `.desktop` file named
+`<app-id>.desktop` (e.g. `packaging/arch/hearthdeck-applet-user.desktop`,
+installed as `/usr/share/applications/io.github.viniciuscr.hearthdeck.AppletUser.desktop`
+- see `PKGBUILD`), with:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=<shown in the "add widget" picker>
+Exec=<the installed binary's name, resolved via $PATH>
+NoDisplay=true
+X-CosmicApplet=true
+```
+
+`NoDisplay=true` keeps it out of a normal application launcher/menu (it's
+only meant to be added as a panel widget, not launched directly by a user).
+
 ## Extending this
 
 To change panel size, autohide, applets, or theme mode for the COSMIC (Test)
@@ -82,9 +123,12 @@ session: edit `apply_cosmic_overrides()` in
 `packaging/arch/cosmic-test-session` - add a `printf` line for the new key,
 following the table above for its RON format. Do not add a settings-import
 step or expect a snapshot file to restore from; there isn't one upstream to
-import, by design of `cosmic-config` itself.
+import, by design of `cosmic-config` itself. If the change adds a new custom
+applet, it also needs its own `.desktop` file per the section above - the
+config key alone will silently do nothing.
 
 This intentionally always overwrites these specific keys on every session
 start rather than seeding them once - see that function's own comment for
 why (a once-only seed silently no-ops on any account that already has a
 real COSMIC desktop login with its own files in place).
+

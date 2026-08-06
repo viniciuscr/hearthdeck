@@ -30,6 +30,13 @@ CachyOS. It installs:
   every login, deliberately, rather than seeding them once - see the
   script's own comments for why. Requires the optional `cosmic-panel`
   package; the Hearthdeck Kiosk (Gamescope) session never starts it.
+- `/usr/bin/io.github.viniciuscr.hearthdeck.AppletUser` and
+  `/usr/share/applications/io.github.viniciuscr.hearthdeck.AppletUser.desktop`:
+  a small `cosmic-panel` applet showing the logged-in username, added to the
+  panel's left wing by `cosmic-test-session`. Both files are required -
+  `cosmic-panel` finds applets by `.desktop` filename, not by binary name
+  alone; see `docs/cosmic-panel-customization.md`. COSMIC (Test) session
+  only, same as the panel itself.
 - `/usr/bin/hearthdeck-overlay-spike`: **temporary**, not a real feature.
   Disposable hardware-verification tool for an in-progress investigation
   into a system-wide overlay menu; see `services/hearthdeck-overlay-spike`

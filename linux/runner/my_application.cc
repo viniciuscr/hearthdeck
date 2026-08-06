@@ -59,6 +59,18 @@ static void my_application_activate(GApplication* application) {
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
   gtk_window_set_title(window, "hearthdeck");
   gtk_window_set_decorated(window, FALSE);
+  // On Wayland, gtk_window_set_decorated(FALSE) alone does not stop the
+  // compositor from drawing its own server-side title bar/min/max/close
+  // buttons: GTK only tells the compositor to skip that (announce_csd
+  // instead of announce_ssd, in GTK3's gdkwindow-wayland.c) when the window
+  // has a client-side titlebar widget installed via
+  // gtk_window_set_titlebar(), regardless of the decorated property. This
+  // matters once the window is undecorated but not fullscreen (as in the
+  // COSMIC (Test) session below, which maximizes instead) - a fullscreen
+  // window happens to never get compositor decorations either way, which is
+  // why this went unnoticed in the Kiosk (Gamescope) session. An empty
+  // titlebar widget satisfies GTK's requirement with nothing rendered.
+  gtk_window_set_titlebar(window, gtk_grid_new());
   // Xvfb plus a minimal, non-compositing window manager (this repo's
   // docker/ visual test sandbox) can leave gtk_window_fullscreen()'s async
   // round-trip to the WM never completing, so the GL area never learns its

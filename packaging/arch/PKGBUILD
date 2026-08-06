@@ -80,10 +80,16 @@ package() {
   install -Dm644 deploy/systemd/hearthdeck-cosmic-test.target "$pkgdir/usr/lib/systemd/user/hearthdeck-cosmic-test.target"
   install -Dm644 packaging/arch/hearthdeck-overlay.service "$pkgdir/usr/lib/systemd/user/hearthdeck-overlay.service"
   install -Dm644 packaging/arch/cosmic-panel.service "$pkgdir/usr/lib/systemd/user/cosmic-panel.service"
-  # COSMIC panel discovers applets by app ID: the binary must be named after
-  # it and on $PATH. See apply_cosmic_overrides in cosmic-test-session for how
-  # the ID is wired into plugins_wings.
+  # COSMIC panel (cosmic-panel-bin's wrapper_space.rs) and cosmic-settings'
+  # applet picker both discover applets by scanning .desktop files (not by
+  # running a same-named binary directly): the file's *name* must equal the
+  # app ID, cosmic-panel spawns whatever its Exec= line says, and
+  # cosmic-settings only lists it if X-CosmicApplet is present. See
+  # apply_cosmic_overrides in cosmic-test-session for how the app ID is wired
+  # into plugins_wings, and docs/cosmic-panel-customization.md for the source
+  # references this was confirmed against.
   install -Dm755 services/target/release/hearthdeck-applet-user "$pkgdir/usr/bin/io.github.viniciuscr.hearthdeck.AppletUser"
+  install -Dm644 packaging/arch/hearthdeck-applet-user.desktop "$pkgdir/usr/share/applications/io.github.viniciuscr.hearthdeck.AppletUser.desktop"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

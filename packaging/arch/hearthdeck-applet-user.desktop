@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Hearthdeck User Applet
+Comment=Shows the logged-in username in the COSMIC panel top bar
+Exec=io.github.viniciuscr.hearthdeck.AppletUser
+Icon=avatar-default-symbolic
+Terminal=false
+NoDisplay=true
+X-CosmicApplet=true

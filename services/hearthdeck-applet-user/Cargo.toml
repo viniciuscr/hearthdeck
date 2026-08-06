@@ -8,9 +8,14 @@ license = "MIT"
 publish = false
 description = """
 COSMIC panel applet for the "COSMIC (Test)" session: displays the logged-in
-username in the top bar as a static text label. Registered with cosmic-panel
-via the plugins_wings config key (see packaging/arch/cosmic-test-session's
-apply_cosmic_overrides). Applet ID: io.github.viniciuscr.hearthdeck.AppletUser.
+username in the top bar as a static text label. Applet ID:
+io.github.viniciuscr.hearthdeck.AppletUser. Wired into the panel's
+plugins_wings config key (see packaging/arch/cosmic-test-session's
+apply_cosmic_overrides) - but that alone does nothing without the matching
+packaging/arch/hearthdeck-applet-user.desktop: cosmic-panel discovers and
+spawns applets by .desktop filename, not by running a same-named binary
+directly, and cosmic-settings' applet picker only lists ones with
+X-CosmicApplet=true in that file. See docs/cosmic-panel-customization.md.
 
 Deliberately NOT a member of services/Cargo.toml's workspace for the same
 reason hearthdeck-overlay isn't: libcosmic's dependency tree would add ~20
