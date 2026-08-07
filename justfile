@@ -102,7 +102,12 @@ pre-push-check:
   mise exec -- cargo build --manifest-path {{services_manifest}} --workspace --release
   @echo "✅ Release build passed"
   @echo ""
-  @echo "⏳ [3/3] Running Clippy lint checks (release mode)..."
+  @echo "⏳ [3/4] Checking standalone package crates..."
+  mise exec -- cargo check --manifest-path services/hearthdeck-cosmic-spike/Cargo.toml --release
+  mise exec -- cargo check --manifest-path services/hearthdeck-applet-user/Cargo.toml --release
+  @echo "✅ Standalone crate checks passed"
+  @echo ""
+  @echo "⏳ [4/4] Running Clippy lint checks (release mode)..."
   mise exec -- cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets --release -- -D warnings
   @echo "✅ Clippy check passed"
   @echo ""

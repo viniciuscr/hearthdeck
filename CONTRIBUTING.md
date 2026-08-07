@@ -56,6 +56,9 @@ Runs format, check-services, and check-app in sequence. Use this before creating
 If you ran `git config core.hooksPath .githooks`, the pre-push hook runs automatically:
 - Checks Rust formatting: `cargo fmt --all -- --check`
 - Builds all services in release mode: `cargo build --workspace --release`
+- Checks standalone packaging crates in release mode:
+  - `cargo check --manifest-path services/hearthdeck-cosmic-spike/Cargo.toml --release`
+  - `cargo check --manifest-path services/hearthdeck-applet-user/Cargo.toml --release`
 - Fails the push if either check fails
 
 ### Manual Pre-Push Check

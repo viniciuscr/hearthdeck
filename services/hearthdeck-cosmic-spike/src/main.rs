@@ -14,7 +14,7 @@ mod app {
     }
 
     #[derive(Clone, Debug)]
-    enum Message {
+    pub(crate) enum Message {
         OpenFullLibrary,
         BackToDashboard,
     }
@@ -53,7 +53,7 @@ mod app {
             Task::none()
         }
 
-        fn view(&self) -> Element<Message> {
+        fn view(&self) -> Element<'_, Message> {
             match self.screen {
                 Screen::Dashboard => dashboard_view(),
                 Screen::FullLibrary => full_library_view(),

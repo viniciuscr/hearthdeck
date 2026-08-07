@@ -49,7 +49,7 @@ impl cosmic::Application for UserApplet {
         Task::none()
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         // `applet.text` auto-scales with panel size (XS→XL).
         // `autosize_window` wraps it in the sizing container cosmic-panel
         // expects so it gets the right dimensions for the slot it occupies.

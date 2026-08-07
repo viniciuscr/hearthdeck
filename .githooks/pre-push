@@ -55,8 +55,23 @@ else
     FAILED=1
 fi
 
-# 3. Check for clippy warnings in release mode
-echo -e "${YELLOW}[3/3] Running Clippy lint checks (release mode)...${NC}"
+# 3. Check standalone crates that are not part of services workspace
+echo -e "${YELLOW}[3/4] Checking standalone package crates...${NC}"
+if cargo check --manifest-path services/hearthdeck-cosmic-spike/Cargo.toml --release > /dev/null 2>&1 \
+    && cargo check --manifest-path services/hearthdeck-applet-user/Cargo.toml --release > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ Standalone crate checks passed${NC}"
+else
+    echo -e "${RED}✗ Standalone crate check failed${NC}"
+    echo ""
+    echo "Check output with:"
+    echo "  cargo check --manifest-path services/hearthdeck-cosmic-spike/Cargo.toml --release"
+    echo "  cargo check --manifest-path services/hearthdeck-applet-user/Cargo.toml --release"
+    echo ""
+    FAILED=1
+fi
+
+# 4. Check for clippy warnings in release mode
+echo -e "${YELLOW}[4/4] Running Clippy lint checks (release mode)...${NC}"
 if cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets --release -- -D warnings > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Clippy check passed${NC}"
 else
