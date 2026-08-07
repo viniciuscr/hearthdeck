@@ -101,6 +101,8 @@ mod app {
         ])
         .spacing(16);
 
+        let nav = list_column().add(list::button(text::body("< Dashboard")).on_press(Message::BackToDashboard));
+
         let categories = list_column()
             .add(list::button(text::body("Games")).selected(true))
             .add(list::button(text::body("Apps")))
@@ -108,9 +110,7 @@ mod app {
 
         container(
             column(vec![
-                list::button(text::body("< Dashboard"))
-                    .on_press(Message::BackToDashboard)
-                    .into(),
+                nav.into(),
                 text::title2("Full Library").into(),
                 text::body("Bigger text + bigger covers, simple responsive layout.").into(),
                 hero_row.into(),
