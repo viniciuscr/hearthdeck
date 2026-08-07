@@ -1,4 +1,6 @@
 set shell := ["zsh", "-cu"]
+services_manifest := "services/Cargo.toml"
+dart_sources := "lib test"
 
 default:
   @just --list
@@ -25,15 +27,13 @@ dev device="macos":
   ./scripts/dev {{device}}
 
 # Analyze, test, and build the Flutter macOS debug application.
-check-app:
-  mise exec -- flutter analyze
-  mise exec -- flutter test
+check-app: test-app
   mise exec -- flutter build macos --debug
 
 # Format Flutter and Rust source files.
 format:
-  mise exec -- dart format lib test
-  mise exec -- cargo fmt --manifest-path services/Cargo.toml --all
+  mise exec -- dart format {{dart_sources}}
+  mise exec -- cargo fmt --manifest-path {{services_manifest}} --all
 
 # Analyze and test the Flutter client.
 test-app:
@@ -42,25 +42,25 @@ test-app:
 
 # Build, test, and lint the Rust backend workspace.
 check-services:
-  mise exec -- cargo check --manifest-path services/Cargo.toml --workspace
-  mise exec -- cargo test --manifest-path services/Cargo.toml --workspace
-  mise exec -- cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets -- -D warnings
+  mise exec -- cargo check --manifest-path {{services_manifest}} --workspace
+  mise exec -- cargo test --manifest-path {{services_manifest}} --workspace
+  mise exec -- cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets -- -D warnings
 
 # Build optimized Linux-host service binaries.
 build-services:
-  mise exec -- cargo build --manifest-path services/Cargo.toml --workspace --release
+  mise exec -- cargo build --manifest-path {{services_manifest}} --workspace --release
 
 # Build debug service binaries for the combined development target.
 build-services-debug:
-  mise exec -- cargo build --manifest-path services/Cargo.toml --workspace
+  mise exec -- cargo build --manifest-path {{services_manifest}} --workspace
 
 # Run the Linux integration bridge in the foreground.
 bridge:
-  mise exec -- cargo run --manifest-path services/Cargo.toml -p hearthdeck-bridge
+  mise exec -- cargo run --manifest-path {{services_manifest}} -p hearthdeck-bridge
 
 # Run the local API daemon in the foreground.
 daemon:
-  mise exec -- cargo run --manifest-path services/Cargo.toml -p hearthdeck-daemon
+  mise exec -- cargo run --manifest-path {{services_manifest}} -p hearthdeck-daemon
 
 # Build the disposable Gamescope external-overlay spike (see
 # services/hearthdeck-overlay-spike). This is only for iterating locally
@@ -73,7 +73,6 @@ build-overlay-spike:
   mise exec -- cargo build --manifest-path services/Cargo.toml -p hearthdeck-overlay-spike --release
   @echo "Local build only: services/target/release/hearthdeck-overlay-spike"
   @echo "Normal path: push, wait for CI, then 'sudo pacman -Syu' on the kiosk box and run 'hearthdeck-overlay-spike'."
-
 
 # Scan installed macOS application bundles through the real provider.
 macos-discovery-check: build-services-debug
@@ -96,15 +95,15 @@ pre-push-check:
   @echo "Running local checks before push..."
   @echo ""
   @echo "⏳ [1/3] Checking Rust code formatting..."
-  mise exec -- cargo fmt --manifest-path services/Cargo.toml --all -- --check
+  mise exec -- cargo fmt --manifest-path {{services_manifest}} --all -- --check
   @echo "✅ Formatting check passed"
   @echo ""
   @echo "⏳ [2/3] Building services in release mode..."
-  mise exec -- cargo build --manifest-path services/Cargo.toml --workspace --release
+  mise exec -- cargo build --manifest-path {{services_manifest}} --workspace --release
   @echo "✅ Release build passed"
   @echo ""
   @echo "⏳ [3/3] Running Clippy lint checks (release mode)..."
-  mise exec -- cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets --release -- -D warnings
+  mise exec -- cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets --release -- -D warnings
   @echo "✅ Clippy check passed"
   @echo ""
   @echo "✨ All checks passed! Push when ready."
@@ -112,11 +111,11 @@ pre-push-check:
 # Run source validation in CI after Flutter and Rust have been installed.
 ci-check:
   flutter pub get
-  dart format --output=none --set-exit-if-changed lib test
-  cargo fmt --manifest-path services/Cargo.toml --all -- --check
-  cargo check --manifest-path services/Cargo.toml --workspace
-  cargo test --manifest-path services/Cargo.toml --workspace
-  cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets -- -D warnings
+  dart format --output=none --set-exit-if-changed {{dart_sources}}
+  cargo fmt --manifest-path {{services_manifest}} --all -- --check
+  cargo check --manifest-path {{services_manifest}} --workspace
+  cargo test --manifest-path {{services_manifest}} --workspace
+  cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets -- -D warnings
   flutter analyze
   flutter test
 
