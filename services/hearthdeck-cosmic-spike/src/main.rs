@@ -14,7 +14,7 @@ mod app {
     }
 
     #[derive(Clone, Debug)]
-    pub(crate) enum Message {
+    pub enum Message {
         OpenFullLibrary,
         BackToDashboard,
     }
