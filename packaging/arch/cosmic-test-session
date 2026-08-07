@@ -1,7 +1,6 @@
 #!/usr/bin/bash
 # Bare-minimum COSMIC test session: runs cosmic-comp directly (no
-# cosmic-session or settings daemon), preferring hearthdeck-v2 when installed
-# and falling back to Hearthdeck.
+# cosmic-session or settings daemon), launching hearthdeck-v2 as its client.
 # cosmic-panel runs alongside it as a real, dark, Panel-only, size-L top bar
 # (see apply_cosmic_overrides below). Independent of the Hearthdeck Kiosk
 # (Gamescope) session.
@@ -84,11 +83,14 @@ apply_cosmic_overrides() {
 apply_cosmic_overrides || log "could not apply cosmic-panel/theme config"
 systemctl --user start cosmic-panel.service || true
 
-launch_app="/opt/hearthdeck/hearthdeck"
-if [[ -x /usr/bin/hearthdeck-v2 ]]; then
-  launch_app="/usr/bin/hearthdeck-v2"
-elif [[ -x /usr/bin/hearthdeck_v2 ]]; then
+launch_app="/usr/bin/hearthdeck-v2"
+if [[ ! -x "$launch_app" && -x /usr/bin/hearthdeck_v2 ]]; then
   launch_app="/usr/bin/hearthdeck_v2"
+fi
+
+if [[ ! -x "$launch_app" ]]; then
+  log "hearthdeck-v2 binary missing: expected /usr/bin/hearthdeck-v2"
+  exit 1
 fi
 
 log "exec cosmic-comp ($launch_app)"
