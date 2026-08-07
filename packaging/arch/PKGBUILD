@@ -43,7 +43,7 @@ build() {
   CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-overlay/Cargo.toml --release
   CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-applet-user/Cargo.toml --release
   CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-cosmic-spike/Cargo.toml --release
-  CARGO_TARGET_DIR=services/target cargo build --manifest-path hearthdeck-v2/Cargo.toml --release
+  CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-v2/Cargo.toml --release
 }
 
 package() {
