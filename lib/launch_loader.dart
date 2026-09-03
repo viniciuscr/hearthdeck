@@ -31,38 +31,45 @@ Future<T?> runWithLaunchLoader<T>(
     barrierColor: Colors.black.withValues(alpha: 0.72),
     transitionDuration: const Duration(milliseconds: 150),
     reverseTransitionDuration: const Duration(milliseconds: 150),
-    pageBuilder: (BuildContext context, Animation<double> animation,
-        Animation<double> secondaryAnimation) {
-      final fade = CurvedAnimation(
-        parent: animation,
-        curve: Curves.easeOut,
-        reverseCurve: Curves.easeIn,
-      );
-      return PopScope(
-        canPop: false,
-        child: FadeTransition(
-          opacity: fade,
-          child: Scaffold(
-            backgroundColor: Colors.transparent,
-            body: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  const CircularProgressIndicator(),
-                  const SizedBox(height: 24),
-                  const Text(
-                    'Launching…',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w600),
+    pageBuilder:
+        (
+          BuildContext context,
+          Animation<double> animation,
+          Animation<double> secondaryAnimation,
+        ) {
+          final fade = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOut,
+            reverseCurve: Curves.easeIn,
+          );
+          return PopScope(
+            canPop: false,
+            child: FadeTransition(
+              opacity: fade,
+              child: Scaffold(
+                backgroundColor: Colors.transparent,
+                body: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 24),
+                      const Text(
+                        'Launching…',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(itemTitle, textAlign: TextAlign.center),
+                    ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(itemTitle, textAlign: TextAlign.center),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
-      );
-    },
+          );
+        },
   );
 
   unawaited(navigator.push(route));
