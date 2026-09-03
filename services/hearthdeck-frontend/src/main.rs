@@ -1,5 +1,8 @@
 #[rustfmt::skip]
-mod config;
+mod config {
+    include!(concat!(env!("OUT_DIR"), "/config.rs"));
+}
+
 mod app;
 mod app_group;
 mod icon_cache;
