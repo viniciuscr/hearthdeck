@@ -42,8 +42,6 @@ build() {
   # ponytail: reuse the workspace target dir so CI cache keeps libcosmic/iced builds.
   CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-overlay/Cargo.toml --release
   CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-applet-user/Cargo.toml --release
-  CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-cosmic-spike/Cargo.toml --release
-  CARGO_TARGET_DIR=services/target cargo build --manifest-path hearthdeck-v2/Cargo.toml --release
 }
 
 package() {
@@ -80,8 +78,7 @@ package() {
   # for what it does and does not do.
   install -Dm644 packaging/arch/cosmic-test-session.desktop "$pkgdir/usr/share/wayland-sessions/cosmic-test.desktop"
   install -Dm755 packaging/arch/cosmic-test-session "$pkgdir/usr/lib/hearthdeck/cosmic-test-session"
-  install -Dm755 services/target/release/hearthdeck-cosmic-spike "$pkgdir/usr/bin/hearthdeck-cosmic-spike"
-  install -Dm755 services/target/release/hearthdeck_v2 "$pkgdir/usr/bin/hearthdeck-v2"
+  install -Dm755 services/target/release/hearthdeck-frontend "$pkgdir/usr/bin/hearthdeck-frontend"
   install -Dm644 deploy/systemd/hearthdeck-cosmic-test.target "$pkgdir/usr/lib/systemd/user/hearthdeck-cosmic-test.target"
   install -Dm644 packaging/arch/hearthdeck-overlay.service "$pkgdir/usr/lib/systemd/user/hearthdeck-overlay.service"
   install -Dm644 packaging/arch/cosmic-panel.service "$pkgdir/usr/lib/systemd/user/cosmic-panel.service"

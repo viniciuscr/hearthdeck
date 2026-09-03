@@ -1,0 +1,39 @@
+hearthdeck = HearthDeck
+pc-games = PC Games
+console-games = Console Games
+applications = Applications
+cosmic-library-home = Library Home
+cosmic-office = Office
+cosmic-system = System
+cosmic-utilities = Utilities
+new-group = Create Folder
+all-apps = All Apps
+all-games = All Games
+filter = Filter
+count-items = { $count ->
+    [one] { $count } item
+    *[other] { $count } items
+}
+name = Name
+ok = Ok
+save = Save
+cancel = Cancel
+search-placeholder = Type to search apps…
+new-group-placeholder = Folder Name
+pin-to-app-tray = Pin to App Tray
+run = Run
+run-on = Run on { $gpu }
+run-on-default = (Default)
+remove = Move to library home
+create-new = Create new folder
+add-group = Add group
+delete = Delete
+rename = Rename
+delete-folder = Delete folder?
+    .msg = Deleting this folder will move the application icons to Library home.
+flatpak = Flatpak
+snap = Snap
+system = System
+local = Local
+nix = Nix
+storage-available = Available space
