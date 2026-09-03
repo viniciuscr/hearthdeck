@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.hearthdeck.HearthDeck</id>
+  <metadata_license>CC0</metadata_license>
+  <name>HearthDeck</name>
+  <summary>Application launcher for the COSMIC desktop</summary>
+  <description>
+    <p>HearthDeck is an application launcher for the COSMIC desktop that lists all installed applications in a grid.</p>
+  </description>
+  <url type="homepage">https://github.com/pop-os/cosmic-app-library</url>
+  <url type="bugtracker">https://github.com/pop-os/cosmic-app-library/issues</url>
+  <content_rating type="oars-1.0" />
+  <releases>
+    <release version="0.1.0" date="2019-07-11" />
+  </releases>
+  <kudos>
+     <!--
+       GNOME Software kudos:
+       https://gitlab.gnome.org/GNOME/gnome-software/-/blob/main/doc/kudos.md
+     -->
+     <kudo>ModernToolkit</kudo>
+     <kudo>HiDpiIcon</kudo>
+  </kudos>
+  <developer_name>Ashley Wulber</developer_name>
+  <update_contact>ashley@system76.com</update_contact>
+  <translation type="gettext">hearthdeck</translation>
+  <launchable type="desktop-id">org.hearthdeck.HearthDeck.desktop</launchable>
+</component>

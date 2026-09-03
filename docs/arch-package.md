@@ -30,7 +30,9 @@ CachyOS. It installs:
   every login, deliberately, rather than seeding them once - see the
   script's own comments for why. Requires the optional `cosmic-panel`
   package; the Hearthdeck Kiosk (Gamescope) session never starts it.
-- `/usr/bin/hearthdeck-cosmic-spike`: disposable libcosmic UI spike. The
+- `/usr/bin/hearthdeck-frontend`: the COSMIC (libcosmic) frontend, migrated
+  from `../cosmic-app-library` (a full Xbox-style app/game grid launcher with
+  search, sidebar, gamepad nav, and daemon-client integration). The
   **COSMIC (Test)** session launcher prefers this binary when present, and
   falls back to `/opt/hearthdeck/hearthdeck` when it is not.
 - `/usr/bin/io.github.viniciuscr.hearthdeck.AppletUser` and

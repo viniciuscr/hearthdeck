@@ -86,8 +86,32 @@ pairing-code:
 refresh-metadata url token provider="appstream-local":
   curl --fail --silent --show-error -X POST {{url}}/v1/metadata/{{provider}}/refresh -H 'Authorization: Bearer {{token}}'
 
+# Build the COSMIC frontend.
+build-frontend:
+  mise exec -- cargo build --manifest-path {{services_manifest}} -p hearthdeck-frontend --release
+
+# Build debug COSMIC frontend.
+build-frontend-debug:
+  mise exec -- cargo build --manifest-path {{services_manifest}} -p hearthdeck-frontend
+
+# Run the COSMIC frontend.
+run-frontend: build-frontend
+  ./services/target/release/hearthdeck-frontend
+
+# Run the COSMIC frontend in debug mode.
+run-frontend-debug: build-frontend-debug
+  ./services/target/debug/hearthdeck-frontend
+
+# Check and lint the COSMIC frontend.
+check-frontend:
+  mise exec -- cargo clippy --manifest-path {{services_manifest}} -p hearthdeck-frontend --all-targets -- -D warnings
+
+# Test the COSMIC frontend.
+test-frontend:
+  mise exec -- cargo test --manifest-path {{services_manifest}} -p hearthdeck-frontend
+
 # Run all portable project checks.
-check: format check-services test-app
+check: format check-services check-frontend test-frontend test-app
 
 # Validate code before pushing: format check, release build, and clippy lint.
 pre-push-check:
@@ -103,7 +127,6 @@ pre-push-check:
   @echo "✅ Release build passed"
   @echo ""
   @echo "⏳ [3/4] Checking standalone package crates..."
-  mise exec -- cargo check --manifest-path services/hearthdeck-cosmic-spike/Cargo.toml --release
   mise exec -- cargo check --manifest-path services/hearthdeck-applet-user/Cargo.toml --release
   @echo "✅ Standalone crate checks passed"
   @echo ""

@@ -4,6 +4,7 @@ members = [
   "hearthdeck-observability",
   "hearthdeck-daemon",
   "hearthdeck-bridge",
+  "hearthdeck-frontend",
   "hearthdeck-overlay-spike",
 ]
 resolver = "3"
@@ -36,3 +37,7 @@ tower-http = { version = "0.6.8", features = ["cors", "limit", "request-id", "tr
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
 uuid = { version = "1.21.0", features = ["v4", "serde"] }
+
+# Release profile shared across all workspace members.
+[profile.release]
+lto = "thin"
