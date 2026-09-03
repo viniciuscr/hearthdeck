@@ -142,23 +142,23 @@ class _RetroPageState extends State<RetroPage> {
     if (romId == null) {
       return;
     }
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
     await runWithLaunchLoader<void>(
       context,
       itemTitle: item.title,
       action: () async {
         try {
           await apiClient.launchRetroRom(romId);
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('${item.title} launch requested.')),
-            );
-          }
+          messenger.showSnackBar(
+            SnackBar(content: Text('${item.title} launch requested.')),
+          );
         } catch (error) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Could not launch ${item.title}: $error')),
-            );
-          }
+          messenger.showSnackBar(
+            SnackBar(content: Text('Could not launch ${item.title}: $error')),
+          );
         }
       },
     );
