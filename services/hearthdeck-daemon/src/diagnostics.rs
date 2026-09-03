@@ -5,8 +5,10 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::settings::{RommCredentials, SettingsRepository};
@@ -14,6 +16,7 @@ use crate::settings::{RommCredentials, SettingsRepository};
 const LOG_LINE_LIMIT: usize = 200;
 const LOG_MESSAGE_LIMIT: usize = 600;
 const ROMM_LOG_LIMIT: usize = 40;
+const MAX_ROM_DOWNLOAD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum RommQueryError {
@@ -244,27 +247,27 @@ pub async fn romm_rom(
         .map_err(|error| RommQueryError::Failed(error.into()))
 }
 
-/// Downloads a ROM's content bytes for local caching ahead of a RetroArch
-/// launch. Multi-file ROMs (discs, `.m3u` sets) are out of scope for now;
-/// this fetches the single content file named by `fs_name`.
-pub async fn romm_rom_content(
+/// Downloads a ROM into a temporary cache file ahead of a RetroArch launch.
+/// Multi-file ROMs (discs, `.m3u` sets) are out of scope for now.
+pub async fn download_rom_content(
     settings: &SettingsRepository,
     rom_id: i64,
     fs_name: &str,
-) -> std::result::Result<Vec<u8>, RommQueryError> {
+    destination: &std::path::Path,
+) -> std::result::Result<(), RommQueryError> {
     let credentials = settings
         .romm_credentials()
         .await
         .map_err(RommQueryError::Failed)?
         .ok_or(RommQueryError::NotConfigured)?;
-    let base = reqwest::Url::parse(&format!(
+    let mut url = reqwest::Url::parse(&format!(
         "{}/api/roms/{rom_id}/content/",
         credentials.base_url
     ))
     .map_err(|error| RommQueryError::Failed(error.into()))?;
-    let url = base
-        .join(fs_name)
-        .map_err(|error| RommQueryError::Failed(error.into()))?;
+    url.path_segments_mut()
+        .map_err(|_| RommQueryError::Failed(anyhow::anyhow!("invalid RomM content URL")))?
+        .push(fs_name);
     let response = reqwest::Client::new()
         .get(url)
         .bearer_auth(&credentials.token)
@@ -278,10 +281,40 @@ pub async fn romm_rom_content(
             "RomM returned {status} downloading rom content"
         )));
     }
-    response
-        .bytes()
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_ROM_DOWNLOAD_BYTES)
+    {
+        return Err(RommQueryError::Failed(anyhow::anyhow!(
+            "RomM content exceeds the 16 GiB download limit"
+        )));
+    }
+
+    let mut file = tokio::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(destination)
         .await
-        .map(|bytes| bytes.to_vec())
+        .map_err(|error| RommQueryError::Failed(error.into()))?;
+    let mut downloaded = 0_u64;
+    let chunks = response.bytes_stream();
+    tokio::pin!(chunks);
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk.map_err(|error| RommQueryError::Failed(error.into()))?;
+        downloaded = downloaded
+            .checked_add(chunk.len() as u64)
+            .filter(|length| *length <= MAX_ROM_DOWNLOAD_BYTES)
+            .ok_or_else(|| {
+                RommQueryError::Failed(anyhow::anyhow!(
+                    "RomM content exceeds the 16 GiB download limit"
+                ))
+            })?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|error| RommQueryError::Failed(error.into()))?;
+    }
+    file.sync_all()
+        .await
         .map_err(|error| RommQueryError::Failed(error.into()))
 }
 

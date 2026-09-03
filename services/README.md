@@ -32,10 +32,10 @@ runtime directory, so the bridge can resume tracking a managed service after a
 restart.
 
 `GET /v1/health` exposes host capabilities. Remote clients, including Android,
-may browse the library and send install requests when supported, but must not
-assume they can launch host applications. An install request is a typed request
-for host-side approval; it never invokes pacman, Flatpak, Steam, or another
-package manager directly.
+may browse the library, but must not assume they can launch host applications.
+Install requests are currently advertised as unsupported and return `501` until
+a privileged host-side approval path exists; the daemon never invokes pacman,
+Flatpak, Steam, or another package manager directly.
 
 On Linux, `hearthdeck.target` is the systemd user-session root. It starts the
 API daemon and owns `hearthdeck-bridge.socket`; the bridge process starts only

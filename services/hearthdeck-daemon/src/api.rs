@@ -81,7 +81,7 @@ fn host_capabilities() -> HostCapabilities {
     HostCapabilities {
         launch: true,
         application_sessions: true,
-        install_requests: true,
+        install_requests: false,
         retro_launch: true,
     }
 }
@@ -91,7 +91,7 @@ fn host_capabilities() -> HostCapabilities {
     HostCapabilities {
         launch: true,
         application_sessions: false,
-        install_requests: true,
+        install_requests: false,
         retro_launch: false,
     }
 }
@@ -561,29 +561,9 @@ async fn stop_application_session(
 async fn request_install(
     State(state): State<SharedState>,
     headers: HeaderMap,
-    Json(request): Json<InstallRequest>,
 ) -> Result<StatusCode, ApiError> {
     authenticate(&state, &headers).await?;
-    if !host_capabilities().install_requests {
-        return Err(ApiError::capability_unavailable("install requests"));
-    }
-    if request.item_id.trim().is_empty() || request.item_id.chars().count() > 512 {
-        return Err(ApiError::invalid_install_request());
-    }
-    if state
-        .catalog
-        .launch_id_for(&request.item_id)
-        .await
-        .map_err(ApiError::internal)?
-        .is_some()
-    {
-        return Err(ApiError::install_not_available());
-    }
-    info!(item_id = %request.item_id, "install request recorded for host approval");
-    let _ = state.events.send(ServerEvent::InstallRequested {
-        item_id: request.item_id,
-    });
-    Ok(StatusCode::ACCEPTED)
+    Err(ApiError::capability_unavailable("install requests"))
 }
 
 async fn events(
@@ -599,12 +579,23 @@ async fn event_socket(
     mut socket: WebSocket,
     mut events: tokio::sync::broadcast::Receiver<ServerEvent>,
 ) {
-    while let Ok(event) = events.recv().await {
-        let Ok(payload) = serde_json::to_string(&event) else {
-            continue;
-        };
-        if socket.send(Message::Text(payload.into())).await.is_err() {
-            return;
+    loop {
+        match events.recv().await {
+            Ok(event) => {
+                let Ok(payload) = serde_json::to_string(&event) else {
+                    continue;
+                };
+                if socket.send(Message::Text(payload.into())).await.is_err() {
+                    return;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                warn!(
+                    skipped,
+                    "event client lagged; resuming with the newest event"
+                );
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         }
     }
 }
@@ -645,11 +636,6 @@ struct HostCapabilities {
     application_sessions: bool,
     install_requests: bool,
     retro_launch: bool,
-}
-
-#[derive(Deserialize)]
-struct InstallRequest {
-    item_id: String,
 }
 
 #[derive(Serialize)]
@@ -830,22 +816,6 @@ impl ApiError {
         }
     }
 
-    fn invalid_install_request() -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            message: "item_id must contain 1 to 512 characters".to_owned(),
-            settings: None,
-        }
-    }
-
-    fn install_not_available() -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            message: "the item is already installed or cannot be installed by this host".to_owned(),
-            settings: None,
-        }
-    }
-
     fn settings_conflict(settings: UserSettings) -> Self {
         Self {
             status: StatusCode::CONFLICT,
@@ -895,11 +865,13 @@ impl ApiError {
                 message,
                 settings: None,
             },
-            RetroLaunchError::RomHasNoContentFile => Self {
-                status: StatusCode::BAD_GATEWAY,
-                message,
-                settings: None,
-            },
+            RetroLaunchError::RomHasNoContentFile | RetroLaunchError::InvalidContentFileName => {
+                Self {
+                    status: StatusCode::BAD_GATEWAY,
+                    message,
+                    settings: None,
+                }
+            }
             RetroLaunchError::Cache(_) => Self::internal(message),
         }
     }
@@ -1238,7 +1210,7 @@ mod tests {
         assert_eq!(health["providers"][0]["id"], "test-apps");
         assert_eq!(health["providers"][0]["status"], "starting");
         assert!(
-            health["capabilities"]["install_requests"]
+            !health["capabilities"]["install_requests"]
                 .as_bool()
                 .unwrap()
         );
@@ -1278,6 +1250,18 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(library[0]["id"], "test:app");
+
+        let unsupported_install = router(state.clone())
+            .oneshot(
+                Request::post("/v1/install-requests")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"item_id":"test:app"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unsupported_install.status(), StatusCode::NOT_IMPLEMENTED);
 
         // Nothing exercised the actual launch endpoints before this: launch
         // dispatch (daemon -> bridge socket -> LaunchAccepted -> response)

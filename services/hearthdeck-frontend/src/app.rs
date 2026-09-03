@@ -672,7 +672,6 @@ impl HearthDeck {
         self.edit_name = None;
         if let Some(de) = self.entry_path_input.get(i) {
             let app_id = de.id.clone();
-            let exec = de.exec.clone().unwrap();
             let terminal = de.terminal;
 
             // Route launches through the daemon when it's configured and the
@@ -698,6 +697,10 @@ impl HearthDeck {
                     },
                 );
             }
+
+            let Some(exec) = de.exec.clone() else {
+                return Task::none();
+            };
 
             request_token(
                 Some(String::from(<Self as cosmic::Application>::APP_ID)),

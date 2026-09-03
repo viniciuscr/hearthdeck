@@ -333,8 +333,8 @@ paths:
               properties:
                 item_id: { type: string }
       responses:
-        '202':
-          description: Install request accepted for host-side approval
+        '501':
+          description: Host-side install approval is not implemented
 components:
   securitySchemes:
     bearerAuth:

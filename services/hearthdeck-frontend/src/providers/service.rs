@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::{RwLock, broadcast, mpsc};
 
@@ -46,6 +45,24 @@ impl ProviderService {
         ));
         let cached = Arc::new(RwLock::new(HashMap::new()));
 
+        for provider in &providers {
+            let Some(interval) = provider.refresh_interval() else {
+                continue;
+            };
+            let source_id = provider.source_id().to_owned();
+            let refresh_tx = refresh_tx.clone();
+            tokio::spawn(async move {
+                let start = tokio::time::Instant::now() + interval;
+                let mut timer = tokio::time::interval_at(start, interval);
+                loop {
+                    timer.tick().await;
+                    if refresh_tx.send(source_id.clone()).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
         let service = Self {
             refresh_tx,
             health: health.clone(),
@@ -71,29 +88,10 @@ impl ProviderService {
         let e2 = events_tx;
         let t2 = records_tx;
         tokio::spawn(async move {
-            // Compute the minimum refresh interval across all providers.
-            let min_interval = providers
-                .iter()
-                .filter_map(|p| p.refresh_interval())
-                .min()
-                .unwrap_or(Duration::from_secs(300));
-
-            loop {
-                tokio::select! {
-                    Some(source_id) = refresh_rx.recv() => {
-                        if let Some(provider) = providers.iter().find(|p| p.source_id() == source_id) {
-                            run_discovery(provider.as_ref(), &h2, &c2, &e2).await;
-                            let _ = t2.send(merge_records(&c2).await).await;
-                        }
-                    }
-                    _ = tokio::time::sleep(min_interval) => {
-                        for provider in &providers {
-                            if provider.refresh_interval().is_some() {
-                                run_discovery(provider.as_ref(), &h2, &c2, &e2).await;
-                            }
-                        }
-                        let _ = t2.send(merge_records(&c2).await).await;
-                    }
+            while let Some(source_id) = refresh_rx.recv().await {
+                if let Some(provider) = providers.iter().find(|p| p.source_id() == source_id) {
+                    run_discovery(provider.as_ref(), &h2, &c2, &e2).await;
+                    let _ = t2.send(merge_records(&c2).await).await;
                 }
             }
         });

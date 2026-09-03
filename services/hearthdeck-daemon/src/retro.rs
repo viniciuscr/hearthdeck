@@ -5,9 +5,10 @@
 //! not track sessions; `api.rs` handles that, the same way it already does
 //! for Heroic and desktop-app launches.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use tokio::fs;
+use uuid::Uuid;
 
 use crate::{
     diagnostics::{self, RommQueryError},
@@ -54,6 +55,7 @@ pub enum RetroLaunchError {
     UnsupportedPlatform { fs_slug: String },
     CoreNotInstalled { core_path: PathBuf },
     RomHasNoContentFile,
+    InvalidContentFileName,
     Cache(std::io::Error),
 }
 
@@ -75,6 +77,7 @@ impl std::fmt::Display for RetroLaunchError {
                 core_path.display()
             ),
             Self::RomHasNoContentFile => write!(formatter, "rom has no content file to launch"),
+            Self::InvalidContentFileName => write!(formatter, "rom content filename is invalid"),
             Self::Cache(error) => write!(formatter, "could not cache rom locally: {error}"),
         }
     }
@@ -149,22 +152,38 @@ async fn ensure_rom_cached(
     rom_id: i64,
     fs_name: &str,
 ) -> Result<PathBuf, RetroLaunchError> {
+    validate_content_filename(fs_name)?;
     let rom_path = rom_cache_directory().join(rom_id.to_string()).join(fs_name);
     if fs::metadata(&rom_path).await.is_ok() {
         return Ok(rom_path);
     }
-    let bytes = diagnostics::romm_rom_content(settings, rom_id, fs_name)
-        .await
-        .map_err(RetroLaunchError::Romm)?;
     if let Some(parent) = rom_path.parent() {
         fs::create_dir_all(parent)
             .await
             .map_err(RetroLaunchError::Cache)?;
     }
-    fs::write(&rom_path, bytes)
-        .await
-        .map_err(RetroLaunchError::Cache)?;
+    let temporary_path =
+        rom_path.with_file_name(format!(".{}.{}.part", fs_name, Uuid::new_v4().simple()));
+    if let Err(error) =
+        diagnostics::download_rom_content(settings, rom_id, fs_name, &temporary_path).await
+    {
+        let _ = fs::remove_file(&temporary_path).await;
+        return Err(RetroLaunchError::Romm(error));
+    }
+    if let Err(error) = fs::rename(&temporary_path, &rom_path).await {
+        let _ = fs::remove_file(&temporary_path).await;
+        return Err(RetroLaunchError::Cache(error));
+    }
     Ok(rom_path)
+}
+
+fn validate_content_filename(fs_name: &str) -> Result<(), RetroLaunchError> {
+    let mut components = Path::new(fs_name).components();
+    if matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none() {
+        Ok(())
+    } else {
+        Err(RetroLaunchError::InvalidContentFileName)
+    }
 }
 
 /// The directory Hearthdeck caches ROMs fetched from RomM into. Matches the
@@ -183,7 +202,9 @@ fn rom_cache_directory() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{CORE_BY_PLATFORM_SLUG, RetroLaunchError, resolve_core_path};
+    use super::{
+        CORE_BY_PLATFORM_SLUG, RetroLaunchError, resolve_core_path, validate_content_filename,
+    };
 
     #[test]
     fn every_pkgbuild_optdepend_core_has_a_platform_mapping() {
@@ -218,5 +239,25 @@ mod tests {
             error,
             RetroLaunchError::UnsupportedPlatform { .. }
         ));
+    }
+
+    #[test]
+    fn accepts_a_single_rom_content_filename() {
+        assert!(validate_content_filename("game (USA).chd").is_ok());
+    }
+
+    #[test]
+    fn rejects_rom_content_paths_and_urls() {
+        for unsafe_name in [
+            "../game.chd",
+            "/tmp/game.chd",
+            "disc/game.chd",
+            "https://example.com/game.chd",
+        ] {
+            assert!(matches!(
+                validate_content_filename(unsafe_name),
+                Err(RetroLaunchError::InvalidContentFileName)
+            ));
+        }
     }
 }

@@ -32,16 +32,23 @@ async fn main() -> Result<()> {
     let (listener, socket_activated) = bridge_listener(&socket_path).await?;
     let session_directory = bridge_session_directory(&socket_path);
     let sessions = Arc::new(Mutex::new(load_managed_sessions(&session_directory).await?));
+    let session_transition = Arc::new(Mutex::new(()));
     info!(socket_activated, "bridge listening");
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let sessions = sessions.clone();
+                let session_transition = session_transition.clone();
                 let session_directory = session_directory.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = handle_connection(stream, &sessions, &session_directory)
-                        .instrument(info_span!("bridge.request"))
-                        .await
+                    if let Err(error) = handle_connection(
+                        stream,
+                        &sessions,
+                        &session_transition,
+                        &session_directory,
+                    )
+                    .instrument(info_span!("bridge.request"))
+                    .await
                     {
                         error!(%error, "bridge request failed");
                     }
@@ -85,6 +92,7 @@ fn inherited_listener() -> Result<Option<UnixListener>> {
 async fn handle_connection(
     stream: UnixStream,
     sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
+    session_transition: &Mutex<()>,
     session_directory: &Path,
 ) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
@@ -92,7 +100,9 @@ async fn handle_connection(
     let mut line = String::new();
     reader.read_line(&mut line).await?;
     let response = match serde_json::from_str::<BridgeRequest>(&line) {
-        Ok(request) => handle_request(request, sessions, session_directory).await,
+        Ok(request) => {
+            handle_request(request, sessions, session_transition, session_directory).await
+        }
         Err(error) => BridgeResponse::Error {
             code: BridgeErrorCode::InvalidRequest,
             message: error.to_string(),
@@ -131,22 +141,22 @@ async fn stop_other_active_sessions(
     new_source_id: &str,
     sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
     session_directory: &Path,
-) {
+) -> Result<()> {
     let Some((session_id, managed)) = active_managed_session(sessions, session_directory).await
     else {
-        return;
+        return Ok(());
     };
     if !should_replace_active_session(new_source_id, &managed.session.source_id) {
-        return;
+        return Ok(());
     }
-    if let Err(error) = platform::stop_application(managed.unit_name.as_deref()).await {
-        warn!(session_id, %error, "could not stop previous application session before launching a new one");
-        return;
-    }
+    platform::stop_application(managed.unit_name.as_deref())
+        .await
+        .context("could not stop previous application session before launching a new one")?;
     sessions.lock().await.remove(&session_id);
     if let Err(error) = remove_managed_session(session_directory, &session_id).await {
         warn!(session_id, %error, "could not remove stopped application session record");
     }
+    Ok(())
 }
 
 /// Whether launching `new_source_id` should first stop the currently active
@@ -160,6 +170,7 @@ fn should_replace_active_session(new_source_id: &str, active_source_id: &str) ->
 async fn handle_request(
     request: BridgeRequest,
     sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
+    session_transition: &Mutex<()>,
     session_directory: &Path,
 ) -> BridgeResponse {
     match request {
@@ -190,7 +201,16 @@ async fn handle_request(
             application_id,
             session_id,
         } => {
-            stop_other_active_sessions(&source_id, sessions, session_directory).await;
+            let _transition = session_transition.lock().await;
+            if let Err(error) =
+                stop_other_active_sessions(&source_id, sessions, session_directory).await
+            {
+                warn!(source_id, application_id, %error, "registered application launch rejected");
+                return BridgeResponse::Error {
+                    code: BridgeErrorCode::LaunchFailed,
+                    message: error.to_string(),
+                };
+            }
             match platform::launch_application(&source_id, &application_id, &session_id).await {
                 Ok(launched) => {
                     register_launch(
@@ -217,7 +237,16 @@ async fn handle_request(
             application_id,
             session_id: _,
         } => {
-            stop_other_active_sessions("heroic", sessions, session_directory).await;
+            let _transition = session_transition.lock().await;
+            if let Err(error) =
+                stop_other_active_sessions("heroic", sessions, session_directory).await
+            {
+                warn!(%error, "Heroic game launch rejected");
+                return BridgeResponse::Error {
+                    code: BridgeErrorCode::LaunchFailed,
+                    message: error.to_string(),
+                };
+            }
             match platform::launch_heroic_game(runner, &application_id).await {
                 Ok(launched) => {
                     // Heroic is a shared, reused resource (see HEROIC_UNIT_NAME's
@@ -251,7 +280,16 @@ async fn handle_request(
             rom_path,
             session_id,
         } => {
-            stop_other_active_sessions("retroarch", sessions, session_directory).await;
+            let _transition = session_transition.lock().await;
+            if let Err(error) =
+                stop_other_active_sessions("retroarch", sessions, session_directory).await
+            {
+                warn!(%error, "RetroArch game launch rejected");
+                return BridgeResponse::Error {
+                    code: BridgeErrorCode::LaunchFailed,
+                    message: error.to_string(),
+                };
+            }
             match platform::launch_retro_game(&core_path, &rom_path, &session_id).await {
                 Ok(launched) => {
                     register_launch(
@@ -274,12 +312,14 @@ async fn handle_request(
             }
         }
         BridgeRequest::ActiveApplicationSession => {
+            let _transition = session_transition.lock().await;
             let session = active_managed_session(sessions, session_directory)
                 .await
                 .map(|(_, managed)| managed.session);
             BridgeResponse::ApplicationSession { session }
         }
         BridgeRequest::StopApplicationSession { session_id } => {
+            let _transition = session_transition.lock().await;
             let managed = sessions.lock().await.get(&session_id).cloned();
             let Some(managed) = managed else {
                 warn!(

@@ -123,6 +123,7 @@ impl AppState {
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)]
 pub enum ServerEvent {
     LibraryChanged {
         source_id: String,
@@ -134,9 +135,6 @@ pub enum ServerEvent {
     },
     ApplicationSessionChanged {
         session: Option<ApplicationSession>,
-    },
-    InstallRequested {
-        item_id: String,
     },
 }
 

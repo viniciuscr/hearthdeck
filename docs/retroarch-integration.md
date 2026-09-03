@@ -52,10 +52,9 @@ Gamescope with the smallest possible memory/CPU footprint.
 - Discovery/catalog: RomM is *not* a `DiscoveryProvider`/`CatalogRecord`
   source (only Heroic and desktop/macOS apps are). It is a separate
   direct-proxy surface.
-- Install requests: `POST /v1/install-requests` and
-  `ServerEvent::InstallRequested` exist end-to-end as a typed event, but
-  nothing on the host acts on it yet (confirmed: no pacman/Flatpak call
-  anywhere in the daemon or bridge). It is a stub today.
+- Install requests: the host advertises `install_requests: false`, and
+  `POST /v1/install-requests` returns `501` until a privileged approval path
+  exists. No pacman/Flatpak call exists in the daemon or bridge.
 
 ## Research findings that shape the decisions below
 
@@ -252,9 +251,8 @@ provider-refresh controls on the same screen. Only shown/wired for the
 
 ## Open questions (need a decision before/at the relevant phase)
 
-1. **Install-request privilege model.** Turning the current stub
-   (`InstallRequested` event, no-op today) into something that actually
-   installs a `libretro-*` package needs a real privileged path — most
+1. **Install-request privilege model.** Supporting install requests that
+  actually install a `libretro-*` package needs a real privileged path — most
    likely a polkit rule scoped to an allowlisted pacman transaction pattern,
    invoked from a small helper, never the daemon calling `pacman` directly
    as the user. This is real, separate security work and deserves its own
