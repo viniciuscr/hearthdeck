@@ -8,6 +8,7 @@ import 'catalog/catalog_repository.dart';
 import 'catalog/catalog_repository_factory.dart';
 import 'content_details.dart';
 import 'dashboard_models.dart';
+import 'launch_loader.dart';
 import 'library_models.dart';
 import 'retro.dart';
 import 'tv_components.dart';
@@ -251,31 +252,37 @@ class _TvSearchPageState extends State<TvSearchPage> {
   /// the same dedicated RomM endpoint `retro.dart` uses) - this dispatches
   /// to whichever one actually produced the tapped result.
   Future<void> _launchItem(DashboardItem item) async {
-    final rommId = item.id.startsWith('romm:')
-        ? int.tryParse(item.id.substring('romm:'.length))
-        : null;
-    try {
-      if (rommId != null) {
-        final apiClient = _connectedApiClient ?? await _apiClient;
-        if (apiClient == null) {
-          throw StateError('No Hearthdeck backend is connected.');
+    await runWithLaunchLoader<void>(
+      context,
+      itemTitle: item.title,
+      action: () async {
+        final rommId = item.id.startsWith('romm:')
+            ? int.tryParse(item.id.substring('romm:'.length))
+            : null;
+        try {
+          if (rommId != null) {
+            final apiClient = _connectedApiClient ?? await _apiClient;
+            if (apiClient == null) {
+              throw StateError('No Hearthdeck backend is connected.');
+            }
+            await apiClient.launchRetroRom(rommId);
+          } else {
+            await _catalogRepository.launch(item);
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('${item.title} launch requested.')),
+            );
+          }
+        } catch (error) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Could not launch ${item.title}: $error')),
+            );
+          }
         }
-        await apiClient.launchRetroRom(rommId);
-      } else {
-        await _catalogRepository.launch(item);
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${item.title} launch requested.')),
-        );
-      }
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not launch ${item.title}: $error')),
-        );
-      }
-    }
+      },
+    );
   }
 
   @override

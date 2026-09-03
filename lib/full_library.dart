@@ -9,6 +9,7 @@ import 'catalog/catalog_repository_factory.dart';
 import 'content_details.dart';
 import 'dashboard_models.dart';
 import 'library_filters.dart';
+import 'launch_loader.dart';
 import 'library_models.dart';
 import 'platform_session.dart';
 import 'retro.dart';
@@ -138,20 +139,26 @@ class _FullLibraryPageState extends State<FullLibraryPage> {
   }
 
   Future<void> _launchItem(DashboardItem item) async {
-    try {
-      await _catalogRepository.launch(item);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${item.title} launch requested.')),
-        );
-      }
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not launch ${item.title}: $error')),
-        );
-      }
-    }
+    await runWithLaunchLoader<void>(
+      context,
+      itemTitle: item.title,
+      action: () async {
+        try {
+          await _catalogRepository.launch(item);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('${item.title} launch requested.')),
+            );
+          }
+        } catch (error) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Could not launch ${item.title}: $error')),
+            );
+          }
+        }
+      },
+    );
   }
 
   Future<void> _requestRescan() async {

@@ -141,6 +141,27 @@ pub async fn application_is_running(unit_name: Option<&str>) -> Result<bool> {
     let Some(unit_name) = unit_name else {
         return Ok(false);
     };
+    if is_unit_active(unit_name).await? {
+        return Ok(true);
+    }
+    // A launched process can migrate into a different `app-<name>-<pid>.scope`
+    // under app.slice than the `systemd-run` unit that started it (see
+    // `find_escaped_unit`'s own docs). When that happens the original unit
+    // reports inactive even though the app is very much still running, which
+    // would make `active_managed_session` prune the session -- so the
+    // overlay's "Close App" sees "no active session" and does nothing, and
+    // launching a second app can't see the first one to stop it. Mirror the
+    // stop path and treat an escaped, still-active scope as running too.
+    if let Some(escaped_unit) = find_escaped_unit(unit_name).await
+        && is_unit_active(&escaped_unit).await?
+    {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[cfg(any(target_os = "linux", test))]
+async fn is_unit_active(unit_name: &str) -> Result<bool> {
     Ok(tokio::process::Command::new("systemctl")
         .args(["--user", "is-active", "--quiet", unit_name])
         .status()

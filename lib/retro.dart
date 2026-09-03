@@ -5,6 +5,7 @@ import 'backend/hearthdeck_api_client.dart';
 import 'catalog/catalog_repository_factory.dart';
 import 'content_details.dart';
 import 'dashboard_models.dart';
+import 'launch_loader.dart';
 import 'library_models.dart';
 import 'search.dart';
 import 'tv_components.dart';
@@ -141,20 +142,26 @@ class _RetroPageState extends State<RetroPage> {
     if (romId == null) {
       return;
     }
-    try {
-      await apiClient.launchRetroRom(romId);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${item.title} launch requested.')),
-        );
-      }
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not launch ${item.title}: $error')),
-        );
-      }
-    }
+    await runWithLaunchLoader<void>(
+      context,
+      itemTitle: item.title,
+      action: () async {
+        try {
+          await apiClient.launchRetroRom(romId);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('${item.title} launch requested.')),
+            );
+          }
+        } catch (error) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Could not launch ${item.title}: $error')),
+            );
+          }
+        }
+      },
+    );
   }
 
   @override
