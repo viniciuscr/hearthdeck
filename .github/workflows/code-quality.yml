@@ -14,6 +14,8 @@ jobs:
     name: Rust Code Quality
     runs-on: ubuntu-latest
     container: ghcr.io/archlinux/archlinux:base-devel
+    env:
+      CARGO_INCREMENTAL: 0
     strategy:
       fail-fast: true
     
@@ -32,12 +34,6 @@ jobs:
         with:
           components: clippy,rustfmt
 
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.44.8
-          cache: true
-
       - name: Restore Rust build cache
         id: cache-restore
         uses: actions/cache/restore@v6.1.0
@@ -46,9 +42,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             services/target
-          key: check-rust-${{ runner.arch }}-rust-1.97.1-${{ hashFiles('services/Cargo.lock') }}
+          key: check-rust-v2-${{ runner.arch }}-rust-1.97.1-${{ hashFiles('services/Cargo.lock') }}
           restore-keys: |
-            check-rust-${{ runner.arch }}-rust-1.97.1-
+            check-rust-v2-${{ runner.arch }}-rust-1.97.1-
 
       - name: Check Rust formatting
         run: |
@@ -71,7 +67,7 @@ jobs:
         continue-on-error: false
 
       - name: Save Rust build cache
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && steps.cache-restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6.1.0
         with:
           path: |

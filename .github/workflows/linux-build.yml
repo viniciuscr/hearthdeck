@@ -47,20 +47,29 @@ jobs:
           cp -a "$HOME/.cargo" "$HOME/.rustup" /home/builder/
           chown -R builder:builder "$flutter_root" /home/builder "$GITHUB_WORKSPACE"
 
-      - name: Restore Rust and Flutter build cache
-        id: build-cache
+      - name: Restore Rust release cache
+        id: rust-cache
         uses: actions/cache/restore@v6.1.0
         with:
           path: |
             /home/builder/.cargo/git
             /home/builder/.cargo/registry
+            services/target/release
+          key: arch-package-rust-v2-${{ runner.arch }}-rust-1.97.1-${{ hashFiles('services/Cargo.lock') }}
+          restore-keys: |
+            arch-package-rust-v2-${{ runner.arch }}-rust-1.97.1-
+
+      - name: Restore Flutter build cache
+        id: flutter-build-cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: |
             /home/builder/.pub-cache
-            services/target
             .dart_tool
             build/linux
-          key: arch-package-${{ runner.arch }}-rust-1.97.1-flutter-3.44.8-${{ hashFiles('services/Cargo.lock', 'pubspec.lock') }}
+          key: arch-package-flutter-v2-${{ runner.arch }}-flutter-3.44.8-${{ hashFiles('pubspec.lock') }}
           restore-keys: |
-            arch-package-${{ runner.arch }}-rust-1.97.1-flutter-3.44.8-
+            arch-package-flutter-v2-${{ runner.arch }}-flutter-3.44.8-
 
       - name: Make restored cache writable
         run: |
@@ -94,18 +103,25 @@ jobs:
           ln -sf hearthdeck.db.tar.gz "$repository/hearthdeck.db"
           test -s "$repository/hearthdeck.db.tar.gz"
 
-      - name: Save Rust and Flutter build cache
-        if: github.ref == 'refs/heads/main'
+      - name: Save Rust release cache
+        if: github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6.1.0
         with:
           path: |
             /home/builder/.cargo/git
             /home/builder/.cargo/registry
+            services/target/release
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+
+      - name: Save Flutter build cache
+        if: github.ref == 'refs/heads/main' && steps.flutter-build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: |
             /home/builder/.pub-cache
-            services/target
             .dart_tool
             build/linux
-          key: ${{ steps.build-cache.outputs.cache-primary-key }}
+          key: ${{ steps.flutter-build-cache.outputs.cache-primary-key }}
 
       - name: Archive pacman package
         uses: actions/upload-artifact@v7.0.1

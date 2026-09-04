@@ -36,7 +36,6 @@ build() {
   source_dir=$(realpath "$startdir/../..")
   cd "$source_dir"
 
-  just ci-check
   flutter build linux --release --dart-define=HEARTHDECK_USE_LOCAL_CATALOG=true
   cargo build --manifest-path services/Cargo.toml --workspace --release
   # ponytail: reuse the workspace target dir so CI cache keeps libcosmic/iced builds.
