@@ -21,6 +21,9 @@ export XDG_CURRENT_DESKTOP=hearthdeck:COSMIC
 export XDG_SESSION_DESKTOP=hearthdeck
 export XDG_SESSION_TYPE=wayland
 
+# This session starts its own local daemon and pairs with it at runtime.
+unset HEARTHDECK_BACKEND_URL HEARTHDECK_PAIRING_TOKEN
+
 systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE || true
 
 # Critical: daemon-reload must come after import-environment to make systemd re-read

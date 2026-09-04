@@ -536,13 +536,6 @@ pub struct DaemonProvider {
 }
 
 impl DaemonProvider {
-    /// Creates a new daemon provider with the given configuration.
-    pub fn new(config: DaemonConfig) -> Self {
-        Self {
-            client: DaemonClient::new(config),
-        }
-    }
-
     /// Creates a new daemon provider with an existing client.
     pub fn with_client(client: DaemonClient) -> Self {
         Self { client }
