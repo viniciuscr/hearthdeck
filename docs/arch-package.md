@@ -56,9 +56,10 @@ Install the initial `hearthdeck-*.pkg.tar.zst` from the GitHub Actions artifact:
 sudo pacman -U hearthdeck-*.pkg.tar.zst
 ```
 
-The package enables `hearthdeck.target` globally for the local daemon and
-bridge. Launching Hearthdeck starts the target for the current user
-immediately. To run the daemon before opening the client, use:
+The Hearthdeck launchers and sessions start `hearthdeck.target` for the active
+user. The package deliberately does not enable it globally: fixed API ports
+cannot be shared by every user manager, including display-manager greeter
+accounts. To run the daemon before opening the client, use:
 
 ```sh
 systemctl --user daemon-reload
@@ -78,9 +79,8 @@ It is currently unsigned and uses `SigLevel = Optional TrustAll`. Installing
 the initial package accepts GitHub Pages over HTTPS as the package trust
 boundary; package signing can replace this later.
 
-Pacman enables the target globally for future user sessions but cannot safely
-start a currently logged-in user's manager during a root package transaction.
-The launcher handles that activation on demand. The units retain
+Pacman cannot safely start a logged-in user's manager during a root package
+transaction. The launcher handles activation on demand. The units retain
 `NoNewPrivileges`, but do not use mount-namespace sandboxing:
 Arch systemd user units cannot reliably support directives such as
 `ProtectSystem`, `ReadWritePaths`, or `PrivateTmp`.

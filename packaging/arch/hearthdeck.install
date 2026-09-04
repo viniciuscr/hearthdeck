@@ -1,5 +1,8 @@
 post_install() {
-  systemctl --global enable hearthdeck.target
+  # Fixed loopback ports cannot be shared by every user manager (including
+  # display-manager greeter accounts). Hearthdeck launchers start this target
+  # explicitly for the active user.
+  systemctl --global disable hearthdeck.target 2>/dev/null || true
   if ! grep -qxF 'Include = /etc/pacman.d/hearthdeck.conf' /etc/pacman.conf; then
     cat >>/etc/pacman.conf <<'EOF'
 
@@ -13,11 +16,10 @@ EOF
 Hearthdeck installs systemd user units for its API daemon and host bridge, and
 a minimal "Hearthdeck Kiosk" Wayland session with no desktop shell.
 
-The local-service target starts for users at their next login. Select
-Hearthdeck Kiosk in the display manager to run Gamescope with Hearthdeck as
-its only child. The Hearthdeck launcher also starts local services for the
-current user. To start them immediately without launching Hearthdeck, run as
-that user:
+The Hearthdeck launchers and sessions start the local-service target for the
+active user. Select Hearthdeck Kiosk in the display manager to run Gamescope
+with Hearthdeck as its only child. To start the services immediately without
+launching Hearthdeck, run as that user:
 
   systemctl --user daemon-reload
   systemctl --user start hearthdeck.target

@@ -13,7 +13,7 @@ mod state;
 
 use std::{net::TcpListener as StdTcpListener, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::extract::DefaultBodyLimit;
 use axum_server::tls_rustls::RustlsConfig;
 use config::Config;
@@ -86,7 +86,14 @@ async fn main() -> Result<()> {
                 .on_response(request_response),
         );
 
-    let local_listener = TcpListener::bind(config.local_admin_address).await?;
+    let local_listener = TcpListener::bind(config.local_admin_address)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to bind local admin listener {}",
+                config.local_admin_address
+            )
+        })?;
     let local_router = api::local_router(state)
         .layer(DefaultBodyLimit::max(4 * 1024))
         .layer(RequestBodyLimitLayer::new(4 * 1024))
@@ -99,7 +106,8 @@ async fn main() -> Result<()> {
 
     if let Some(tls) = config.tls {
         let tls = RustlsConfig::from_pem_file(tls.certificate_path, tls.private_key_path).await?;
-        let listener = StdTcpListener::bind(config.bind_address)?;
+        let listener = StdTcpListener::bind(config.bind_address)
+            .with_context(|| format!("failed to bind API listener {}", config.bind_address))?;
         listener.set_nonblocking(true)?;
         info!(address = %config.bind_address, version = VERSION, transport = "https", "daemon listening");
         notify_ready()?;
@@ -108,7 +116,9 @@ async fn main() -> Result<()> {
             axum_server::from_tcp_rustls(listener, tls)?.serve(router.into_make_service()),
         )?;
     } else {
-        let listener = TcpListener::bind(config.bind_address).await?;
+        let listener = TcpListener::bind(config.bind_address)
+            .await
+            .with_context(|| format!("failed to bind API listener {}", config.bind_address))?;
         info!(address = %config.bind_address, version = VERSION, transport = "http", "daemon listening");
         notify_ready()?;
         tokio::try_join!(local_server, axum::serve(listener, router))?;

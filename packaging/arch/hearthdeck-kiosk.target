@@ -3,9 +3,9 @@ Description=Hearthdeck Kiosk session prerequisites
 Documentation=file:///usr/share/doc/hearthdeck/KIOSK-SESSION.md
 # Everything that must be running before Gamescope launches Hearthdeck in the
 # Kiosk session specifically. hearthdeck.target itself stays usable standalone
-# in any session (COSMIC, etc.) and enables at any login per its own [Install]
-# section; this target is the Kiosk session's own, single, explicit hook for
-# what it additionally requires. Future kiosk-only startup dependencies (an
+# in any session (COSMIC, etc.); this target is the Kiosk session's own, single,
+# explicit hook for starting it and anything the session additionally requires.
+# Future kiosk-only startup dependencies (an
 # input daemon for a system-wide gamepad overlay, network/Bluetooth adapters,
 # etc.) each get their own Requires=/After= line here, not a change to the
 # session script itself.

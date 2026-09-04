@@ -1,8 +1,7 @@
 [Unit]
 Description=Hearthdeck COSMIC (Test) session prerequisites
 Documentation=file:///usr/share/doc/hearthdeck/KIOSK-SESSION.md
-# Do not start hearthdeck.target directly: it is already wanted by
-# default.target at login. Requiring it here joins that existing start job.
-# Mirror hearthdeck-kiosk.target's structure exactly to avoid the race.
+# Requiring the shared target here starts the fixed-port services only for the
+# active COSMIC session user. Mirror hearthdeck-kiosk.target's structure.
 Requires=hearthdeck.target
 After=hearthdeck.target

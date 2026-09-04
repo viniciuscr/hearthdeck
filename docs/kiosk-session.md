@@ -34,9 +34,9 @@ Display manager (SDDM/GDM/greetd/...)
 `hearthdeck-kiosk.target` exists as this session's single, dedicated,
 documented hook for everything it needs started before Gamescope launches
 Hearthdeck — see that unit file's own description. `hearthdeck.target`
-itself stays the general-purpose target enabled for any session (COSMIC
-included); the Kiosk session's own additional startup dependencies (a future
-gamepad input daemon, network/Bluetooth adapters, etc.) get added to
+stays the general-purpose target started explicitly by each Hearthdeck
+launcher or session; the Kiosk session's own additional startup dependencies
+(a future gamepad input daemon, network/Bluetooth adapters, etc.) get added to
 `hearthdeck-kiosk.target`, never to the session script itself. The session
 script's `systemctl --user start` call intentionally still ends in `|| true`
 — Hearthdeck launches either way so its own system-health screen can report

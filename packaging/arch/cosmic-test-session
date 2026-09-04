@@ -7,12 +7,12 @@
 # (Gamescope) session.
 set -Euo pipefail
 
-# Writes straight to the system journal regardless of how this session was
-# launched (greetd/cosmic-greeter's own output capture is unreliable to find
-# - see the "Address already in use" investigation). Find these with:
-#   journalctl -t cosmic-test-session
+# Preserve all session, compositor, and frontend output even after the app
+# covers the greeter terminal. Find it with: journalctl -b -t cosmic-test-session
+exec > >(systemd-cat -t cosmic-test-session) 2>&1
+
 log() {
-  logger -t cosmic-test-session -- "$1" || true
+  printf '[cosmic-test-session] %s\n' "$1"
 }
 
 log "starting"

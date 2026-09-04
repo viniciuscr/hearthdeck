@@ -24,9 +24,9 @@ export XDG_SESSION_TYPE=wayland
 systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE || true
 
 # The local API daemon and Linux bridge are lightweight background services,
-# not a desktop shell. Starting them here (in addition to the global
-# default.target enablement) guarantees they are up before Hearthdeck makes
-# its first request, even on a from-cold-boot autologin.
+# not a desktop shell. Starting them here guarantees they are owned by the
+# active user and ready before Hearthdeck makes its first request, even on a
+# from-cold-boot autologin.
 #
 # hearthdeck-kiosk.target is this session's single, dedicated hook for
 # everything it needs started before Hearthdeck launches (see that unit's own
