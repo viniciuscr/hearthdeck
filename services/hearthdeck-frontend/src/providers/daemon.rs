@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use hearthdeck_protocol::ApplicationSession;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::{OnceCell, mpsc};
 
 use super::{GameProvider, GameRecord};
 
@@ -19,6 +20,23 @@ pub struct DaemonConfig {
 pub struct DaemonClient {
     config: DaemonConfig,
     http: reqwest::Client,
+    token: Arc<OnceCell<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PairingCodeResponse {
+    code: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CompletePairingRequest<'a> {
+    code: &'a str,
+    client_name: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct PairingCompleteResponse {
+    token: String,
 }
 
 /// Response from the /v1/health endpoint.
@@ -102,6 +120,7 @@ impl DaemonClient {
         Self {
             config,
             http: reqwest::Client::new(),
+            token: Arc::new(OnceCell::new()),
         }
     }
 
@@ -111,14 +130,73 @@ impl DaemonClient {
     }
 
     /// Returns authorization headers for API requests.
-    fn auth_headers(&self) -> reqwest::header::HeaderMap {
+    async fn auth_headers(&self) -> Result<reqwest::header::HeaderMap, DaemonError> {
+        let token = self
+            .token
+            .get_or_try_init(|| async {
+                if self.config.token.is_empty() {
+                    self.pair_local().await
+                } else {
+                    Ok(self.config.token.clone())
+                }
+            })
+            .await?;
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::AUTHORIZATION,
-            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", self.config.token))
-                .expect("invalid token"),
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(DaemonError::InvalidToken)?,
         );
-        headers
+        Ok(headers)
+    }
+
+    async fn pair_local(&self) -> Result<String, DaemonError> {
+        let mut api_url =
+            url::Url::parse(&self.config.base_url).map_err(DaemonError::InvalidBaseUrl)?;
+        if !matches!(api_url.host_str(), Some("127.0.0.1" | "localhost" | "::1")) {
+            return Err(DaemonError::PairingRequiresLoopback);
+        }
+        let mut admin_url = api_url.clone();
+        admin_url
+            .set_port(Some(38401))
+            .map_err(|_| DaemonError::PairingRequiresLoopback)?;
+        admin_url.set_path("/v1/pairing");
+        admin_url.set_query(None);
+
+        let response = self
+            .http
+            .post(admin_url.clone())
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+        if !response.status().is_success() {
+            return Err(DaemonError::UnexpectedStatus(response.status()));
+        }
+        let pairing = response
+            .json::<PairingCodeResponse>()
+            .await
+            .map_err(DaemonError::Deserialization)?;
+
+        api_url.set_path("/v1/pairing/complete");
+        api_url.set_query(None);
+        let response = self
+            .http
+            .post(api_url)
+            .json(&CompletePairingRequest {
+                code: &pairing.code,
+                client_name: "hearthdeck-cosmic-frontend",
+            })
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+        if !response.status().is_success() {
+            return Err(DaemonError::UnexpectedStatus(response.status()));
+        }
+        response
+            .json::<PairingCompleteResponse>()
+            .await
+            .map(|pairing| pairing.token)
+            .map_err(DaemonError::Deserialization)
     }
 
     /// Checks if the daemon is reachable and returns its health status.
@@ -143,7 +221,7 @@ impl DaemonClient {
         let response = self
             .http
             .get(self.api_url("/v1/library"))
-            .headers(self.auth_headers())
+            .headers(self.auth_headers().await?)
             .send()
             .await
             .map_err(DaemonError::Connection)?;
@@ -161,7 +239,7 @@ impl DaemonClient {
         let response = self
             .http
             .post(self.api_url("/v1/library/rescan"))
-            .headers(self.auth_headers())
+            .headers(self.auth_headers().await?)
             .send()
             .await
             .map_err(DaemonError::Connection)?;
@@ -178,7 +256,7 @@ impl DaemonClient {
         let response = self
             .http
             .post(self.api_url(&format!("/v1/apps/{}/launch", id)))
-            .headers(self.auth_headers())
+            .headers(self.auth_headers().await?)
             .send()
             .await
             .map_err(DaemonError::Connection)?;
@@ -195,7 +273,7 @@ impl DaemonClient {
         let response = self
             .http
             .get(self.api_url("/v1/sessions/active"))
-            .headers(self.auth_headers())
+            .headers(self.auth_headers().await?)
             .send()
             .await
             .map_err(DaemonError::Connection)?;
@@ -213,7 +291,7 @@ impl DaemonClient {
         let response = self
             .http
             .post(self.api_url(&format!("/v1/sessions/{}/stop", session_id)))
-            .headers(self.auth_headers())
+            .headers(self.auth_headers().await?)
             .send()
             .await
             .map_err(DaemonError::Connection)?;
@@ -231,7 +309,7 @@ impl DaemonClient {
         let response = self
             .http
             .get(self.api_url("/v1/retro/consoles"))
-            .headers(self.auth_headers())
+            .headers(self.auth_headers().await?)
             .send()
             .await
             .map_err(DaemonError::Connection)?;
@@ -271,7 +349,7 @@ impl DaemonClient {
         let response = self
             .http
             .get(&url)
-            .headers(self.auth_headers())
+            .headers(self.auth_headers().await?)
             .send()
             .await
             .map_err(DaemonError::Connection)?;
@@ -289,7 +367,7 @@ impl DaemonClient {
         let response = self
             .http
             .post(self.api_url(&format!("/v1/retro/roms/{}/launch", rom_id)))
-            .headers(self.auth_headers())
+            .headers(self.auth_headers().await?)
             .send()
             .await
             .map_err(DaemonError::Connection)?;
@@ -336,8 +414,7 @@ impl DaemonClient {
 pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
     let metadata = &item.metadata;
 
-    // Extract categories from metadata
-    let categories = metadata
+    let mut categories: Vec<String> = metadata
         .get("categories")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -346,6 +423,17 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
                 .collect()
         })
         .unwrap_or_default();
+    categories.retain(|category| !category.eq_ignore_ascii_case("game"));
+    if item.kind.eq_ignore_ascii_case("game") {
+        categories.push("Game".to_string());
+    }
+    if let Some(store) = metadata.get("store").and_then(|v| v.as_str())
+        && !categories
+            .iter()
+            .any(|category| category.eq_ignore_ascii_case(store))
+    {
+        categories.push(store.to_string());
+    }
 
     // Extract summary/description for the comment field
     let comment = metadata
@@ -390,6 +478,12 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
             serde_json::Value::String(version.to_string()),
         );
     }
+    if let Some(store) = metadata.get("store").and_then(|v| v.as_str()) {
+        game_metadata.insert(
+            "store".to_string(),
+            serde_json::Value::String(store.to_string()),
+        );
+    }
 
     // Determine if this prefers dGPU based on metadata
     let prefers_dgpu = metadata
@@ -422,6 +516,15 @@ pub enum DaemonError {
     #[error("deserialization failed: {0}")]
     Deserialization(reqwest::Error),
 
+    #[error("invalid daemon base URL: {0}")]
+    InvalidBaseUrl(url::ParseError),
+
+    #[error("invalid pairing token: {0}")]
+    InvalidToken(reqwest::header::InvalidHeaderValue),
+
+    #[error("automatic pairing requires a loopback daemon")]
+    PairingRequiresLoopback,
+
     #[error("daemon not available")]
     #[allow(dead_code)]
     Unavailable,
@@ -441,7 +544,6 @@ impl DaemonProvider {
     }
 
     /// Creates a new daemon provider with an existing client.
-    #[allow(dead_code)]
     pub fn with_client(client: DaemonClient) -> Self {
         Self { client }
     }
@@ -512,7 +614,7 @@ mod tests {
         assert_eq!(record.id, "hearthdeck:test:app");
         assert_eq!(record.name, "Test App");
         assert_eq!(record.exec, Some("test.app".to_string()));
-        assert_eq!(record.categories, vec!["Utility", "Game"]);
+        assert_eq!(record.categories, vec!["Utility"]);
         assert_eq!(record.source, "System");
         assert_eq!(
             record.metadata["comment"],
@@ -538,6 +640,8 @@ mod tests {
         let record = catalog_item_to_game_record(item);
 
         assert_eq!(record.source, "Heroic (Epic)");
+        assert_eq!(record.categories, vec!["Game", "Epic"]);
+        assert_eq!(record.metadata["store"], "Epic");
     }
 
     #[test]

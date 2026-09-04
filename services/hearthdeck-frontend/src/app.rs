@@ -1906,15 +1906,16 @@ impl cosmic::Application for HearthDeck {
         let locale = std::env::var("LANG").unwrap_or_default();
         let locale = locale.split('.').next().unwrap_or_default();
 
+        let daemon_client =
+            crate::providers::daemon::DaemonClient::new(crate::providers::daemon::DaemonConfig {
+                base_url: std::env::var("HEARTHDECK_BACKEND_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:38400".to_string()),
+                token: std::env::var("HEARTHDECK_PAIRING_TOKEN").unwrap_or_default(),
+            });
         let (provider_service, mut provider_rx) =
             crate::providers::service::ProviderService::start(vec![
-                std::sync::Arc::new(crate::providers::daemon::DaemonProvider::new(
-                    crate::providers::daemon::DaemonConfig {
-                        base_url: std::env::var("HEARTHDECK_BACKEND_URL")
-                            .unwrap_or_else(|_| "http://127.0.0.1:38400".to_string()),
-                        token: std::env::var("HEARTHDECK_PAIRING_TOKEN")
-                            .unwrap_or_else(|_| String::new()),
-                    },
+                std::sync::Arc::new(crate::providers::daemon::DaemonProvider::with_client(
+                    daemon_client.clone(),
                 )),
                 std::sync::Arc::new(crate::providers::heroic::HeroicProvider::from_system()),
                 std::sync::Arc::new(crate::providers::lutris::LutrisProvider::from_system()),
@@ -1922,19 +1923,6 @@ impl cosmic::Application for HearthDeck {
                     locale.to_string(),
                 ])),
             ]);
-
-        let daemon_client = std::env::var("HEARTHDECK_PAIRING_TOKEN")
-            .ok()
-            .filter(|token| !token.is_empty())
-            .map(|token| {
-                crate::providers::daemon::DaemonClient::new(
-                    crate::providers::daemon::DaemonConfig {
-                        base_url: std::env::var("HEARTHDECK_BACKEND_URL")
-                            .unwrap_or_else(|_| "http://127.0.0.1:38400".to_string()),
-                        token,
-                    },
-                )
-            });
 
         let helper = AppLibraryConfig::helper();
 
@@ -1975,7 +1963,7 @@ impl cosmic::Application for HearthDeck {
             group_keys,
             next_group_key: group_count,
             provider_service: Some(provider_service),
-            daemon_client,
+            daemon_client: Some(daemon_client),
             ..Default::default()
         };
 
