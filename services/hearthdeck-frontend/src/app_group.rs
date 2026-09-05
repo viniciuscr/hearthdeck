@@ -389,18 +389,56 @@ impl AppLibraryConfig {
             "Utility",
             "Video",
         ];
+        const GAME_CATEGORIES: &[&str] = &[
+            "Action",
+            "ActionGame",
+            "Adventure",
+            "AdventureGame",
+            "Arcade",
+            "ArcadeGame",
+            "BoardGame",
+            "CardGame",
+            "Casual",
+            "Fighting",
+            "Horror",
+            "Indie",
+            "KidsGame",
+            "LogicGame",
+            "MMO",
+            "MMORPG",
+            "Platformer",
+            "Puzzle",
+            "Racing",
+            "Roguelike",
+            "RolePlaying",
+            "RPG",
+            "Shooter",
+            "Simulation",
+            "Sports",
+            "SportsGame",
+            "Strategy",
+            "StrategyGame",
+            "Survival",
+        ];
+        const STORE_CATEGORY_PREFIX: &str = "hearthdeck-store:";
 
         let mut changed = false;
         for section in Section::ALL {
             let mut categories = BTreeMap::new();
             for entry in entries.iter().filter(|entry| section.matches(entry)) {
                 for category in &entry.categories {
-                    if category.eq_ignore_ascii_case("game")
-                        || section == Section::Applications
-                            && !APPLICATION_CATEGORIES
-                                .iter()
-                                .any(|known| category.eq_ignore_ascii_case(known))
-                    {
+                    let visible = match section {
+                        Section::Applications => APPLICATION_CATEGORIES
+                            .iter()
+                            .any(|known| category.eq_ignore_ascii_case(known)),
+                        Section::PcGames | Section::ConsoleGames => {
+                            category.starts_with(STORE_CATEGORY_PREFIX)
+                                || GAME_CATEGORIES
+                                    .iter()
+                                    .any(|known| category.eq_ignore_ascii_case(known))
+                        }
+                    };
+                    if category.eq_ignore_ascii_case("game") || !visible {
                         continue;
                     }
                     categories
@@ -417,12 +455,15 @@ impl AppLibraryConfig {
             let mut groups: Vec<_> = categories
                 .into_values()
                 .map(|category| AppGroup {
-                    name: match category.to_ascii_lowercase().as_str() {
-                        "office" => "cosmic-office".to_string(),
-                        "system" => "cosmic-system".to_string(),
-                        "utility" => "cosmic-utilities".to_string(),
-                        _ => category.clone(),
-                    },
+                    name: category
+                        .strip_prefix(STORE_CATEGORY_PREFIX)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| match category.to_ascii_lowercase().as_str() {
+                            "office" => "cosmic-office".to_string(),
+                            "system" => "cosmic-system".to_string(),
+                            "utility" => "cosmic-utilities".to_string(),
+                            _ => category.clone(),
+                        }),
                     icon: "folder-symbolic".to_string(),
                     filter: FilterType::Categories {
                         categories: vec![category],
@@ -494,6 +535,31 @@ mod tests {
                 .map(|group| group.name())
                 .collect::<Vec<_>>(),
             vec!["Utilities"]
+        );
+    }
+
+    #[test]
+    fn game_tabs_only_show_stores_and_game_genres() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_category_groups(&[entry(
+            "game",
+            &[
+                "Game",
+                "PackageManager",
+                "FileTransfer",
+                "RPG",
+                "hearthdeck-store:Epic Games",
+            ],
+        )]);
+
+        assert_eq!(
+            config
+                .sections
+                .get(Section::PcGames)
+                .iter()
+                .map(|group| group.name())
+                .collect::<Vec<_>>(),
+            vec!["Epic Games", "RPG"]
         );
     }
 

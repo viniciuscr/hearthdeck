@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use futures::future::join_all;
 use hearthdeck_protocol::ApplicationSession;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -567,6 +568,21 @@ impl GameProvider for DaemonProvider {
             .map_err(|e| anyhow::anyhow!("failed to fetch library: {}", e))?;
 
         tracing::info!(item_count = items.len(), "fetched catalog from daemon");
+
+        let items = join_all(items.into_iter().map(|mut item| async move {
+            if let Some(url) = item
+                .icon
+                .as_deref()
+                .filter(|icon| icon.starts_with("http://") || icon.starts_with("https://"))
+                .map(str::to_owned)
+            {
+                item.icon = tokio::task::spawn_blocking(move || super::heroic::cache_icon(&url))
+                    .await
+                    .unwrap_or(None);
+            }
+            item
+        }))
+        .await;
 
         Ok(items.into_iter().map(catalog_item_to_game_record).collect())
     }

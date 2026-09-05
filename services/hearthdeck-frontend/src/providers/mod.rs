@@ -35,12 +35,23 @@ pub struct GameRecord {
 
 impl GameRecord {
     /// Convert into a `DesktopEntryData` for integration with the existing UI.
-    pub fn into_desktop_entry(self) -> DesktopEntryData {
-        let fallback_icon = if self
+    pub fn into_desktop_entry(mut self) -> DesktopEntryData {
+        let is_game = self
             .categories
             .iter()
-            .any(|category| category.eq_ignore_ascii_case("game"))
+            .any(|category| category.eq_ignore_ascii_case("game"));
+        if is_game
+            && let Some(store) = self
+                .metadata
+                .get("store")
+                .and_then(serde_json::Value::as_str)
         {
+            self.categories
+                .retain(|category| !category.eq_ignore_ascii_case(store));
+            self.categories.push(format!("hearthdeck-store:{store}"));
+        }
+
+        let fallback_icon = if is_game {
             "applications-games"
         } else {
             "application-x-executable"
@@ -155,5 +166,17 @@ mod tests {
             record(None).into_desktop_entry().icon,
             IconSource::Name(name) if name == "application-x-executable"
         ));
+    }
+
+    #[test]
+    fn game_store_becomes_a_tab_category() {
+        let mut game = record(None);
+        game.categories = vec!["Game".into(), "Epic Games".into()];
+        game.metadata = serde_json::json!({"store": "Epic Games"});
+
+        assert_eq!(
+            game.into_desktop_entry().categories,
+            vec!["Game", "hearthdeck-store:Epic Games"]
+        );
     }
 }

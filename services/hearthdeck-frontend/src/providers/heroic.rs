@@ -358,20 +358,26 @@ fn valid_application_id(value: &str) -> bool {
 /// Download a remote icon URL to a local cache directory and return the cached
 /// file path. Returns `None` on failure (network error, etc.) so callers can
 /// fall back to a generic icon.
-fn cache_icon(url: &str) -> Option<String> {
+pub(super) fn cache_icon(url: &str) -> Option<String> {
     let cache_dir = icon_cache_dir();
     let _ = std::fs::create_dir_all(&cache_dir);
 
-    let ext = Path::new(url)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png");
+    let ext = url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| {
+            Path::new(parsed.path())
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(str::to_ascii_lowercase)
+        })
+        .filter(|extension| matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "svg" | "webp"))
+        .unwrap_or_else(|| "png".to_string());
     let mut hasher = DefaultHasher::new();
     hasher.write(url.as_bytes());
     let filename = format!("{:016x}.{ext}", hasher.finish());
     let cached = cache_dir.join(&filename);
 
-    if cached.exists() {
+    if cached.metadata().is_ok_and(|metadata| metadata.len() >= 16) {
         return Some(cached.to_string_lossy().into_owned());
     }
 
@@ -400,7 +406,10 @@ fn cache_icon(url: &str) -> Option<String> {
             return None;
         }
     };
-    let _ = file.write_all(&body);
+    if let Err(e) = file.write_all(&body) {
+        log::warn!("icon cache write failed: {e}");
+        return None;
+    }
     Some(cached.to_string_lossy().into_owned())
 }
 
