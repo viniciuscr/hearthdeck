@@ -37,9 +37,6 @@ build() {
   cd "$source_dir"
 
   cargo build --manifest-path services/Cargo.toml --workspace --release
-  # ponytail: reuse the workspace target dir so CI cache keeps libcosmic/iced builds.
-  CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-overlay/Cargo.toml --release
-  CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-applet-user/Cargo.toml --release
 }
 
 package() {

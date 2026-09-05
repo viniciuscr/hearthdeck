@@ -298,6 +298,10 @@ async fn launch_with_systemd(
     if is_kiosk_session() {
         command.arg("--slice=hearthdeck-kiosk.slice");
     }
+    command.arg("--setenv").arg(format!(
+        "{}={unit_name}",
+        super::TRACKED_UNIT_ENVIRONMENT_VARIABLE
+    ));
     // Forward the display/session environment the launched process needs to
     // connect to whatever session Hearthdeck itself is running in -
     // `systemd-run` does not inherit the caller's environment, and a

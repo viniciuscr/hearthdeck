@@ -1,10 +1,8 @@
-[workspace]
-
 [package]
 name = "hearthdeck-overlay"
-version = "0.1.0"
-edition = "2024"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 publish = false
 description = """
 Quick-menu overlay for the "COSMIC (Test)" session (see
@@ -18,11 +16,6 @@ mechanism cosmic-panel/cosmic-launcher themselves use) where this is
 architecturally sound. UNTESTED against a real Linux/Wayland toolchain -
 first build must happen on real hardware.
 
-Deliberately NOT a member of services/Cargo.toml's workspace: libcosmic
-pulls in iced/wgpu/winit/smithay-client-toolkit, a dependency tree large
-enough that `cargo build --workspace` (what `just ci-check` runs) went from
-~3 minutes to ~25 building it every time. Build/test this crate on its own:
-  cargo build --manifest-path services/hearthdeck-overlay/Cargo.toml --release
 PKGBUILD builds and installs it only for the COSMIC (Test) session.
 """
 

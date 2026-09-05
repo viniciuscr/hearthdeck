@@ -1,8 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 use hearthdeck_protocol::DiscoveredApplication;
 #[cfg(all(not(target_os = "linux"), not(test)))]
 use hearthdeck_protocol::HeroicRunner;
+#[cfg(any(target_os = "linux", test))]
+use std::collections::BTreeSet;
 
 #[cfg(any(target_os = "linux", test))]
 pub const DESKTOP_APPS_SOURCE: &str = "desktop-apps";
@@ -24,38 +26,43 @@ pub struct LaunchedApplication {
 }
 
 #[cfg(any(target_os = "linux", test))]
+const TRACKED_UNIT_ENVIRONMENT_VARIABLE: &str = "HEARTHDECK_UNIT_NAME";
+
+#[cfg(any(target_os = "linux", test))]
 pub async fn stop_application(unit_name: Option<&str>) -> Result<()> {
     let Some(unit_name) = unit_name else {
         anyhow::bail!("application session cannot be stopped on this platform")
     };
 
-    let escaped_unit = find_escaped_unit(unit_name).await;
-    let stop_primary = stop_unit(unit_name);
-    let Some(escaped_unit) = escaped_unit else {
-        return stop_primary.await;
+    let escaped_units = find_escaped_units(unit_name).await;
+    let stop_primary = async {
+        if is_unit_active(unit_name).await? {
+            stop_unit(unit_name).await?;
+        }
+        Ok::<(), anyhow::Error>(())
     };
-
-    // Independent units - `systemctl stop` blocks until each unit's
-    // processes actually exit (SIGTERM, then wait for graceful shutdown),
-    // so stopping them one after another meant waiting out that exit delay
-    // twice in a row for no reason. Stopping them concurrently cuts the
-    // total wait to whichever one is slower, instead of the sum of both -
-    // this is what the overlay's "Closing app..." status waits on, so this
-    // directly shortens how long that stays on screen when a launch has
-    // escaped (see `find_escaped_unit`'s own docs).
-    let (primary, escaped) = tokio::join!(stop_primary, stop_unit(&escaped_unit));
-    match escaped {
-        Ok(()) => tracing::info!(
-            unit = %escaped_unit,
-            "stopped a unit the launched process had escaped into"
-        ),
-        Err(error) => tracing::warn!(
-            unit = %escaped_unit,
-            %error,
-            "could not stop a unit the launched process had escaped into"
-        ),
-    }
-    primary
+    let stop_escaped = async {
+        for escaped_unit in &escaped_units {
+            if is_unit_active(escaped_unit).await? {
+                stop_unit(escaped_unit).await.with_context(|| {
+                    format!("could not stop escaped application unit {escaped_unit}")
+                })?;
+                tracing::info!(
+                    unit = %escaped_unit,
+                    "stopped a unit the launched process had escaped into"
+                );
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    let (primary, escaped) = tokio::join!(stop_primary, stop_escaped);
+    primary?;
+    escaped?;
+    anyhow::ensure!(
+        !application_is_running(Some(unit_name)).await?,
+        "application processes are still running after stop"
+    );
+    Ok(())
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -70,10 +77,7 @@ async fn stop_unit(unit_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Detects whether the process tracked as `unit_name`'s main process has
-/// been moved into a *different* systemd unit's cgroup than the one
-/// `systemd-run` originally placed it in, and returns that other unit's
-/// name if so.
+/// Finds app scopes containing processes launched for `unit_name`.
 ///
 /// ponytail: confirmed on real hardware, via `/proc/<pid>/cgroup`, that a
 /// launched process (Heroic specifically, so far) can end up in an
@@ -87,14 +91,48 @@ async fn stop_unit(unit_name: &str) -> Result<()> {
 /// https://systemd.io/DESKTOP_ENVIRONMENTS/), independent of how the
 /// process was originally spawned.
 ///
-/// Rather than special-case Heroic by name (and need a new branch for every
-/// future app source that turns out to do the same thing - Flatpak apps are
-/// a known example of something else that self-scopes this way), this asks
-/// the kernel directly: read the tracked main PID's *actual* current cgroup
-/// and compare it to the unit we expect it to still be in. Works
-/// identically for any launched app, with no per-app-name branching.
+/// Every supervised launch inherits `HEARTHDECK_UNIT_NAME`, so scanning
+/// same-user `/proc` entries still attributes the process tree after systemd
+/// has cleared the original service's `MainPID`. The `MainPID` lookup stays
+/// as a compatibility path for applications launched before that marker was
+/// added.
 #[cfg(any(target_os = "linux", test))]
-async fn find_escaped_unit(unit_name: &str) -> Option<String> {
+async fn find_escaped_units(unit_name: &str) -> Vec<String> {
+    let mut escaped_units = BTreeSet::new();
+
+    if let Some(pid) = unit_main_pid(unit_name).await
+        && let Some(escaped_unit) = escaped_unit_for_process(pid, unit_name).await
+    {
+        escaped_units.insert(escaped_unit);
+    }
+
+    let marker = format!("{TRACKED_UNIT_ENVIRONMENT_VARIABLE}={unit_name}");
+    let Ok(mut processes) = tokio::fs::read_dir("/proc").await else {
+        return escaped_units.into_iter().collect();
+    };
+    while let Ok(Some(process)) = processes.next_entry().await {
+        let Some(pid) = process
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(environment) = tokio::fs::read(process.path().join("environ")).await else {
+            continue;
+        };
+        if environment_contains_entry(&environment, marker.as_bytes())
+            && let Some(escaped_unit) = escaped_unit_for_process(pid, unit_name).await
+        {
+            escaped_units.insert(escaped_unit);
+        }
+    }
+
+    escaped_units.into_iter().collect()
+}
+
+#[cfg(any(target_os = "linux", test))]
+async fn unit_main_pid(unit_name: &str) -> Option<u32> {
     let output = tokio::process::Command::new("systemctl")
         .args(["--user", "show", unit_name, "--property=MainPID", "--value"])
         .output()
@@ -104,20 +142,26 @@ async fn find_escaped_unit(unit_name: &str) -> Option<String> {
         .trim()
         .parse()
         .ok()?;
-    if pid == 0 {
-        // Unit has no main process (already exited, or never had one) -
-        // nothing to have escaped.
-        return None;
-    }
+    (pid != 0).then_some(pid)
+}
 
+#[cfg(any(target_os = "linux", test))]
+async fn escaped_unit_for_process(pid: u32, unit_name: &str) -> Option<String> {
     let cgroup = tokio::fs::read_to_string(format!("/proc/{pid}/cgroup"))
         .await
         .ok()?;
     escaped_unit_from_cgroup(&cgroup, unit_name)
 }
 
-/// Pure parsing half of `find_escaped_unit`, split out so the cgroup-parsing
-/// logic is unit-testable without needing a real systemd/proc environment.
+#[cfg(any(target_os = "linux", test))]
+fn environment_contains_entry(environment: &[u8], entry: &[u8]) -> bool {
+    environment
+        .split(|byte| *byte == 0)
+        .any(|value| value == entry)
+}
+
+/// Pure cgroup parsing used by `find_escaped_units`, split out so the logic is
+/// unit-testable without needing a real systemd/proc environment.
 #[cfg(any(target_os = "linux", test))]
 fn escaped_unit_from_cgroup(cgroup: &str, unit_name: &str) -> Option<String> {
     // cgroup v2 (the only kind systemd-managed user sessions use here) has
@@ -152,10 +196,10 @@ pub async fn application_is_running(unit_name: Option<&str>) -> Result<bool> {
     // overlay's "Close App" sees "no active session" and does nothing, and
     // launching a second app can't see the first one to stop it. Mirror the
     // stop path and treat an escaped, still-active scope as running too.
-    if let Some(escaped_unit) = find_escaped_unit(unit_name).await
-        && is_unit_active(&escaped_unit).await?
-    {
-        return Ok(true);
+    for escaped_unit in find_escaped_units(unit_name).await {
+        if is_unit_active(&escaped_unit).await? {
+            return Ok(true);
+        }
     }
     Ok(false)
 }
@@ -207,7 +251,21 @@ pub async fn launch_application(
 
 #[cfg(test)]
 mod tests {
-    use super::escaped_unit_from_cgroup;
+    use super::{environment_contains_entry, escaped_unit_from_cgroup};
+
+    #[test]
+    fn matches_only_the_exact_nul_delimited_launch_marker() {
+        let environment = b"PATH=/usr/bin\0HEARTHDECK_UNIT_NAME=hearthdeck-app-abc.service\0";
+
+        assert!(environment_contains_entry(
+            environment,
+            b"HEARTHDECK_UNIT_NAME=hearthdeck-app-abc.service"
+        ));
+        assert!(!environment_contains_entry(
+            environment,
+            b"HEARTHDECK_UNIT_NAME=hearthdeck-app-ab.service"
+        ));
+    }
 
     #[test]
     fn detects_a_process_moved_into_an_app_slice_scope() {

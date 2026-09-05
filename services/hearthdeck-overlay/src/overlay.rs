@@ -32,6 +32,7 @@ use crate::shortcut;
 
 const APP_ID: &str = "io.github.viniciuscr.hearthdeck.Overlay";
 const TOGGLE_MESSAGE: &[u8] = b"toggle";
+const INPUT_RELEASE_DELAY: Duration = Duration::from_millis(300);
 
 pub fn main() -> Result<(), Box<dyn Error>> {
     match std::env::args().nth(1).as_deref() {
@@ -126,6 +127,7 @@ enum Message {
     /// message (not the original `io::Error`) since `Message` must be
     /// `Clone` for iced/cosmic's event loop, and `io::Error` isn't.
     CloseFinished(Result<(), String>),
+    HideAfterClose,
 }
 
 /// What `view_window` renders while the overlay is visible. Not used while
@@ -136,6 +138,7 @@ enum Message {
 enum Status {
     Menu,
     Closing,
+    CloseFailed,
 }
 
 /// The menu's entries, in on-screen order - also the order gamepad D-pad
@@ -146,6 +149,10 @@ enum Status {
 const MENU_ITEMS: [(&str, Message); 2] = [
     ("Resume", Message::ResumeApp),
     ("Close App", Message::CloseApp),
+];
+const CLOSE_FAILED_ITEMS: [(&str, Message); 2] = [
+    ("Retry Close", Message::CloseApp),
+    ("Resume", Message::ResumeApp),
 ];
 
 struct Overlay {
@@ -214,8 +221,12 @@ impl cosmic::Application for Overlay {
                 // Only meaningful while the menu itself is showing - ignored
                 // while hidden (no menu to navigate) or while closing (the
                 // surface no longer shows the item list).
-                if self.visible && self.status == Status::Menu {
-                    let len = MENU_ITEMS.len();
+                if self.visible && self.status != Status::Closing {
+                    let len = match self.status {
+                        Status::Menu => MENU_ITEMS.len(),
+                        Status::CloseFailed => CLOSE_FAILED_ITEMS.len(),
+                        Status::Closing => unreachable!(),
+                    };
                     self.selected = if matches!(message, Message::NavigateUp) {
                         (self.selected + len - 1) % len
                     } else {
@@ -225,10 +236,13 @@ impl cosmic::Application for Overlay {
                 Task::none()
             }
             Message::Activate => {
-                if self.visible && self.status == Status::Menu {
-                    self.update(MENU_ITEMS[self.selected].1.clone())
-                } else {
-                    Task::none()
+                if !self.visible {
+                    return Task::none();
+                }
+                match self.status {
+                    Status::Menu => self.update(MENU_ITEMS[self.selected].1.clone()),
+                    Status::CloseFailed => self.update(CLOSE_FAILED_ITEMS[self.selected].1.clone()),
+                    Status::Closing => Task::none(),
                 }
             }
             Message::ResumeApp => self.hide(),
@@ -250,10 +264,19 @@ impl cosmic::Application for Overlay {
                     )
                 })
             }
-            Message::CloseFinished(result) => {
-                if let Err(err) = result {
+            Message::CloseFinished(result) => match result {
+                Ok(()) => cosmic::task::future(async {
+                    tokio::time::sleep(INPUT_RELEASE_DELAY).await;
+                    Message::HideAfterClose
+                }),
+                Err(err) => {
                     error!(%err, "hearthdeck-overlay: failed to stop active application");
+                    self.status = Status::CloseFailed;
+                    self.selected = 0;
+                    Task::none()
                 }
+            },
+            Message::HideAfterClose => {
                 self.status = Status::Menu;
                 self.hide()
             }
@@ -286,6 +309,21 @@ impl cosmic::Application for Overlay {
             // CloseApp was pressed, and navigating/activating here
             // wouldn't affect it either way.
             Status::Closing => column(vec![text::title2("Closing app\u{2026}").into()]),
+            Status::CloseFailed => {
+                let mut items = list_column();
+                for (index, (label, message)) in CLOSE_FAILED_ITEMS.iter().enumerate() {
+                    items = items.add(
+                        list::button(text::body(*label))
+                            .on_press(message.clone())
+                            .selected(index == self.selected),
+                    );
+                }
+                column(vec![
+                    text::title2("Could not close app").into(),
+                    text::body("The app is still running.").into(),
+                    items.into(),
+                ])
+            }
         }
         .spacing(12)
         .align_x(Alignment::Center)
@@ -412,7 +450,10 @@ fn stop_active_application() -> io::Result<()> {
     };
     let Some(session) = session else {
         warn!("hearthdeck-overlay: no application session is active");
-        return Ok(());
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no application session is active",
+        ));
     };
 
     let response = bridge_request(&BridgeRequest::StopApplicationSession {

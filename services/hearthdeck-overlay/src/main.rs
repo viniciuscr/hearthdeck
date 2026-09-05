@@ -9,8 +9,7 @@
 // `create_dummy_layer_surface`/`show`/`hide` functions) and cosmic-comp's
 // own src/lib.rs (kiosk_child exit handling), not guessed from memory - but
 // libcosmic's git-main API has no stable release and does change, so the
-// Build this module on its target platform with:
-// `cargo build --manifest-path services/hearthdeck-overlay/Cargo.toml --release`.
+// Build this module on its target platform as part of the services workspace.
 // It is Linux-only because it uses Wayland layer-shell.
 #[cfg(target_os = "linux")]
 mod input;

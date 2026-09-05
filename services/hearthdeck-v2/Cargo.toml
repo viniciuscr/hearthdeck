@@ -1,9 +1,0 @@
-[package]
-name = "hearthdeck_v2"
-version = "0.1.0"
-edition = "2024"
-
-[workspace]
-
-[dependencies]
-libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["winit_wgpu", "tokio"] }
