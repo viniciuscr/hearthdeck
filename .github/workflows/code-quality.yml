@@ -76,38 +76,9 @@ jobs:
             services/target
           key: ${{ steps.cache-restore.outputs.cache-primary-key }}
 
-  check-flutter:
-    name: Flutter Code Quality
-    runs-on: ubuntu-latest
-    
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.44.8
-          cache: true
-
-      - name: Get Flutter dependencies
-        run: flutter pub get
-
-      - name: Check Dart formatting
-        run: |
-          dart format --output=none --set-exit-if-changed lib test
-        continue-on-error: false
-
-      - name: Analyze Flutter code
-        run: flutter analyze
-        continue-on-error: false
-
-      - name: Run Flutter tests
-        run: flutter test
-        continue-on-error: false
-
   validate-ci-readiness:
     name: CI Readiness Check
-    needs: [check-rust, check-flutter]
+    needs: check-rust
     runs-on: ubuntu-latest
     if: always()
     
@@ -118,10 +89,6 @@ jobs:
         run: |
           if [ "${{ needs.check-rust.result }}" != "success" ]; then
             echo "❌ Rust code quality checks failed"
-            exit 1
-          fi
-          if [ "${{ needs.check-flutter.result }}" != "success" ]; then
-            echo "❌ Flutter code quality checks failed"
             exit 1
           fi
           echo "✅ All code quality gates passed"

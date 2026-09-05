@@ -79,14 +79,14 @@ use switcheroo_control::Gpu;
 use crate::app_group::{AppGroup, AppLibraryConfig, Section};
 use crate::fl;
 use crate::style::{
-    DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH, EDIT_NAME_INPUT_WIDTH, FILTER_BUTTON_HEIGHT,
-    GRID_COLUMNS, GRID_TOP_PADDING, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL,
-    ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, SEARCH_ICON_PADDING, SEARCH_WIDTH,
-    SIDEBAR_ACCENT_BAR_HEIGHT, SIDEBAR_ACCENT_BAR_WIDTH, SIDEBAR_HEADER_HEIGHT,
-    SIDEBAR_ITEM_HEIGHT, TAB_HEIGHT, TAB_UNDERLINE_HEIGHT, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER,
-    TEXT_LARGE, TEXT_TITLE, TITLE_ACTION_HEIGHT, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, grid_gap,
-    root_background, section_button_class, sidebar_divider, sidebar_width, tab_button_class,
-    tab_width, tile_height, tile_width,
+    CONTENT_HORIZONTAL_PADDING, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
+    EDIT_NAME_INPUT_WIDTH, FILTER_BUTTON_HEIGHT, GRID_COLUMNS, GRID_TOP_PADDING, ICON_BODY,
+    ICON_LARGE, ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH,
+    SEARCH_ICON_PADDING, SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_HEIGHT, SIDEBAR_ACCENT_BAR_WIDTH,
+    SIDEBAR_HEADER_HEIGHT, SIDEBAR_ITEM_HEIGHT, TAB_HEIGHT, TAB_UNDERLINE_HEIGHT, TEXT_BODY,
+    TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, TITLE_ACTION_HEIGHT, WINDOW_HEIGHT,
+    WINDOW_WIDTH, accent_bar, grid_gap, root_background, section_button_class, sidebar_divider,
+    sidebar_width, tab_button_class, tab_width, tile_height, tile_width,
 };
 use crate::subscriptions::desktop_files::desktop_files;
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
@@ -551,6 +551,31 @@ pub fn menu_control_padding() -> Padding {
 }
 
 impl HearthDeck {
+    fn sync_category_groups(&mut self) {
+        let selected_group = self
+            .cur_group
+            .and_then(|index| self.config.sections.get(self.cur_section).get(index))
+            .cloned();
+        if !self.config.sync_category_groups(&self.all_entries) {
+            return;
+        }
+
+        self.cur_group = selected_group.and_then(|selected| {
+            self.config
+                .sections
+                .get(self.cur_section)
+                .iter()
+                .position(|group| group == &selected)
+        });
+        self.group_keys = (0..self.config.sections.get(self.cur_section).len())
+            .map(|_| {
+                let key = self.next_group_key;
+                self.next_group_key += 1;
+                key
+            })
+            .collect();
+    }
+
     fn current_group(&self) -> &AppGroup {
         match self.cur_group {
             None => AppLibraryConfig::home(),
@@ -737,7 +762,8 @@ impl HearthDeck {
 
     /// Height of one row of the application grid, in logical pixels.
     fn grid_row_height(&self) -> f32 {
-        tile_height(self.window_width) + grid_gap(self.window_width)
+        tile_height(self.window_width, self.cur_section != Section::Applications)
+            + grid_gap(self.window_width)
     }
 
     /// The number of grid rows currently visible in the scrollable viewport.
@@ -1009,7 +1035,6 @@ impl cosmic::Application for HearthDeck {
     fn update(&mut self, message: Message) -> Task<Self::Message> {
         match message {
             Message::ProviderRecords(records) => {
-                self.config.ensure_provider_groups(&records);
                 let new_entries: Vec<_> = records
                     .into_iter()
                     .map(|r| std::sync::Arc::new(r.into_desktop_entry()))
@@ -1025,6 +1050,7 @@ impl cosmic::Application for HearthDeck {
                     }
                 }
                 self.all_entries.sort_by(|a, b| a.name.cmp(&b.name));
+                self.sync_category_groups();
                 if let Some(helper) = AppLibraryConfig::helper() {
                     let _ = self.config.write_entry(&helper);
                 }
@@ -2002,6 +2028,7 @@ impl cosmic::Application for HearthDeck {
             }
         }
         self_.all_entries.sort_by(|a, b| a.name.cmp(&b.name));
+        self_.sync_category_groups();
 
         self_.load_apps();
 
@@ -2374,6 +2401,7 @@ impl HearthDeck {
                     icon_handle.clone(),
                     &entry.path,
                     tile_width(self.window_width),
+                    tile_height(self.window_width, self.cur_section != Section::Applications),
                     move |rect| Message::OpenContextMenu(rect, i),
                     if self.menu.is_none() {
                         Some(Message::ActivateApp(i, gpu_idx))
@@ -2421,6 +2449,8 @@ impl HearthDeck {
                 Message::ScrollYOffset(offset.y, viewport.bounds().height)
             })
             .id(SCROLLABLE_ID.clone())
+            .scrollbar_width(0)
+            .scroller_width(0)
             .height(Length::Fill),
         )
         .height(Length::Fill);
@@ -2440,7 +2470,7 @@ impl HearthDeck {
                 app_scrollable,
             ]
             .width(Length::Fill)
-            .padding([0, space_l]),
+            .padding([0, CONTENT_HORIZONTAL_PADDING]),
         ]
         .height(Length::Fill);
 

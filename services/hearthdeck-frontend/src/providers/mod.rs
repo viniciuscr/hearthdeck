@@ -36,20 +36,28 @@ pub struct GameRecord {
 impl GameRecord {
     /// Convert into a `DesktopEntryData` for integration with the existing UI.
     pub fn into_desktop_entry(self) -> DesktopEntryData {
+        let fallback_icon = if self
+            .categories
+            .iter()
+            .any(|category| category.eq_ignore_ascii_case("game"))
+        {
+            "applications-games"
+        } else {
+            "application-x-executable"
+        };
         let icon_source = self
             .icon
             .as_deref()
             .map(|icon| {
                 if icon.starts_with("http://") || icon.starts_with("https://") {
-                    // HTTP URLs can't be resolved as icon theme names.
-                    // Use the standard applications-games icon as fallback.
-                    // TODO: download and cache remote icons.
-                    fde::IconSource::Name("applications-games".to_string())
-                } else {
+                    fde::IconSource::Name(fallback_icon.to_string())
+                } else if PathBuf::from(icon).is_absolute() {
                     fde::IconSource::Path(PathBuf::from(icon))
+                } else {
+                    fde::IconSource::Name(icon.to_string())
                 }
             })
-            .unwrap_or(fde::IconSource::Name(String::new()));
+            .unwrap_or_else(|| fde::IconSource::Name(fallback_icon.to_string()));
 
         DesktopEntryData {
             id: self.id,
@@ -105,4 +113,47 @@ pub enum ProviderStatus {
     Refreshing,
     Ready,
     Degraded,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GameRecord;
+    use cosmic::desktop::fde::IconSource;
+
+    fn record(icon: Option<&str>) -> GameRecord {
+        GameRecord {
+            id: "test".into(),
+            name: "Test".into(),
+            exec: None,
+            icon: icon.map(str::to_owned),
+            path: None,
+            categories: vec!["Utility".into()],
+            terminal: false,
+            prefers_dgpu: false,
+            source: "test".into(),
+            metadata: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn resolves_icon_names_and_absolute_paths() {
+        assert!(matches!(
+            record(Some("org.example.App")).into_desktop_entry().icon,
+            IconSource::Name(name) if name == "org.example.App"
+        ));
+        assert!(matches!(
+            record(Some("/usr/share/icons/example.png"))
+                .into_desktop_entry()
+                .icon,
+            IconSource::Path(path) if path == std::path::Path::new("/usr/share/icons/example.png")
+        ));
+    }
+
+    #[test]
+    fn missing_application_icon_uses_fallback() {
+        assert!(matches!(
+            record(None).into_desktop_entry().icon,
+            IconSource::Name(name) if name == "application-x-executable"
+        ));
+    }
 }

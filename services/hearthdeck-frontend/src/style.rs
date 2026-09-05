@@ -58,9 +58,11 @@ pub const SIDEBAR_ITEM_HEIGHT: f32 = 56.0;
 pub const SIDEBAR_ACCENT_BAR_WIDTH: f32 = 6.0;
 /// Height of the accent bar shown next to the active sidebar section.
 pub const SIDEBAR_ACCENT_BAR_HEIGHT: f32 = 40.0;
+/// Horizontal padding inside the main content panel.
+pub const CONTENT_HORIZONTAL_PADDING: u16 = 24;
 
 /// Number of columns in the application grid.
-pub const GRID_COLUMNS: usize = 6;
+pub const GRID_COLUMNS: usize = 5;
 /// Gap between grid tiles as a fraction of tile width (Xbox: ~6.5%).
 pub const GRID_GAP_RATIO: f32 = 0.065;
 /// Minimum gap in pixels.
@@ -85,7 +87,10 @@ pub fn sidebar_width(window_width: f32) -> f32 {
 
 /// Compute the content area width from the window width.
 pub fn content_width(window_width: f32) -> f32 {
-    window_width - sidebar_width(window_width) - DIVIDER_WIDTH
+    window_width
+        - sidebar_width(window_width)
+        - DIVIDER_WIDTH
+        - 2.0 * f32::from(CONTENT_HORIZONTAL_PADDING)
 }
 
 /// Compute the gap between grid tiles from the tile width.
@@ -99,16 +104,16 @@ pub fn grid_gap(window_width: f32) -> f32 {
     (est_tile * GRID_GAP_RATIO).clamp(GRID_GAP_MIN, GRID_GAP_MAX)
 }
 
-/// Compute the tile width from the content width. Tiles are nearly square.
+/// Compute the tile width from the padded content width.
 pub fn tile_width(window_width: f32) -> f32 {
     let cw = content_width(window_width);
     let gap = grid_gap(window_width);
     ((cw - (GRID_COLUMNS as f32 - 1.0) * gap) / GRID_COLUMNS as f32).max(60.0)
 }
 
-/// Tile height equals tile width (nearly square, like Xbox).
-pub fn tile_height(window_width: f32) -> f32 {
-    tile_width(window_width)
+/// Games use common 2:3 portrait cover art; applications remain square.
+pub fn tile_height(window_width: f32, is_game: bool) -> f32 {
+    tile_width(window_width) * if is_game { 1.5 } else { 1.0 }
 }
 
 /// Size of the drag-preview icon shown while dragging a tile.
@@ -376,5 +381,33 @@ pub fn tile_button_class(selected: bool) -> Button {
             style.border_radius = theme.cosmic().corner_radii.radius_s.into();
             focus_ring(style, focused, theme)
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CONTENT_HORIZONTAL_PADDING, GRID_COLUMNS, content_width, grid_gap, sidebar_width,
+        tile_height, tile_width,
+    };
+
+    #[test]
+    fn grid_fits_inside_padded_content() {
+        let window_width = 1200.0;
+        let occupied = GRID_COLUMNS as f32 * tile_width(window_width)
+            + (GRID_COLUMNS - 1) as f32 * grid_gap(window_width);
+
+        assert!((occupied - content_width(window_width)).abs() < 0.01);
+        assert!(
+            occupied + sidebar_width(window_width) + 2.0 * f32::from(CONTENT_HORIZONTAL_PADDING)
+                <= window_width
+        );
+    }
+
+    #[test]
+    fn game_tiles_are_portrait_and_application_tiles_are_square() {
+        let width = tile_width(1200.0);
+        assert_eq!(tile_height(1200.0, false), width);
+        assert_eq!(tile_height(1200.0, true), width * 1.5);
     }
 }

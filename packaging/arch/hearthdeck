@@ -3,4 +3,6 @@
 # launcher is the reliable point to activate the local API and bridge for them.
 systemctl --user daemon-reload >/dev/null 2>&1 || true
 systemctl --user start hearthdeck.target >/dev/null 2>&1 || true
-exec /opt/hearthdeck/hearthdeck "$@"
+systemctl --user import-environment DISPLAY WAYLAND_DISPLAY >/dev/null 2>&1 || true
+systemctl --user try-restart hearthdeck-bridge.service >/dev/null 2>&1 || true
+exec /usr/bin/hearthdeck-frontend "$@"

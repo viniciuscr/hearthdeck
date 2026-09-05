@@ -21,9 +21,9 @@ Display manager (SDDM/GDM/greetd/...)
                  -> Wants= hearthdeck-bridge.socket, hearthdeck-daemon.service
        -> systemctl --user try-restart hearthdeck-bridge.service
        -> exec gamescope --backend drm --fullscreen --force-grab-cursor -- \
-            /opt/hearthdeck/hearthdeck
+          /usr/bin/hearthdeck
             -> Hearthdeck is Gamescope's ONLY child process
-            -> Hearthdeck's own startup (my_application.cc) imports
+          -> The Hearthdeck launcher imports
                DISPLAY/WAYLAND_DISPLAY into systemd --user too, and
                try-restarts hearthdeck-bridge.service again - this can only
                happen here, not in the script above, because Gamescope only
@@ -283,7 +283,7 @@ style preferences.
   of it.)
 - **Do not run Hearthdeck as a systemd unit that is a sibling of Gamescope.**
   Hearthdeck must be Gamescope's literal child
-  (`gamescope ... -- /opt/hearthdeck/hearthdeck`), not a separately
+  (`gamescope ... -- /usr/bin/hearthdeck`), not a separately
   started/tracked process.
 - **Do not remove `--backend drm`.** Without it, Gamescope tries to run
   nested inside another Wayland/X11 session, which does not exist here.
@@ -362,8 +362,8 @@ style preferences.
 | Session doesn't appear in display manager's session list | `.desktop` file not installed, or `DesktopNames`/session-type mismatch | `ls /usr/share/wayland-sessions/hearthdeck.desktop` |
 | Black screen after selecting Hearthdeck Kiosk | Gamescope failed to acquire DRM/KMS (driver quirk, GPU already owned by another seat) | Run `hearthdeck-session` from a TTY per above; read Gamescope's own stderr directly |
 | Hearthdeck renders into a small, centered, blurry fraction of the screen | Something else is a second Gamescope/compositor process attached to this outer instance (see the incident above), or the installed `gamescope` package itself changed behavior (check `gamescope --version` and whether the same box's non-Hearthdeck compositor, e.g. a normal desktop session, still fills the screen correctly — if it does, the regression is specific to this session, not the display/driver) | `journalctl --user -b`; confirm no other *Gamescope* process connects to `$WAYLAND_DISPLAY` during the session (ordinary app/game clients are expected and fine); re-read "Do not" above |
-| Session starts then immediately returns to login | Hearthdeck (the Flutter binary) crashed on launch | `journalctl --user -b` around the session's start time; run `/opt/hearthdeck/hearthdeck` directly from a TTY inside a manually started `gamescope --backend drm --fullscreen -- bash` shell to isolate Gamescope vs. the app |
+| Session starts then immediately returns to login | The Hearthdeck frontend crashed on launch | `journalctl --user -b` around the session's start time; run `/usr/bin/hearthdeck` directly from a TTY inside a manually started `gamescope --backend drm --fullscreen -- bash` shell to isolate Gamescope vs. the app |
 | App loads but library/pairing calls fail | `hearthdeck.target` didn't reach ready in time, or bridge/daemon crashed | `systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-daemon.service`; `journalctl --user -u hearthdeck-daemon.service -u hearthdeck-bridge.service --since '10 minutes ago'` |
 | Launched apps/games aren't in `hearthdeck-kiosk.slice` | `hearthdeck-bridge` doesn't see `XDG_CURRENT_DESKTOP=hearthdeck` in its own environment, so `is_kiosk_session()` returns false even though this genuinely is the Kiosk session | `systemctl --user show-environment \| grep XDG_CURRENT_DESKTOP`; confirm the `import-environment` line in `hearthdeck-session` still runs and still lists all three variables |
-| Trigger/launch succeeds (accepted, no errors in daemon/bridge logs), but nothing appears on screen | Either the launched process has no `DISPLAY`/`WAYLAND_DISPLAY` to connect to (if `hearthdeck-bridge`'s own environment is missing them), or - if using a nested Gamescope for something other than Heroic's own SDL-backend instance - it's connected but never shown, the confirmed-broken pattern described in "Launching apps and games" above | `systemctl --user show-environment \| grep -iE 'display\|wayland'`; confirm Hearthdeck's own `import_display_environment()` (`linux/runner/my_application.cc`) ran; check `journalctl --user -u 'hearthdeck-app-*' -u hearthdeck-heroic.service` for the specific launch's own stderr, which the daemon/bridge logs never show |
+| Trigger/launch succeeds (accepted, no errors in daemon/bridge logs), but nothing appears on screen | Either the launched process has no `DISPLAY`/`WAYLAND_DISPLAY` to connect to (if `hearthdeck-bridge`'s own environment is missing them), or - if using a nested Gamescope for something other than Heroic's own SDL-backend instance - it's connected but never shown, the confirmed-broken pattern described in "Launching apps and games" above | `systemctl --user show-environment \| grep -iE 'display\|wayland'`; confirm `/usr/bin/hearthdeck` imported the display environment; check `journalctl --user -u 'hearthdeck-app-*' -u hearthdeck-heroic.service` for the specific launch's own stderr, which the daemon/bridge logs never show |
 | CI passes but the session doesn't work on hardware, or vice versa | These are different claims (see "The real lesson"). CI only proves the code compiles and packages; it never runs the graphical session | Always confirm on real hardware separately, and never conflate the two when reporting something as "working" |

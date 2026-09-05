@@ -36,7 +36,6 @@ build() {
   source_dir=$(realpath "$startdir/../..")
   cd "$source_dir"
 
-  flutter build linux --release --dart-define=HEARTHDECK_USE_LOCAL_CATALOG=true
   cargo build --manifest-path services/Cargo.toml --workspace --release
   # ponytail: reuse the workspace target dir so CI cache keeps libcosmic/iced builds.
   CARGO_TARGET_DIR=services/target cargo build --manifest-path services/hearthdeck-overlay/Cargo.toml --release
@@ -48,8 +47,6 @@ package() {
   source_dir=$(realpath "$startdir/../..")
   cd "$source_dir"
 
-  install -d "$pkgdir/opt/hearthdeck" "$pkgdir/usr/bin"
-  cp -a build/linux/x64/release/bundle/. "$pkgdir/opt/hearthdeck/"
   install -Dm755 packaging/arch/hearthdeck "$pkgdir/usr/bin/hearthdeck"
   install -Dm755 services/target/release/hearthdeck-bridge "$pkgdir/usr/lib/hearthdeck/hearthdeck-bridge"
   install -Dm755 services/target/release/hearthdeck-daemon "$pkgdir/usr/lib/hearthdeck/hearthdeck-daemon"

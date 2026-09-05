@@ -3,8 +3,8 @@
 The `hearthdeck` package targets `x86_64` Arch Linux derivatives, including
 CachyOS. It installs:
 
-- `/opt/hearthdeck/`: the Flutter Linux client bundle.
-- `/usr/bin/hearthdeck`: the desktop launcher command.
+- `/usr/bin/hearthdeck`: the desktop and kiosk launcher command.
+- `/usr/bin/hearthdeck-frontend`: the COSMIC (libcosmic) frontend.
 - `/usr/lib/hearthdeck/`: the local bridge and daemon binaries, and the
   Kiosk session script.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
@@ -30,11 +30,9 @@ CachyOS. It installs:
   every login, deliberately, rather than seeding them once - see the
   script's own comments for why. Requires the optional `cosmic-panel`
   package; the Hearthdeck Kiosk (Gamescope) session never starts it.
-- `/usr/bin/hearthdeck-frontend`: the COSMIC (libcosmic) frontend, migrated
-  from `../cosmic-app-library` (a full Xbox-style app/game grid launcher with
-  search, sidebar, gamepad nav, and daemon-client integration). The
-  **COSMIC (Test)** session launcher prefers this binary when present, and
-  falls back to `/opt/hearthdeck/hearthdeck` when it is not.
+- The COSMIC frontend was migrated from `../cosmic-app-library` and provides
+  the app/game grid, search, sidebar, gamepad navigation, and daemon-client
+  integration.
 - `/usr/bin/io.github.viniciuscr.hearthdeck.AppletUser` and
   `/usr/share/applications/io.github.viniciuscr.hearthdeck.AppletUser.desktop`:
   a small `cosmic-panel` applet showing the logged-in username, added to the
@@ -110,7 +108,7 @@ into Hearthdeck fullscreen with the lowest possible memory and CPU footprint.
 The session script (`/usr/lib/hearthdeck/hearthdeck-session`) starts
 `hearthdeck.target` for the current user and then execs Gamescope directly on
 the DRM/KMS seat with Hearthdeck as its only child (`gamescope --backend drm
---fullscreen -- /opt/hearthdeck/hearthdeck`). There is no intermediate desktop
+--fullscreen -- /usr/bin/hearthdeck`). There is no intermediate desktop
 compositor to initialize first, and no other process for Gamescope to share
 the seat with. Exiting Hearthdeck ends Gamescope and returns to the display
 manager's login screen; there is no underlying desktop to fall back to.

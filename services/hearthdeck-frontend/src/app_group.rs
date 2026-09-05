@@ -1,14 +1,13 @@
 use crate::config::APP_ID;
 use crate::fl;
-use crate::providers::GameRecord;
 use cosmic::cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use cosmic::cosmic_config::{
     CosmicConfigEntry, {self},
 };
 use cosmic::desktop::DesktopEntryData;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
-use std::vec;
 
 static HOME: LazyLock<AppGroup> = LazyLock::new(|| AppGroup {
     name: "cosmic-library-home".to_string(),
@@ -263,7 +262,7 @@ fn is_emulator_entry(entry: &DesktopEntryData) -> bool {
     EMULATORS.iter().any(|emulator| haystack.contains(emulator))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, CosmicConfigEntry)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, CosmicConfigEntry)]
 pub struct AppLibraryConfig {
     #[serde(default)]
     pub sections: Sections,
@@ -373,115 +372,145 @@ impl AppLibraryConfig {
             .collect()
     }
 
-    /// Ensure category-based groups exist for each store found in provider records.
-    /// Groups are created dynamically from the `metadata.store` value that each
-    /// provider sets (e.g. "Epic Games", "GOG"). No store names are hardcoded.
-    pub fn ensure_provider_groups(&mut self, records: &[GameRecord]) {
-        for record in records {
-            let Some(store_name) = record.metadata.get("store").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            if store_name.is_empty() {
-                continue;
-            }
-            // Determine which section this record belongs to based on its
-            // categories (same logic as Section::matches but without
-            // DesktopEntryData).
-            let is_game = record
-                .categories
-                .iter()
-                .any(|cat| cat.eq_ignore_ascii_case("game"));
-            if !is_game {
-                continue;
-            }
-            let section = Section::PcGames;
+    /// Rebuild category tabs from the entries currently present while keeping
+    /// user-created groups, which use explicit application IDs.
+    pub fn sync_category_groups(&mut self, entries: &[Arc<DesktopEntryData>]) -> bool {
+        const APPLICATION_CATEGORIES: &[&str] = &[
+            "Audio",
+            "AudioVideo",
+            "Development",
+            "Education",
+            "Graphics",
+            "Network",
+            "Office",
+            "Science",
+            "Settings",
+            "System",
+            "Utility",
+            "Video",
+        ];
 
-            let already_has_group = self.sections.get(section).iter().any(|g| {
-                matches!(
-                    &g.filter,
-                    FilterType::Categories { categories, .. }
-                    if categories.iter().any(|c| c == store_name)
-                )
-            });
-            if already_has_group {
-                continue;
+        let mut changed = false;
+        for section in Section::ALL {
+            let mut categories = BTreeMap::new();
+            for entry in entries.iter().filter(|entry| section.matches(entry)) {
+                for category in &entry.categories {
+                    if category.eq_ignore_ascii_case("game")
+                        || section == Section::Applications
+                            && !APPLICATION_CATEGORIES
+                                .iter()
+                                .any(|known| category.eq_ignore_ascii_case(known))
+                    {
+                        continue;
+                    }
+                    categories
+                        .entry(category.to_lowercase())
+                        .or_insert_with(|| category.clone());
+                }
             }
-            self.sections.get_mut(section).insert(
-                0,
-                AppGroup {
-                    name: store_name.to_string(),
+
+            let existing = self.sections.get(section);
+            let custom_groups = existing
+                .iter()
+                .filter(|group| matches!(group.filter, FilterType::AppIds(_)))
+                .cloned();
+            let mut groups: Vec<_> = categories
+                .into_values()
+                .map(|category| AppGroup {
+                    name: match category.to_ascii_lowercase().as_str() {
+                        "office" => "cosmic-office".to_string(),
+                        "system" => "cosmic-system".to_string(),
+                        "utility" => "cosmic-utilities".to_string(),
+                        _ => category.clone(),
+                    },
                     icon: "folder-symbolic".to_string(),
                     filter: FilterType::Categories {
-                        categories: vec![store_name.to_string()],
+                        categories: vec![category],
                         include: Vec::new(),
                         exclude: Vec::new(),
                     },
-                },
-            );
+                })
+                .collect();
+            groups.extend(custom_groups);
+
+            if existing != &groups {
+                *self.sections.get_mut(section) = groups;
+                changed = true;
+            }
         }
+        changed
     }
 }
 
-impl Default for AppLibraryConfig {
-    fn default() -> Self {
-        AppLibraryConfig {
-            sections: Sections {
-                pc_games: vec![AppGroup {
-                    name: "Epic Games".to_string(),
-                    icon: "folder-symbolic".to_string(),
-                    filter: FilterType::Categories {
-                        categories: vec!["Epic Games".to_string()],
-                        include: Vec::new(),
-                        exclude: Vec::new(),
-                    },
-                }],
-                console_games: Vec::new(),
-                applications: vec![
-                    AppGroup {
-                        name: "cosmic-office".to_string(),
-                        icon: "folder-symbolic".to_string(),
-                        filter: FilterType::Categories {
-                            categories: vec!["Office".to_string()],
-                            include: vec![
-                                "org.gnome.Totem".to_string(),
-                                "org.gnome.eog".to_string(),
-                                "simple-scan".to_string(),
-                                "thunderbird".to_string(),
-                            ],
-                            exclude: Vec::new(),
-                        },
-                    },
-                    AppGroup {
-                        name: "cosmic-system".to_string(),
-                        icon: "folder-symbolic".to_string(),
-                        filter: FilterType::Categories {
-                            categories: vec!["System".to_string()],
-                            include: vec![
-                                "gnome-language-selector".to_string(),
-                                "im-config".to_string(),
-                                "org.freedesktop.IBus.Setup".to_string(),
-                                "system76-driver".to_string(),
-                            ],
-                            exclude: vec![
-                                "com.system76.CosmicStore".to_string(),
-                                "com.system76.CosmicTerm".to_string(),
-                            ],
-                        },
-                    },
-                    AppGroup {
-                        name: "cosmic-utilities".to_string(),
-                        icon: "folder-symbolic".to_string(),
-                        filter: FilterType::Categories {
-                            categories: vec!["Utility".to_string()],
-                            include: vec!["nm-connection-editor".to_string()],
-                            exclude: vec![
-                                "com.system76.CosmicEdit".to_string(),
-                                "com.system76.CosmicFiles".to_string(),
-                            ],
-                        },
-                    },
-                ],
-            },
-        }
+#[cfg(test)]
+mod tests {
+    use super::{AppGroup, AppLibraryConfig, FilterType, Section};
+    use cosmic::desktop::{DesktopEntryData, fde::IconSource};
+    use std::sync::Arc;
+
+    fn entry(id: &str, categories: &[&str]) -> Arc<DesktopEntryData> {
+        Arc::new(DesktopEntryData {
+            id: id.into(),
+            name: id.into(),
+            wm_class: None,
+            exec: None,
+            icon: IconSource::Name(String::new()),
+            path: None,
+            categories: categories
+                .iter()
+                .map(|category| (*category).into())
+                .collect(),
+            desktop_actions: Vec::new(),
+            mime_types: Vec::new(),
+            prefers_dgpu: false,
+            terminal: false,
+        })
+    }
+
+    #[test]
+    fn category_tabs_follow_loaded_entries() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_category_groups(&[
+            entry("writer", &["Office"]),
+            entry("terminal", &["Utility"]),
+        ]);
+
+        assert_eq!(
+            config
+                .sections
+                .get(Section::Applications)
+                .iter()
+                .map(|group| group.name())
+                .collect::<Vec<_>>(),
+            vec!["Office", "Utilities"]
+        );
+
+        config.sync_category_groups(&[entry("terminal", &["Utility"])]);
+        assert_eq!(
+            config
+                .sections
+                .get(Section::Applications)
+                .iter()
+                .map(|group| group.name())
+                .collect::<Vec<_>>(),
+            vec!["Utilities"]
+        );
+    }
+
+    #[test]
+    fn category_sync_preserves_custom_groups() {
+        let mut config = AppLibraryConfig::default();
+        config.sections.applications.push(AppGroup {
+            name: "Favorites".into(),
+            icon: "folder-symbolic".into(),
+            filter: FilterType::AppIds(vec!["writer".into()]),
+        });
+
+        config.sync_category_groups(&[entry("writer", &["Office"])]);
+
+        assert!(config.sections.applications.iter().any(|group| {
+            group.name == "Favorites"
+                && matches!(&group.filter, FilterType::AppIds(ids) if ids == &["writer"])
+        }));
     }
 }

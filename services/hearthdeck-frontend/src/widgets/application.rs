@@ -48,7 +48,8 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
         name: &str,
         icon_handle: icon::Handle,
         path: &Option<PathBuf>,
-        tile_size: f32,
+        tile_width: f32,
+        tile_height: f32,
         on_right_release: impl Fn(Rectangle) -> Message + 'a,
         on_pressed: Option<Message>,
         source: Option<&(AppSource, Option<icon::Handle>)>,
@@ -121,8 +122,8 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
             )
             .id(widget_id)
             .selected(selected)
-            .width(Length::Fixed(tile_size))
-            .height(Length::Fixed(tile_size))
+            .width(Length::Fixed(tile_width))
+            .height(Length::Fixed(tile_height))
             .class(tile_button_class(selected))
             .padding(0)
             .on_press_maybe(on_pressed.clone()),

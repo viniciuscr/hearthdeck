@@ -34,18 +34,11 @@ jobs:
         with:
           components: clippy,rustfmt
 
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.44.8
-          cache: true
-
       - name: Configure package builder
         run: |
-          flutter_root=$(dirname "$(dirname "$(command -v flutter)")")
           useradd --create-home builder
           cp -a "$HOME/.cargo" "$HOME/.rustup" /home/builder/
-          chown -R builder:builder "$flutter_root" /home/builder "$GITHUB_WORKSPACE"
+          chown -R builder:builder /home/builder "$GITHUB_WORKSPACE"
 
       - name: Restore Rust release cache
         id: rust-cache
@@ -59,27 +52,14 @@ jobs:
           restore-keys: |
             arch-package-rust-v2-${{ runner.arch }}-rust-1.97.1-
 
-      - name: Restore Flutter build cache
-        id: flutter-build-cache
-        uses: actions/cache/restore@v6.1.0
-        with:
-          path: |
-            /home/builder/.pub-cache
-            .dart_tool
-            build/linux
-          key: arch-package-flutter-v2-${{ runner.arch }}-flutter-3.44.8-${{ hashFiles('pubspec.lock') }}
-          restore-keys: |
-            arch-package-flutter-v2-${{ runner.arch }}-flutter-3.44.8-
-
       - name: Make restored cache writable
         run: |
-          chown -R builder:builder /home/builder/.cargo /home/builder/.pub-cache "$GITHUB_WORKSPACE/services/target" "$GITHUB_WORKSPACE/.dart_tool" "$GITHUB_WORKSPACE/build" 2>/dev/null || true
+          chown -R builder:builder /home/builder/.cargo "$GITHUB_WORKSPACE/services/target" 2>/dev/null || true
 
       - name: Build pacman package
         run: |
-          flutter_bin=$(dirname "$(command -v flutter)")
           package_version="1.0.0.r${GITHUB_RUN_NUMBER}"
-          su --login builder --command "cd '$GITHUB_WORKSPACE' && HEARTHDECK_PKGVER='$package_version' HEARTHDECK_PKGREL=1 PATH='$flutter_bin:/home/builder/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/bin' just ci-package-arch"
+          su --login builder --command "cd '$GITHUB_WORKSPACE' && HEARTHDECK_PKGVER='$package_version' HEARTHDECK_PKGREL=1 PATH='/home/builder/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/bin' just ci-package-arch"
 
       - name: Archive package build logs
         if: always()
@@ -112,16 +92,6 @@ jobs:
             /home/builder/.cargo/registry
             services/target/release
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
-
-      - name: Save Flutter build cache
-        if: github.ref == 'refs/heads/main' && steps.flutter-build-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6.1.0
-        with:
-          path: |
-            /home/builder/.pub-cache
-            .dart_tool
-            build/linux
-          key: ${{ steps.flutter-build-cache.outputs.cache-primary-key }}
 
       - name: Archive pacman package
         uses: actions/upload-artifact@v7.0.1
