@@ -11,8 +11,10 @@ RemainAfterExit=yes
 Environment=ROMM_COMPOSE_FILE=/mnt/external/romM/podman-compose.yaml
 EnvironmentFile=-%h/.config/hearthdeck/romm.env
 ExecCondition=/usr/bin/test -f ${ROMM_COMPOSE_FILE}
+ExecStartPre=/usr/bin/echo Starting RomM Podman Compose stack
 ExecStart=/usr/bin/podman-compose -f ${ROMM_COMPOSE_FILE} up -d
 ExecStop=/usr/bin/podman-compose -f ${ROMM_COMPOSE_FILE} down
+ExecStopPost=/usr/bin/echo RomM Podman Compose stack stopped
 TimeoutStartSec=300
 TimeoutStopSec=300
 Restart=on-failure

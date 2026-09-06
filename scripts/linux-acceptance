@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+require_romm=false
+if [[ "${1:-}" == "--require-romm" ]]; then
+  require_romm=true
+  shift
+fi
+if (( $# != 0 )); then
+  printf 'usage: %s [--require-romm]\n' "$0" >&2
+  exit 2
+fi
+
+passes=0
+skips=0
+failures=0
+
+pass() {
+  printf 'PASS  %s\n' "$1"
+  ((passes += 1))
+}
+
+skip() {
+  printf 'SKIP  %s\n' "$1"
+  ((skips += 1))
+}
+
+fail() {
+  printf 'FAIL  %s\n' "$1" >&2
+  ((failures += 1))
+}
+
+if [[ "$(uname -s)" != "Linux" ]]; then
+  printf 'linux-acceptance must run on the target Linux host\n' >&2
+  exit 2
+fi
+
+for command in curl journalctl stat systemctl; do
+  if command -v "$command" >/dev/null 2>&1; then
+    pass "$command is installed"
+  else
+    fail "$command is required"
+  fi
+done
+
+if (( failures > 0 )); then
+  exit 1
+fi
+
+printf '\nStarting a fresh Hearthdeck service session...\n'
+if systemctl --user daemon-reload && systemctl --user restart hearthdeck.target; then
+  pass "hearthdeck.target restarted"
+else
+  fail "hearthdeck.target could not be restarted"
+fi
+
+for unit in \
+  hearthdeck.target \
+  hearthdeck-log.service \
+  hearthdeck-bridge.socket \
+  hearthdeck-daemon.service; do
+  if systemctl --user is-active --quiet "$unit"; then
+    pass "$unit is active"
+  else
+    fail "$unit is not active"
+  fi
+done
+
+health_file=$(mktemp)
+trap 'rm -f "$health_file"' EXIT
+if curl \
+  --fail \
+  --silent \
+  --show-error \
+  --retry 10 \
+  --retry-all-errors \
+  --retry-delay 1 \
+  --max-time 5 \
+  http://127.0.0.1:38400/v1/health > "$health_file"; then
+  pass "daemon health endpoint responded"
+else
+  fail "daemon health endpoint did not respond"
+fi
+
+romm_compose_file=/mnt/external/romM/podman-compose.yaml
+romm_env="$HOME/.config/hearthdeck/romm.env"
+romm_expected=false
+if [[ -r "$romm_env" ]]; then
+  while IFS= read -r line; do
+    if [[ "$line" == ROMM_COMPOSE_FILE=* ]]; then
+      romm_compose_file=${line#ROMM_COMPOSE_FILE=}
+      romm_compose_file=${romm_compose_file%$'\r'}
+      if [[ "$romm_compose_file" == \"*\" || "$romm_compose_file" == \'*\' ]]; then
+        romm_compose_file=${romm_compose_file:1:${#romm_compose_file}-2}
+      fi
+    fi
+  done < "$romm_env"
+fi
+
+if [[ -f "$romm_compose_file" ]]; then
+  romm_expected=true
+  pass "RomM compose file exists: $romm_compose_file"
+  if ! command -v podman-compose >/dev/null 2>&1; then
+    fail "podman-compose is required for the configured RomM stack"
+  elif ! command -v podman >/dev/null 2>&1; then
+    fail "podman is required for the configured RomM stack"
+  else
+    if systemctl --user is-active --quiet romm.service; then
+      pass "romm.service is active"
+    else
+      fail "romm.service is not active"
+    fi
+
+    container_ids=$(podman-compose -f "$romm_compose_file" ps --quiet 2>/dev/null)
+    compose_status=$?
+    if (( compose_status != 0 )); then
+      container_ids=$(podman-compose -f "$romm_compose_file" ps -q 2>/dev/null)
+      compose_status=$?
+    fi
+    if (( compose_status != 0 )); then
+      fail "podman-compose could not inspect the RomM stack"
+    elif [[ -z "$container_ids" ]]; then
+      fail "RomM has no running containers"
+    else
+      stopped_container=false
+      while IFS= read -r container_id; do
+        [[ -z "$container_id" ]] && continue
+        if [[ "$(podman inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null)" != "true" ]]; then
+          stopped_container=true
+        fi
+      done <<< "$container_ids"
+      if $stopped_container; then
+        fail "at least one listed RomM container is not running"
+      else
+        pass "RomM containers are running"
+      fi
+    fi
+  fi
+elif $require_romm; then
+  fail "required RomM compose file is missing: $romm_compose_file"
+else
+  skip "RomM compose file is absent; romm.service should be skipped"
+  if systemctl --user is-active --quiet romm.service; then
+    fail "romm.service is active without its compose file"
+  else
+    pass "romm.service skipped cleanly"
+  fi
+fi
+
+log_file="$HOME/hearthdeck.log"
+for _ in {1..20}; do
+  [[ -s "$log_file" ]] && grep -q 'hearthdeck-daemon' "$log_file" && break
+  sleep 0.25
+done
+if [[ -s "$log_file" ]]; then
+  pass "$log_file contains session output"
+  mode=$(stat -c '%a' "$log_file")
+  if [[ "$mode" == "600" ]]; then
+    pass "$log_file permissions are 0600"
+  else
+    fail "$log_file permissions are $mode, expected 600"
+  fi
+  if grep -q 'hearthdeck-daemon' "$log_file"; then
+    pass "$log_file contains daemon output"
+  else
+    fail "$log_file does not contain daemon output"
+  fi
+  if $romm_expected; then
+    if grep -q 'Starting RomM Podman Compose stack' "$log_file"; then
+      pass "$log_file contains RomM startup output"
+    else
+      fail "$log_file does not contain RomM startup output"
+    fi
+  fi
+else
+  fail "$log_file is empty or missing"
+fi
+
+for unit in hearthdeck-log.service hearthdeck-daemon.service romm.service; do
+  if systemctl --user is-failed --quiet "$unit"; then
+    fail "$unit is failed"
+  fi
+done
+
+printf '\nAutomated checks: %d passed, %d skipped, %d failed\n' "$passes" "$skips" "$failures"
+if (( failures > 0 )); then
+  printf '\nInspect failures with:\n'
+  printf '  systemctl --user status hearthdeck.target hearthdeck-log.service hearthdeck-daemon.service romm.service\n'
+  printf '  tail -n 200 ~/hearthdeck.log\n'
+  exit 1
+fi
+
+cat <<'EOF'
+
+Manual checks still required:
+  [ ] Hearthdeck opens fullscreen without a panel or desktop behind it.
+  [ ] Guide opens the overlay and closing it returns input to Hearthdeck.
+  [ ] A regular desktop app and a generated web app both open.
+  [ ] The launched app receives controller input while Hearthdeck stays idle.
+  [ ] Closing the app returns controller navigation to Hearthdeck.
+  [ ] A ROM launches through RetroArch and returns cleanly to Hearthdeck.
+EOF

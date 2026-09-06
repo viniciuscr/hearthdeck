@@ -147,6 +147,10 @@ ci-check:
 ci-package-arch:
   cd packaging/arch && makepkg --cleanbuild --log --noconfirm --nodeps
 
+# Run automated acceptance checks on the target Linux host with RomM required.
+acceptance-linux:
+  ./scripts/linux-acceptance --require-romm
+
 # Install Linux systemd user units and enable the local services.
 install-services:
   mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/bin"

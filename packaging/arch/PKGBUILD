@@ -45,6 +45,7 @@ package() {
   cd "$source_dir"
 
   install -Dm755 packaging/arch/hearthdeck "$pkgdir/usr/bin/hearthdeck"
+  install -Dm755 scripts/linux-acceptance "$pkgdir/usr/lib/hearthdeck/linux-acceptance"
   install -Dm755 services/target/release/hearthdeck-bridge "$pkgdir/usr/lib/hearthdeck/hearthdeck-bridge"
   install -Dm755 services/target/release/hearthdeck-daemon "$pkgdir/usr/lib/hearthdeck/hearthdeck-daemon"
   # Disposable Gamescope external-overlay spike (see

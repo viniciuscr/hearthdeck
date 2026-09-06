@@ -1,8 +1,20 @@
 # Linux Acceptance Checklist
 
-Run this on the CachyOS desktop after installing the two user services.
-Everything except the final graphical launch is tested on macOS in the Rust
-workspace test suite.
+Run the automated gate on the CachyOS host after installing or upgrading
+Hearthdeck:
+
+```sh
+just acceptance-linux
+# Installed-package equivalent:
+/usr/lib/hearthdeck/linux-acceptance --require-romm
+```
+
+The command restarts `hearthdeck.target`, requires the configured RomM stack,
+checks required user units, the daemon health endpoint, running Podman
+containers, `~/hearthdeck.log`, and failed-unit state. It exits nonzero on an
+automated failure and prints the graphical/controller checks that still need a
+person. Run `scripts/linux-acceptance` without `--require-romm` on hosts where
+RomM is intentionally absent.
 
 ## Setup
 
@@ -25,8 +37,8 @@ error summary. A degraded provider leaves other catalog sources available.
 
 ## RomM
 
-For the existing Podman Compose RomM deployment, verify automatic session
-startup:
+The automated gate verifies the existing Podman Compose RomM deployment. For
+manual investigation:
 
 ```sh
 systemctl --user daemon-reload

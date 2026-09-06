@@ -817,6 +817,7 @@ mod tests {
         let deploy_target = include_str!("../../../deploy/systemd/hearthdeck.target");
         let package_target = include_str!("../../../packaging/arch/hearthdeck.target");
         let kiosk_session = include_str!("../../../packaging/arch/hearthdeck-session");
+        let acceptance = include_str!("../../../scripts/linux-acceptance");
         let package = include_str!("../../../packaging/arch/PKGBUILD");
         let justfile = include_str!("../../../justfile");
 
@@ -826,12 +827,14 @@ mod tests {
         );
         assert!(service.contains("EnvironmentFile=-%h/.config/hearthdeck/romm.env"));
         assert!(service.contains("ExecCondition=/usr/bin/test -f ${ROMM_COMPOSE_FILE}"));
+        assert!(service.contains("Starting RomM Podman Compose stack"));
         assert!(service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} up -d"));
         assert!(service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} down"));
         assert!(service.contains("SyslogIdentifier=romm"));
         assert!(service.contains("PartOf=hearthdeck.target"));
         assert!(log_service.contains("StandardOutput=append:%h/hearthdeck.log"));
         assert!(log_service.contains("ExecStartPre=/usr/bin/truncate --size=0 %h/hearthdeck.log"));
+        assert!(log_service.contains("ExecStartPre=/usr/bin/chmod 600 %h/hearthdeck.log"));
         assert!(log_service.contains("--identifier=hearthdeck-session"));
         assert!(log_service.contains("--identifier=cosmic-test-session"));
         assert!(log_service.contains("--identifier=hearthdeck-daemon"));
@@ -852,6 +855,12 @@ mod tests {
         assert!(package.contains("deploy/systemd/hearthdeck-log.service"));
         assert!(package.contains("deploy/systemd/romm.service"));
         assert!(package.contains("deploy/systemd/romm.env.example"));
+        assert!(package.contains("scripts/linux-acceptance"));
+        assert!(acceptance.contains("systemctl --user restart hearthdeck.target"));
+        assert!(acceptance.contains("http://127.0.0.1:38400/v1/health"));
+        assert!(acceptance.contains("podman-compose -f \"$romm_compose_file\" ps"));
+        assert!(acceptance.contains("stat -c '%a' \"$log_file\""));
+        assert!(justfile.contains("./scripts/linux-acceptance --require-romm"));
         assert!(justfile.contains("cp deploy/systemd/hearthdeck-log.service"));
         assert!(justfile.contains("cp deploy/systemd/romm.service"));
     }

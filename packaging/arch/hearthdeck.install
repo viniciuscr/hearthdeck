@@ -34,6 +34,8 @@ path, copy /usr/share/doc/hearthdeck/romm.env.example to
 ~/.config/hearthdeck/romm.env and edit ROMM_COMPOSE_FILE.
 
 Combined session logs are written to ~/hearthdeck.log.
+Run /usr/lib/hearthdeck/linux-acceptance --require-romm after upgrading to
+verify the installed services and RomM stack.
 
 Future Hearthdeck package updates arrive through `pacman -Syu`. The GitHub
 Pages repository is unsigned and should not be enabled on systems that require

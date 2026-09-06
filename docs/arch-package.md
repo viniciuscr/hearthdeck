@@ -5,6 +5,8 @@ CachyOS. It installs:
 
 - `/usr/bin/hearthdeck`: the desktop and kiosk launcher command.
 - `/usr/bin/hearthdeck-frontend`: the COSMIC (libcosmic) frontend.
+- `/usr/lib/hearthdeck/linux-acceptance`: target-host service, RomM, API, and
+  aggregate-log acceptance checks.
 - `/usr/lib/hearthdeck/`: the local bridge and daemon binaries, and the
   Kiosk session script.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, API
