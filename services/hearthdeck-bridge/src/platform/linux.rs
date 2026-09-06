@@ -418,14 +418,14 @@ fn parse_exec(
 ) -> Result<Vec<String>> {
     let mut arguments = Vec::new();
     let mut argument = String::new();
-    let mut quoted = false;
+    let mut quote = None;
     let mut argument_was_quoted = false;
     let mut characters = value.chars().peekable();
     while let Some(character) = characters.next() {
-        if quoted {
-            if character == '"' {
-                quoted = false;
-            } else if character == '\\' {
+        if let Some(delimiter) = quote {
+            if character == delimiter {
+                quote = None;
+            } else if delimiter == '"' && character == '\\' {
                 let escaped = characters
                     .next()
                     .context("desktop entry has an invalid quoted Exec command")?;
@@ -441,10 +441,10 @@ fn parse_exec(
                 .next()
                 .context("desktop entry has an invalid Exec command")?;
             argument.push(escaped);
-        } else if character == '"' {
-            quoted = true;
+        } else if matches!(character, '"' | '\'') {
+            quote = Some(character);
             argument_was_quoted = true;
-        } else if character.is_whitespace() && !quoted {
+        } else if character.is_whitespace() {
             if !argument.is_empty() {
                 arguments.push((std::mem::take(&mut argument), argument_was_quoted));
                 argument_was_quoted = false;
@@ -453,7 +453,7 @@ fn parse_exec(
             argument.push(character);
         }
     }
-    if quoted {
+    if quote.is_some() {
         anyhow::bail!("desktop entry has an invalid Exec command")
     }
     if !argument.is_empty() {
@@ -747,6 +747,26 @@ mod tests {
         .unwrap();
 
         assert_eq!(command, ["example", "--title", "Example"]);
+    }
+
+    #[test]
+    fn preserves_single_quoted_web_app_commands() {
+        let command = parse_exec(
+            "sh -c 'XAPP_FORCE_GTKWINDOW_ICON=webapp firefox --class WebApp --app=https://example.com'",
+            std::path::Path::new("/tmp/webapp.desktop"),
+            Some("Web App"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            [
+                "sh",
+                "-c",
+                "XAPP_FORCE_GTKWINDOW_ICON=webapp firefox --class WebApp --app=https://example.com"
+            ]
+        );
     }
 
     #[test]
