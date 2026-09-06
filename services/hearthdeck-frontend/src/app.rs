@@ -548,6 +548,14 @@ impl DashboardShelf {
         }
     }
 
+    fn empty_message(self) -> String {
+        match self {
+            Self::Recent => fl!("no-recently-played"),
+            Self::Favorites => fl!("no-favorites"),
+            Self::Library => fl!("library-empty"),
+        }
+    }
+
     fn widget_id(self, entry_id: &str) -> widget::Id {
         widget::Id::from(format!("dashboard-{}-{entry_id}", self.key()))
     }
@@ -943,21 +951,18 @@ impl HearthDeck {
             .iter()
             .take(DASHBOARD_VISIBLE_TILES)
             .collect::<Vec<_>>();
-        let favorites = self.config.favorite_entries(&self.all_entries);
-        let mut shelves = Vec::new();
-        if !recent.is_empty() {
-            shelves.push((DashboardShelf::Recent, recent));
-        }
-        if !favorites.is_empty() {
-            shelves.push((
-                DashboardShelf::Favorites,
-                favorites
-                    .into_iter()
-                    .take(DASHBOARD_VISIBLE_TILES)
-                    .collect(),
-            ));
-        }
-        if shelves.is_empty() {
+        let favorites = self
+            .config
+            .favorite_entries(&self.all_entries)
+            .into_iter()
+            .take(DASHBOARD_VISIBLE_TILES)
+            .collect::<Vec<_>>();
+        let show_library = recent.is_empty() && favorites.is_empty();
+        let mut shelves = vec![
+            (DashboardShelf::Recent, recent),
+            (DashboardShelf::Favorites, favorites),
+        ];
+        if show_library {
             shelves.push((
                 DashboardShelf::Library,
                 self.all_entries
@@ -1023,11 +1028,13 @@ impl HearthDeck {
     fn dashboard_entry_rows(&self) -> Vec<Vec<widget::Id>> {
         self.dashboard_shelves()
             .into_iter()
-            .map(|(shelf, entries)| {
-                entries
-                    .into_iter()
-                    .map(|entry| shelf.widget_id(&entry.id))
-                    .collect()
+            .filter_map(|(shelf, entries)| {
+                (!entries.is_empty()).then(|| {
+                    entries
+                        .into_iter()
+                        .map(|entry| shelf.widget_id(&entry.id))
+                        .collect()
+                })
             })
             .collect()
     }
@@ -2904,17 +2911,16 @@ impl HearthDeck {
                     .collect();
                 let rail: Element<'_, Message> = if tiles.is_empty() {
                     container(
-                        column![
-                            icon::icon(APP_ICON.clone()).size(ICON_LARGE),
-                            text::body("Your installed games and apps will appear here")
-                                .size(TEXT_BODY),
+                        row![
+                            icon::icon(APP_ICON.clone()).size(ICON_BODY),
+                            text::body(shelf.empty_message()).size(TEXT_BODY),
                         ]
                         .spacing(space_s)
-                        .align_x(Alignment::Center),
+                        .align_y(Alignment::Center),
                     )
                     .width(Length::Fill)
-                    .height(Length::Fixed(tile_size))
-                    .align_x(Alignment::Center)
+                    .height(Length::Fixed(f32::from(space_xxl)))
+                    .align_x(Horizontal::Left)
                     .align_y(Alignment::Center)
                     .into()
                 } else {
@@ -3561,15 +3567,32 @@ mod tests {
         };
         let shelves = app.dashboard_shelves();
 
-        assert_eq!(shelves[0].0, DashboardShelf::Favorites);
+        assert_eq!(shelves[1].0, DashboardShelf::Favorites);
         assert_eq!(
-            shelves[0]
+            shelves[1]
                 .1
                 .iter()
                 .map(|entry| entry.id.as_str())
                 .collect::<Vec<_>>(),
             ["second", "first"]
         );
+    }
+
+    #[test]
+    fn empty_dashboard_keeps_recent_and_favorites_visible() {
+        let app = HearthDeck {
+            all_entries: vec![entry("game")],
+            ..Default::default()
+        };
+        let shelves = app.dashboard_shelves();
+
+        assert_eq!(shelves.len(), 3);
+        assert_eq!(shelves[0].0, DashboardShelf::Recent);
+        assert!(shelves[0].1.is_empty());
+        assert_eq!(shelves[1].0, DashboardShelf::Favorites);
+        assert!(shelves[1].1.is_empty());
+        assert_eq!(shelves[2].0, DashboardShelf::Library);
+        assert_eq!(app.dashboard_entry_rows().len(), 1);
     }
 
     #[test]

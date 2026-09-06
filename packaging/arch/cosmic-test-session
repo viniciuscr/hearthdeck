@@ -33,6 +33,7 @@ log "starting hearthdeck-cosmic-test.target"
 if ! systemctl --user start hearthdeck-cosmic-test.target; then
   log "hearthdeck-cosmic-test.target failed; continuing so Hearthdeck can show diagnostics"
 fi
+systemctl --user try-restart hearthdeck-daemon.service || true
 systemctl --user try-restart hearthdeck-bridge.service || true
 
 # Add the default COSMIC custom shortcut once. The helper is idempotent and
