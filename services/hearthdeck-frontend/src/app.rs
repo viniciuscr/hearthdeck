@@ -35,7 +35,7 @@ use cosmic::{
     iced::{
         core::{
             Padding, Rectangle, Vector,
-            alignment::Vertical,
+            alignment::{Horizontal, Vertical},
             keyboard::{Key, key::Named},
             widget::operation::{
                 self, Operation, Outcome,
@@ -81,14 +81,17 @@ use crate::input_ownership::{
 };
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::style::{
-    CONTENT_HORIZONTAL_PADDING, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
-    EDIT_NAME_INPUT_WIDTH, FILTER_BUTTON_HEIGHT, GRID_COLUMNS, GRID_TOP_PADDING, ICON_BODY,
-    ICON_LARGE, ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH,
-    SEARCH_ICON_PADDING, SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_HEIGHT, SIDEBAR_ACCENT_BAR_WIDTH,
-    SIDEBAR_HEADER_HEIGHT, SIDEBAR_ITEM_HEIGHT, TAB_HEIGHT, TAB_UNDERLINE_HEIGHT, TEXT_BODY,
-    TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, TITLE_ACTION_HEIGHT, WINDOW_HEIGHT,
-    WINDOW_WIDTH, accent_bar, grid_gap, launch_overlay, root_background, section_button_class,
-    sidebar_divider, sidebar_width, tab_button_class, tab_width, tile_height, tile_width,
+    CONTENT_HORIZONTAL_PADDING, DASHBOARD_HORIZONTAL_PADDING, DASHBOARD_NAV_BUTTON_SIZE,
+    DASHBOARD_TILE_GAP, DASHBOARD_TOP_BAR_HEIGHT, DASHBOARD_VISIBLE_TILES, DIALOG_ACTION_WIDTH,
+    DIALOG_WIDTH, DIVIDER_WIDTH, EDIT_NAME_INPUT_WIDTH, FILTER_BUTTON_HEIGHT, GRID_COLUMNS,
+    GRID_TOP_PADDING, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION,
+    MENU_MAX_HEIGHT, MENU_MAX_WIDTH, SEARCH_ICON_PADDING, SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_HEIGHT,
+    SIDEBAR_ACCENT_BAR_WIDTH, SIDEBAR_HEADER_HEIGHT, SIDEBAR_ITEM_HEIGHT, TAB_HEIGHT,
+    TAB_UNDERLINE_HEIGHT, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE,
+    TITLE_ACTION_HEIGHT, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, dashboard_background,
+    dashboard_nav_button_class, dashboard_tile_size, grid_gap, launch_overlay, root_background,
+    section_button_class, sidebar_divider, sidebar_width, tab_button_class, tab_width, tile_height,
+    tile_width,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::widgets::application::{AppletString, ApplicationButton};
@@ -99,6 +102,9 @@ use crate::widgets::application::{AppletString, ApplicationButton};
 
 static SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("search"));
 static FILTER_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter"));
+static DASHBOARD_HOME_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-home"));
+static DASHBOARD_LIBRARY_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-library"));
+static DASHBOARD_SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-search"));
 
 static APP_ICON: LazyLock<icon::Handle> = LazyLock::new(|| {
     icon::from_svg_bytes(include_bytes!(
@@ -345,6 +351,7 @@ impl Display for AppSource {
 }
 
 struct HearthDeck {
+    page: Page,
     search_value: String,
     entry_path_input: Vec<Arc<DesktopEntryData>>,
     all_entries: Vec<Arc<DesktopEntryData>>,
@@ -386,6 +393,7 @@ struct HearthDeck {
 impl Default for HearthDeck {
     fn default() -> Self {
         Self {
+            page: Page::Dashboard,
             search_value: Default::default(),
             entry_path_input: Default::default(),
             all_entries: Default::default(),
@@ -459,6 +467,13 @@ impl HearthDeck {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Page {
+    #[default]
+    Dashboard,
+    Library,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum GroupRowKey {
     AllApps,
@@ -478,8 +493,12 @@ enum Message {
     NextCol,
     GamepadEvent(GamepadEvent),
     FocusGridFirst,
+    OpenDashboard,
+    OpenLibrary,
+    OpenSearch,
     Close,
     ActivateApp(usize),
+    ActivateDashboardApp(usize),
     ActivateFirstApp,
     ConfirmFocused(widget::Id),
     SelectSection(Section),
@@ -752,11 +771,24 @@ impl HearthDeck {
     }
 
     fn activate_app(&mut self, i: usize) -> Task<<Self as cosmic::Application>::Message> {
+        let entry = self.entry_path_input.get(i).cloned();
+        self.activate_entry(entry)
+    }
+
+    fn activate_dashboard_app(&mut self, i: usize) -> Task<<Self as cosmic::Application>::Message> {
+        let entry = self.all_entries.get(i).cloned();
+        self.activate_entry(entry)
+    }
+
+    fn activate_entry(
+        &mut self,
+        entry: Option<Arc<DesktopEntryData>>,
+    ) -> Task<<Self as cosmic::Application>::Message> {
         if !self.input_ownership.frontend_has_control() {
             return Task::none();
         }
         self.edit_name = None;
-        if let Some(de) = self.entry_path_input.get(i) {
+        if let Some(de) = entry {
             let app_id = de.id.clone();
             let title = de.name.clone();
 
@@ -788,6 +820,38 @@ impl HearthDeck {
         } else {
             Task::none()
         }
+    }
+
+    fn dashboard_entry_ids(&self) -> Vec<widget::Id> {
+        self.all_entries
+            .iter()
+            .take(DASHBOARD_VISIBLE_TILES)
+            .map(|entry| widget::Id::from(format!("dashboard-entry-{}", entry.id)))
+            .collect()
+    }
+
+    fn focus_dashboard_id(&mut self, id: widget::Id) -> Task<Message> {
+        self.focused_id = Some(id.clone());
+        iced_runtime::task::widget(focus(id))
+            .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id))))
+    }
+
+    fn dashboard_horizontal_target(&self, delta: i32) -> Option<widget::Id> {
+        let entry_ids = self.dashboard_entry_ids();
+        let nav_ids = [
+            DASHBOARD_HOME_ID.clone(),
+            DASHBOARD_LIBRARY_ID.clone(),
+            DASHBOARD_SEARCH_ID.clone(),
+        ];
+        let focused = self.focused_id.as_ref();
+        let ids = if focused.is_some_and(|focused| nav_ids.contains(focused)) {
+            nav_ids.as_slice()
+        } else {
+            entry_ids.as_slice()
+        };
+        let current = focused.and_then(|focused| ids.iter().position(|id| id == focused));
+        let next = (current? as i32 + delta).clamp(0, ids.len() as i32 - 1) as usize;
+        ids.get(next).cloned()
     }
 
     /// The index of the currently focused app in the grid, if any.
@@ -962,6 +1026,9 @@ impl HearthDeck {
 
     /// Handle the gamepad context menu (X) button for the focused app.
     fn gamepad_context_menu(&mut self) -> Task<Message> {
+        if self.page == Page::Dashboard {
+            return Task::none();
+        }
         if self.menu.is_some() {
             return self.update(Message::CloseContextMenu);
         }
@@ -983,6 +1050,9 @@ impl HearthDeck {
     /// The cycle consists of the three fixed sidebar tabs in order, so
     /// circling wraps around both ends and never skips a section.
     fn gamepad_switch_section(&mut self, delta: i32) -> Task<Message> {
+        if self.page == Page::Dashboard {
+            return Task::none();
+        }
         let total = Section::ALL.len() as i32;
         let current = self.cur_section.index() as i32;
         let next = (current + delta).rem_euclid(total) as usize;
@@ -997,6 +1067,9 @@ impl HearthDeck {
     /// The "all apps" state (no tab selected) is treated as preceding the
     /// first tab, so the next tab after it is the first one.
     fn gamepad_switch_tab(&mut self, delta: i32) -> Task<Message> {
+        if self.page == Page::Dashboard {
+            return Task::none();
+        }
         let groups = self.config.sections.get(self.cur_section);
         let len = groups.len() as i32;
         if len <= 0 {
@@ -1221,12 +1294,15 @@ impl cosmic::Application for HearthDeck {
                     ]);
                 }
                 keyboard_nav::Action::Escape => return self.on_escape(),
-                keyboard_nav::Action::Search => return self.on_search(),
+                keyboard_nav::Action::Search => return self.update(Message::OpenSearch),
 
                 keyboard_nav::Action::Fullscreen => {}
             },
 
             Message::PrevRow => {
+                if self.page == Page::Dashboard {
+                    return self.focus_dashboard_id(DASHBOARD_HOME_ID.clone());
+                }
                 let mut i = self
                     .focused_id
                     .as_ref()
@@ -1259,6 +1335,12 @@ impl cosmic::Application for HearthDeck {
                 return Task::batch(tasks);
             }
             Message::NextRow => {
+                if self.page == Page::Dashboard {
+                    let Some(id) = self.dashboard_entry_ids().first().cloned() else {
+                        return Task::none();
+                    };
+                    return self.focus_dashboard_id(id);
+                }
                 let mut i: i32 = self
                     .focused_id
                     .as_ref()
@@ -1292,6 +1374,12 @@ impl cosmic::Application for HearthDeck {
                 return Task::batch(tasks);
             }
             Message::PrevCol => {
+                if self.page == Page::Dashboard {
+                    let Some(id) = self.dashboard_horizontal_target(-1) else {
+                        return Task::none();
+                    };
+                    return self.focus_dashboard_id(id);
+                }
                 let Some(i) = self.focused_grid_index() else {
                     return self.focus_grid_index(0);
                 };
@@ -1301,6 +1389,12 @@ impl cosmic::Application for HearthDeck {
                 return self.focus_grid_index(i - 1);
             }
             Message::NextCol => {
+                if self.page == Page::Dashboard {
+                    let Some(id) = self.dashboard_horizontal_target(1) else {
+                        return Task::none();
+                    };
+                    return self.focus_dashboard_id(id);
+                }
                 let i = self.focused_grid_index().unwrap_or(0);
                 let Some(last) = self.entry_ids.len().checked_sub(1) else {
                     return Task::none();
@@ -1321,7 +1415,7 @@ impl cosmic::Application for HearthDeck {
                     GamepadEvent::MoveRight => self.gamepad_move(Message::NextCol),
                     GamepadEvent::Confirm => self.gamepad_confirm(),
                     GamepadEvent::Back => self.gamepad_back(),
-                    GamepadEvent::Search => self.update(Message::SelectGroup(None)),
+                    GamepadEvent::Search => self.update(Message::OpenSearch),
                     GamepadEvent::ContextMenu => self.gamepad_context_menu(),
                     GamepadEvent::PrevGroup => self.gamepad_switch_section(-1),
                     GamepadEvent::NextGroup => self.gamepad_switch_section(1),
@@ -1331,6 +1425,26 @@ impl cosmic::Application for HearthDeck {
             }
             Message::FocusGridFirst => {
                 return self.focus_grid_index(0);
+            }
+            Message::OpenDashboard => {
+                self.page = Page::Dashboard;
+                self.focused_id = None;
+                let id = self
+                    .dashboard_entry_ids()
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| DASHBOARD_HOME_ID.clone());
+                return self.focus_dashboard_id(id);
+            }
+            Message::OpenLibrary => {
+                self.page = Page::Library;
+                self.focused_id = None;
+                return self.focus_grid_index(0);
+            }
+            Message::OpenSearch => {
+                self.page = Page::Library;
+                self.focused_id = Some(SEARCH_ID.clone());
+                return text_input::focus(SEARCH_ID.clone());
             }
             Message::InputChanged(value) => {
                 self.search_value = value;
@@ -1343,16 +1457,38 @@ impl cosmic::Application for HearthDeck {
                     }
                     return Task::none();
                 }
+                if self.page == Page::Library {
+                    return self.update(Message::OpenDashboard);
+                }
                 return self.close();
             }
             Message::ActivateApp(i) => {
                 return self.activate_app(i);
+            }
+            Message::ActivateDashboardApp(i) => {
+                return self.activate_dashboard_app(i);
             }
             Message::ActivateFirstApp => {
                 return self.activate_app(0);
             }
             Message::ConfirmFocused(focused) => {
                 self.focused_id = Some(focused.clone());
+                if focused == *DASHBOARD_HOME_ID {
+                    return self.update(Message::OpenDashboard);
+                }
+                if focused == *DASHBOARD_LIBRARY_ID {
+                    return self.update(Message::OpenLibrary);
+                }
+                if focused == *DASHBOARD_SEARCH_ID {
+                    return self.update(Message::OpenSearch);
+                }
+                if self.page == Page::Dashboard {
+                    let ids = self.dashboard_entry_ids();
+                    let Some(i) = focused_entry_index(&focused, &ids) else {
+                        return Task::none();
+                    };
+                    return self.activate_dashboard_app(i);
+                }
                 if focused == *NEW_GROUP_ID {
                     return self.update(Message::SubmitNewGroup);
                 }
@@ -1787,7 +1923,10 @@ impl cosmic::Application for HearthDeck {
         if self.launch_state.is_visible() {
             self.view_launch_overlay()
         } else {
-            self.view_main_content()
+            match self.page {
+                Page::Dashboard => self.view_dashboard(),
+                Page::Library => self.view_main_content(),
+            }
         }
     }
 
@@ -2148,14 +2287,20 @@ impl cosmic::Application for HearthDeck {
         self_.load_apps();
 
         let fullscreen = window::set_mode(SurfaceId::RESERVED, window::Mode::Fullscreen);
-        let focus_search = text_input::focus(SEARCH_ID.clone());
+        let dashboard_focus = self_
+            .dashboard_entry_ids()
+            .first()
+            .cloned()
+            .unwrap_or_else(|| DASHBOARD_HOME_ID.clone());
+        let focus_dashboard = iced_runtime::task::widget(focus(dashboard_focus))
+            .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id))));
         let poll_active_session = self_.poll_active_session(std::time::Duration::ZERO);
         let load_romm_platforms = self_.load_romm_platforms(std::time::Duration::ZERO);
         (
             self_,
             Task::batch([
                 fullscreen,
-                focus_search,
+                focus_dashboard,
                 poll_active_session,
                 load_romm_platforms,
             ]),
@@ -2164,6 +2309,163 @@ impl cosmic::Application for HearthDeck {
 }
 
 impl HearthDeck {
+    fn view_dashboard<'a>(&'a self) -> Element<'a, Message> {
+        let Spacing {
+            space_xs,
+            space_s,
+            space_m,
+            space_l,
+            space_xxl,
+            ..
+        } = theme::spacing();
+        let tile_size = dashboard_tile_size(self.window_width);
+        let user_name = current_user_name();
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+        let disk_free = human_size(available_disk_bytes(&home));
+
+        let nav_button = |id: widget::Id,
+                          icon_name: &'static str,
+                          label: &'static str,
+                          selected: bool,
+                          message: Message|
+         -> Element<'_, Message> {
+            tooltip(
+                button::custom(icon::icon(icon::from_name(icon_name).into()).size(ICON_BODY))
+                    .id(id)
+                    .width(Length::Fixed(DASHBOARD_NAV_BUTTON_SIZE))
+                    .height(Length::Fixed(DASHBOARD_NAV_BUTTON_SIZE))
+                    .class(dashboard_nav_button_class(selected))
+                    .on_press(message),
+                text::body(label).size(TEXT_BODY),
+                tooltip::Position::Bottom,
+            )
+            .into()
+        };
+
+        let profile = row![
+            icon::icon(icon::from_name("avatar-default-symbolic").into()).size(ICON_LARGE),
+            column![
+                text::body(user_name).size(TEXT_HEADER),
+                text::caption("Hearthdeck").size(TEXT_CAPTION),
+            ]
+            .spacing(space_xs),
+        ]
+        .spacing(space_s)
+        .align_y(Alignment::Center)
+        .width(Length::FillPortion(1));
+
+        let navigation = row![
+            nav_button(
+                DASHBOARD_HOME_ID.clone(),
+                "go-home-symbolic",
+                "Home",
+                true,
+                Message::OpenDashboard,
+            ),
+            nav_button(
+                DASHBOARD_LIBRARY_ID.clone(),
+                "view-grid-symbolic",
+                "Library",
+                false,
+                Message::OpenLibrary,
+            ),
+            nav_button(
+                DASHBOARD_SEARCH_ID.clone(),
+                "system-search-symbolic",
+                "Search",
+                false,
+                Message::OpenSearch,
+            ),
+        ]
+        .spacing(space_xs)
+        .align_y(Alignment::Center);
+
+        let storage = row![
+            icon::icon(icon::from_name("drive-harddisk-solidstate-symbolic").into())
+                .size(ICON_BODY),
+            text::body(disk_free).size(TEXT_BODY),
+        ]
+        .spacing(space_xs)
+        .align_y(Alignment::Center);
+
+        let top_bar = row![
+            profile,
+            navigation,
+            container(storage)
+                .width(Length::FillPortion(1))
+                .align_x(Horizontal::Right),
+        ]
+        .spacing(space_l)
+        .align_y(Alignment::Center)
+        .height(Length::Fixed(DASHBOARD_TOP_BAR_HEIGHT));
+
+        let tiles: Vec<Element<'_, Message>> = self
+            .all_entries
+            .iter()
+            .take(DASHBOARD_VISIBLE_TILES)
+            .zip(self.dashboard_entry_ids())
+            .enumerate()
+            .map(|(i, (entry, id))| {
+                ApplicationButton::new(
+                    id,
+                    &entry.name,
+                    crate::icon_cache::entry_icon_handle(&entry.icon, tile_size as u32),
+                    &entry.path,
+                    tile_size,
+                    tile_size,
+                    |_| Message::CloseContextMenu,
+                    Some(Message::ActivateDashboardApp(i)),
+                    None,
+                    false,
+                    None,
+                    None,
+                    None,
+                )
+                .into()
+            })
+            .collect();
+
+        let rail: Element<'_, Message> = if tiles.is_empty() {
+            container(
+                column![
+                    icon::icon(APP_ICON.clone()).size(ICON_LARGE),
+                    text::body("Your installed games and apps will appear here").size(TEXT_BODY),
+                ]
+                .spacing(space_s)
+                .align_x(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fixed(tile_size))
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .into()
+        } else {
+            row(tiles).spacing(DASHBOARD_TILE_GAP).into()
+        };
+
+        let content = column![
+            top_bar,
+            space::vertical().height(Length::Fill),
+            text::title3("Games & apps").size(TEXT_HEADER),
+            container(rail).padding([space_m, 0, 0, 0]),
+            space::vertical().height(space_xxl),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding([
+            space_l,
+            DASHBOARD_HORIZONTAL_PADDING,
+            space_l,
+            DASHBOARD_HORIZONTAL_PADDING,
+        ]);
+
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .class(theme::Container::Custom(Box::new(dashboard_background)))
+            .into()
+    }
+
     fn view_launch_overlay<'a>(&'a self) -> Element<'a, Message> {
         let spacing = theme::spacing();
         let title = self.launch_state.title().unwrap_or_default();
@@ -2679,16 +2981,96 @@ fn is_primary_window(id: SurfaceId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        focused_entry_index, is_primary_window, next_romm_offset, romm_page_is_current,
-        selected_romm_platform_id,
+        HearthDeck, Page, focused_entry_index, is_primary_window, next_romm_offset,
+        romm_page_is_current, selected_romm_platform_id,
     };
     use crate::app_group::{AppLibraryConfig, Section};
-    use cosmic::iced::widget;
+    use cosmic::{
+        desktop::{DesktopEntryData, fde::IconSource},
+        iced::widget,
+    };
+    use std::sync::Arc;
+
+    fn entry(id: &str) -> Arc<DesktopEntryData> {
+        Arc::new(DesktopEntryData {
+            id: id.into(),
+            name: id.into(),
+            wm_class: None,
+            exec: None,
+            icon: IconSource::Name(String::new()),
+            path: None,
+            categories: Vec::new(),
+            desktop_actions: Vec::new(),
+            mime_types: Vec::new(),
+            prefers_dgpu: false,
+            terminal: false,
+        })
+    }
 
     #[test]
     fn only_the_primary_window_is_forced_fullscreen() {
         assert!(is_primary_window(cosmic::iced::window::Id::RESERVED));
         assert!(!is_primary_window(cosmic::iced::window::Id::unique()));
+    }
+
+    #[test]
+    fn dashboard_is_the_startup_page() {
+        assert_eq!(HearthDeck::default().page, Page::Dashboard);
+    }
+
+    #[test]
+    fn dashboard_routes_to_library_and_back() {
+        let mut app = HearthDeck::default();
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenLibrary);
+        assert_eq!(app.page, Page::Library);
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::Close);
+        assert_eq!(app.page, Page::Dashboard);
+    }
+
+    #[test]
+    fn dashboard_search_opens_the_library() {
+        let mut app = HearthDeck::default();
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSearch);
+
+        assert_eq!(app.page, Page::Library);
+        assert_eq!(app.focused_id, Some(super::SEARCH_ID.clone()));
+    }
+
+    #[test]
+    fn dashboard_controller_moves_across_top_navigation() {
+        let mut app = HearthDeck {
+            focused_id: Some(super::DASHBOARD_HOME_ID.clone()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            app.dashboard_horizontal_target(1),
+            Some(super::DASHBOARD_LIBRARY_ID.clone())
+        );
+        app.focused_id = Some(super::DASHBOARD_SEARCH_ID.clone());
+        assert_eq!(
+            app.dashboard_horizontal_target(-1),
+            Some(super::DASHBOARD_LIBRARY_ID.clone())
+        );
+    }
+
+    #[test]
+    fn stale_dashboard_focus_does_not_resolve_after_catalog_changes() {
+        let mut app = HearthDeck {
+            all_entries: vec![entry("old"), entry("current")],
+            ..Default::default()
+        };
+        let stale = app.dashboard_entry_ids()[0].clone();
+
+        app.all_entries = vec![entry("current")];
+
+        assert_eq!(
+            focused_entry_index(&stale, &app.dashboard_entry_ids()),
+            None
+        );
     }
 
     #[test]
