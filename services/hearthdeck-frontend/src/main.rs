@@ -12,6 +12,7 @@ mod localize;
 mod providers;
 mod style;
 mod subscriptions;
+mod system_status;
 mod widgets;
 
 use config::{APP_ID, VERSION};

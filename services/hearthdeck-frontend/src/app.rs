@@ -95,6 +95,7 @@ use crate::style::{
     tile_width,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
+use crate::system_status::SystemStatus;
 use crate::widgets::application::{AppletString, ApplicationButton};
 
 // popovers should show options, but also the desktop info options
@@ -129,6 +130,7 @@ static CANCEL: LazyLock<String> = LazyLock::new(|| fl!("cancel"));
 static RUN: LazyLock<String> = LazyLock::new(|| fl!("run"));
 const LAUNCH_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(1200);
 const SESSION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+const SYSTEM_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 const ROMM_PAGE_SIZE: u32 = 48;
 const ROMM_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 static REMOVE: LazyLock<String> = LazyLock::new(|| fl!("remove"));
@@ -388,6 +390,7 @@ struct HearthDeck {
     daemon_client: Option<crate::providers::daemon::DaemonClient>,
     launch_state: LaunchState,
     input_ownership: InputOwnership,
+    system_status: SystemStatus,
     romm_request_generation: u64,
 }
 
@@ -426,6 +429,7 @@ impl Default for HearthDeck {
             daemon_client: None,
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
+            system_status: SystemStatus::default(),
             romm_request_generation: 0,
         }
     }
@@ -541,6 +545,7 @@ enum Message {
     DaemonLaunchResult(Result<(), String>),
     ActiveSessionResult(Result<bool, String>),
     RommPlatforms(Result<Vec<crate::providers::daemon::RetroPlatform>, String>),
+    SystemStatus(SystemStatus),
     RommGames {
         generation: u64,
         platform_id: Option<i64>,
@@ -636,6 +641,16 @@ impl HearthDeck {
                     .map_err(|error| error.to_string())
             },
             |result| cosmic::Action::App(Message::ActiveSessionResult(result)),
+        )
+    }
+
+    fn load_system_status(delay: std::time::Duration) -> Task<Message> {
+        Task::perform(
+            async move {
+                tokio::time::sleep(delay).await;
+                SystemStatus::load().await
+            },
+            |status| cosmic::Action::App(Message::SystemStatus(status)),
         )
     }
 
@@ -1903,6 +1918,10 @@ impl cosmic::Application for HearthDeck {
                 }
                 return self.poll_active_session(SESSION_POLL_INTERVAL);
             }
+            Message::SystemStatus(status) => {
+                self.system_status = status;
+                return Self::load_system_status(SYSTEM_STATUS_POLL_INTERVAL);
+            }
             Message::DismissLaunch => {
                 self.launch_state.update(LaunchEvent::Dismiss);
             }
@@ -2336,6 +2355,7 @@ impl cosmic::Application for HearthDeck {
             .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id))));
         let poll_active_session = self_.poll_active_session(std::time::Duration::ZERO);
         let load_romm_platforms = self_.load_romm_platforms(std::time::Duration::ZERO);
+        let load_system_status = Self::load_system_status(std::time::Duration::ZERO);
         (
             self_,
             Task::batch([
@@ -2343,6 +2363,7 @@ impl cosmic::Application for HearthDeck {
                 focus_dashboard,
                 poll_active_session,
                 load_romm_platforms,
+                load_system_status,
             ]),
         )
     }
@@ -2359,7 +2380,6 @@ impl HearthDeck {
             ..
         } = theme::spacing();
         let tile_size = dashboard_tile_size(self.window_width);
-        let user_name = current_user_name();
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
         let disk_free = human_size(available_disk_bytes(&home));
 
@@ -2382,13 +2402,30 @@ impl HearthDeck {
             .into()
         };
 
-        let profile = row![
-            icon::icon(icon::from_name("avatar-default-symbolic").into()).size(ICON_LARGE),
-            column![
-                text::body(user_name).size(TEXT_HEADER),
-                text::caption("Hearthdeck").size(TEXT_CAPTION),
-            ]
-            .spacing(space_xs),
+        let status_icon = |icon_name: &'static str, label: &'static str| -> Element<'_, Message> {
+            tooltip(
+                icon::icon(icon::from_name(icon_name).into()).size(ICON_BODY),
+                text::body(label).size(TEXT_BODY),
+                tooltip::Position::Bottom,
+            )
+            .into()
+        };
+        let wifi = self
+            .system_status
+            .wifi
+            .as_ref()
+            .map(|status| status_icon(status.icon_name(), status.label()))
+            .unwrap_or_else(|| status_icon("network-wireless-error-symbolic", "Wi-Fi unavailable"));
+        let bluetooth = self
+            .system_status
+            .bluetooth
+            .as_ref()
+            .map(|status| status_icon("bluetooth-symbolic", status.label()))
+            .unwrap_or_else(|| status_icon("bluetooth-symbolic", "Bluetooth unavailable"));
+        let system_status = row![
+            text::body(crate::system_status::current_time()).size(TEXT_HEADER),
+            wifi,
+            bluetooth,
         ]
         .spacing(space_s)
         .align_y(Alignment::Center)
@@ -2429,7 +2466,7 @@ impl HearthDeck {
         .align_y(Alignment::Center);
 
         let top_bar = row![
-            profile,
+            system_status,
             navigation,
             container(storage)
                 .width(Length::FillPortion(1))
