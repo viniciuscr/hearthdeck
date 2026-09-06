@@ -96,6 +96,7 @@ use crate::widgets::application::{AppletString, ApplicationButton};
 // should be a way to remove apps from groups
 
 static SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("search"));
+static FILTER_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter"));
 
 static APP_ICON: LazyLock<icon::Handle> = LazyLock::new(|| {
     icon::from_svg_bytes(include_bytes!(
@@ -473,7 +474,8 @@ enum Message {
     FocusGridFirst,
     Close,
     ActivateApp(usize),
-    StartCurAppFocus,
+    ActivateFirstApp,
+    ConfirmFocused(widget::Id),
     SelectSection(Section),
     SelectGroup(Option<usize>),
     ToggleFilterMenu,
@@ -724,7 +726,7 @@ impl HearthDeck {
     fn focused_grid_index(&self) -> Option<usize> {
         self.focused_id
             .as_ref()
-            .and_then(|focused| self.entry_ids.iter().position(|id| id == focused))
+            .and_then(|focused| focused_entry_index(focused, &self.entry_ids))
     }
 
     /// True if focus is inside a text input, where gamepad movement should
@@ -854,16 +856,6 @@ impl HearthDeck {
         if self.launch_state.is_visible() {
             return Task::none();
         }
-        let focused = self.focused_id.clone();
-        if focused.as_ref() == Some(&*NEW_GROUP_ID) {
-            return self.update(Message::SubmitNewGroup);
-        }
-        if focused.as_ref() == Some(&*SUBMIT_DELETE_ID) {
-            return self.update(Message::ConfirmDelete);
-        }
-        if focused.as_ref() == Some(&*EDIT_GROUP_ID) {
-            return self.update(Message::SubmitName);
-        }
         if let Some(i) = self.menu {
             // A context menu is open: confirm its primary action, which is
             // launching the app it was opened for.
@@ -873,7 +865,8 @@ impl HearthDeck {
                 self.update(Message::ActivateApp(i)),
             ]);
         }
-        self.update(Message::StartCurAppFocus)
+        iced_runtime::task::widget(find_focused())
+            .map(|id| cosmic::Action::App(Message::ConfirmFocused(id)))
     }
 
     /// Handle the gamepad back (B) button.
@@ -1207,18 +1200,22 @@ impl cosmic::Application for HearthDeck {
             Message::ActivateApp(i) => {
                 return self.activate_app(i);
             }
-            Message::StartCurAppFocus => {
-                let i = if self
-                    .focused_id
-                    .as_ref()
-                    .is_some_and(|cur_focus| cur_focus == &*SEARCH_ID)
-                {
-                    0
-                } else {
-                    self.focused_id
-                        .as_ref()
-                        .and_then(|focus| self.entry_ids.iter().position(|id| focus == id))
-                        .unwrap_or_default()
+            Message::ActivateFirstApp => {
+                return self.activate_app(0);
+            }
+            Message::ConfirmFocused(focused) => {
+                self.focused_id = Some(focused.clone());
+                if focused == *NEW_GROUP_ID {
+                    return self.update(Message::SubmitNewGroup);
+                }
+                if focused == *SUBMIT_DELETE_ID {
+                    return self.update(Message::ConfirmDelete);
+                }
+                if focused == *EDIT_GROUP_ID {
+                    return self.update(Message::SubmitName);
+                }
+                let Some(i) = focused_entry_index(&focused, &self.entry_ids) else {
+                    return Task::none();
                 };
                 return self.activate_app(i);
             }
@@ -2210,7 +2207,7 @@ impl HearthDeck {
                 text_input(SEARCH_PLACEHOLDER.as_str(), self.search_value.as_str())
                     .on_input(Message::InputChanged)
                     .on_paste(Message::InputChanged)
-                    .on_submit(|_| Message::StartCurAppFocus)
+                    .on_submit(|_| Message::ActivateFirstApp)
                     .style(TextInput::Search)
                     .width(Length::Fixed(SEARCH_WIDTH))
                     .size(TEXT_HEADER)
@@ -2247,6 +2244,7 @@ impl HearthDeck {
         .height(Length::Fixed(FILTER_BUTTON_HEIGHT))
         .width(Length::Shrink)
         .class(section_button_class(false))
+        .id(FILTER_ID.clone())
         .on_press(Message::ToggleFilterMenu);
 
         // ===== Sub-tab filter row =====
@@ -2464,5 +2462,25 @@ impl HearthDeck {
             .height(Length::Fill)
             .class(theme::Container::Custom(Box::new(root_background)))
             .into()
+    }
+}
+
+fn focused_entry_index(focused: &widget::Id, entry_ids: &[widget::Id]) -> Option<usize> {
+    entry_ids.iter().position(|id| id == focused)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::focused_entry_index;
+    use cosmic::iced::widget;
+
+    #[test]
+    fn non_grid_focus_cannot_activate_a_stale_grid_entry() {
+        let app = widget::Id::new("app-entry-example");
+        let filter = widget::Id::new("filter");
+        let entries = [app.clone()];
+
+        assert_eq!(focused_entry_index(&app, &entries), Some(0));
+        assert_eq!(focused_entry_index(&filter, &entries), None);
     }
 }

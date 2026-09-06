@@ -431,7 +431,8 @@ impl AppLibraryConfig {
                         Section::Applications => APPLICATION_CATEGORIES
                             .iter()
                             .any(|known| category.eq_ignore_ascii_case(known)),
-                        Section::PcGames | Section::ConsoleGames => {
+                        Section::PcGames => category.starts_with(STORE_CATEGORY_PREFIX),
+                        Section::ConsoleGames => {
                             category.starts_with(STORE_CATEGORY_PREFIX)
                                 || GAME_CATEGORIES
                                     .iter()
@@ -539,17 +540,37 @@ mod tests {
     }
 
     #[test]
-    fn game_tabs_only_show_stores_and_game_genres() {
+    fn pc_game_tabs_only_show_stores_with_installed_games() {
         let mut config = AppLibraryConfig::default();
+        config.sync_category_groups(&[
+            entry(
+                "epic-game",
+                &[
+                    "Game",
+                    "PackageManager",
+                    "RPG",
+                    "hearthdeck-store:Epic Games",
+                ],
+            ),
+            entry(
+                "gog-game",
+                &["Game", "FileTransfer", "Shooter", "hearthdeck-store:GOG"],
+            ),
+        ]);
+
+        assert_eq!(
+            config
+                .sections
+                .get(Section::PcGames)
+                .iter()
+                .map(|group| group.name())
+                .collect::<Vec<_>>(),
+            vec!["Epic Games", "GOG"]
+        );
+
         config.sync_category_groups(&[entry(
-            "game",
-            &[
-                "Game",
-                "PackageManager",
-                "FileTransfer",
-                "RPG",
-                "hearthdeck-store:Epic Games",
-            ],
+            "gog-game",
+            &["Game", "FileTransfer", "Shooter", "hearthdeck-store:GOG"],
         )]);
 
         assert_eq!(
@@ -559,7 +580,7 @@ mod tests {
                 .iter()
                 .map(|group| group.name())
                 .collect::<Vec<_>>(),
-            vec!["Epic Games", "RPG"]
+            vec!["GOG"]
         );
     }
 
