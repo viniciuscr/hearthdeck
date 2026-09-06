@@ -61,16 +61,8 @@ pub const SIDEBAR_ACCENT_BAR_HEIGHT: f32 = 40.0;
 /// Horizontal padding inside the main content panel.
 pub const CONTENT_HORIZONTAL_PADDING: u16 = 24;
 
-/// Horizontal padding for the dashboard shell.
-pub const DASHBOARD_HORIZONTAL_PADDING: u16 = 40;
-/// Height of the dashboard's profile and navigation bar.
-pub const DASHBOARD_TOP_BAR_HEIGHT: f32 = 64.0;
-/// Width and height of each dashboard navigation button.
-pub const DASHBOARD_NAV_BUTTON_SIZE: f32 = 52.0;
 /// Number of installed titles shown on the dashboard.
 pub const DASHBOARD_VISIBLE_TILES: usize = 6;
-/// Gap between dashboard content tiles.
-pub const DASHBOARD_TILE_GAP: f32 = 16.0;
 
 /// Number of columns in the application grid.
 pub const GRID_COLUMNS: usize = 5;
@@ -128,10 +120,10 @@ pub fn tile_height(window_width: f32, is_game: bool) -> f32 {
 }
 
 /// Square dashboard tiles fill one horizontal row without shifting on focus.
-pub fn dashboard_tile_size(window_width: f32) -> f32 {
+pub fn dashboard_tile_size(window_width: f32, horizontal_padding: u16, tile_gap: u16) -> f32 {
     let available = window_width
-        - 2.0 * f32::from(DASHBOARD_HORIZONTAL_PADDING)
-        - (DASHBOARD_VISIBLE_TILES - 1) as f32 * DASHBOARD_TILE_GAP;
+        - 2.0 * f32::from(horizontal_padding)
+        - (DASHBOARD_VISIBLE_TILES - 1) as f32 * f32::from(tile_gap);
     (available / DASHBOARD_VISIBLE_TILES as f32).clamp(120.0, 220.0)
 }
 
@@ -303,18 +295,6 @@ pub fn root_background(theme: &Theme) -> container::Style {
     }
 }
 
-/// Dashboard background stays black independently of the desktop theme.
-pub fn dashboard_background(_theme: &Theme) -> container::Style {
-    container::Style {
-        text_color: Some(Color::WHITE),
-        icon_color: Some(Color::WHITE),
-        background: Some(Color::BLACK.into()),
-        border: Border::default(),
-        shadow: Shadow::default(),
-        snap: false,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Button styles
 // ---------------------------------------------------------------------------
@@ -346,26 +326,26 @@ fn focus_ring(mut style: button::Style, focused: bool, theme: &Theme) -> button:
 pub fn dashboard_nav_button_class(selected: bool) -> Button {
     Button::Custom {
         active: Box::new(move |focused, theme| {
-            let mut style = theme.active(focused, selected, &Button::Icon);
-            style.background = selected.then(|| chip_background(0.22, theme));
-            style.text_color = Some(Color::WHITE);
-            style.icon_color = Some(Color::WHITE);
-            focus_ring(style, focused, theme)
+            focus_ring(
+                theme.active(focused, selected, &Button::Icon),
+                focused,
+                theme,
+            )
         }),
         disabled: Box::new(|theme| theme.disabled(&Button::Icon)),
         hovered: Box::new(move |focused, theme| {
-            let mut style = theme.hovered(focused, selected, &Button::Icon);
-            style.background = Some(chip_background(if selected { 0.22 } else { 0.12 }, theme));
-            style.text_color = Some(Color::WHITE);
-            style.icon_color = Some(Color::WHITE);
-            focus_ring(style, focused, theme)
+            focus_ring(
+                theme.hovered(focused, selected, &Button::Icon),
+                focused,
+                theme,
+            )
         }),
         pressed: Box::new(move |focused, theme| {
-            let mut style = theme.pressed(focused, selected, &Button::Icon);
-            style.background = Some(chip_background(0.22, theme));
-            style.text_color = Some(Color::WHITE);
-            style.icon_color = Some(Color::WHITE);
-            focus_ring(style, focused, theme)
+            focus_ring(
+                theme.pressed(focused, selected, &Button::Icon),
+                focused,
+                theme,
+            )
         }),
     }
 }
@@ -461,8 +441,8 @@ pub fn tile_button_class(selected: bool) -> Button {
 #[cfg(test)]
 mod tests {
     use super::{
-        CONTENT_HORIZONTAL_PADDING, GRID_COLUMNS, content_width, grid_gap, sidebar_width,
-        tile_height, tile_width,
+        CONTENT_HORIZONTAL_PADDING, DASHBOARD_VISIBLE_TILES, GRID_COLUMNS, content_width,
+        dashboard_tile_size, grid_gap, sidebar_width, tile_height, tile_width,
     };
 
     #[test]
@@ -476,6 +456,19 @@ mod tests {
             occupied + sidebar_width(window_width) + 2.0 * f32::from(CONTENT_HORIZONTAL_PADDING)
                 <= window_width
         );
+    }
+
+    #[test]
+    fn dashboard_tiles_fit_themed_spacing() {
+        let window_width = 1200.0;
+        let padding = 32;
+        let gap = 16;
+        let occupied = DASHBOARD_VISIBLE_TILES as f32
+            * dashboard_tile_size(window_width, padding, gap)
+            + (DASHBOARD_VISIBLE_TILES - 1) as f32 * f32::from(gap)
+            + 2.0 * f32::from(padding);
+
+        assert!((occupied - window_width).abs() < 0.01);
     }
 
     #[test]

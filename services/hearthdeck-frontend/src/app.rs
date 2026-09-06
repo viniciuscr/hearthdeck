@@ -82,17 +82,15 @@ use crate::input_ownership::{
 };
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::style::{
-    CONTENT_HORIZONTAL_PADDING, DASHBOARD_HORIZONTAL_PADDING, DASHBOARD_NAV_BUTTON_SIZE,
-    DASHBOARD_TILE_GAP, DASHBOARD_TOP_BAR_HEIGHT, DASHBOARD_VISIBLE_TILES, DIALOG_ACTION_WIDTH,
-    DIALOG_WIDTH, DIVIDER_WIDTH, EDIT_NAME_INPUT_WIDTH, FILTER_BUTTON_HEIGHT, GRID_COLUMNS,
-    GRID_TOP_PADDING, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION,
-    MENU_MAX_HEIGHT, MENU_MAX_WIDTH, SEARCH_ICON_PADDING, SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_HEIGHT,
+    CONTENT_HORIZONTAL_PADDING, DASHBOARD_VISIBLE_TILES, DIALOG_ACTION_WIDTH, DIALOG_WIDTH,
+    DIVIDER_WIDTH, EDIT_NAME_INPUT_WIDTH, FILTER_BUTTON_HEIGHT, GRID_COLUMNS, GRID_TOP_PADDING,
+    ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION, MENU_MAX_HEIGHT,
+    MENU_MAX_WIDTH, SEARCH_ICON_PADDING, SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_HEIGHT,
     SIDEBAR_ACCENT_BAR_WIDTH, SIDEBAR_HEADER_HEIGHT, SIDEBAR_ITEM_HEIGHT, TAB_HEIGHT,
     TAB_UNDERLINE_HEIGHT, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE,
-    TITLE_ACTION_HEIGHT, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, dashboard_background,
-    dashboard_nav_button_class, dashboard_tile_size, grid_gap, launch_overlay, root_background,
-    section_button_class, sidebar_divider, sidebar_width, tab_button_class, tab_width, tile_height,
-    tile_width,
+    TITLE_ACTION_HEIGHT, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, dashboard_nav_button_class,
+    dashboard_tile_size, grid_gap, launch_overlay, root_background, section_button_class,
+    sidebar_divider, sidebar_width, tab_button_class, tab_width, tile_height, tile_width,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
@@ -1482,7 +1480,7 @@ impl cosmic::Application for HearthDeck {
                 if self.page == Page::Library {
                     return self.update(Message::OpenDashboard);
                 }
-                return self.close();
+                return Task::none();
             }
             Message::ActivateApp(i) => {
                 return self.activate_app(i);
@@ -2376,12 +2374,13 @@ impl HearthDeck {
             space_s,
             space_m,
             space_l,
+            space_xl,
             space_xxl,
             ..
         } = theme::spacing();
-        let tile_size = dashboard_tile_size(self.window_width);
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
-        let disk_free = human_size(available_disk_bytes(&home));
+        let tile_size = dashboard_tile_size(self.window_width, space_l, space_s);
+        let nav_button_size = f32::from(space_xl);
+        let user_name = current_user_name();
 
         let nav_button = |id: widget::Id,
                           icon_name: &'static str,
@@ -2392,8 +2391,8 @@ impl HearthDeck {
             tooltip(
                 button::custom(icon::icon(icon::from_name(icon_name).into()).size(ICON_BODY))
                     .id(id)
-                    .width(Length::Fixed(DASHBOARD_NAV_BUTTON_SIZE))
-                    .height(Length::Fixed(DASHBOARD_NAV_BUTTON_SIZE))
+                    .width(Length::Fixed(nav_button_size))
+                    .height(Length::Fixed(nav_button_size))
                     .class(dashboard_nav_button_class(selected))
                     .on_press(message),
                 text::body(label).size(TEXT_BODY),
@@ -2420,12 +2419,23 @@ impl HearthDeck {
             .system_status
             .bluetooth
             .as_ref()
-            .map(|status| status_icon("bluetooth-symbolic", status.label()))
-            .unwrap_or_else(|| status_icon("bluetooth-symbolic", "Bluetooth unavailable"));
+            .map(|status| status_icon(status.icon_name(), status.label()))
+            .unwrap_or_else(|| status_icon("bluetooth-disabled-symbolic", "Bluetooth unavailable"));
         let system_status = row![
             text::body(crate::system_status::current_time()).size(TEXT_HEADER),
             wifi,
             bluetooth,
+        ]
+        .spacing(space_s)
+        .align_y(Alignment::Center);
+
+        let profile = row![
+            icon::icon(icon::from_name("avatar-default-symbolic").into()).size(ICON_LARGE),
+            column![
+                text::body(user_name).size(TEXT_HEADER),
+                text::caption("Hearthdeck").size(TEXT_CAPTION),
+            ]
+            .spacing(space_xs),
         ]
         .spacing(space_s)
         .align_y(Alignment::Center)
@@ -2457,24 +2467,16 @@ impl HearthDeck {
         .spacing(space_xs)
         .align_y(Alignment::Center);
 
-        let storage = row![
-            icon::icon(icon::from_name("drive-harddisk-solidstate-symbolic").into())
-                .size(ICON_BODY),
-            text::body(disk_free).size(TEXT_BODY),
-        ]
-        .spacing(space_xs)
-        .align_y(Alignment::Center);
-
         let top_bar = row![
-            system_status,
+            profile,
             navigation,
-            container(storage)
+            container(system_status)
                 .width(Length::FillPortion(1))
                 .align_x(Horizontal::Right),
         ]
         .spacing(space_l)
         .align_y(Alignment::Center)
-        .height(Length::Fixed(DASHBOARD_TOP_BAR_HEIGHT));
+        .height(Length::Fixed(f32::from(space_xxl)));
 
         let tiles: Vec<Element<'_, Message>> = self
             .all_entries
@@ -2517,7 +2519,7 @@ impl HearthDeck {
             .align_y(Alignment::Center)
             .into()
         } else {
-            row(tiles).spacing(DASHBOARD_TILE_GAP).into()
+            row(tiles).spacing(space_s).into()
         };
 
         let content = column![
@@ -2529,17 +2531,12 @@ impl HearthDeck {
         ]
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding([
-            space_l,
-            DASHBOARD_HORIZONTAL_PADDING,
-            space_l,
-            DASHBOARD_HORIZONTAL_PADDING,
-        ]);
+        .padding(space_l);
 
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .class(theme::Container::Custom(Box::new(dashboard_background)))
+            .class(theme::Container::Custom(Box::new(root_background)))
             .into()
     }
 
@@ -3103,6 +3100,15 @@ mod tests {
         assert_eq!(app.page, Page::Library);
 
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::Close);
+        assert_eq!(app.page, Page::Dashboard);
+    }
+
+    #[test]
+    fn dashboard_ignores_back() {
+        let mut app = HearthDeck::default();
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::Close);
+
         assert_eq!(app.page, Page::Dashboard);
     }
 

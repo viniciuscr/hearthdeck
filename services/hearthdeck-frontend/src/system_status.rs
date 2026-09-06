@@ -21,7 +21,9 @@ pub struct BluetoothStatus {
 
 impl WifiStatus {
     pub fn icon_name(&self) -> &'static str {
-        if !self.enabled || !self.connected {
+        if !self.enabled {
+            "network-wireless-signal-none-symbolic"
+        } else if !self.connected {
             "network-wireless-disconnected-symbolic"
         } else if self.strength < 25 {
             "network-wireless-signal-weak-symbolic"
@@ -46,6 +48,16 @@ impl WifiStatus {
 }
 
 impl BluetoothStatus {
+    pub fn icon_name(&self) -> &'static str {
+        if !self.enabled {
+            "bluetooth-disabled-symbolic"
+        } else if self.connected {
+            "bluetooth-active-symbolic"
+        } else {
+            "bluetooth-symbolic"
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         if !self.enabled {
             "Bluetooth off"
@@ -119,7 +131,7 @@ async fn bluetooth_status() -> Option<BluetoothStatus> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WifiStatus, current_time};
+    use super::{BluetoothStatus, WifiStatus, current_time};
 
     #[test]
     fn current_time_is_displayable() {
@@ -140,5 +152,23 @@ mod tests {
 
         status.connected = false;
         assert_eq!(status.icon_name(), "network-wireless-disconnected-symbolic");
+
+        status.enabled = false;
+        assert_eq!(status.icon_name(), "network-wireless-signal-none-symbolic");
+    }
+
+    #[test]
+    fn bluetooth_icon_tracks_power_and_connection() {
+        let mut status = BluetoothStatus {
+            enabled: false,
+            connected: false,
+        };
+        assert_eq!(status.icon_name(), "bluetooth-disabled-symbolic");
+
+        status.enabled = true;
+        assert_eq!(status.icon_name(), "bluetooth-symbolic");
+
+        status.connected = true;
+        assert_eq!(status.icon_name(), "bluetooth-active-symbolic");
     }
 }
