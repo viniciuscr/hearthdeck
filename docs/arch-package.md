@@ -139,13 +139,18 @@ stop hearthdeck-heroic.service`, which reliably tears down the whole process
 tree via its cgroup even though Heroic never exits on its own. See
 `services/README.md` for the full reasoning.
 
-Controller input is Hearthdeck's direct Linux joystick reader; there is no
-desktop shell input stack to coordinate with. PipeWire/WirePlumber provide
-audio, while NetworkManager and BlueZ remain system services. Their existing
-connections and paired devices continue to work, but Hearthdeck does not yet
-provide Wi-Fi, Bluetooth, or audio-routing configuration interfaces, and the
-Kiosk session does not start a polkit agent, so NetworkManager changes needing
-authentication are unavailable from it.
+The frontend reads controllers directly only while it owns foreground input.
+It relinquishes its gamepad subscription before every managed launch and keeps
+it disabled while the launched session owns the display. Session polling and
+COSMIC focus events return ownership after the app exits or Hearthdeck regains
+focus. The quick-menu overlay reads the Guide button independently and grabs
+the controller exclusively while its menu is visible.
+
+PipeWire/WirePlumber provide audio, while NetworkManager and BlueZ remain
+system services. Their existing connections and paired devices continue to
+work, but Hearthdeck does not yet provide Wi-Fi, Bluetooth, or audio-routing
+configuration interfaces, and the Kiosk session does not start a polkit agent,
+so NetworkManager changes needing authentication are unavailable from it.
 
 `gamepad-osk` remains optional and external to this package. It must be running
 as its upstream daemon service and have its uinput/input permissions configured

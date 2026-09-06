@@ -2,7 +2,13 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use hearthdeck_protocol::ApplicationSession;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{
+    env,
+    hash::{DefaultHasher, Hasher},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::sync::{OnceCell, mpsc};
 
 use super::{GameProvider, GameRecord};
@@ -576,7 +582,7 @@ impl GameProvider for DaemonProvider {
                 .filter(|icon| icon.starts_with("http://") || icon.starts_with("https://"))
                 .map(str::to_owned)
             {
-                item.icon = tokio::task::spawn_blocking(move || super::heroic::cache_icon(&url))
+                item.icon = tokio::task::spawn_blocking(move || cache_icon(&url))
                     .await
                     .unwrap_or(None);
             }
@@ -586,6 +592,50 @@ impl GameProvider for DaemonProvider {
 
         Ok(items.into_iter().map(catalog_item_to_game_record).collect())
     }
+}
+
+fn cache_icon(url: &str) -> Option<String> {
+    let cache_dir = icon_cache_dir();
+    let _ = std::fs::create_dir_all(&cache_dir);
+    let extension = url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| {
+            Path::new(parsed.path())
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(str::to_ascii_lowercase)
+        })
+        .filter(|extension| matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "svg" | "webp"))
+        .unwrap_or_else(|| "png".to_string());
+    let mut hasher = DefaultHasher::new();
+    hasher.write(url.as_bytes());
+    let cached = cache_dir.join(format!("{:016x}.{extension}", hasher.finish()));
+
+    if cached.metadata().is_ok_and(|metadata| metadata.len() >= 16) {
+        return Some(cached.to_string_lossy().into_owned());
+    }
+
+    let response = ureq::get(url).call().ok()?;
+    let mut body = Vec::new();
+    response
+        .into_body()
+        .into_reader()
+        .read_to_end(&mut body)
+        .ok()?;
+    if body.len() < 16 {
+        return None;
+    }
+    let mut file = std::fs::File::create(&cached).ok()?;
+    file.write_all(&body).ok()?;
+    Some(cached.to_string_lossy().into_owned())
+}
+
+fn icon_cache_dir() -> PathBuf {
+    env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("hearthdeck/icons")
 }
 
 /// Response from the /v1/retro/roms endpoint.

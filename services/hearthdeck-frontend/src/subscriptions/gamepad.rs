@@ -84,6 +84,7 @@ impl Direction {
 
 #[derive(Default)]
 struct NavState {
+    armed: bool,
     dir: Option<Direction>,
     repeat_at: Option<Instant>,
     last_move_at: Option<Instant>,
@@ -91,7 +92,10 @@ struct NavState {
 
 impl NavState {
     fn poll(&mut self, gamepad: &Gamepad, tx: &UnboundedSender<GamepadEvent>) {
-        let dir = current_direction(gamepad, self.dir.is_some());
+        let dir = direction_after_neutral(
+            &mut self.armed,
+            current_direction(gamepad, self.dir.is_some()),
+        );
         match (self.dir, dir) {
             (Some(prev), Some(next)) if prev == next => {
                 if let Some(repeat_at) = self.repeat_at
@@ -126,6 +130,14 @@ impl NavState {
         self.last_move_at = Some(Instant::now());
         true
     }
+}
+
+fn direction_after_neutral(armed: &mut bool, direction: Option<Direction>) -> Option<Direction> {
+    if !*armed {
+        *armed = direction.is_none();
+        return None;
+    }
+    direction
 }
 
 /// Determines which direction is currently pressed, from the D-pad or the
@@ -206,7 +218,7 @@ fn gilrs_loop(tx: UnboundedSender<GamepadEvent>) {
     // affect navigation coming from another pad.
     let mut nav_states: HashMap<GamepadId, NavState> = HashMap::new();
 
-    loop {
+    while !tx.is_closed() {
         while let Some(Event { id, event, .. }) = gilrs.next_event() {
             let gamepad = gilrs.gamepad(id);
             if !gamepad.is_connected() {
@@ -215,8 +227,10 @@ fn gilrs_loop(tx: UnboundedSender<GamepadEvent>) {
             let EventType::ButtonPressed(button, _) = event else {
                 continue;
             };
-            if let Some(ev) = map_button(button) {
-                let _ = tx.unbounded_send(ev);
+            if let Some(ev) = map_button(button)
+                && tx.unbounded_send(ev).is_err()
+            {
+                return;
             }
         }
 
@@ -230,5 +244,27 @@ fn gilrs_loop(tx: UnboundedSender<GamepadEvent>) {
 
         gilrs.inc();
         std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Direction, direction_after_neutral};
+
+    #[test]
+    fn resumed_subscription_waits_for_neutral_input() {
+        let mut armed = false;
+
+        assert_eq!(
+            direction_after_neutral(&mut armed, Some(Direction::Down)),
+            None
+        );
+        assert!(!armed);
+        assert_eq!(direction_after_neutral(&mut armed, None), None);
+        assert!(armed);
+        assert_eq!(
+            direction_after_neutral(&mut armed, Some(Direction::Down)),
+            Some(Direction::Down)
+        );
     }
 }

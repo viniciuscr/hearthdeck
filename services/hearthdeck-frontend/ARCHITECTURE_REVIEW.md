@@ -44,21 +44,14 @@ architecture debt is pre-existing, not introduced by our work.
 
 - [ ] **H-A1. Filter logic duplicated** — `load_apps()` does filtering +
   sorting + duplicate detection synchronously on the main thread.
-  `filter_apps()` does the same async. Both call
-  `config.filtered()`. `load_apps()` is triggered by the desktop-files
-  subscription on every file change. Files: `src/app.rs:499-554,556-579`.
+  `filter_apps()` does the same async. Both call `config.filtered()`.
 
   Fix: After loading `all_entries`, delegate to `filter_apps()` instead of
   duplicating the pipeline.
 
-- [ ] **H-A2. Desktop files subscription fires too aggressively** — 3-second
-  coalesce, recursive watch on all default_paths. Package managers create
-  dozens of events. Each triggers a full `load_apps()`. File:
-  `src/subscriptions/desktop_files.rs:34`.
-
-  Fix: Increase debounce to 10-30s, or use a channel-based debounce that
-  resets on each event. Consider watching only `.desktop` file metadata
-  changes.
+- [x] **H-A2. Desktop files subscription fires too aggressively** — Removed.
+  The daemon is the sole catalog owner and refreshes desktop applications
+  through the bridge.
 
 - [ ] **H-A3. State scattered across 3+ reset locations** — `scroll_offset`,
   `search_value`, `cur_group` are reset in `SelectSection`, `SelectGroup`,
@@ -105,12 +98,10 @@ architecture debt is pre-existing, not introduced by our work.
 
   Fix: Move to async task. Use `HashSet` for O(n) dedup.
 
-- [ ] **M-A4. Unclear input precedence** — Gamepad, keyboard, and mouse events
-  mixed in one subscription. Focus-trapping rules undocumented. File:
-  `src/app.rs:1697-1769`.
-
-  Fix: Create `input.rs` module that maps raw events to semantic actions
-  with a clear precedence chain.
+- [x] **M-A4. Unclear input precedence** — `input_ownership.rs` now combines
+  managed-session state with compositor focus. The frontend subscribes to
+  gamepad input only while it owns foreground input and rejects queued events
+  after ownership changes.
 
 - [ ] **M-A5. Config migration fragile** — Only migrates to `pc_games`, never
   writes back. Runs repeatedly. File: `src/app.rs:1796-1804`.

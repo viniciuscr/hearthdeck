@@ -24,6 +24,7 @@
 //      read here so either kind of controller can navigate the menu;
 //      confirm on real hardware which (if either) actually fires, with
 //      `evtest`.
+use std::future::Future;
 use std::time::Duration;
 
 use cosmic::iced::Subscription;
@@ -43,6 +44,23 @@ pub enum GamepadEvent {
 }
 
 const RESCAN_DELAY: Duration = Duration::from_secs(5);
+
+#[derive(Default)]
+struct WatchTasks(Vec<tokio::task::JoinHandle<()>>);
+
+impl WatchTasks {
+    fn spawn(&mut self, future: impl Future<Output = ()> + Send + 'static) {
+        self.0.push(tokio::spawn(future));
+    }
+}
+
+impl Drop for WatchTasks {
+    fn drop(&mut self) {
+        for task in &self.0 {
+            task.abort();
+        }
+    }
+}
 
 /// Emits a `GamepadEvent` each time any currently-connected gamepad reports
 /// one of the button/axis transitions the overlay cares about.
@@ -65,10 +83,11 @@ const RESCAN_DELAY: Duration = Duration::from_secs(5);
 /// `visible` is threaded through as this `Subscription`'s identifying data
 /// (`Subscription::run_with`): a change in the value iced sees between calls
 /// to `Overlay::subscription` is what causes iced to tear down the previous
-/// stream (dropping its `Device`s, releasing any grab) and spawn a fresh one
-/// with the new grab state - not a channel/signal into an already-running
-/// stream. The brief gap while devices are re-enumerated and reopened across
-/// that transition is an accepted tradeoff for reusing iced's own
+/// stream and spawn a fresh one with the new grab state - not a channel/signal
+/// into an already-running stream. Its child watcher tasks are owned by an
+/// abort-on-drop collection, so tearing down the stream closes every `Device`
+/// and releases any grab. The brief gap while devices are re-enumerated and
+/// reopened across that transition is an accepted tradeoff for reusing iced's
 /// state-driven subscription mechanism instead of hand-rolling a persistent
 /// task with its own control channel.
 ///
@@ -99,10 +118,10 @@ pub fn subscription(visible: bool) -> Subscription<GamepadEvent> {
                     // per-device `next_event().await` loop needs neither,
                     // keeping this crate's dependency footprint smaller.
                     let (tx, mut rx) = mpsc::channel(8);
-                    let mut tasks = Vec::new();
+                    let mut tasks = WatchTasks::default();
                     for device in devices {
                         let tx = tx.clone();
-                        tasks.push(tokio::spawn(watch_device(device, tx, visible)));
+                        tasks.spawn(watch_device(device, tx, visible));
                     }
                     drop(tx);
 
@@ -115,9 +134,6 @@ pub fn subscription(visible: bool) -> Subscription<GamepadEvent> {
                     tracing::warn!(
                         "hearthdeck-overlay: all evdev devices disconnected, rescanning"
                     );
-                    for task in tasks {
-                        task.abort();
-                    }
                 }
             },
         )
@@ -215,8 +231,41 @@ fn gamepad_devices() -> Vec<Device> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GamepadEvent, map_axis_event, map_key_event};
+    use std::future::pending;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::{GamepadEvent, WatchTasks, map_axis_event, map_key_event};
     use evdev::{AbsoluteAxisCode, KeyCode};
+
+    struct DropSignal(Arc<AtomicBool>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn dropping_watch_tasks_cancels_device_watchers() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let dropped = Arc::new(AtomicBool::new(false));
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let signal = DropSignal(Arc::clone(&dropped));
+            let mut tasks = WatchTasks::default();
+
+            tasks.spawn(async move {
+                let _signal = signal;
+                let _ = started_tx.send(());
+                pending::<()>().await;
+            });
+            started_rx.await.unwrap();
+            drop(tasks);
+            tokio::task::yield_now().await;
+
+            assert!(dropped.load(Ordering::SeqCst));
+        });
+    }
 
     #[test]
     fn guide_dpad_and_south_button_map_on_press_only() {

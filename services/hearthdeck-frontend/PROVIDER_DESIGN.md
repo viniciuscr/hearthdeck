@@ -149,29 +149,27 @@ impl ProviderService {
 
 ### Step 5: Integrate with HearthDeck app
 
-The app calls `ProviderService::start()` in `init()`.
-Records are merged with the existing `all_entries` / `entry_path_input`.
-The UI displays games from providers alongside XDG desktop entries.
-Provider health is shown in the sidebar or settings.
+The app starts only `DaemonProvider` in `init()`. Discovery belongs to the
+daemon, which combines its providers into one catalog. Frontend-side providers
+must not introduce launchable records outside that catalog because they cannot
+participate in managed application sessions.
 
 ### Step 6: Launch integration
 
 When a user activates a game:
-1. Look up the `GameRecord` by ID
-2. Use the `launch_id` to determine how to launch:
-   - `"legendary:{appid}"` → `heroic://launch/legendary/{appid}`
-   - `"gog:{appid}"` → `heroic://launch/gog/{appid}`
-   - Desktop entry ID → existing `spawn_desktop_exec` path
+1. Remove the frontend-only `hearthdeck:` prefix from the catalog ID.
+2. POST that ID to the daemon launch endpoint.
+3. Let the bridge validate the target and launch it in a tracked systemd unit.
+4. Relinquish controller input until the managed session exits or compositor
+    focus returns to Hearthdeck.
+
+The frontend must never execute provider commands directly.
 
 ---
 
 ## Implementation order
 
-1. Create `src/providers/mod.rs` with `GameProvider` trait + `GameRecord`
-2. Create `src/providers/heroic.rs` — read Heroic config, return records
-3. Create `src/providers/desktop_apps.rs` — wrap existing desktop entry loading
-4. Create `src/providers/service.rs` — lifecycle management
-5. Wire into `HearthDeck::init()` — start providers, merge records
-6. Update `load_apps()` — include provider records alongside XDG entries
-7. Update `activate_app()` — handle provider-specific launch paths
-8. Add provider health display in sidebar/settings
+1. Add discovery providers to the daemon.
+2. Merge their records into the daemon catalog.
+3. Expose records through `DaemonProvider`.
+4. Add typed daemon/bridge launch handling and managed-session tests.

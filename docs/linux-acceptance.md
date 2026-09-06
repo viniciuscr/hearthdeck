@@ -87,6 +87,13 @@ confirm `systemctl --user status hearthdeck-heroic.service` shows the unit
 fully stopped, with no lingering Heroic or game process still running
 (`ps -u $USER -o pid,cmd | grep -i heroic`).
 
+While every managed game or application is in the foreground, exercise all
+controller buttons and sticks. Confirm the launched app receives them while
+Hearthdeck does not move selection, open another app, close itself, or end the
+session. Close a normal managed app and confirm controller navigation returns
+to Hearthdeck. For persistent Heroic, return focus to Hearthdeck and confirm
+navigation returns without the still-active Heroic unit taking ownership back.
+
 If `gamepad-osk` is installed, confirm it is running in daemon mode with access to
 the controller input and `/dev/uinput`. Its evdev grab cannot reliably suppress
 Hearthdeck's direct joystick reader, so OSK input isolation is not guaranteed.

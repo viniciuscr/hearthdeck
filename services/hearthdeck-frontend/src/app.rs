@@ -46,7 +46,6 @@ use cosmic::{
         },
         platform_specific::shell::wayland::commands::{
             self,
-            activation::request_token,
             layer_surface::{destroy_layer_surface, get_layer_surface},
             popup::destroy_popup,
         },
@@ -74,10 +73,10 @@ use cosmic_app_list_config::AppListConfig;
 use itertools::Itertools;
 use log::error;
 use serde::{Deserialize, Serialize};
-use switcheroo_control::Gpu;
 
 use crate::app_group::{AppGroup, AppLibraryConfig, Section};
 use crate::fl;
+use crate::input_ownership::{Event as InputEvent, InputOwnership, managed_catalog_id};
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::style::{
     CONTENT_HORIZONTAL_PADDING, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
@@ -89,7 +88,6 @@ use crate::style::{
     WINDOW_WIDTH, accent_bar, grid_gap, launch_overlay, root_background, section_button_class,
     sidebar_divider, sidebar_width, tab_button_class, tab_width, tile_height, tile_width,
 };
-use crate::subscriptions::desktop_files::desktop_files;
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::widgets::application::{AppletString, ApplicationButton};
 
@@ -120,6 +118,7 @@ static SAVE: LazyLock<String> = LazyLock::new(|| fl!("save"));
 static CANCEL: LazyLock<String> = LazyLock::new(|| fl!("cancel"));
 static RUN: LazyLock<String> = LazyLock::new(|| fl!("run"));
 const LAUNCH_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(1200);
+const SESSION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 static REMOVE: LazyLock<String> = LazyLock::new(|| fl!("remove"));
 static FLATPAK: LazyLock<String> = LazyLock::new(|| fl!("flatpak"));
 static LOCAL: LazyLock<String> = LazyLock::new(|| fl!("local"));
@@ -361,7 +360,6 @@ struct HearthDeck {
     window_width: f32,
     core: Core,
     group_to_delete: Option<usize>,
-    gpus: Option<Vec<Gpu>>,
     duplicates: HashMap<PathBuf, (AppSource, Option<widget::icon::Handle>)>,
     app_list_config: AppListConfig,
     focused_id: Option<widget::Id>,
@@ -376,6 +374,7 @@ struct HearthDeck {
     /// Client for the HearthDeck daemon, if available.
     daemon_client: Option<crate::providers::daemon::DaemonClient>,
     launch_state: LaunchState,
+    input_ownership: InputOwnership,
 }
 
 impl Default for HearthDeck {
@@ -400,7 +399,6 @@ impl Default for HearthDeck {
             window_width: WINDOW_WIDTH,
             core: Default::default(),
             group_to_delete: Default::default(),
-            gpus: Default::default(),
             duplicates: Default::default(),
             app_list_config: Default::default(),
             focused_id: Default::default(),
@@ -412,25 +410,9 @@ impl Default for HearthDeck {
             provider_service: None,
             daemon_client: None,
             launch_state: LaunchState::default(),
+            input_ownership: InputOwnership::default(),
         }
     }
-}
-
-async fn try_get_gpus() -> Option<Vec<Gpu>> {
-    let connection = zbus::Connection::system().await.ok()?;
-    let proxy = switcheroo_control::SwitcherooControlProxy::new(&connection)
-        .await
-        .ok()?;
-
-    if !proxy.has_dual_gpu().await.ok()? {
-        return None;
-    }
-
-    let gpus = proxy.get_gpus().await.ok()?;
-    if gpus.is_empty() {
-        return None;
-    }
-    Some(gpus)
 }
 
 impl HearthDeck {
@@ -490,9 +472,8 @@ enum Message {
     GamepadEvent(GamepadEvent),
     FocusGridFirst,
     Close,
-    ActivateApp(usize, Option<usize>),
+    ActivateApp(usize),
     StartCurAppFocus,
-    ActivationToken(Option<String>, String, String, Option<usize>, bool),
     SelectSection(Section),
     SelectGroup(Option<usize>),
     ToggleFilterMenu,
@@ -507,7 +488,6 @@ enum Message {
     NewGroup(String),
     SubmitNewGroup,
     CancelNewGroup,
-    LoadApps,
     FilterApps(
         String,
         Vec<Arc<DesktopEntryData>>,
@@ -524,21 +504,20 @@ enum Message {
     LeaveDndOffer(Option<usize>),
     ScrollYOffset(f32, f32),
     ViewportHeight(f32),
-    GpuUpdate(Option<Vec<Gpu>>),
     PinToAppTray(usize),
     UnPinFromAppTray(usize),
     AppListConfig(AppListConfig),
     Opened(SurfaceId),
+    WindowFocusChanged(bool),
     WindowResized(f32),
     DaemonLaunchResult(Result<(), String>),
-    LocalLaunchStarted,
+    ActiveSessionResult(Result<bool, String>),
     DismissLaunch,
 }
 
 #[derive(Clone, Debug)]
 enum MenuAction {
     Remove,
-    DesktopAction(String),
 }
 
 pub fn menu_button<'a, Message: Clone + 'a>(
@@ -557,6 +536,23 @@ pub fn menu_control_padding() -> Padding {
 }
 
 impl HearthDeck {
+    fn poll_active_session(&self, delay: std::time::Duration) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                tokio::time::sleep(delay).await;
+                client
+                    .active_session()
+                    .await
+                    .map(|session| session.is_some())
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::ActiveSessionResult(result)),
+        )
+    }
+
     fn sync_category_groups(&mut self) {
         let selected_group = self
             .cur_group
@@ -590,13 +586,8 @@ impl HearthDeck {
     }
 
     pub fn load_apps(&mut self) {
-        // Populate from desktop as a synchronous fallback so the first frame
-        // already has entries.  ProviderService merges additional entries
-        // asynchronously via ProviderRecords (never replaces).
-        // NOTE: we no longer load XDG desktop entries here — the provider
-        // system (Heroic, Lutris, Flatpak) handles game discovery.
-        // Desktop entries that are not games belong in the Applications
-        // section, handled separately.
+        // The daemon owns discovery; this only projects its catalog records
+        // into the currently selected section and group.
 
         self.entry_path_input = self.config.filtered(
             self.cur_section,
@@ -695,64 +686,35 @@ impl HearthDeck {
         ])
     }
 
-    fn activate_app(
-        &mut self,
-        i: usize,
-        gpu_idx: Option<usize>,
-    ) -> Task<<Self as cosmic::Application>::Message> {
+    fn activate_app(&mut self, i: usize) -> Task<<Self as cosmic::Application>::Message> {
+        if !self.input_ownership.frontend_has_control() {
+            return Task::none();
+        }
         self.edit_name = None;
         if let Some(de) = self.entry_path_input.get(i) {
             let app_id = de.id.clone();
             let title = de.name.clone();
-            let terminal = de.terminal;
 
-            // Route launches through the daemon when it's configured and the
-            // entry came from the daemon provider. Daemon-launched apps get
-            // proper session management (single-session policy, stop support).
-            // Falls back to direct cosmic launch for local entries.
-            if let Some(client) = self
-                .daemon_client
-                .clone()
-                .filter(|_| app_id.starts_with("hearthdeck:"))
-            {
-                if self.launch_state.update(LaunchEvent::Start(title)) != LaunchEffect::Launch {
-                    return Task::none();
-                }
-                let launch_id: String = app_id
-                    .split_once(':')
-                    .map(|(_, id)| id.to_string())
-                    .unwrap_or_else(|| app_id.clone());
-                return Task::perform(
-                    async move { client.launch_app(&launch_id).await },
-                    move |result| match result {
-                        Ok(_) => cosmic::Action::App(Message::DaemonLaunchResult(Ok(()))),
-                        Err(e) => {
-                            cosmic::Action::App(Message::DaemonLaunchResult(Err(e.to_string())))
-                        }
-                    },
-                );
-            }
-
-            let Some(exec) = de.exec.clone() else {
+            let Some(client) = self.daemon_client.clone() else {
+                return Task::none();
+            };
+            let Some(launch_id) = managed_catalog_id(&app_id).map(str::to_owned) else {
+                error!("refusing unmanaged application launch: {app_id}");
                 return Task::none();
             };
             if self.launch_state.update(LaunchEvent::Start(title)) != LaunchEffect::Launch {
                 return Task::none();
             }
-
-            request_token(
-                Some(String::from(<Self as cosmic::Application>::APP_ID)),
-                Some(SurfaceId::RESERVED),
+            self.input_ownership.update(InputEvent::LaunchStarted);
+            Task::perform(
+                async move { client.launch_app(&launch_id).await },
+                move |result| match result {
+                    Ok(_) => cosmic::Action::App(Message::DaemonLaunchResult(Ok(()))),
+                    Err(error) => {
+                        cosmic::Action::App(Message::DaemonLaunchResult(Err(error.to_string())))
+                    }
+                },
             )
-            .map(move |t| {
-                cosmic::Action::App(Message::ActivationToken(
-                    t,
-                    app_id.clone(),
-                    exec.clone(),
-                    gpu_idx,
-                    terminal,
-                ))
-            })
         } else {
             Task::none()
         }
@@ -908,7 +870,7 @@ impl HearthDeck {
             self.menu = None;
             return Task::batch(vec![
                 commands::popup::destroy_popup(*MENU_ID),
-                self.update(Message::ActivateApp(i, None)),
+                self.update(Message::ActivateApp(i)),
             ]);
         }
         self.update(Message::StartCurAppFocus)
@@ -1208,6 +1170,9 @@ impl cosmic::Application for HearthDeck {
                 return self.focus_grid_index(i + 1);
             }
             Message::GamepadEvent(event) => {
+                if !self.input_ownership.frontend_has_control() {
+                    return Task::none();
+                }
                 return match event {
                     GamepadEvent::MoveUp => self.gamepad_move(Message::PrevRow),
                     GamepadEvent::MoveDown => self.gamepad_move(Message::NextRow),
@@ -1239,8 +1204,8 @@ impl cosmic::Application for HearthDeck {
                 }
                 return self.close();
             }
-            Message::ActivateApp(i, gpu_idx) => {
-                return self.activate_app(i, gpu_idx);
+            Message::ActivateApp(i) => {
+                return self.activate_app(i);
             }
             Message::StartCurAppFocus => {
                 let i = if self
@@ -1255,23 +1220,7 @@ impl cosmic::Application for HearthDeck {
                         .and_then(|focus| self.entry_ids.iter().position(|id| focus == id))
                         .unwrap_or_default()
                 };
-                let gpu_idx = None;
-                return self.activate_app(i, gpu_idx);
-            }
-            Message::ActivationToken(token, app_id, exec, gpu_idx, terminal) => {
-                let mut env_vars = Vec::new();
-                if let Some(token) = token {
-                    env_vars.push(("XDG_ACTIVATION_TOKEN".to_string(), token.clone()));
-                    env_vars.push(("DESKTOP_STARTUP_ID".to_string(), token));
-                }
-                if let (Some(gpus), Some(idx)) = (self.gpus.as_ref(), gpu_idx) {
-                    env_vars.extend(gpus[idx].environment.clone());
-                }
-                tokio::spawn(async move {
-                    cosmic::desktop::spawn_desktop_exec(exec, env_vars, Some(&app_id), terminal)
-                        .await
-                });
-                return self.update(Message::LocalLaunchStarted);
+                return self.activate_app(i);
             }
             Message::SelectSection(section) => {
                 if section == self.cur_section {
@@ -1367,10 +1316,6 @@ impl cosmic::Application for HearthDeck {
                 {
                     error!("{:?}", err);
                 }
-            }
-            Message::LoadApps => {
-                self.load_apps();
-                return Task::none();
             }
             Message::Delete(group) => {
                 self.group_to_delete = Some(group);
@@ -1497,24 +1442,6 @@ impl cosmic::Application for HearthDeck {
                             }
                             tasks.push(self.filter_apps());
                         }
-                        MenuAction::DesktopAction(exec) => {
-                            let mut exec = shlex::Shlex::new(&exec);
-
-                            let mut cmd = match exec.next() {
-                                Some(cmd) if !cmd.contains('=') => {
-                                    tokio::process::Command::new(cmd)
-                                }
-                                _ => return Task::none(),
-                            };
-                            for arg in exec {
-                                // TODO handle "%" args here if necessary?
-                                if !arg.starts_with('%') {
-                                    cmd.arg(arg);
-                                }
-                            }
-                            let _ = cmd.spawn();
-                            return Task::none();
-                        }
                     }
                 }
                 return Task::batch(tasks);
@@ -1603,9 +1530,6 @@ impl cosmic::Application for HearthDeck {
                     });
                 }
             }
-            Message::GpuUpdate(gpus) => {
-                self.gpus = gpus;
-            }
             Message::PinToAppTray(usize) => {
                 let pinned_id = self.entry_path_input.get(usize).map(|e| e.id.clone());
                 if let Some((pinned_id, app_list_helper)) = pinned_id
@@ -1633,14 +1557,25 @@ impl cosmic::Application for HearthDeck {
             Message::Opened(window_id) => {
                 return window::set_mode(window_id, window::Mode::Fullscreen);
             }
+            Message::WindowFocusChanged(focused) => {
+                self.input_ownership.update(if focused {
+                    InputEvent::FrontendFocused
+                } else {
+                    InputEvent::FrontendUnfocused
+                });
+            }
             Message::WindowResized(width) => {
                 self.window_width = width;
             }
             Message::DaemonLaunchResult(result) => {
                 let effect = match result {
-                    Ok(()) => self.launch_state.update(LaunchEvent::Accepted),
+                    Ok(()) => {
+                        self.input_ownership.update(InputEvent::LaunchAccepted);
+                        self.launch_state.update(LaunchEvent::Accepted)
+                    }
                     Err(error) => {
                         error!("daemon launch failed: {error}");
+                        self.input_ownership.update(InputEvent::LaunchFailed);
                         self.launch_state.update(LaunchEvent::Failed(error))
                     }
                 };
@@ -1650,12 +1585,17 @@ impl cosmic::Application for HearthDeck {
                     });
                 }
             }
-            Message::LocalLaunchStarted => {
-                if self.launch_state.update(LaunchEvent::Accepted) == LaunchEffect::DelayDismiss {
-                    return Task::perform(tokio::time::sleep(LAUNCH_OVERLAY_DELAY), |_| {
-                        cosmic::Action::App(Message::DismissLaunch)
-                    });
+            Message::ActiveSessionResult(result) => {
+                match result {
+                    Ok(active) => self
+                        .input_ownership
+                        .update(InputEvent::SessionObserved(active)),
+                    Err(error) => {
+                        log::warn!("active session check failed: {error}");
+                        self.input_ownership.update(InputEvent::SessionCheckFailed);
+                    }
                 }
+                return self.poll_active_session(SESSION_POLL_INTERVAL);
             }
             Message::DismissLaunch => {
                 self.launch_state.update(LaunchEvent::Dismiss);
@@ -1715,50 +1655,11 @@ impl cosmic::Application for HearthDeck {
 
             let mut list_column = Vec::new();
 
-            if let Some(gpus) = self.gpus.as_ref() {
-                for (j, gpu) in gpus.iter().enumerate() {
-                    let default_idx = if menu.prefers_dgpu {
-                        gpus.iter().position(|gpu| !gpu.default).unwrap_or(0)
-                    } else {
-                        gpus.iter().position(|gpu| gpu.default).unwrap_or(0)
-                    };
-                    list_column.push(
-                        menu_button(
-                            text::body(format!(
-                                "{} {}",
-                                fl!("run-on", gpu = gpu.name.as_str()),
-                                if j == default_idx {
-                                    fl!("run-on-default")
-                                } else {
-                                    String::new()
-                                }
-                            ))
-                            .size(TEXT_BODY),
-                        )
-                        .on_press(Message::ActivateApp(*i, Some(j)))
-                        .into(),
-                    )
-                }
-            } else {
-                list_column.push(
-                    menu_button(text::body(RUN.clone()).size(TEXT_BODY))
-                        .on_press(Message::ActivateApp(*i, None))
-                        .into(),
-                );
-            }
-
-            if !menu.desktop_actions.is_empty() {
-                list_column.push(divider::horizontal::light().into());
-                for action in menu.desktop_actions.iter() {
-                    list_column.push(
-                        menu_button(text::body(&action.name).size(TEXT_BODY))
-                            .on_press(Message::SelectAction(MenuAction::DesktopAction(
-                                action.exec.clone(),
-                            )))
-                            .into(),
-                    );
-                }
-            }
+            list_column.push(
+                menu_button(text::body(RUN.clone()).size(TEXT_BODY))
+                    .on_press(Message::ActivateApp(*i))
+                    .into(),
+            );
 
             // add to pinned
             let svg_accent = Rc::new(|theme: &cosmic::Theme| {
@@ -1897,11 +1798,17 @@ impl cosmic::Application for HearthDeck {
 
     fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![
-            desktop_files(0).map(|_| Message::LoadApps),
-            gamepad_events().map(Message::GamepadEvent),
             listen_with(|e, status, id| match e {
                 cosmic::iced::Event::Window(WindowEvent::Opened { .. }) => {
                     Some(Message::Opened(id))
+                }
+                cosmic::iced::Event::Window(WindowEvent::Focused) if id == SurfaceId::RESERVED => {
+                    Some(Message::WindowFocusChanged(true))
+                }
+                cosmic::iced::Event::Window(WindowEvent::Unfocused)
+                    if id == SurfaceId::RESERVED =>
+                {
+                    Some(Message::WindowFocusChanged(false))
                 }
                 cosmic::iced::Event::Window(WindowEvent::Resized(size)) => {
                     Some(Message::WindowResized(size.width))
@@ -1972,6 +1879,10 @@ impl cosmic::Application for HearthDeck {
                 .map(|config| Message::AppListConfig(config.config)),
         ];
 
+        if self.input_ownership.frontend_has_control() {
+            subs.push(gamepad_events().map(Message::GamepadEvent));
+        }
+
         subs.push(provider_records_subscription());
 
         Subscription::batch(subs)
@@ -1986,9 +1897,6 @@ impl cosmic::Application for HearthDeck {
         core.set_app_type(cosmic::core::AppType::Window);
         core.window.use_template = false;
 
-        let locale = std::env::var("LANG").unwrap_or_default();
-        let locale = locale.split('.').next().unwrap_or_default();
-
         let daemon_client =
             crate::providers::daemon::DaemonClient::new(crate::providers::daemon::DaemonConfig {
                 base_url: std::env::var("HEARTHDECK_BACKEND_URL")
@@ -1996,16 +1904,9 @@ impl cosmic::Application for HearthDeck {
                 token: std::env::var("HEARTHDECK_PAIRING_TOKEN").unwrap_or_default(),
             });
         let (provider_service, mut provider_rx) =
-            crate::providers::service::ProviderService::start(vec![
-                std::sync::Arc::new(crate::providers::daemon::DaemonProvider::with_client(
-                    daemon_client.clone(),
-                )),
-                std::sync::Arc::new(crate::providers::heroic::HeroicProvider::from_system()),
-                std::sync::Arc::new(crate::providers::lutris::LutrisProvider::from_system()),
-                std::sync::Arc::new(crate::providers::flatpak::FlatpakProvider::new(vec![
-                    locale.to_string(),
-                ])),
-            ]);
+            crate::providers::service::ProviderService::start(vec![std::sync::Arc::new(
+                crate::providers::daemon::DaemonProvider::with_client(daemon_client.clone()),
+            )]);
 
         let helper = AppLibraryConfig::helper();
 
@@ -2090,10 +1991,8 @@ impl cosmic::Application for HearthDeck {
         self_.load_apps();
 
         let focus_search = text_input::focus(SEARCH_ID.clone());
-        let fetch_gpus = Task::perform(try_get_gpus(), |gpus| {
-            cosmic::Action::App(Message::GpuUpdate(gpus))
-        });
-        (self_, Task::batch([focus_search, fetch_gpus]))
+        let poll_active_session = self_.poll_active_session(std::time::Duration::ZERO);
+        (self_, Task::batch([focus_search, poll_active_session]))
     }
 }
 
@@ -2475,13 +2374,6 @@ impl HearthDeck {
             .zip(self.entry_icon_handles.iter())
             .enumerate()
             .map(|(i, ((entry, id), icon_handle))| {
-                let gpu_idx = self.gpus.as_ref().map(|gpus| {
-                    if entry.prefers_dgpu {
-                        gpus.iter().position(|gpu| !gpu.default).unwrap_or(0)
-                    } else {
-                        gpus.iter().position(|gpu| gpu.default).unwrap_or(0)
-                    }
-                });
                 let dup = entry
                     .path
                     .as_ref()
@@ -2497,7 +2389,7 @@ impl HearthDeck {
                     tile_height(self.window_width, self.cur_section != Section::Applications),
                     move |rect| Message::OpenContextMenu(rect, i),
                     if self.menu.is_none() {
-                        Some(Message::ActivateApp(i, gpu_idx))
+                        Some(Message::ActivateApp(i))
                     } else if selected {
                         Some(Message::CloseContextMenu)
                     } else {

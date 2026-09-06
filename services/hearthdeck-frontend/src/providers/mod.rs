@@ -1,8 +1,4 @@
 pub mod daemon;
-pub mod desktop_apps;
-pub mod flatpak;
-pub mod heroic;
-pub mod lutris;
 pub mod service;
 
 use std::path::PathBuf;
