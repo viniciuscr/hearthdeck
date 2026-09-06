@@ -232,26 +232,27 @@ fn gamepad_devices() -> Vec<Device> {
 #[cfg(test)]
 mod tests {
     use std::future::pending;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
 
     use super::{GamepadEvent, WatchTasks, map_axis_event, map_key_event};
     use evdev::{AbsoluteAxisCode, KeyCode};
 
-    struct DropSignal(Arc<AtomicBool>);
+    struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
 
     impl Drop for DropSignal {
         fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
+            if let Some(dropped) = self.0.take() {
+                let _ = dropped.send(());
+            }
         }
     }
 
     #[test]
     fn dropping_watch_tasks_cancels_device_watchers() {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
-            let dropped = Arc::new(AtomicBool::new(false));
             let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-            let signal = DropSignal(Arc::clone(&dropped));
+            let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+            let signal = DropSignal(Some(dropped_tx));
             let mut tasks = WatchTasks::default();
 
             tasks.spawn(async move {
@@ -261,9 +262,11 @@ mod tests {
             });
             started_rx.await.unwrap();
             drop(tasks);
-            tokio::task::yield_now().await;
 
-            assert!(dropped.load(Ordering::SeqCst));
+            tokio::time::timeout(Duration::from_secs(1), dropped_rx)
+                .await
+                .expect("device watcher was not canceled")
+                .expect("device watcher exited without dropping its resources");
         });
     }
 
