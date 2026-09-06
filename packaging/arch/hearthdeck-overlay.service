@@ -11,8 +11,9 @@ ExecStart=/usr/lib/hearthdeck/hearthdeck-overlay
 # packaging/arch/cosmic-test-session (it starts this unit before exec'ing
 # into cosmic-comp). Restart-on-failure with a short delay lets it keep
 # retrying until that environment is actually available, rather than
-# needing a separate polling mechanism here.
-Restart=on-failure
+# needing a separate polling mechanism here. Always restart because this is a
+# persistent session service; a clean unexpected exit must not disable toggles.
+Restart=always
 RestartSec=1
 StandardOutput=journal
 StandardError=journal

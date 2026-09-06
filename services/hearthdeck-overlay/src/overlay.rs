@@ -2,7 +2,7 @@ use std::error::Error;
 use std::io;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixDatagram as StdUnixDatagram, UnixStream as StdUnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -29,6 +29,7 @@ use tracing::{error, info, warn};
 
 use crate::input;
 use crate::shortcut;
+use crate::state::{Effect, Event, OverlayState, Status};
 
 const APP_ID: &str = "io.github.viniciuscr.hearthdeck.Overlay";
 const TOGGLE_MESSAGE: &[u8] = b"toggle";
@@ -89,8 +90,16 @@ fn toggle() -> io::Result<()> {
 }
 
 fn send_toggle() -> io::Result<()> {
-    StdUnixDatagram::unbound()?.send_to(TOGGLE_MESSAGE, socket_path())?;
+    send_toggle_to(&socket_path())?;
     Ok(())
+}
+
+fn send_toggle_to(path: &Path) -> io::Result<usize> {
+    StdUnixDatagram::unbound()?.send_to(TOGGLE_MESSAGE, path)
+}
+
+fn is_toggle_message(message: &[u8]) -> bool {
+    message == TOGGLE_MESSAGE
 }
 
 fn socket_path() -> PathBuf {
@@ -130,17 +139,6 @@ enum Message {
     HideAfterClose,
 }
 
-/// What `view_window` renders while the overlay is visible. Not used while
-/// hidden. Separate from `Overlay::visible` because closing keeps the
-/// surface up (with different content) until `stop_active_application`
-/// actually finishes - unlike toggling/resuming, which hide immediately.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Status {
-    Menu,
-    Closing,
-    CloseFailed,
-}
-
 /// The menu's entries, in on-screen order - also the order gamepad D-pad
 /// navigation cycles through. A plain array (not a widget-per-variant match)
 /// so navigation logic (index math) and rendering (map to a list row) both
@@ -158,12 +156,7 @@ const CLOSE_FAILED_ITEMS: [(&str, Message); 2] = [
 struct Overlay {
     core: Core,
     window_id: window::Id,
-    visible: bool,
-    status: Status,
-    /// Index into `MENU_ITEMS` the gamepad's D-pad currently highlights.
-    /// Reset to 0 each time the overlay opens (see `show`) rather than
-    /// persisted, so it never opens with a stale/off-screen selection.
-    selected: usize,
+    state: OverlayState,
 }
 
 impl cosmic::Application for Overlay {
@@ -184,16 +177,14 @@ impl cosmic::Application for Overlay {
         let app = Overlay {
             core,
             window_id: window::Id::unique(),
-            visible: false,
-            status: Status::Menu,
-            selected: 0,
+            state: OverlayState::default(),
         };
         (app, Task::none())
     }
 
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            input::subscription(self.visible).map(|event| match event {
+            input::subscription(self.state.visible).map(|event| match event {
                 input::GamepadEvent::ToggleOverlay => Message::ToggleOverlay,
                 input::GamepadEvent::NavigateUp => Message::NavigateUp,
                 input::GamepadEvent::NavigateDown => Message::NavigateDown,
@@ -206,79 +197,44 @@ impl cosmic::Application for Overlay {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ToggleOverlay => {
-                // Ignore toggles while a close is in progress rather than
-                // tearing down the "Closing..." surface early - the surface
-                // comes down on its own once CloseFinished arrives.
-                if self.status == Status::Closing {
-                    Task::none()
-                } else if self.visible {
-                    self.hide()
-                } else {
-                    self.show()
-                }
+                let effect = self.state.update(Event::Toggle);
+                self.apply_effect(effect)
             }
             Message::NavigateUp | Message::NavigateDown => {
-                // Only meaningful while the menu itself is showing - ignored
-                // while hidden (no menu to navigate) or while closing (the
-                // surface no longer shows the item list).
-                if self.visible && self.status != Status::Closing {
-                    let len = match self.status {
-                        Status::Menu => MENU_ITEMS.len(),
-                        Status::CloseFailed => CLOSE_FAILED_ITEMS.len(),
-                        Status::Closing => unreachable!(),
-                    };
-                    self.selected = if matches!(message, Message::NavigateUp) {
-                        (self.selected + len - 1) % len
-                    } else {
-                        (self.selected + 1) % len
-                    };
-                }
-                Task::none()
+                let event = if matches!(message, Message::NavigateUp) {
+                    Event::NavigateUp
+                } else {
+                    Event::NavigateDown
+                };
+                let effect = self.state.update(event);
+                self.apply_effect(effect)
             }
             Message::Activate => {
-                if !self.visible {
-                    return Task::none();
-                }
-                match self.status {
-                    Status::Menu => self.update(MENU_ITEMS[self.selected].1.clone()),
-                    Status::CloseFailed => self.update(CLOSE_FAILED_ITEMS[self.selected].1.clone()),
-                    Status::Closing => Task::none(),
-                }
+                let effect = self.state.update(Event::Activate);
+                self.apply_effect(effect)
             }
-            Message::ResumeApp => self.hide(),
+            Message::ResumeApp => {
+                let effect = self.state.update(Event::Resume);
+                self.apply_effect(effect)
+            }
             Message::CloseApp => {
-                if self.status == Status::Closing {
-                    // Already closing from an earlier press; asking the
-                    // bridge "what's active *now*?" again could close a
-                    // different app once the first close has already
-                    // removed the first one from its tracking.
-                    return Task::none();
-                }
-                self.status = Status::Closing;
-                cosmic::task::future(async {
-                    Message::CloseFinished(
-                        tokio::task::spawn_blocking(stop_active_application)
-                            .await
-                            .map_err(|err| err.to_string())
-                            .and_then(|result| result.map_err(|err| err.to_string())),
-                    )
-                })
+                let effect = self.state.update(Event::Close);
+                self.apply_effect(effect)
             }
             Message::CloseFinished(result) => match result {
-                Ok(()) => cosmic::task::future(async {
-                    tokio::time::sleep(INPUT_RELEASE_DELAY).await;
-                    Message::HideAfterClose
-                }),
+                Ok(()) => {
+                    let effect = self.state.update(Event::CloseSucceeded);
+                    self.apply_effect(effect)
+                }
                 Err(err) => {
                     error!(%err, "hearthdeck-overlay: failed to stop active application");
-                    self.status = Status::CloseFailed;
-                    self.selected = 0;
-                    Task::none()
+                    let effect = self.state.update(Event::CloseFailed);
+                    self.apply_effect(effect)
                 }
             },
             Message::HideAfterClose => {
-                self.status = Status::Menu;
-                self.hide()
+                let effect = self.state.update(Event::HideAfterClose);
+                self.apply_effect(effect)
             }
         }
     }
@@ -292,14 +248,14 @@ impl cosmic::Application for Overlay {
             return text("").into();
         }
 
-        let menu: Element<'_, Message> = match self.status {
+        let menu: Element<'_, Message> = match self.state.status {
             Status::Menu => {
                 let mut items = list_column();
                 for (index, (label, message)) in MENU_ITEMS.iter().enumerate() {
                     items = items.add(
                         list::button(text::body(*label))
                             .on_press(message.clone())
-                            .selected(index == self.selected),
+                            .selected(index == self.state.selected),
                     );
                 }
                 column(vec![text::title2("Hearthdeck").into(), items.into()])
@@ -315,7 +271,7 @@ impl cosmic::Application for Overlay {
                     items = items.add(
                         list::button(text::body(*label))
                             .on_press(message.clone())
-                            .selected(index == self.selected),
+                            .selected(index == self.state.selected),
                     );
                 }
                 column(vec![
@@ -374,7 +330,7 @@ fn toggle_subscription() -> Subscription<()> {
 
             loop {
                 match socket.recv(&mut buffer).await {
-                    Ok(length) if &buffer[..length] == TOGGLE_MESSAGE => {
+                    Ok(length) if is_toggle_message(&buffer[..length]) => {
                         if output.send(()).await.is_err() {
                             break;
                         }
@@ -471,9 +427,27 @@ fn stop_active_application() -> io::Result<()> {
 }
 
 impl Overlay {
+    fn apply_effect(&mut self, effect: Effect) -> Task<Message> {
+        match effect {
+            Effect::None => Task::none(),
+            Effect::Show => self.show(),
+            Effect::Hide => self.hide(),
+            Effect::StopApplication => cosmic::task::future(async {
+                Message::CloseFinished(
+                    tokio::task::spawn_blocking(stop_active_application)
+                        .await
+                        .map_err(|err| err.to_string())
+                        .and_then(|result| result.map_err(|err| err.to_string())),
+                )
+            }),
+            Effect::DelayHide => cosmic::task::future(async {
+                tokio::time::sleep(INPUT_RELEASE_DELAY).await;
+                Message::HideAfterClose
+            }),
+        }
+    }
+
     fn show(&mut self) -> Task<Message> {
-        self.visible = true;
-        self.selected = 0;
         cosmic::surface::surface_task(app_layer_shell(
             |_app: &Overlay| LiveSettings {
                 padding: Some(IcedMargin::default()),
@@ -496,7 +470,6 @@ impl Overlay {
     }
 
     fn hide(&mut self) -> Task<Message> {
-        self.visible = false;
         destroy_layer_surface(self.window_id)
     }
 }
@@ -504,12 +477,48 @@ impl Overlay {
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixListener;
+    use std::os::unix::net::{UnixDatagram, UnixListener};
 
-    use super::stop_active_application;
+    use super::{TOGGLE_MESSAGE, is_toggle_message, send_toggle_to, stop_active_application};
 
     #[test]
-    fn stops_the_session_the_bridge_reports_as_active() {
+    fn toggle_command_reaches_the_overlay_control_socket() {
+        let socket_path = std::env::temp_dir().join(format!(
+            "hearthdeck-overlay-control-test-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+        let socket = UnixDatagram::bind(&socket_path).expect("bind overlay control socket");
+
+        assert_eq!(
+            send_toggle_to(&socket_path).expect("send toggle command"),
+            TOGGLE_MESSAGE.len()
+        );
+        let mut received = [0; 16];
+        let length = socket.recv(&mut received).expect("receive toggle command");
+        assert!(is_toggle_message(&received[..length]));
+        assert!(!is_toggle_message(b"invalid"));
+
+        let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[test]
+    fn overlay_dependency_and_service_wiring_stay_pinned() {
+        let manifest = include_str!("../Cargo.toml");
+        assert!(manifest.contains("dc1cf9f00cbe2902a52166492654bb9fee8a73d1"));
+
+        let service = include_str!("../../../packaging/arch/hearthdeck-overlay.service");
+        assert!(service.contains("ExecStart=/usr/lib/hearthdeck/hearthdeck-overlay"));
+        assert!(service.contains("Restart=always"));
+
+        let package = include_str!("../../../packaging/arch/PKGBUILD");
+        assert!(package.contains(
+            "install -Dm755 services/target/release/hearthdeck-overlay \"$pkgdir/usr/lib/hearthdeck/hearthdeck-overlay\""
+        ));
+    }
+
+    #[test]
+    fn stops_the_session_the_bridge_reports_as_active_and_rejects_missing_sessions() {
         let socket_path = std::env::temp_dir().join(format!(
             "hearthdeck-overlay-test-{}.sock",
             std::process::id()
@@ -547,6 +556,28 @@ mod tests {
 
         stop_active_application().expect("stop_active_application should succeed");
         server.join().expect("test bridge thread should not panic");
+        let _ = std::fs::remove_file(&socket_path);
+
+        let listener = UnixListener::bind(&socket_path).expect("bind test socket");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept test connection");
+            let mut reader = BufReader::new(&stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read test request");
+            assert!(line.contains("active_application_session"));
+            let mut stream = &stream;
+            stream
+                .write_all(b"{\"type\":\"application_session\",\"session\":null}\n")
+                .expect("write test response");
+        });
+
+        let error = stop_active_application().expect_err("missing session must fail close");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        server.join().expect("test bridge thread should not panic");
+        // SAFETY: no other test in this crate touches this env var.
+        unsafe {
+            std::env::remove_var("HEARTHDECK_BRIDGE_SOCKET");
+        }
         let _ = std::fs::remove_file(&socket_path);
     }
 }

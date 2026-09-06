@@ -56,9 +56,8 @@ Runs format, check-services, and check-app in sequence. Use this before creating
 If you ran `git config core.hooksPath .githooks`, the pre-push hook runs automatically:
 - Checks Rust formatting: `cargo fmt --all -- --check`
 - Builds all services in release mode: `cargo build --workspace --release`
-- Checks standalone packaging crates in release mode:
-  - `cargo check --manifest-path services/hearthdeck-applet-user/Cargo.toml --release`
-- Fails the push if either check fails
+- Runs strict Clippy checks across the workspace
+- Fails the push if any check fails
 
 ### Manual Pre-Push Check
 To manually run the same checks without pushing:
@@ -188,7 +187,7 @@ cargo build --target x86_64-unknown-linux-gnu --manifest-path services/Cargo.tom
   - `hearthdeck-bridge`: Linux desktop environment integration
   - `hearthdeck-observability`: Telemetry and logging
   - `hearthdeck-protocol`: Shared types and API contracts
-  - `hearthdeck-overlay`: Gamescope overlay integration (new)
+   - `hearthdeck-overlay`: COSMIC quick-menu layer-shell surface
   - `hearthdeck-overlay-spike`: Temporary spike for overlay investigation
 
 - **`lib/`**: Flutter frontend (Dart)
@@ -197,6 +196,12 @@ cargo build --target x86_64-unknown-linux-gnu --manifest-path services/Cargo.tom
 - **`.github/workflows/`**: CI/CD pipeline (GitHub Actions)
 
 ## Testing
+
+Every behavior change must include automated coverage in the same change. A bug
+fix must add a regression test that fails without the fix. Platform-facing code
+should separate testable state/parsing from the OS integration and cover both
+that logic and its package/service wiring where a compositor or device cannot
+run in CI.
 
 ### Backend (Rust)
 ```bash

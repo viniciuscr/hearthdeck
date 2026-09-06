@@ -165,18 +165,10 @@ async fn watch_device(mut device: Device, tx: mpsc::Sender<GamepadEvent>, grab: 
         };
 
         let mapped = match event.destructure() {
-            EventSummary::Key(_, KeyCode::BTN_MODE, 1) => Some(GamepadEvent::ToggleOverlay),
-            EventSummary::Key(_, KeyCode::BTN_DPAD_UP, 1) => Some(GamepadEvent::NavigateUp),
-            EventSummary::Key(_, KeyCode::BTN_DPAD_DOWN, 1) => Some(GamepadEvent::NavigateDown),
-            EventSummary::Key(_, KeyCode::BTN_SOUTH, 1) => Some(GamepadEvent::Activate),
+            EventSummary::Key(_, code, value) => map_key_event(code, value),
             // Hat-axis D-pad, for controllers that don't report BTN_DPAD_*
             // as discrete keys - see this module's own top-of-file docs.
-            EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_HAT0Y, -1) => {
-                Some(GamepadEvent::NavigateUp)
-            }
-            EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_HAT0Y, 1) => {
-                Some(GamepadEvent::NavigateDown)
-            }
+            EventSummary::AbsoluteAxis(_, axis, value) => map_axis_event(axis, value),
             _ => None,
         };
 
@@ -185,6 +177,24 @@ async fn watch_device(mut device: Device, tx: mpsc::Sender<GamepadEvent>, grab: 
         {
             return;
         }
+    }
+}
+
+fn map_key_event(code: KeyCode, value: i32) -> Option<GamepadEvent> {
+    match (code, value) {
+        (KeyCode::BTN_MODE, 1) => Some(GamepadEvent::ToggleOverlay),
+        (KeyCode::BTN_DPAD_UP, 1) => Some(GamepadEvent::NavigateUp),
+        (KeyCode::BTN_DPAD_DOWN, 1) => Some(GamepadEvent::NavigateDown),
+        (KeyCode::BTN_SOUTH, 1) => Some(GamepadEvent::Activate),
+        _ => None,
+    }
+}
+
+fn map_axis_event(axis: AbsoluteAxisCode, value: i32) -> Option<GamepadEvent> {
+    match (axis, value) {
+        (AbsoluteAxisCode::ABS_HAT0Y, -1) => Some(GamepadEvent::NavigateUp),
+        (AbsoluteAxisCode::ABS_HAT0Y, 1) => Some(GamepadEvent::NavigateDown),
+        _ => None,
     }
 }
 
@@ -201,4 +211,46 @@ fn gamepad_devices() -> Vec<Device> {
                 .is_some_and(|keys| keys.contains(KeyCode::BTN_MODE))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GamepadEvent, map_axis_event, map_key_event};
+    use evdev::{AbsoluteAxisCode, KeyCode};
+
+    #[test]
+    fn guide_dpad_and_south_button_map_on_press_only() {
+        assert_eq!(
+            map_key_event(KeyCode::BTN_MODE, 1),
+            Some(GamepadEvent::ToggleOverlay)
+        );
+        assert_eq!(
+            map_key_event(KeyCode::BTN_DPAD_UP, 1),
+            Some(GamepadEvent::NavigateUp)
+        );
+        assert_eq!(
+            map_key_event(KeyCode::BTN_DPAD_DOWN, 1),
+            Some(GamepadEvent::NavigateDown)
+        );
+        assert_eq!(
+            map_key_event(KeyCode::BTN_SOUTH, 1),
+            Some(GamepadEvent::Activate)
+        );
+        assert_eq!(map_key_event(KeyCode::BTN_SOUTH, 0), None);
+        assert_eq!(map_key_event(KeyCode::BTN_SOUTH, 2), None);
+    }
+
+    #[test]
+    fn hat_axis_maps_directions_and_ignores_release() {
+        assert_eq!(
+            map_axis_event(AbsoluteAxisCode::ABS_HAT0Y, -1),
+            Some(GamepadEvent::NavigateUp)
+        );
+        assert_eq!(
+            map_axis_event(AbsoluteAxisCode::ABS_HAT0Y, 1),
+            Some(GamepadEvent::NavigateDown)
+        );
+        assert_eq!(map_axis_event(AbsoluteAxisCode::ABS_HAT0Y, 0), None);
+        assert_eq!(map_axis_event(AbsoluteAxisCode::ABS_HAT0X, 1), None);
+    }
 }

@@ -216,6 +216,21 @@ pub fn tile_label_overlay(theme: &Theme) -> container::Style {
     }
 }
 
+/// Opaque launch layer shown while a selected game is starting.
+pub fn launch_overlay(theme: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(theme.cosmic().on_bg_color().into()),
+        icon_color: Some(theme.cosmic().accent_color().into()),
+        background: Some(Background::Color(Color {
+            r: 0.02,
+            g: 0.025,
+            b: 0.03,
+            a: 0.97,
+        })),
+        ..container::Style::default()
+    }
+}
+
 /// Radius of the accent indicator bars/underlines.
 const ACCENT_BAR_RADIUS: f32 = 2.0;
 

@@ -78,6 +78,7 @@ use switcheroo_control::Gpu;
 
 use crate::app_group::{AppGroup, AppLibraryConfig, Section};
 use crate::fl;
+use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::style::{
     CONTENT_HORIZONTAL_PADDING, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
     EDIT_NAME_INPUT_WIDTH, FILTER_BUTTON_HEIGHT, GRID_COLUMNS, GRID_TOP_PADDING, ICON_BODY,
@@ -85,8 +86,8 @@ use crate::style::{
     SEARCH_ICON_PADDING, SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_HEIGHT, SIDEBAR_ACCENT_BAR_WIDTH,
     SIDEBAR_HEADER_HEIGHT, SIDEBAR_ITEM_HEIGHT, TAB_HEIGHT, TAB_UNDERLINE_HEIGHT, TEXT_BODY,
     TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, TITLE_ACTION_HEIGHT, WINDOW_HEIGHT,
-    WINDOW_WIDTH, accent_bar, grid_gap, root_background, section_button_class, sidebar_divider,
-    sidebar_width, tab_button_class, tab_width, tile_height, tile_width,
+    WINDOW_WIDTH, accent_bar, grid_gap, launch_overlay, root_background, section_button_class,
+    sidebar_divider, sidebar_width, tab_button_class, tab_width, tile_height, tile_width,
 };
 use crate::subscriptions::desktop_files::desktop_files;
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
@@ -118,6 +119,7 @@ static NEW_GROUP_PLACEHOLDER: LazyLock<String> = LazyLock::new(|| fl!("new-group
 static SAVE: LazyLock<String> = LazyLock::new(|| fl!("save"));
 static CANCEL: LazyLock<String> = LazyLock::new(|| fl!("cancel"));
 static RUN: LazyLock<String> = LazyLock::new(|| fl!("run"));
+const LAUNCH_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(1200);
 static REMOVE: LazyLock<String> = LazyLock::new(|| fl!("remove"));
 static FLATPAK: LazyLock<String> = LazyLock::new(|| fl!("flatpak"));
 static LOCAL: LazyLock<String> = LazyLock::new(|| fl!("local"));
@@ -373,6 +375,7 @@ struct HearthDeck {
     provider_service: Option<crate::providers::service::ProviderService>,
     /// Client for the HearthDeck daemon, if available.
     daemon_client: Option<crate::providers::daemon::DaemonClient>,
+    launch_state: LaunchState,
 }
 
 impl Default for HearthDeck {
@@ -408,6 +411,7 @@ impl Default for HearthDeck {
             gamepad_focus_first: Default::default(),
             provider_service: None,
             daemon_client: None,
+            launch_state: LaunchState::default(),
         }
     }
 }
@@ -527,6 +531,8 @@ enum Message {
     Opened(SurfaceId),
     WindowResized(f32),
     DaemonLaunchResult(Result<(), String>),
+    LocalLaunchStarted,
+    DismissLaunch,
 }
 
 #[derive(Clone, Debug)]
@@ -697,6 +703,7 @@ impl HearthDeck {
         self.edit_name = None;
         if let Some(de) = self.entry_path_input.get(i) {
             let app_id = de.id.clone();
+            let title = de.name.clone();
             let terminal = de.terminal;
 
             // Route launches through the daemon when it's configured and the
@@ -708,6 +715,9 @@ impl HearthDeck {
                 .clone()
                 .filter(|_| app_id.starts_with("hearthdeck:"))
             {
+                if self.launch_state.update(LaunchEvent::Start(title)) != LaunchEffect::Launch {
+                    return Task::none();
+                }
                 let launch_id: String = app_id
                     .split_once(':')
                     .map(|(_, id)| id.to_string())
@@ -726,6 +736,9 @@ impl HearthDeck {
             let Some(exec) = de.exec.clone() else {
                 return Task::none();
             };
+            if self.launch_state.update(LaunchEvent::Start(title)) != LaunchEffect::Launch {
+                return Task::none();
+            }
 
             request_token(
                 Some(String::from(<Self as cosmic::Application>::APP_ID)),
@@ -856,6 +869,9 @@ impl HearthDeck {
     /// dialog is open, but a text input never traps the controller: moving
     /// down or right from an input jumps into the grid.
     fn gamepad_move(&mut self, msg: Message) -> Task<Message> {
+        if self.launch_state.is_visible() {
+            return Task::none();
+        }
         if self.new_group.is_some() || self.group_to_delete.is_some() {
             return Task::none();
         }
@@ -870,6 +886,12 @@ impl HearthDeck {
 
     /// Handle the gamepad confirm (A) button.
     fn gamepad_confirm(&mut self) -> Task<Message> {
+        if self.launch_state.error().is_some() {
+            return self.update(Message::DismissLaunch);
+        }
+        if self.launch_state.is_visible() {
+            return Task::none();
+        }
         let focused = self.focused_id.clone();
         if focused.as_ref() == Some(&*NEW_GROUP_ID) {
             return self.update(Message::SubmitNewGroup);
@@ -894,6 +916,12 @@ impl HearthDeck {
 
     /// Handle the gamepad back (B) button.
     fn gamepad_back(&mut self) -> Task<Message> {
+        if self.launch_state.error().is_some() {
+            return self.update(Message::DismissLaunch);
+        }
+        if self.launch_state.is_visible() {
+            return Task::none();
+        }
         if self.menu.is_some() {
             return self.update(Message::CloseContextMenu);
         }
@@ -1203,6 +1231,12 @@ impl cosmic::Application for HearthDeck {
                 return self.filter_apps();
             }
             Message::Close => {
+                if self.launch_state.is_visible() {
+                    if self.launch_state.error().is_some() {
+                        self.launch_state.update(LaunchEvent::Dismiss);
+                    }
+                    return Task::none();
+                }
                 return self.close();
             }
             Message::ActivateApp(i, gpu_idx) => {
@@ -1237,7 +1271,7 @@ impl cosmic::Application for HearthDeck {
                     cosmic::desktop::spawn_desktop_exec(exec, env_vars, Some(&app_id), terminal)
                         .await
                 });
-                return Task::none();
+                return self.update(Message::LocalLaunchStarted);
             }
             Message::SelectSection(section) => {
                 if section == self.cur_section {
@@ -1603,9 +1637,28 @@ impl cosmic::Application for HearthDeck {
                 self.window_width = width;
             }
             Message::DaemonLaunchResult(result) => {
-                if let Err(error) = result {
-                    error!("daemon launch failed: {error}");
+                let effect = match result {
+                    Ok(()) => self.launch_state.update(LaunchEvent::Accepted),
+                    Err(error) => {
+                        error!("daemon launch failed: {error}");
+                        self.launch_state.update(LaunchEvent::Failed(error))
+                    }
+                };
+                if effect == LaunchEffect::DelayDismiss {
+                    return Task::perform(tokio::time::sleep(LAUNCH_OVERLAY_DELAY), |_| {
+                        cosmic::Action::App(Message::DismissLaunch)
+                    });
                 }
+            }
+            Message::LocalLaunchStarted => {
+                if self.launch_state.update(LaunchEvent::Accepted) == LaunchEffect::DelayDismiss {
+                    return Task::perform(tokio::time::sleep(LAUNCH_OVERLAY_DELAY), |_| {
+                        cosmic::Action::App(Message::DismissLaunch)
+                    });
+                }
+            }
+            Message::DismissLaunch => {
+                self.launch_state.update(LaunchEvent::Dismiss);
             }
         }
         Task::none()
@@ -1636,7 +1689,11 @@ impl cosmic::Application for HearthDeck {
     }
 
     fn view<'a>(&'a self) -> Element<'a, Message> {
-        self.view_main_content()
+        if self.launch_state.is_visible() {
+            self.view_launch_overlay()
+        } else {
+            self.view_main_content()
+        }
     }
 
     fn view_window<'a>(&'a self, id: SurfaceId) -> Element<'a, Message> {
@@ -2041,6 +2098,42 @@ impl cosmic::Application for HearthDeck {
 }
 
 impl HearthDeck {
+    fn view_launch_overlay<'a>(&'a self) -> Element<'a, Message> {
+        let spacing = theme::spacing();
+        let title = self.launch_state.title().unwrap_or_default();
+        let content: Element<'_, Message> = if let Some(error) = self.launch_state.error() {
+            column![
+                icon::icon(icon::from_name("dialog-error-symbolic").into()).size(ICON_LARGE),
+                text::title2("Launch failed"),
+                text::body(title),
+                text::caption(error),
+                button::custom(text::body("Dismiss"))
+                    .class(Button::Suggested)
+                    .on_press(Message::DismissLaunch)
+                    .padding([spacing.space_xs, spacing.space_l]),
+            ]
+            .spacing(spacing.space_s)
+            .align_x(Alignment::Center)
+            .into()
+        } else {
+            column![
+                icon::icon(APP_ICON.clone()).size(ICON_LARGE),
+                text::title2(format!("Launching {title}...")),
+            ]
+            .spacing(spacing.space_m)
+            .align_x(Alignment::Center)
+            .into()
+        };
+
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .class(theme::Container::Custom(Box::new(launch_overlay)))
+            .into()
+    }
+
     fn view_main_content<'a>(&'a self) -> Element<'a, Message> {
         let Spacing {
             space_none,

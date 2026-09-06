@@ -17,6 +17,8 @@ mod input;
 mod overlay;
 #[cfg(target_os = "linux")]
 mod shortcut;
+#[cfg(target_os = "linux")]
+mod state;
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {

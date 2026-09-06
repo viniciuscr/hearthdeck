@@ -20,13 +20,13 @@ PKGBUILD builds and installs it only for the COSMIC (Test) session.
 """
 
 [target.'cfg(target_os = "linux")'.dependencies]
-cosmic-config = { git = "https://github.com/pop-os/libcosmic/" }
-cosmic-settings-config = { git = "https://github.com/pop-os/cosmic-settings-daemon/", package = "cosmic-settings-config" }
+cosmic-config = { git = "https://github.com/pop-os/libcosmic/", rev = "dc1cf9f00cbe2902a52166492654bb9fee8a73d1" }
+cosmic-settings-config = { git = "https://github.com/pop-os/cosmic-settings-daemon/", package = "cosmic-settings-config", rev = "21a9692b53fcbffa0f18f7d0a12bf0f9d5bd0590" }
 evdev = { version = "0.13", features = ["tokio"] }
 futures-channel = "0.3"
 futures-util = "0.3"
 hearthdeck-protocol = { path = "../hearthdeck-protocol" }
-libcosmic = { git = "https://github.com/pop-os/libcosmic/", features = [
+libcosmic = { git = "https://github.com/pop-os/libcosmic/", rev = "dc1cf9f00cbe2902a52166492654bb9fee8a73d1", features = [
   "wayland",
   "winit",
   "wgpu",

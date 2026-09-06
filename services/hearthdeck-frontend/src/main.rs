@@ -6,6 +6,7 @@ mod config {
 mod app;
 mod app_group;
 mod icon_cache;
+mod launch_state;
 mod localize;
 mod providers;
 mod style;
