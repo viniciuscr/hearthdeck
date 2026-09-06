@@ -8,10 +8,11 @@ CachyOS. It installs:
 - `/usr/lib/hearthdeck/`: the local bridge and daemon binaries, and the
   Kiosk session script.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, API
-  daemon, and optional Docker Compose RomM user units.
+  daemon, and optional Podman Compose RomM user units.
 - `/usr/share/doc/hearthdeck/romm.env.example`: opt-in configuration for the
   external RomM Compose deployment; `romm.service` is skipped until copied to
-  `~/.config/hearthdeck/romm.env` and updated with an absolute compose path.
+  `~/.config/hearthdeck/romm.env`. The packaged value points to
+  `/mnt/external/romM/podman-compose.yaml`.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck.desktop`: the minimal Hearthdeck
   Kiosk session shown by compatible display managers.

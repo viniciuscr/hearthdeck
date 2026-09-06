@@ -26,7 +26,7 @@ optdepends=(
   'libretro-flycast: RetroArch core for Sega Dreamcast'
   'cosmic-comp: bare-minimum "COSMIC (Test)" session, unrelated to the Hearthdeck Kiosk session'
   'cosmic-panel: real top bar for the "COSMIC (Test)" session, unrelated to the Hearthdeck Kiosk session'
-  'docker-compose: start an optional local RomM stack with the Hearthdeck session'
+  'podman-compose: start an optional local RomM stack with the Hearthdeck session'
 )
 install="${pkgname}.install"
 backup=('etc/pacman.d/hearthdeck.conf')

@@ -665,7 +665,7 @@ fn parse_journal_entry(line: &str) -> Option<LogEntry> {
     // display_message's redaction is tuned for Hearthdeck's own structured
     // JSON log lines, where a stray local path or bearer token in an error
     // string would be an accidental leak. romm.service's lines are plain
-    // Docker Compose output: paths, image references, and container
+    // Podman Compose output: paths, image references, and container
     // names are the entire point of reading them, not secrets, and that
     // process never has access to Hearthdeck's own tokens. Redacting them
     // the same way would turn the one tab meant to show a real
@@ -748,7 +748,7 @@ fn value_to_text(value: &Value) -> String {
 /// is split into its own `api` source instead of being merged with general
 /// `daemon` events, so the two can be viewed as separate log tabs. Lines
 /// from the optional `romm.service` unit (deploy/systemd/romm.service,
-/// Docker Compose's own start/stop output) join the same `romm` tab the
+/// Podman Compose's own start/stop output) join the same `romm` tab the
 /// synthesized RomM connectivity-check messages already use (`push_romm_log`),
 /// rather than getting a separate tab, since both are "what's going on with
 /// RomM" from the user's point of view.
@@ -820,7 +820,7 @@ mod tests {
 
         assert!(service.contains("ConditionPathExists=%h/.config/hearthdeck/romm.env"));
         assert!(service.contains("EnvironmentFile=%h/.config/hearthdeck/romm.env"));
-        assert!(service.contains("docker compose -f ${ROMM_COMPOSE_FILE} up -d"));
+        assert!(service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} up -d"));
         assert!(service.contains("PartOf=hearthdeck.target"));
         assert!(
             deploy_target
@@ -872,7 +872,7 @@ mod tests {
 
     #[test]
     fn labels_romm_service_journal_lines_with_the_romm_source_unredacted() {
-        // Plain Docker Compose stdout, not Hearthdeck's own structured JSON
+        // Plain Podman Compose stdout, not Hearthdeck's own structured JSON
         // log shape, and full of legitimate paths/image refs that a real
         // configuration failure needs to stay readable.
         let entry = super::parse_journal_entry(
