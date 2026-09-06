@@ -57,6 +57,7 @@ package() {
   install -Dm644 packaging/arch/hearthdeck-bridge.socket "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.socket"
   install -Dm644 packaging/arch/hearthdeck-bridge.service "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.service"
   install -Dm644 packaging/arch/hearthdeck-daemon.service "$pkgdir/usr/lib/systemd/user/hearthdeck-daemon.service"
+  install -Dm644 deploy/systemd/hearthdeck-log.service "$pkgdir/usr/lib/systemd/user/hearthdeck-log.service"
   install -Dm644 deploy/systemd/romm.service "$pkgdir/usr/lib/systemd/user/romm.service"
   install -Dm644 deploy/systemd/daemon.env.example "$pkgdir/usr/share/doc/hearthdeck/daemon.env.example"
   install -Dm644 deploy/systemd/romm.env.example "$pkgdir/usr/share/doc/hearthdeck/romm.env.example"

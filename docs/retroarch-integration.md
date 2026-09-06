@@ -215,14 +215,12 @@ start/stop ordering, and boot/session integration.
 
 `deploy/systemd/romm.service` is an optional `systemd --user` oneshot unit
 (`RemainAfterExit=yes`) wrapping `podman-compose up -d`/`down`. The Arch
-package installs it and `hearthdeck.target` wants it, but
-`ConditionPathExists=%h/.config/hearthdeck/romm.env` keeps it inert until the
-user opts in. That environment file supplies the deployment-specific absolute
-`ROMM_COMPOSE_FILE`, preconfigured as
-`/mnt/external/romM/podman-compose.yaml`; an example is installed under
-`/usr/share/doc/hearthdeck/romm.env.example`. This starts RomM with the active
-Hearthdeck user session rather than system boot, and avoids putting host
-command construction in the daemon.
+package installs it and `hearthdeck.target` wants it. It defaults to
+`/mnt/external/romM/podman-compose.yaml`, skips cleanly when that file is absent,
+and accepts an optional `ROMM_COMPOSE_FILE` override from
+`~/.config/hearthdeck/romm.env`. This starts RomM with the active Hearthdeck
+user session rather than system boot, and avoids putting host command
+construction in the daemon.
 
 **"A place in the UI to do this kind of stuff":** rather than build a new
 control surface, `service_statuses()` in `diagnostics.rs` — the same

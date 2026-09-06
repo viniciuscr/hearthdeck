@@ -28,11 +28,12 @@ The launcher pairs with the loopback daemon automatically. Optional LAN/TLS
 configuration belongs in ~/.config/hearthdeck/daemon.env; see
 /usr/share/doc/hearthdeck/daemon.env.example.
 
-To start the existing Podman Compose RomM deployment with the Hearthdeck
-session, copy /usr/share/doc/hearthdeck/romm.env.example to
-~/.config/hearthdeck/romm.env. It is preconfigured for
-/mnt/external/romM/podman-compose.yaml.
-The optional romm.service remains skipped until that file exists.
+The Hearthdeck session starts the Podman Compose RomM deployment at
+/mnt/external/romM/podman-compose.yaml when that file exists. To override the
+path, copy /usr/share/doc/hearthdeck/romm.env.example to
+~/.config/hearthdeck/romm.env and edit ROMM_COMPOSE_FILE.
+
+Combined session logs are written to ~/hearthdeck.log.
 
 Future Hearthdeck package updates arrive through `pacman -Syu`. The GitHub
 Pages repository is unsigned and should not be enabled on systems that require

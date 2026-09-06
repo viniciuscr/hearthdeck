@@ -5,6 +5,10 @@
 Services use Rust `tracing`, not ad hoc prints. Every service writes one event
 per line to stderr; systemd captures it in the user journal.
 
+`hearthdeck-log.service` also writes the current session's daemon, bridge,
+overlay, RomM, compositor, and frontend output to `~/hearthdeck.log`. The file
+is truncated when `hearthdeck.target` starts so it stays scoped to one session.
+
 - Production default: newline-delimited JSON (`HEARTHDECK_LOG_FORMAT=json`).
 - Development: readable output (`HEARTHDECK_LOG_FORMAT=pretty`).
 - Filtering: `RUST_LOG`, for example `RUST_LOG=hearthdeck_daemon=debug,tower_http=info`.
@@ -58,6 +62,7 @@ For catalog synchronization, expect this lifecycle in order:
 
 ```sh
 just services-logs
+just logs-file
 just logs-daemon
 just logs-bridge
 just logs-errors

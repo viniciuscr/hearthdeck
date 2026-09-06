@@ -25,23 +25,22 @@ error summary. A degraded provider leaves other catalog sources available.
 
 ## RomM
 
-For the existing Podman Compose RomM deployment, configure automatic session
+For the existing Podman Compose RomM deployment, verify automatic session
 startup:
 
 ```sh
-mkdir -p ~/.config/hearthdeck
-cp /usr/share/doc/hearthdeck/romm.env.example ~/.config/hearthdeck/romm.env
 systemctl --user daemon-reload
 systemctl --user restart hearthdeck.target
 systemctl --user status romm.service
+tail -f ~/hearthdeck.log
 ```
 
-Without `romm.env`, confirm `romm.service` is skipped and the rest of
-`hearthdeck.target` still starts. With it configured, confirm the Compose stack
-at `/mnt/external/romM/podman-compose.yaml` starts, the COSMIC frontend shows
-only platforms with installed ROMs under Console Games, selecting a platform
-loads its ROMs, and launching one creates a managed session through RetroArch.
-Stop `hearthdeck.target` and confirm the Compose stack is stopped.
+Confirm the Compose stack at `/mnt/external/romM/podman-compose.yaml` starts,
+the COSMIC frontend shows only platforms with installed ROMs under Console
+Games, selecting a platform loads its ROMs, and launching one creates a managed
+session through RetroArch. Stop `hearthdeck.target` and confirm the Compose
+stack is stopped. Temporarily move the compose file away and confirm
+`romm.service` is skipped while the rest of `hearthdeck.target` still starts.
 
 ## Library Scan
 

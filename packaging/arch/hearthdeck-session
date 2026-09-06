@@ -5,6 +5,9 @@
 # the session.
 set -Euo pipefail
 
+# Keep Gamescope, Hearthdeck, and session startup output in the user journal.
+exec > >(systemd-cat -t hearthdeck-session) 2>&1
+
 export XDG_CURRENT_DESKTOP=hearthdeck
 export XDG_SESSION_DESKTOP=hearthdeck
 export XDG_SESSION_TYPE=wayland

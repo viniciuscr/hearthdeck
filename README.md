@@ -156,12 +156,11 @@ design and phased roadmap for this integration is tracked in
 `docs/retroarch-integration.md`.
 
 The Arch package installs an optional `romm.service` that starts an existing
-Podman Compose deployment alongside the Hearthdeck session. Copy
-`/usr/share/doc/hearthdeck/romm.env.example` to
-`~/.config/hearthdeck/romm.env`; it defaults to
-`/mnt/external/romM/podman-compose.yaml`. Without that config file the unit is
-skipped. Its status appears in Settings' service status view next to the daemon
-and bridge.
+Podman Compose deployment alongside the Hearthdeck session. It uses
+`/mnt/external/romM/podman-compose.yaml` by default and skips cleanly when that
+file is absent. `~/.config/hearthdeck/romm.env` can override the path. Its
+status appears in Settings' service status view next to the daemon and bridge.
+Combined session output is also available at `~/hearthdeck.log`.
 
 ## Shared Screens
 

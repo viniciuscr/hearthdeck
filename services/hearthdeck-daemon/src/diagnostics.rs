@@ -529,8 +529,8 @@ async fn service_statuses() -> Vec<ServiceStatus> {
         service_status("daemon", "hearthdeck-daemon.service", false),
         service_status("bridge_socket", "hearthdeck-bridge.socket", false),
         service_status("bridge", "hearthdeck-bridge.service", true),
-        // Optional: the packaged unit is skipped until the user supplies its
-        // environment file. This is safe to query unconditionally.
+        // Optional: the packaged unit is skipped when its compose file is
+        // absent. This is safe to query unconditionally.
         service_status("romm_container", "romm.service", false),
     );
     vec![session, daemon, bridge_socket, bridge, romm_container]
@@ -813,25 +813,46 @@ mod tests {
     #[test]
     fn romm_compose_service_is_optional_and_session_managed() {
         let service = include_str!("../../../deploy/systemd/romm.service");
+        let log_service = include_str!("../../../deploy/systemd/hearthdeck-log.service");
         let deploy_target = include_str!("../../../deploy/systemd/hearthdeck.target");
         let package_target = include_str!("../../../packaging/arch/hearthdeck.target");
+        let kiosk_session = include_str!("../../../packaging/arch/hearthdeck-session");
         let package = include_str!("../../../packaging/arch/PKGBUILD");
         let justfile = include_str!("../../../justfile");
 
-        assert!(service.contains("ConditionPathExists=%h/.config/hearthdeck/romm.env"));
-        assert!(service.contains("EnvironmentFile=%h/.config/hearthdeck/romm.env"));
+        assert!(
+            service
+                .contains("Environment=ROMM_COMPOSE_FILE=/mnt/external/romM/podman-compose.yaml")
+        );
+        assert!(service.contains("EnvironmentFile=-%h/.config/hearthdeck/romm.env"));
+        assert!(service.contains("ExecCondition=/usr/bin/test -f ${ROMM_COMPOSE_FILE}"));
         assert!(service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} up -d"));
+        assert!(service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} down"));
+        assert!(service.contains("SyslogIdentifier=romm"));
         assert!(service.contains("PartOf=hearthdeck.target"));
+        assert!(log_service.contains("StandardOutput=append:%h/hearthdeck.log"));
+        assert!(log_service.contains("ExecStartPre=/usr/bin/truncate --size=0 %h/hearthdeck.log"));
+        assert!(log_service.contains("--identifier=hearthdeck-session"));
+        assert!(log_service.contains("--identifier=cosmic-test-session"));
+        assert!(log_service.contains("--identifier=hearthdeck-daemon"));
+        assert!(log_service.contains("--identifier=hearthdeck-bridge"));
+        assert!(log_service.contains("--identifier=hearthdeck-overlay"));
+        assert!(log_service.contains("--identifier=romm"));
+        assert!(kiosk_session.contains("systemd-cat -t hearthdeck-session"));
         assert!(
-            deploy_target
-                .contains("Wants=hearthdeck-bridge.socket hearthdeck-daemon.service romm.service")
+            deploy_target.contains(
+                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service romm.service"
+            )
         );
         assert!(
-            package_target
-                .contains("Wants=hearthdeck-bridge.socket hearthdeck-daemon.service romm.service")
+            package_target.contains(
+                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service romm.service"
+            )
         );
+        assert!(package.contains("deploy/systemd/hearthdeck-log.service"));
         assert!(package.contains("deploy/systemd/romm.service"));
         assert!(package.contains("deploy/systemd/romm.env.example"));
+        assert!(justfile.contains("cp deploy/systemd/hearthdeck-log.service"));
         assert!(justfile.contains("cp deploy/systemd/romm.service"));
     }
 
