@@ -2701,14 +2701,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hearthdeck-applet-user"
-version = "0.1.0"
-dependencies = [
- "libcosmic 1.0.0 (git+https://github.com/pop-os/libcosmic)",
- "tokio",
-]
-
-[[package]]
 name = "hearthdeck-bridge"
 version = "0.1.0"
 dependencies = [

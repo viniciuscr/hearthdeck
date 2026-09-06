@@ -515,7 +515,7 @@ enum Message {
     PinToAppTray(usize),
     UnPinFromAppTray(usize),
     AppListConfig(AppListConfig),
-    Opened(SurfaceId),
+    Opened,
     WindowFocusChanged(bool),
     WindowResized(f32),
     DaemonLaunchResult(Result<(), String>),
@@ -1709,8 +1709,8 @@ impl cosmic::Application for HearthDeck {
             Message::AppListConfig(config) => {
                 self.app_list_config = config;
             }
-            Message::Opened(window_id) => {
-                return window::set_mode(window_id, window::Mode::Fullscreen);
+            Message::Opened => {
+                return window::set_mode(SurfaceId::RESERVED, window::Mode::Fullscreen);
             }
             Message::WindowFocusChanged(focused) => {
                 self.input_ownership.update(if focused {
@@ -1954,8 +1954,10 @@ impl cosmic::Application for HearthDeck {
     fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![
             listen_with(|e, status, id| match e {
-                cosmic::iced::Event::Window(WindowEvent::Opened { .. }) => {
-                    Some(Message::Opened(id))
+                cosmic::iced::Event::Window(WindowEvent::Opened { .. })
+                    if is_primary_window(id) =>
+                {
+                    Some(Message::Opened)
                 }
                 cosmic::iced::Event::Window(WindowEvent::Focused) if id == SurfaceId::RESERVED => {
                     Some(Message::WindowFocusChanged(true))
@@ -2145,12 +2147,18 @@ impl cosmic::Application for HearthDeck {
 
         self_.load_apps();
 
+        let fullscreen = window::set_mode(SurfaceId::RESERVED, window::Mode::Fullscreen);
         let focus_search = text_input::focus(SEARCH_ID.clone());
         let poll_active_session = self_.poll_active_session(std::time::Duration::ZERO);
         let load_romm_platforms = self_.load_romm_platforms(std::time::Duration::ZERO);
         (
             self_,
-            Task::batch([focus_search, poll_active_session, load_romm_platforms]),
+            Task::batch([
+                fullscreen,
+                focus_search,
+                poll_active_session,
+                load_romm_platforms,
+            ]),
         )
     }
 }
@@ -2664,13 +2672,35 @@ fn next_romm_offset(offset: u32, item_count: u32, total: u64) -> Option<u32> {
     (item_count > 0 && u64::from(next) < total).then_some(next)
 }
 
+fn is_primary_window(id: SurfaceId) -> bool {
+    id == SurfaceId::RESERVED
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        focused_entry_index, next_romm_offset, romm_page_is_current, selected_romm_platform_id,
+        focused_entry_index, is_primary_window, next_romm_offset, romm_page_is_current,
+        selected_romm_platform_id,
     };
     use crate::app_group::{AppLibraryConfig, Section};
     use cosmic::iced::widget;
+
+    #[test]
+    fn only_the_primary_window_is_forced_fullscreen() {
+        assert!(is_primary_window(cosmic::iced::window::Id::RESERVED));
+        assert!(!is_primary_window(cosmic::iced::window::Id::unique()));
+    }
+
+    #[test]
+    fn cosmic_session_does_not_start_or_configure_a_panel() {
+        let session = include_str!("../../../packaging/arch/cosmic-test-session");
+        let package = include_str!("../../../packaging/arch/PKGBUILD");
+
+        assert!(!session.contains(".config/cosmic"));
+        assert!(!session.contains("cosmic-panel"));
+        assert!(!package.contains("cosmic-panel"));
+        assert!(!package.contains("hearthdeck-applet-user"));
+    }
 
     #[test]
     fn non_grid_focus_cannot_activate_a_stale_grid_entry() {

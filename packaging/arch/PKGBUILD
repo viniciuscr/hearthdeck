@@ -25,7 +25,6 @@ optdepends=(
   'libretro-desmume: RetroArch core for Nintendo DS'
   'libretro-flycast: RetroArch core for Sega Dreamcast'
   'cosmic-comp: bare-minimum "COSMIC (Test)" session, unrelated to the Hearthdeck Kiosk session'
-  'cosmic-panel: real top bar for the "COSMIC (Test)" session, unrelated to the Hearthdeck Kiosk session'
   'podman-compose: start an optional local RomM stack with the Hearthdeck session'
 )
 install="${pkgname}.install"
@@ -65,7 +64,6 @@ package() {
   install -Dm644 docs/arch-package.md "$pkgdir/usr/share/doc/hearthdeck/README.md"
   install -Dm644 docs/linux-acceptance.md "$pkgdir/usr/share/doc/hearthdeck/ACCEPTANCE.md"
   install -Dm644 docs/kiosk-session.md "$pkgdir/usr/share/doc/hearthdeck/KIOSK-SESSION.md"
-  install -Dm644 docs/cosmic-panel-customization.md "$pkgdir/usr/share/doc/hearthdeck/COSMIC-PANEL-CUSTOMIZATION.md"
   install -Dm644 packaging/arch/hearthdeck.desktop "$pkgdir/usr/share/applications/io.github.viniciuscr.hearthdeck.desktop"
   install -Dm644 packaging/arch/hearthdeck-session.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck.desktop"
   install -Dm755 packaging/arch/hearthdeck-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-session"
@@ -77,17 +75,6 @@ package() {
   install -Dm755 services/target/release/hearthdeck-frontend "$pkgdir/usr/bin/hearthdeck-frontend"
   install -Dm644 deploy/systemd/hearthdeck-cosmic-test.target "$pkgdir/usr/lib/systemd/user/hearthdeck-cosmic-test.target"
   install -Dm644 packaging/arch/hearthdeck-overlay.service "$pkgdir/usr/lib/systemd/user/hearthdeck-overlay.service"
-  install -Dm644 packaging/arch/cosmic-panel.service "$pkgdir/usr/lib/systemd/user/cosmic-panel.service"
-  # COSMIC panel (cosmic-panel-bin's wrapper_space.rs) and cosmic-settings'
-  # applet picker both discover applets by scanning .desktop files (not by
-  # running a same-named binary directly): the file's *name* must equal the
-  # app ID, cosmic-panel spawns whatever its Exec= line says, and
-  # cosmic-settings only lists it if X-CosmicApplet is present. See
-  # apply_cosmic_overrides in cosmic-test-session for how the app ID is wired
-  # into plugins_wings, and docs/cosmic-panel-customization.md for the source
-  # references this was confirmed against.
-  install -Dm755 services/target/release/hearthdeck-applet-user "$pkgdir/usr/bin/io.github.viniciuscr.hearthdeck.AppletUser"
-  install -Dm644 packaging/arch/hearthdeck-applet-user.desktop "$pkgdir/usr/share/applications/io.github.viniciuscr.hearthdeck.AppletUser.desktop"
   install -Dm644 macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.viniciuscr.hearthdeck.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

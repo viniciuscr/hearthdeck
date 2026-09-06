@@ -57,15 +57,13 @@ fi
 
 # 3. Check standalone crates that are not part of services workspace
 echo -e "${YELLOW}[3/4] Checking standalone package crates...${NC}"
-if cargo check --manifest-path services/hearthdeck-cosmic-spike/Cargo.toml --release > /dev/null 2>&1 \
-    && cargo check --manifest-path services/hearthdeck-applet-user/Cargo.toml --release > /dev/null 2>&1; then
+if cargo check --manifest-path services/hearthdeck-cosmic-spike/Cargo.toml --release > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Standalone crate checks passed${NC}"
 else
     echo -e "${RED}✗ Standalone crate check failed${NC}"
     echo ""
     echo "Check output with:"
     echo "  cargo check --manifest-path services/hearthdeck-cosmic-spike/Cargo.toml --release"
-    echo "  cargo check --manifest-path services/hearthdeck-applet-user/Cargo.toml --release"
     echo ""
     FAILED=1
 fi

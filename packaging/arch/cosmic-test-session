@@ -2,9 +2,7 @@
 # Bare-minimum COSMIC test session: runs cosmic-comp directly (no
 # cosmic-session or settings daemon), launching the hearthdeck-frontend
 # COSMIC app (the migrated cosmic-app-library UI) as its client.
-# cosmic-panel runs alongside it as a real, dark, Panel-only, size-L top bar
-# (see apply_cosmic_overrides below). Independent of the Hearthdeck Kiosk
-# (Gamescope) session.
+# Independent of the Hearthdeck Kiosk (Gamescope) session.
 set -Euo pipefail
 
 # Preserve all session, compositor, and frontend output even after the app
@@ -45,47 +43,6 @@ systemctl --user try-restart hearthdeck-bridge.service || true
 # separate COSMIC test session. Its restart policy absorbs the compositor's
 # initial activation-environment race.
 systemctl --user start hearthdeck-overlay.service || true
-
-# cosmic-panel (the top bar + dock) and cosmic-comp/cosmic-panel's own theming
-# both read plain per-key files under $XDG_CONFIG_HOME/cosmic - normally
-# written by cosmic-settings, which doesn't run in this minimal session. Force
-# the same fixed values on every login instead of seeding them once: a
-# once-only seed silently no-ops on a machine that already has a real COSMIC
-# desktop login (its own entries/theme files already exist), which is exactly
-# how the Dock ended up showing here despite the "Panel only" intent below.
-# Trade-off: this always overwrites these specific keys, including any manual
-# COSMIC Settings change made to them from a real desktop session sharing the
-# same account - deliberate, since this session needs a known, reproducible
-# look every time, not "whatever was left over from last time". Key meanings
-# and file-format reference: docs/cosmic-panel-customization.md.
-apply_cosmic_overrides() {
-  local entries_dir="$HOME/.config/cosmic/com.system76.CosmicPanel/v1"
-  local panel_dir="$HOME/.config/cosmic/com.system76.CosmicPanel.Panel/v1"
-  local mode_dir="$HOME/.config/cosmic/com.system76.CosmicTheme.Mode/v1"
-  mkdir -p "$entries_dir" "$panel_dir" "$mode_dir"
-  # Panel only - no Dock, redundant with Hearthdeck's own UI.
-  printf '%s' '["Panel"]' > "$entries_dir/entries"
-  # Hides the bar behind whatever's currently fullscreen (Hearthdeck
-  # maximizes instead of fullscreening here - see my_application.cc - so it
-  # stays visible; a launched game going fullscreen hides it).
-  printf '%s' 'OnOverlap' > "$panel_dir/autohide"
-  # Larger bar/icon scale.
-  printf '%s' 'L' > "$panel_dir/size"
-  # Left wing: our username applet, at the far left (closest to the screen
-  # edge - the wing tuple's first side is left-anchored, and within a wing
-  # the first entry is closest to center, so a single-entry left wing sits
-  # at the edge automatically). Right wing: Bluetooth, then Network (Wifi),
-  # then Time (Calendar) at the very screen edge - same
-  # closest-to-center-first/closest-to-edge-last convention.
-  printf '%s' 'Some((["io.github.viniciuscr.hearthdeck.AppletUser"], ["com.system76.CosmicAppletBluetooth", "com.system76.CosmicAppletBattery", "com.system76.CosmicAppletNetwork", "com.system76.CosmicAppletTime"]))' > "$panel_dir/plugins_wings"
-  printf '%s' 'None' > "$panel_dir/plugins_center"
-  # Dark, and don't auto-switch with the system clock: this session should
-  # always look the same, not depend on time of day.
-  printf '%s' 'true' > "$mode_dir/is_dark"
-  printf '%s' 'false' > "$mode_dir/auto_switch"
-}
-apply_cosmic_overrides || log "could not apply cosmic-panel/theme config"
-systemctl --user start cosmic-panel.service || true
 
 launch_app="/usr/bin/hearthdeck-frontend"
 if [[ ! -x "$launch_app" && -x /usr/bin/hearthdeck_cosmic ]]; then

@@ -6,7 +6,6 @@ members = [
   "hearthdeck-bridge",
   "hearthdeck-frontend",
   "hearthdeck-overlay",
-  "hearthdeck-applet-user",
   "hearthdeck-overlay-spike",
 ]
 resolver = "3"
