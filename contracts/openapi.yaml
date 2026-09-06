@@ -63,6 +63,25 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/LibraryItem'
+  /v1/activity/recent:
+    get:
+      operationId: listRecentActivity
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 6 }
+      responses:
+        '200':
+          description: Most recently launched items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RecentActivity'
   /v1/library/rescan:
     post:
       operationId: rescanLibrary
@@ -513,6 +532,20 @@ components:
               type: array
               items: { type: string, format: uri }
             provenance: { type: string }
+    RecentActivity:
+      type: object
+      required: [id, title, icon, categories, source, metadata, last_launched_at, launch_count]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        icon: { type: [string, 'null'] }
+        categories:
+          type: array
+          items: { type: string }
+        source: { type: string }
+        metadata: { type: object }
+        last_launched_at: { type: string, format: date-time }
+        launch_count: { type: integer, minimum: 1 }
     RetroConsole:
       type: object
       required: [id, name, rom_count]

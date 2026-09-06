@@ -48,7 +48,7 @@ struct PairingCompleteResponse {
 }
 
 /// Response from the /v1/health endpoint.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct HealthResponse {
     pub version: String,
@@ -58,7 +58,7 @@ pub struct HealthResponse {
     pub capabilities: HostCapabilities,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct ProviderHealthInfo {
     pub id: String,
@@ -67,7 +67,7 @@ pub struct ProviderHealthInfo {
     pub last_attempt_at: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct HostCapabilities {
     pub launch: bool,
@@ -86,6 +86,16 @@ pub struct CatalogItem {
     pub launch_id: Option<String>,
     pub icon: Option<String>,
     pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct RecentActivityItem {
+    id: String,
+    title: String,
+    icon: Option<String>,
+    categories: Vec<String>,
+    source: String,
+    metadata: serde_json::Value,
 }
 
 /// Server event received via WebSocket.
@@ -243,6 +253,39 @@ impl DaemonClient {
         }
 
         response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    pub async fn recent_records(&self, limit: u32) -> Result<Vec<GameRecord>, DaemonError> {
+        let response = self
+            .http
+            .get(self.api_url("/v1/activity/recent"))
+            .query(&[("limit", limit)])
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+        if !response.status().is_success() {
+            return Err(DaemonError::UnexpectedStatus(response.status()));
+        }
+        let items: Vec<RecentActivityItem> = response
+            .json()
+            .await
+            .map_err(DaemonError::Deserialization)?;
+
+        Ok(stream::iter(items.into_iter().map(|item| {
+            let client = self.clone();
+            async move {
+                let icon = if item.source == "romm" {
+                    client.cache_retro_cover_path(item.icon.as_deref()).await
+                } else {
+                    item.icon.clone()
+                };
+                recent_activity_to_game_record(item, icon)
+            }
+        }))
+        .buffered(8)
+        .collect()
+        .await)
     }
 
     /// Triggers a rescan of all discovery and enrichment providers.
@@ -403,7 +446,12 @@ impl DaemonClient {
     }
 
     async fn cache_retro_cover(&self, game: &RetroGame) -> Option<String> {
-        if let Some(path) = game.cover_path.as_deref() {
+        self.cache_retro_cover_path(game.cover_path.as_deref())
+            .await
+    }
+
+    async fn cache_retro_cover_path(&self, path: Option<&str>) -> Option<String> {
+        if let Some(path) = path {
             let key = format!("romm:{path}");
             if let Some(cached) = cached_icon(&key) {
                 return Some(cached);
@@ -613,6 +661,26 @@ pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameR
     }
 }
 
+fn recent_activity_to_game_record(item: RecentActivityItem, icon: Option<String>) -> GameRecord {
+    let prefers_dgpu = item
+        .metadata
+        .get("prefers_dgpu")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    GameRecord {
+        id: item.id,
+        name: item.title,
+        exec: None,
+        icon,
+        path: None,
+        categories: item.categories,
+        terminal: false,
+        prefers_dgpu,
+        source: item.source,
+        metadata: item.metadata,
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("connection failed: {0}")]
@@ -788,7 +856,10 @@ pub struct RetroRecordPage {
 
 #[cfg(test)]
 mod tests {
-    use super::{CatalogItem, RetroGame, catalog_item_to_game_record, retro_game_to_game_record};
+    use super::{
+        CatalogItem, RecentActivityItem, RetroGame, catalog_item_to_game_record,
+        recent_activity_to_game_record, retro_game_to_game_record,
+    };
 
     #[test]
     fn catalog_item_maps_to_game_record_with_prefix() {
@@ -880,5 +951,24 @@ mod tests {
         assert_eq!(record.categories, vec!["Game", "hearthdeck-console:7"]);
         assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
         assert_eq!(record.metadata["genres"], serde_json::json!(["RPG"]));
+    }
+
+    #[test]
+    fn recent_activity_keeps_its_launchable_frontend_id() {
+        let record = recent_activity_to_game_record(
+            RecentActivityItem {
+                id: "romm:42".into(),
+                title: "Example ROM".into(),
+                icon: Some("/assets/example.jpg".into()),
+                categories: vec!["Game".into(), "hearthdeck-console:7".into()],
+                source: "romm".into(),
+                metadata: serde_json::json!({"release_year": 1994}),
+            },
+            Some("/tmp/example.jpg".into()),
+        );
+
+        assert_eq!(record.id, "romm:42");
+        assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
+        assert_eq!(record.categories[1], "hearthdeck-console:7");
     }
 }

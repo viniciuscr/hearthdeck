@@ -88,6 +88,7 @@ impl std::error::Error for RetroLaunchError {}
 pub struct RetroLaunchPlan {
     pub core_path: PathBuf,
     pub rom_path: PathBuf,
+    pub game: diagnostics::RommGame,
 }
 
 /// Resolves the core and locally cached ROM path for a RomM rom ID,
@@ -127,6 +128,7 @@ pub async fn prepare_launch(
     Ok(RetroLaunchPlan {
         core_path,
         rom_path,
+        game: rom,
     })
 }
 

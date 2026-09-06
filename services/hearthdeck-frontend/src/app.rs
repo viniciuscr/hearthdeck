@@ -105,6 +105,7 @@ static FILTER_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter"));
 static DASHBOARD_HOME_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-home"));
 static DASHBOARD_LIBRARY_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-library"));
 static DASHBOARD_SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-search"));
+static DASHBOARD_NOTICE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-notice"));
 
 static APP_ICON: LazyLock<icon::Handle> = LazyLock::new(|| {
     icon::from_svg_bytes(include_bytes!(
@@ -129,6 +130,8 @@ static RUN: LazyLock<String> = LazyLock::new(|| fl!("run"));
 const LAUNCH_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(1200);
 const SESSION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 const SYSTEM_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+const DASHBOARD_HEALTH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+const RECENT_ACTIVITY_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 const ROMM_PAGE_SIZE: u32 = 48;
 const ROMM_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 static REMOVE: LazyLock<String> = LazyLock::new(|| fl!("remove"));
@@ -356,6 +359,7 @@ struct HearthDeck {
     search_value: String,
     entry_path_input: Vec<Arc<DesktopEntryData>>,
     all_entries: Vec<Arc<DesktopEntryData>>,
+    recent_entries: Vec<Arc<DesktopEntryData>>,
     menu: Option<usize>,
     helper: Option<Config>,
     config: AppLibraryConfig,
@@ -389,6 +393,8 @@ struct HearthDeck {
     launch_state: LaunchState,
     input_ownership: InputOwnership,
     system_status: SystemStatus,
+    dashboard_notice: Option<DashboardNotice>,
+    dashboard_health_generation: u64,
     romm_request_generation: u64,
 }
 
@@ -399,6 +405,7 @@ impl Default for HearthDeck {
             search_value: Default::default(),
             entry_path_input: Default::default(),
             all_entries: Default::default(),
+            recent_entries: Default::default(),
             menu: Default::default(),
             helper: Default::default(),
             config: Default::default(),
@@ -428,6 +435,8 @@ impl Default for HearthDeck {
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
             system_status: SystemStatus::default(),
+            dashboard_notice: None,
+            dashboard_health_generation: 0,
             romm_request_generation: 0,
         }
     }
@@ -477,6 +486,73 @@ enum Page {
     Library,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DashboardShelf {
+    Recent,
+    Favorites,
+    Library,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DashboardNotice {
+    BackendUnavailable,
+    ProvidersDegraded(Vec<String>),
+    RefreshFailed,
+}
+
+impl DashboardNotice {
+    fn from_health(health: &crate::providers::daemon::HealthResponse) -> Option<Self> {
+        let providers = health
+            .providers
+            .iter()
+            .filter(|provider| provider.status == "degraded")
+            .map(|provider| provider.id.clone())
+            .collect::<Vec<_>>();
+        (!providers.is_empty()).then_some(Self::ProvidersDegraded(providers))
+    }
+
+    fn title(&self) -> String {
+        match self {
+            Self::BackendUnavailable => fl!("backend-unavailable"),
+            Self::ProvidersDegraded(providers) if providers.len() == 1 => {
+                fl!("library-source-degraded")
+            }
+            Self::ProvidersDegraded(_) => fl!("library-sources-degraded"),
+            Self::RefreshFailed => fl!("library-refresh-failed"),
+        }
+    }
+
+    fn detail(&self) -> String {
+        match self {
+            Self::BackendUnavailable => fl!("backend-unavailable-detail"),
+            Self::ProvidersDegraded(providers) => providers.join(", "),
+            Self::RefreshFailed => fl!("library-refresh-failed-detail"),
+        }
+    }
+}
+
+impl DashboardShelf {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Recent => "recent",
+            Self::Favorites => "favorites",
+            Self::Library => "library",
+        }
+    }
+
+    fn title(self) -> String {
+        match self {
+            Self::Recent => fl!("recently-played"),
+            Self::Favorites => fl!("favorites"),
+            Self::Library => "Games & apps".to_owned(),
+        }
+    }
+
+    fn widget_id(self, entry_id: &str) -> widget::Id {
+        widget::Id::from(format!("dashboard-{}-{entry_id}", self.key()))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum GroupRowKey {
     AllApps,
@@ -501,7 +577,7 @@ enum Message {
     OpenSearch,
     Close,
     ActivateApp(usize),
-    ActivateDashboardApp(usize),
+    ActivateDashboardApp(String),
     ActivateFirstApp,
     ConfirmFocused(widget::Id),
     SelectSection(Section),
@@ -536,6 +612,7 @@ enum Message {
     ViewportHeight(f32),
     PinToAppTray(usize),
     UnPinFromAppTray(usize),
+    ToggleFavorite(usize),
     AppListConfig(AppListConfig),
     Opened,
     WindowFocusChanged(bool),
@@ -543,6 +620,13 @@ enum Message {
     DaemonLaunchResult(Result<(), String>),
     ActiveSessionResult(Result<bool, String>),
     RommPlatforms(Result<Vec<crate::providers::daemon::RetroPlatform>, String>),
+    RecentEntries(Result<Vec<crate::providers::GameRecord>, String>),
+    DashboardHealth {
+        generation: u64,
+        result: Result<crate::providers::daemon::HealthResponse, String>,
+    },
+    RefreshDashboardNotice,
+    DashboardRescanResult(Result<(), String>),
     SystemStatus(SystemStatus),
     RommGames {
         generation: u64,
@@ -649,6 +733,59 @@ impl HearthDeck {
                 SystemStatus::load().await
             },
             |status| cosmic::Action::App(Message::SystemStatus(status)),
+        )
+    }
+
+    fn load_dashboard_health(&self, delay: std::time::Duration) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        let generation = self.dashboard_health_generation;
+        Task::perform(
+            async move {
+                tokio::time::sleep(delay).await;
+                client.health().await.map_err(|error| error.to_string())
+            },
+            move |result| cosmic::Action::App(Message::DashboardHealth { generation, result }),
+        )
+    }
+
+    fn refresh_dashboard_notice(&mut self) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        if matches!(
+            self.dashboard_notice,
+            Some(DashboardNotice::ProvidersDegraded(_))
+        ) {
+            Task::perform(
+                async move {
+                    client
+                        .rescan_library()
+                        .await
+                        .map_err(|error| error.to_string())
+                },
+                |result| cosmic::Action::App(Message::DashboardRescanResult(result)),
+            )
+        } else {
+            self.dashboard_health_generation += 1;
+            self.load_dashboard_health(std::time::Duration::ZERO)
+        }
+    }
+
+    fn load_recent_activity(&self, delay: std::time::Duration) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                tokio::time::sleep(delay).await;
+                client
+                    .recent_records(DASHBOARD_VISIBLE_TILES as u32)
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::RecentEntries(result)),
         )
     }
 
@@ -790,9 +927,46 @@ impl HearthDeck {
         self.activate_entry(entry)
     }
 
-    fn activate_dashboard_app(&mut self, i: usize) -> Task<<Self as cosmic::Application>::Message> {
-        let entry = self.all_entries.get(i).cloned();
+    fn activate_dashboard_app(&mut self, id: &str) -> Task<<Self as cosmic::Application>::Message> {
+        let entry = self
+            .all_entries
+            .iter()
+            .chain(&self.recent_entries)
+            .find(|entry| entry.id == id)
+            .cloned();
         self.activate_entry(entry)
+    }
+
+    fn dashboard_shelves(&self) -> Vec<(DashboardShelf, Vec<&Arc<DesktopEntryData>>)> {
+        let recent = self
+            .recent_entries
+            .iter()
+            .take(DASHBOARD_VISIBLE_TILES)
+            .collect::<Vec<_>>();
+        let favorites = self.config.favorite_entries(&self.all_entries);
+        let mut shelves = Vec::new();
+        if !recent.is_empty() {
+            shelves.push((DashboardShelf::Recent, recent));
+        }
+        if !favorites.is_empty() {
+            shelves.push((
+                DashboardShelf::Favorites,
+                favorites
+                    .into_iter()
+                    .take(DASHBOARD_VISIBLE_TILES)
+                    .collect(),
+            ));
+        }
+        if shelves.is_empty() {
+            shelves.push((
+                DashboardShelf::Library,
+                self.all_entries
+                    .iter()
+                    .take(DASHBOARD_VISIBLE_TILES)
+                    .collect(),
+            ));
+        }
+        shelves
     }
 
     fn activate_entry(
@@ -843,11 +1017,30 @@ impl HearthDeck {
     }
 
     fn dashboard_entry_ids(&self) -> Vec<widget::Id> {
-        self.all_entries
-            .iter()
-            .take(DASHBOARD_VISIBLE_TILES)
-            .map(|entry| widget::Id::from(format!("dashboard-entry-{}", entry.id)))
+        self.dashboard_entry_rows().into_iter().flatten().collect()
+    }
+
+    fn dashboard_entry_rows(&self) -> Vec<Vec<widget::Id>> {
+        self.dashboard_shelves()
+            .into_iter()
+            .map(|(shelf, entries)| {
+                entries
+                    .into_iter()
+                    .map(|entry| shelf.widget_id(&entry.id))
+                    .collect()
+            })
             .collect()
+    }
+
+    fn dashboard_entry_id_for_widget(&self, id: &widget::Id) -> Option<String> {
+        self.dashboard_shelves()
+            .into_iter()
+            .flat_map(|(shelf, entries)| {
+                entries
+                    .into_iter()
+                    .map(move |entry| (shelf.widget_id(&entry.id), entry.id.clone()))
+            })
+            .find_map(|(widget_id, entry_id)| (widget_id == *id).then_some(entry_id))
     }
 
     fn focus_dashboard_id(&mut self, id: widget::Id) -> Task<Message> {
@@ -857,21 +1050,78 @@ impl HearthDeck {
     }
 
     fn dashboard_horizontal_target(&self, delta: i32) -> Option<widget::Id> {
-        let entry_ids = self.dashboard_entry_ids();
         let nav_ids = [
             DASHBOARD_HOME_ID.clone(),
             DASHBOARD_LIBRARY_ID.clone(),
             DASHBOARD_SEARCH_ID.clone(),
         ];
         let focused = self.focused_id.as_ref();
-        let ids = if focused.is_some_and(|focused| nav_ids.contains(focused)) {
-            nav_ids.as_slice()
-        } else {
-            entry_ids.as_slice()
-        };
+        let entry_rows = self.dashboard_entry_rows();
+        let ids = focused
+            .and_then(|focused| entry_rows.iter().find(|row| row.contains(focused)))
+            .map(Vec::as_slice)
+            .or_else(|| {
+                focused
+                    .is_some_and(|focused| nav_ids.contains(focused))
+                    .then_some(nav_ids.as_slice())
+            })?;
         let current = focused.and_then(|focused| ids.iter().position(|id| id == focused));
         let next = (current? as i32 + delta).clamp(0, ids.len() as i32 - 1) as usize;
         ids.get(next).cloned()
+    }
+
+    fn dashboard_vertical_target(&self, delta: i32) -> Option<widget::Id> {
+        let rows = self.dashboard_entry_rows();
+        let focused = self.focused_id.as_ref();
+        let nav_ids = [
+            DASHBOARD_HOME_ID.clone(),
+            DASHBOARD_LIBRARY_ID.clone(),
+            DASHBOARD_SEARCH_ID.clone(),
+        ];
+        if focused.is_some_and(|id| nav_ids.contains(id)) {
+            return if delta > 0 {
+                self.dashboard_notice
+                    .as_ref()
+                    .map(|_| DASHBOARD_NOTICE_ID.clone())
+                    .or_else(|| rows.first()?.first().cloned())
+            } else {
+                None
+            };
+        }
+        if focused.is_some_and(|id| id == &*DASHBOARD_NOTICE_ID) {
+            return if delta < 0 {
+                Some(DASHBOARD_HOME_ID.clone())
+            } else {
+                rows.first()?.first().cloned()
+            };
+        }
+        for (row_index, row) in rows.iter().enumerate() {
+            let Some(column) =
+                focused.and_then(|id| row.iter().position(|candidate| candidate == id))
+            else {
+                continue;
+            };
+            if delta < 0 && row_index == 0 {
+                return Some(if self.dashboard_notice.is_some() {
+                    DASHBOARD_NOTICE_ID.clone()
+                } else {
+                    DASHBOARD_HOME_ID.clone()
+                });
+            }
+            let target_row = row_index as i32 + delta;
+            if target_row < 0 || target_row >= rows.len() as i32 {
+                return None;
+            }
+            let target = &rows[target_row as usize];
+            return target
+                .get(column.min(target.len().saturating_sub(1)))
+                .cloned();
+        }
+        if delta > 0 {
+            rows.first()?.first().cloned()
+        } else {
+            Some(DASHBOARD_HOME_ID.clone())
+        }
     }
 
     /// The index of the currently focused app in the grid, if any.
@@ -1321,7 +1571,10 @@ impl cosmic::Application for HearthDeck {
 
             Message::PrevRow => {
                 if self.page == Page::Dashboard {
-                    return self.focus_dashboard_id(DASHBOARD_HOME_ID.clone());
+                    let Some(id) = self.dashboard_vertical_target(-1) else {
+                        return Task::none();
+                    };
+                    return self.focus_dashboard_id(id);
                 }
                 let mut i = self
                     .focused_id
@@ -1356,7 +1609,7 @@ impl cosmic::Application for HearthDeck {
             }
             Message::NextRow => {
                 if self.page == Page::Dashboard {
-                    let Some(id) = self.dashboard_entry_ids().first().cloned() else {
+                    let Some(id) = self.dashboard_vertical_target(1) else {
                         return Task::none();
                     };
                     return self.focus_dashboard_id(id);
@@ -1485,8 +1738,8 @@ impl cosmic::Application for HearthDeck {
             Message::ActivateApp(i) => {
                 return self.activate_app(i);
             }
-            Message::ActivateDashboardApp(i) => {
-                return self.activate_dashboard_app(i);
+            Message::ActivateDashboardApp(id) => {
+                return self.activate_dashboard_app(&id);
             }
             Message::ActivateFirstApp => {
                 return self.activate_app(0);
@@ -1502,12 +1755,14 @@ impl cosmic::Application for HearthDeck {
                 if focused == *DASHBOARD_SEARCH_ID {
                     return self.update(Message::OpenSearch);
                 }
+                if focused == *DASHBOARD_NOTICE_ID {
+                    return self.refresh_dashboard_notice();
+                }
                 if self.page == Page::Dashboard {
-                    let ids = self.dashboard_entry_ids();
-                    let Some(i) = focused_entry_index(&focused, &ids) else {
+                    let Some(entry_id) = self.dashboard_entry_id_for_widget(&focused) else {
                         return Task::none();
                     };
-                    return self.activate_dashboard_app(i);
+                    return self.activate_dashboard_app(&entry_id);
                 }
                 if focused == *NEW_GROUP_ID {
                     return self.update(Message::SubmitNewGroup);
@@ -1870,6 +2125,22 @@ impl cosmic::Application for HearthDeck {
                 self.menu = None;
                 return commands::popup::destroy_popup(*MENU_ID);
             }
+            Message::ToggleFavorite(usize) => {
+                if let Some(id) = self
+                    .entry_path_input
+                    .get(usize)
+                    .map(|entry| entry.id.clone())
+                {
+                    self.config.toggle_favorite(&id);
+                    if let Some(helper) = self.helper.as_ref()
+                        && let Err(error) = self.config.write_entry(helper)
+                    {
+                        error!("failed to save favorite: {error:?}");
+                    }
+                }
+                self.menu = None;
+                return commands::popup::destroy_popup(*MENU_ID);
+            }
             Message::AppListConfig(config) => {
                 self.app_list_config = config;
             }
@@ -1887,6 +2158,7 @@ impl cosmic::Application for HearthDeck {
                 self.window_width = width;
             }
             Message::DaemonLaunchResult(result) => {
+                let refresh_recent = result.is_ok();
                 let effect = match result {
                     Ok(()) => {
                         self.input_ownership.update(InputEvent::LaunchAccepted);
@@ -1898,11 +2170,17 @@ impl cosmic::Application for HearthDeck {
                         self.launch_state.update(LaunchEvent::Failed(error))
                     }
                 };
-                if effect == LaunchEffect::DelayDismiss {
-                    return Task::perform(tokio::time::sleep(LAUNCH_OVERLAY_DELAY), |_| {
-                        cosmic::Action::App(Message::DismissLaunch)
-                    });
+                let mut tasks = Vec::new();
+                if refresh_recent {
+                    tasks.push(self.load_recent_activity(std::time::Duration::ZERO));
                 }
+                if effect == LaunchEffect::DelayDismiss {
+                    tasks.push(Task::perform(
+                        tokio::time::sleep(LAUNCH_OVERLAY_DELAY),
+                        |_| cosmic::Action::App(Message::DismissLaunch),
+                    ));
+                }
+                return Task::batch(tasks);
             }
             Message::ActiveSessionResult(result) => {
                 match result {
@@ -1920,6 +2198,74 @@ impl cosmic::Application for HearthDeck {
                 self.system_status = status;
                 return Self::load_system_status(SYSTEM_STATUS_POLL_INTERVAL);
             }
+            Message::DashboardHealth { generation, result } => {
+                if generation != self.dashboard_health_generation {
+                    return Task::none();
+                }
+                let notice_was_focused = self
+                    .focused_id
+                    .as_ref()
+                    .is_some_and(|focused| focused == &*DASHBOARD_NOTICE_ID);
+                self.dashboard_notice = match result {
+                    Ok(health) => DashboardNotice::from_health(&health),
+                    Err(error) => {
+                        log::debug!("dashboard health is not available: {error}");
+                        Some(DashboardNotice::BackendUnavailable)
+                    }
+                };
+                let poll = self.load_dashboard_health(DASHBOARD_HEALTH_POLL_INTERVAL);
+                if notice_was_focused && self.dashboard_notice.is_none() {
+                    let id = self
+                        .dashboard_entry_ids()
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| DASHBOARD_HOME_ID.clone());
+                    return Task::batch([self.focus_dashboard_id(id), poll]);
+                }
+                return poll;
+            }
+            Message::RefreshDashboardNotice => {
+                return self.refresh_dashboard_notice();
+            }
+            Message::DashboardRescanResult(result) => {
+                if let Err(error) = result {
+                    log::warn!("dashboard library refresh failed: {error}");
+                    self.dashboard_notice = Some(DashboardNotice::RefreshFailed);
+                }
+                self.dashboard_health_generation += 1;
+                return self.load_dashboard_health(std::time::Duration::from_secs(1));
+            }
+            Message::RecentEntries(result) => match result {
+                Ok(records) => {
+                    self.recent_entries = records
+                        .into_iter()
+                        .map(|record| Arc::new(record.into_desktop_entry()))
+                        .collect();
+                    if self.page == Page::Dashboard {
+                        let entry_ids = self.dashboard_entry_ids();
+                        let nav_ids = [
+                            DASHBOARD_HOME_ID.clone(),
+                            DASHBOARD_LIBRARY_ID.clone(),
+                            DASHBOARD_SEARCH_ID.clone(),
+                            DASHBOARD_NOTICE_ID.clone(),
+                        ];
+                        let focus_is_valid = self.focused_id.as_ref().is_some_and(|focused| {
+                            nav_ids.contains(focused) || entry_ids.contains(focused)
+                        });
+                        if !focus_is_valid {
+                            let id = entry_ids
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| DASHBOARD_HOME_ID.clone());
+                            return self.focus_dashboard_id(id);
+                        }
+                    }
+                }
+                Err(error) => {
+                    log::debug!("recent activity is not available yet: {error}");
+                    return self.load_recent_activity(RECENT_ACTIVITY_RETRY_INTERVAL);
+                }
+            },
             Message::DismissLaunch => {
                 self.launch_state.update(LaunchEvent::Dismiss);
             }
@@ -2019,6 +2365,29 @@ impl cosmic::Application for HearthDeck {
             });
             list_column.push(divider::horizontal::light().into());
             list_column.push(pin_to_app_tray.into());
+
+            let is_favorite = self.config.is_favorite(&menu.id);
+            list_column.push(divider::horizontal::light().into());
+            list_column.push(
+                menu_button(
+                    row![
+                        if is_favorite {
+                            icon::icon(
+                                icon::from_name("checkbox-checked-symbolic")
+                                    .size(ICON_SMALL)
+                                    .into(),
+                            )
+                            .class(cosmic::theme::Svg::Custom(svg_accent.clone()))
+                        } else {
+                            icon::icon(icon::from_name("checkbox-symbolic").size(ICON_SMALL).into())
+                        },
+                        text::body(fl!("favorite")).size(TEXT_BODY)
+                    ]
+                    .spacing(space_xxs),
+                )
+                .on_press(Message::ToggleFavorite(*i))
+                .into(),
+            );
 
             let compatibility_enabled = self.config.desktop_input_enabled(&menu.id);
             list_column.push(divider::horizontal::light().into());
@@ -2354,6 +2723,8 @@ impl cosmic::Application for HearthDeck {
         let poll_active_session = self_.poll_active_session(std::time::Duration::ZERO);
         let load_romm_platforms = self_.load_romm_platforms(std::time::Duration::ZERO);
         let load_system_status = Self::load_system_status(std::time::Duration::ZERO);
+        let load_recent_activity = self_.load_recent_activity(std::time::Duration::ZERO);
+        let load_dashboard_health = self_.load_dashboard_health(std::time::Duration::ZERO);
         (
             self_,
             Task::batch([
@@ -2362,6 +2733,8 @@ impl cosmic::Application for HearthDeck {
                 poll_active_session,
                 load_romm_platforms,
                 load_system_status,
+                load_recent_activity,
+                load_dashboard_health,
             ]),
         )
     }
@@ -2478,60 +2851,94 @@ impl HearthDeck {
         .align_y(Alignment::Center)
         .height(Length::Fixed(f32::from(space_xxl)));
 
-        let tiles: Vec<Element<'_, Message>> = self
-            .all_entries
-            .iter()
-            .take(DASHBOARD_VISIBLE_TILES)
-            .zip(self.dashboard_entry_ids())
-            .enumerate()
-            .map(|(i, (entry, id))| {
-                ApplicationButton::new(
-                    id,
-                    &entry.name,
-                    crate::icon_cache::entry_icon_handle(&entry.icon, tile_size as u32),
-                    &entry.path,
-                    tile_size,
-                    tile_size,
-                    |_| Message::CloseContextMenu,
-                    Some(Message::ActivateDashboardApp(i)),
-                    None,
-                    false,
-                    None,
-                    None,
-                    None,
+        let notice = self.dashboard_notice.as_ref().map(|notice| {
+            container(
+                button::custom(
+                    row![
+                        icon::icon(icon::from_name("dialog-warning-symbolic").into())
+                            .size(ICON_BODY),
+                        column![
+                            text::body(notice.title()).size(TEXT_BODY),
+                            text::caption(notice.detail()).size(TEXT_CAPTION),
+                        ]
+                        .spacing(space_xs),
+                        space::horizontal(),
+                        icon::icon(icon::from_name("view-refresh-symbolic").into()).size(ICON_BODY),
+                    ]
+                    .spacing(space_s)
+                    .align_y(Alignment::Center),
                 )
+                .id(DASHBOARD_NOTICE_ID.clone())
+                .on_press(Message::RefreshDashboardNotice)
+                .padding([space_s, space_m])
+                .width(Length::Fill),
+            )
+            .class(theme::Container::Card)
+            .width(Length::Fill)
+        });
+
+        let shelves: Vec<Element<'_, Message>> = self
+            .dashboard_shelves()
+            .into_iter()
+            .map(|(shelf, entries)| {
+                let tiles: Vec<Element<'_, Message>> = entries
+                    .into_iter()
+                    .map(|entry| {
+                        ApplicationButton::new(
+                            shelf.widget_id(&entry.id),
+                            &entry.name,
+                            crate::icon_cache::entry_icon_handle(&entry.icon, tile_size as u32),
+                            &entry.path,
+                            tile_size,
+                            tile_size,
+                            |_| Message::CloseContextMenu,
+                            Some(Message::ActivateDashboardApp(entry.id.clone())),
+                            None,
+                            false,
+                            None,
+                            None,
+                            None,
+                        )
+                        .into()
+                    })
+                    .collect();
+                let rail: Element<'_, Message> = if tiles.is_empty() {
+                    container(
+                        column![
+                            icon::icon(APP_ICON.clone()).size(ICON_LARGE),
+                            text::body("Your installed games and apps will appear here")
+                                .size(TEXT_BODY),
+                        ]
+                        .spacing(space_s)
+                        .align_x(Alignment::Center),
+                    )
+                    .width(Length::Fill)
+                    .height(Length::Fixed(tile_size))
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center)
+                    .into()
+                } else {
+                    row(tiles).spacing(space_s).into()
+                };
+                column![
+                    text::title3(shelf.title()).size(TEXT_HEADER),
+                    container(rail).padding([space_m, 0, 0, 0]),
+                ]
                 .into()
             })
             .collect();
 
-        let rail: Element<'_, Message> = if tiles.is_empty() {
-            container(
-                column![
-                    icon::icon(APP_ICON.clone()).size(ICON_LARGE),
-                    text::body("Your installed games and apps will appear here").size(TEXT_BODY),
-                ]
-                .spacing(space_s)
-                .align_x(Alignment::Center),
-            )
+        let mut content = column![top_bar].spacing(space_m);
+        if let Some(notice) = notice {
+            content = content.push(notice);
+        }
+        let content = content
+            .push(space::vertical().height(Length::Fill))
+            .push(column(shelves).spacing(space_l))
+            .push(space::vertical().height(space_xxl))
             .width(Length::Fill)
-            .height(Length::Fixed(tile_size))
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-            .into()
-        } else {
-            row(tiles).spacing(space_s).into()
-        };
-
-        let content = column![
-            top_bar,
-            space::vertical().height(Length::Fill),
-            text::title3("Games & apps").size(TEXT_HEADER),
-            container(rail).padding([space_m, 0, 0, 0]),
-            space::vertical().height(space_xxl),
-        ]
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(space_l);
+            .height(Length::Fill)
+            .padding(space_l);
 
         container(content)
             .width(Length::Fill)
@@ -3055,10 +3462,11 @@ fn is_primary_window(id: SurfaceId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        HearthDeck, Page, focused_entry_index, is_primary_window, next_romm_offset,
-        romm_page_is_current, selected_romm_platform_id,
+        DashboardNotice, DashboardShelf, HearthDeck, Page, focused_entry_index, is_primary_window,
+        next_romm_offset, romm_page_is_current, selected_romm_platform_id,
     };
     use crate::app_group::{AppLibraryConfig, Section};
+    use crate::providers::daemon::{HealthResponse, HostCapabilities, ProviderHealthInfo};
     use cosmic::{
         desktop::{DesktopEntryData, fde::IconSource},
         iced::widget,
@@ -3138,6 +3546,143 @@ mod tests {
             app.dashboard_horizontal_target(-1),
             Some(super::DASHBOARD_LIBRARY_ID.clone())
         );
+    }
+
+    #[test]
+    fn dashboard_favorites_follow_saved_ids_not_catalog_order() {
+        let config = AppLibraryConfig {
+            favorite_ids: vec!["second".into(), "missing".into(), "first".into()],
+            ..Default::default()
+        };
+        let app = HearthDeck {
+            all_entries: vec![entry("first"), entry("second"), entry("other")],
+            config,
+            ..Default::default()
+        };
+        let shelves = app.dashboard_shelves();
+
+        assert_eq!(shelves[0].0, DashboardShelf::Favorites);
+        assert_eq!(
+            shelves[0]
+                .1
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            ["second", "first"]
+        );
+    }
+
+    #[test]
+    fn dashboard_navigation_moves_between_recent_and_favorite_shelves() {
+        let config = AppLibraryConfig {
+            favorite_ids: vec!["favorite".into()],
+            ..Default::default()
+        };
+        let mut app = HearthDeck {
+            all_entries: vec![entry("favorite")],
+            recent_entries: vec![entry("recent-a"), entry("recent-b")],
+            config,
+            ..Default::default()
+        };
+        let rows = app.dashboard_entry_rows();
+        app.focused_id = Some(rows[0][1].clone());
+
+        assert_eq!(app.dashboard_vertical_target(1), Some(rows[1][0].clone()));
+        assert_eq!(
+            app.dashboard_entry_id_for_widget(&rows[0][0]),
+            Some("recent-a".into())
+        );
+    }
+
+    #[test]
+    fn dashboard_health_only_reports_degraded_providers() {
+        let health = |providers| HealthResponse {
+            version: "test".into(),
+            lan_enabled: false,
+            transport: "http".into(),
+            providers,
+            capabilities: HostCapabilities {
+                launch: true,
+                application_sessions: true,
+                install_requests: false,
+                retro_launch: true,
+            },
+        };
+        let provider = |id: &str, status: &str| ProviderHealthInfo {
+            id: id.into(),
+            status: status.into(),
+            record_count: None,
+            last_attempt_at: None,
+        };
+
+        assert_eq!(
+            DashboardNotice::from_health(&health(vec![provider("heroic", "ready")])),
+            None
+        );
+        assert_eq!(
+            DashboardNotice::from_health(&health(vec![
+                provider("heroic", "degraded"),
+                provider("desktop-apps", "ready"),
+            ])),
+            Some(DashboardNotice::ProvidersDegraded(vec!["heroic".into()]))
+        );
+    }
+
+    #[test]
+    fn dashboard_notice_sits_between_navigation_and_shelves() {
+        let mut app = HearthDeck {
+            all_entries: vec![entry("game")],
+            dashboard_notice: Some(DashboardNotice::BackendUnavailable),
+            focused_id: Some(super::DASHBOARD_HOME_ID.clone()),
+            ..Default::default()
+        };
+        let first_entry = app.dashboard_entry_rows()[0][0].clone();
+
+        assert_eq!(
+            app.dashboard_vertical_target(1),
+            Some(super::DASHBOARD_NOTICE_ID.clone())
+        );
+        app.focused_id = Some(super::DASHBOARD_NOTICE_ID.clone());
+        assert_eq!(app.dashboard_vertical_target(1), Some(first_entry.clone()));
+        app.focused_id = Some(first_entry);
+        assert_eq!(
+            app.dashboard_vertical_target(-1),
+            Some(super::DASHBOARD_NOTICE_ID.clone())
+        );
+    }
+
+    #[test]
+    fn clearing_a_focused_dashboard_notice_restores_shelf_focus() {
+        let mut app = HearthDeck {
+            all_entries: vec![entry("game")],
+            dashboard_notice: Some(DashboardNotice::BackendUnavailable),
+            focused_id: Some(super::DASHBOARD_NOTICE_ID.clone()),
+            ..Default::default()
+        };
+        let expected = app.dashboard_entry_rows()[0][0].clone();
+        let health = HealthResponse {
+            version: "test".into(),
+            lan_enabled: false,
+            transport: "http".into(),
+            providers: Vec::new(),
+            capabilities: HostCapabilities {
+                launch: true,
+                application_sessions: true,
+                install_requests: false,
+                retro_launch: true,
+            },
+        };
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::DashboardHealth {
+                generation: 0,
+                result: Ok(health),
+            },
+        );
+
+        assert_eq!(app.dashboard_notice, None);
+        assert_eq!(app.focused_id, Some(expected));
     }
 
     #[test]

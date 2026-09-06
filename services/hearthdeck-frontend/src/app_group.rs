@@ -292,6 +292,8 @@ pub struct AppLibraryConfig {
     pub sections: Sections,
     #[serde(default)]
     pub desktop_input_apps: Vec<String>,
+    #[serde(default)]
+    pub favorite_ids: Vec<String>,
 }
 
 impl AppLibraryConfig {
@@ -316,6 +318,28 @@ impl AppLibraryConfig {
         } else {
             self.desktop_input_apps.push(id.to_owned());
         }
+    }
+
+    pub fn is_favorite(&self, id: &str) -> bool {
+        self.favorite_ids.iter().any(|favorite| favorite == id)
+    }
+
+    pub fn toggle_favorite(&mut self, id: &str) {
+        if self.is_favorite(id) {
+            self.favorite_ids.retain(|favorite| favorite != id);
+        } else {
+            self.favorite_ids.push(id.to_owned());
+        }
+    }
+
+    pub fn favorite_entries<'a>(
+        &self,
+        entries: &'a [Arc<DesktopEntryData>],
+    ) -> Vec<&'a Arc<DesktopEntryData>> {
+        self.favorite_ids
+            .iter()
+            .filter_map(|id| entries.iter().find(|entry| entry.id == *id))
+            .collect()
     }
 
     pub fn home() -> &'static AppGroup {
@@ -673,5 +697,26 @@ mod tests {
 
         config.toggle_desktop_input("writer");
         assert!(!config.desktop_input_enabled("writer"));
+    }
+
+    #[test]
+    fn favorites_follow_saved_order_and_ignore_missing_entries() {
+        let mut config = AppLibraryConfig::default();
+        config.toggle_favorite("terminal");
+        config.toggle_favorite("missing");
+        config.toggle_favorite("writer");
+        let entries = [entry("writer", &[]), entry("terminal", &[])];
+
+        assert_eq!(
+            config
+                .favorite_entries(&entries)
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            ["terminal", "writer"]
+        );
+
+        config.toggle_favorite("terminal");
+        assert!(!config.is_favorite("terminal"));
     }
 }

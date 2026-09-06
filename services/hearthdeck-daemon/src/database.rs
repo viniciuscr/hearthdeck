@@ -74,6 +74,12 @@ impl Database {
             CREATE TABLE IF NOT EXISTS hearthdeck_schema_migrations (
               version INTEGER PRIMARY KEY
             );
+                        CREATE TABLE IF NOT EXISTS launch_activity (
+                            item_id TEXT PRIMARY KEY,
+                            snapshot_json TEXT NOT NULL,
+                            last_launched_at TEXT NOT NULL,
+                            launch_count INTEGER NOT NULL DEFAULT 1
+                        );
             "#,
         )
         .execute(&self.pool)

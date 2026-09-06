@@ -1,6 +1,6 @@
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use tracing::info;
 
 #[derive(Clone)]
@@ -74,34 +74,7 @@ impl CatalogStore {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                let discovery = serde_json::from_str(&row.get::<String, _>("metadata_json"))
-                    .unwrap_or(Value::Null);
-                let enrichment: Option<Value> = row
-                    .get::<Option<String>, _>("enrichment_payload_json")
-                    .and_then(|payload| serde_json::from_str(&payload).ok());
-                let enrichment_provider: Option<String> = row.get("enrichment_provider_id");
-                let title: String = row.get("title");
-                CatalogItem {
-                    id: row.get("id"),
-                    source_id: row.get("source_id"),
-                    title: title.clone(),
-                    kind: row.get("kind"),
-                    launch_id: row.get("launch_id"),
-                    icon: row
-                        .get::<Option<String>, _>("icon")
-                        .or_else(|| metadata_string(enrichment.as_ref(), "icon")),
-                    metadata: merged_metadata(
-                        &title,
-                        &discovery,
-                        enrichment.as_ref(),
-                        enrichment_provider,
-                    ),
-                }
-            })
-            .collect())
+        Ok(rows.into_iter().map(catalog_item_from_row).collect())
     }
 
     /// Replaces every application alias owned by a metadata provider in one
@@ -146,20 +119,50 @@ impl CatalogStore {
         Ok(())
     }
 
-    pub async fn launch_id_for(&self, item_id: &str) -> Result<Option<String>, sqlx::Error> {
-        let row = sqlx::query("SELECT launch_id FROM library_items WHERE id = ?")
-            .bind(item_id)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.and_then(|row| row.get("launch_id")))
+    pub async fn get(&self, item_id: &str) -> Result<Option<CatalogItem>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+              item.id, item.source_id, item.title, item.kind, item.launch_id, item.icon,
+              item.metadata_json,
+              enrichment.provider_id AS enrichment_provider_id,
+              enrichment.payload_json AS enrichment_payload_json
+            FROM library_items AS item
+            LEFT JOIN catalog_enrichments AS enrichment ON enrichment.rowid = (
+              SELECT candidate.rowid
+              FROM catalog_enrichments AS candidate
+              WHERE candidate.application_id = item.launch_id
+              ORDER BY candidate.priority DESC, candidate.updated_at DESC
+              LIMIT 1
+            )
+            WHERE item.id = ?
+            "#,
+        )
+        .bind(item_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(catalog_item_from_row))
     }
+}
 
-    pub async fn source_id_for(&self, item_id: &str) -> Result<Option<String>, sqlx::Error> {
-        let row = sqlx::query("SELECT source_id FROM library_items WHERE id = ?")
-            .bind(item_id)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.and_then(|row| row.get("source_id")))
+fn catalog_item_from_row(row: SqliteRow) -> CatalogItem {
+    let discovery =
+        serde_json::from_str(&row.get::<String, _>("metadata_json")).unwrap_or(Value::Null);
+    let enrichment: Option<Value> = row
+        .get::<Option<String>, _>("enrichment_payload_json")
+        .and_then(|payload| serde_json::from_str(&payload).ok());
+    let enrichment_provider: Option<String> = row.get("enrichment_provider_id");
+    let title: String = row.get("title");
+    CatalogItem {
+        id: row.get("id"),
+        source_id: row.get("source_id"),
+        title: title.clone(),
+        kind: row.get("kind"),
+        launch_id: row.get("launch_id"),
+        icon: row
+            .get::<Option<String>, _>("icon")
+            .or_else(|| metadata_string(enrichment.as_ref(), "icon")),
+        metadata: merged_metadata(&title, &discovery, enrichment.as_ref(), enrichment_provider),
     }
 }
 
@@ -256,7 +259,7 @@ pub struct EnrichmentRecord {
     pub updated_at: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct CatalogItem {
     pub id: String,
     pub source_id: String,

@@ -5,14 +5,16 @@ use hearthdeck_protocol::ApplicationSession;
 use tokio::sync::broadcast;
 
 use crate::{
-    auth::AuthRepository, catalog::CatalogStore, config::Config, database::Database,
-    discovery::DiscoveryService, enrichment::EnrichmentService, settings::SettingsRepository,
+    activity::ActivityStore, auth::AuthRepository, catalog::CatalogStore, config::Config,
+    database::Database, discovery::DiscoveryService, enrichment::EnrichmentService,
+    settings::SettingsRepository,
 };
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
     pub auth: AuthRepository,
+    pub activity: ActivityStore,
     pub catalog: CatalogStore,
     pub settings: SettingsRepository,
     pub discovery: Option<DiscoveryService>,
@@ -102,6 +104,7 @@ impl AppState {
         Self {
             config,
             auth: AuthRepository::new(database.pool().clone()),
+            activity: ActivityStore::new(database.pool().clone()),
             catalog: CatalogStore::new(database.pool().clone()),
             settings: SettingsRepository::new(database.pool().clone()),
             discovery: None,

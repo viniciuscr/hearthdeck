@@ -19,6 +19,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
+    activity::{ActivityEntry, RecentActivity},
     diagnostics::{self, RommGame, RommPlatform, RommQueryError},
     retro::RetroLaunchError,
     settings::{
@@ -33,6 +34,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/diagnostics", get(diagnostics))
         .route("/v1/pairing/complete", post(complete_pairing))
         .route("/v1/library", get(list_library))
+        .route("/v1/activity/recent", get(list_recent_activity))
         .route("/v1/retro/consoles", get(list_retro_consoles))
         .route("/v1/retro/roms", get(list_retro_roms))
         .route("/v1/retro/roms/{id}/launch", post(launch_retro_rom))
@@ -161,6 +163,20 @@ async fn list_library(
     Ok(Json(items))
 }
 
+async fn list_recent_activity(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Query(query): Query<RecentActivityQuery>,
+) -> Result<Json<Vec<RecentActivity>>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let items = state
+        .activity
+        .recent(query.limit.unwrap_or(6))
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(items))
+}
+
 async fn list_retro_consoles(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -222,6 +238,7 @@ async fn launch_retro_rom(
     let plan = crate::retro::prepare_launch(&state.settings, rom_id)
         .await
         .map_err(ApiError::retro_launch)?;
+    let activity = retro_activity_entry(&plan.game);
     let session_id = Uuid::new_v4().to_string();
     let request = BridgeRequest::LaunchRetroGame {
         core_path: plan.core_path.to_string_lossy().into_owned(),
@@ -235,6 +252,9 @@ async fn launch_retro_rom(
     let BridgeResponse::LaunchAccepted { session } = response else {
         return Err(ApiError::bad_gateway("bridge rejected retro game launch"));
     };
+    if let Err(error) = state.activity.record_launch(activity).await {
+        warn!(%error, rom_id, "failed to record retro launch activity");
+    }
     info!(rom_id, "retro game launch accepted");
     let _ = state.events.send(ServerEvent::ApplicationSessionChanged {
         session: Some(session.clone()),
@@ -459,22 +479,17 @@ async fn launch_app(
     if !host_capabilities().launch {
         return Err(ApiError::capability_unavailable("application launch"));
     }
-    let launch_id = state
+    let item = state
         .catalog
-        .launch_id_for(&id)
+        .get(&id)
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(ApiError::not_found)?;
-    let source_id = state
-        .catalog
-        .source_id_for(&id)
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(ApiError::not_found)?;
+    let launch_id = item.launch_id.as_deref().ok_or_else(ApiError::not_found)?;
     let session_id = Uuid::new_v4().to_string();
-    let request = if source_id == "heroic" {
+    let request = if item.source_id == "heroic" {
         let (runner, application_id) =
-            heroic_launch_target(&launch_id).ok_or_else(ApiError::not_found)?;
+            heroic_launch_target(launch_id).ok_or_else(ApiError::not_found)?;
         BridgeRequest::LaunchHeroicGame {
             runner,
             application_id,
@@ -483,8 +498,8 @@ async fn launch_app(
         }
     } else {
         BridgeRequest::LaunchApplication {
-            source_id,
-            application_id: launch_id,
+            source_id: item.source_id.clone(),
+            application_id: launch_id.to_owned(),
             session_id,
             input_profile: options.input_profile,
         }
@@ -495,6 +510,13 @@ async fn launch_app(
     let BridgeResponse::LaunchAccepted { session } = response else {
         return Err(ApiError::bad_gateway("bridge rejected application launch"));
     };
+    if let Err(error) = state
+        .activity
+        .record_launch(catalog_activity_entry(&item))
+        .await
+    {
+        warn!(%error, item_id = %id, "failed to record catalog launch activity");
+    }
     info!(item_id = %id, "catalog launch accepted");
     let _ = state.events.send(ServerEvent::ApplicationSessionChanged {
         session: Some(session.clone()),
@@ -506,6 +528,51 @@ async fn launch_app(
 struct LaunchOptions {
     #[serde(default)]
     input_profile: InputProfile,
+}
+
+#[derive(Deserialize)]
+struct RecentActivityQuery {
+    limit: Option<u32>,
+}
+
+fn catalog_activity_entry(item: &crate::catalog::CatalogItem) -> ActivityEntry {
+    let categories = item
+        .metadata
+        .get("categories")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    ActivityEntry {
+        id: format!("hearthdeck:{}", item.id),
+        title: item.title.clone(),
+        icon: item.icon.clone(),
+        categories,
+        source: item.source_id.clone(),
+        metadata: item.metadata.clone(),
+    }
+}
+
+fn retro_activity_entry(game: &RommGame) -> ActivityEntry {
+    let game = RetroGame::from(game);
+    ActivityEntry {
+        id: format!("romm:{}", game.id),
+        title: game.title,
+        icon: game.cover_path,
+        categories: vec![
+            "Game".to_owned(),
+            format!("hearthdeck-console:{}", game.platform_id),
+        ],
+        source: "romm".to_owned(),
+        metadata: serde_json::json!({
+            "summary": game.summary,
+            "genres": game.genres,
+            "release_year": game.release_year,
+            "screenshot_paths": game.screenshot_paths,
+        }),
+    }
 }
 
 fn heroic_launch_target(launch_id: &str) -> Option<(HeroicRunner, String)> {
@@ -1318,6 +1385,20 @@ mod tests {
         assert_eq!(launched["state"], "running");
         assert!(launched["id"].as_str().is_some_and(|id| !id.is_empty()));
         bridge.await.unwrap();
+
+        let (status, recent) = response_json(
+            router(state.clone()),
+            Request::get("/v1/activity/recent?limit=6")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(recent[0]["id"], "hearthdeck:test:app");
+        assert_eq!(recent[0]["title"], "Hearthdeck Test App");
+        assert_eq!(recent[0]["launch_count"], 1);
+        assert!(recent[0]["last_launched_at"].is_string());
 
         let launch_unknown_item = router(state)
             .oneshot(
