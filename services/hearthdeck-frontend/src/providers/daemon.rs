@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use futures::future::join_all;
+use futures::{StreamExt, future::join_all, stream};
 use hearthdeck_protocol::ApplicationSession;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -12,6 +12,7 @@ use std::{
 use tokio::sync::{OnceCell, mpsc};
 
 use super::{GameProvider, GameRecord};
+use crate::app_group::romm_console_category;
 
 /// Configuration for connecting to the HearthDeck daemon.
 #[derive(Clone, Debug)]
@@ -98,27 +99,31 @@ pub enum ServerEvent {
 }
 
 /// Retro game from the daemon's /v1/retro/roms endpoint.
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct RetroGame {
     pub id: i64,
     pub platform_id: i64,
     pub title: String,
     pub summary: Option<String>,
     pub cover_path: Option<String>,
-    pub cover_url: Option<String>,
     pub screenshot_paths: Vec<String>,
     pub genres: Vec<String>,
     pub release_year: Option<i32>,
 }
 
 /// Retro platform from the daemon's /v1/retro/consoles endpoint.
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct RetroPlatform {
     pub id: i64,
     pub name: String,
     pub display_name: Option<String>,
+    pub rom_count: u64,
+}
+
+impl RetroPlatform {
+    pub fn label(&self) -> &str {
+        self.display_name.as_deref().unwrap_or(&self.name)
+    }
 }
 
 impl DaemonClient {
@@ -311,7 +316,6 @@ impl DaemonClient {
     }
 
     /// Lists available retro consoles from RomM.
-    #[allow(dead_code)]
     pub async fn list_retro_consoles(&self) -> Result<Vec<RetroPlatform>, DaemonError> {
         let response = self
             .http
@@ -329,7 +333,6 @@ impl DaemonClient {
     }
 
     /// Lists retro ROMs, optionally filtered by platform.
-    #[allow(dead_code)]
     pub async fn list_retro_roms(
         &self,
         platform_id: Option<i64>,
@@ -368,8 +371,68 @@ impl DaemonClient {
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
+    pub async fn list_retro_records(
+        &self,
+        platform_id: Option<i64>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<RetroRecordPage, DaemonError> {
+        let page = self
+            .list_retro_roms(platform_id, None, limit, offset)
+            .await?;
+        let records = stream::iter(page.items.into_iter().map(|game| {
+            let client = self.clone();
+            async move {
+                let icon = client.cache_retro_cover(&game).await;
+                retro_game_to_game_record(game, icon)
+            }
+        }))
+        .buffered(8)
+        .collect()
+        .await;
+        Ok(RetroRecordPage {
+            items: records,
+            total: page.total,
+            offset: page.offset,
+        })
+    }
+
+    async fn cache_retro_cover(&self, game: &RetroGame) -> Option<String> {
+        if let Some(path) = game.cover_path.as_deref() {
+            let key = format!("romm:{path}");
+            if let Some(cached) = cached_icon(&key) {
+                return Some(cached);
+            }
+            let mut url = url::Url::parse(&self.api_url("/v1/retro/assets")).ok()?;
+            url.query_pairs_mut().append_pair("path", path);
+            let response = self
+                .http
+                .get(url)
+                .headers(self.auth_headers().await.ok()?)
+                .send()
+                .await
+                .ok()?;
+            if response.status().is_success() {
+                let extension = image_extension(
+                    response
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok()),
+                );
+                let bytes = response.bytes().await.ok()?.to_vec();
+                return tokio::task::spawn_blocking(move || {
+                    cache_icon_bytes(&key, extension, &bytes)
+                })
+                .await
+                .ok()
+                .flatten();
+            }
+        }
+
+        None
+    }
+
     /// Launches a retro ROM by its ID.
-    #[allow(dead_code)]
     pub async fn launch_retro_rom(&self, rom_id: i64) -> Result<ApplicationSession, DaemonError> {
         let response = self
             .http
@@ -512,6 +575,34 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
     }
 }
 
+pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameRecord {
+    let mut metadata = serde_json::Map::new();
+    if let Some(summary) = game.summary {
+        metadata.insert("comment".to_string(), serde_json::Value::String(summary));
+    }
+    metadata.insert("genres".to_string(), serde_json::json!(game.genres));
+    metadata.insert(
+        "screenshot_paths".to_string(),
+        serde_json::json!(game.screenshot_paths),
+    );
+    if let Some(release_year) = game.release_year {
+        metadata.insert("release_year".to_string(), release_year.into());
+    }
+
+    GameRecord {
+        id: format!("romm:{}", game.id),
+        name: game.title,
+        exec: Some(game.id.to_string()),
+        icon,
+        path: None,
+        categories: vec!["Game".to_string(), romm_console_category(game.platform_id)],
+        terminal: false,
+        prefers_dgpu: false,
+        source: "RomM".to_string(),
+        metadata: serde_json::Value::Object(metadata),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("connection failed: {0}")]
@@ -630,6 +721,38 @@ fn cache_icon(url: &str) -> Option<String> {
     Some(cached.to_string_lossy().into_owned())
 }
 
+fn cached_icon(key: &str) -> Option<String> {
+    let mut hasher = DefaultHasher::new();
+    hasher.write(key.as_bytes());
+    let stem = format!("{:016x}", hasher.finish());
+    ["jpg", "png", "webp"]
+        .into_iter()
+        .map(|extension| icon_cache_dir().join(format!("{stem}.{extension}")))
+        .find(|path| path.metadata().is_ok_and(|metadata| metadata.len() >= 16))
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn cache_icon_bytes(key: &str, extension: &str, bytes: &[u8]) -> Option<String> {
+    if bytes.len() < 16 {
+        return None;
+    }
+    let cache_dir = icon_cache_dir();
+    std::fs::create_dir_all(&cache_dir).ok()?;
+    let mut hasher = DefaultHasher::new();
+    hasher.write(key.as_bytes());
+    let cached = cache_dir.join(format!("{:016x}.{extension}", hasher.finish()));
+    std::fs::File::create(&cached).ok()?.write_all(bytes).ok()?;
+    Some(cached.to_string_lossy().into_owned())
+}
+
+fn image_extension(content_type: Option<&str>) -> &'static str {
+    match content_type {
+        Some(value) if value.eq_ignore_ascii_case("image/png") => "png",
+        Some(value) if value.eq_ignore_ascii_case("image/webp") => "webp",
+        _ => "jpg",
+    }
+}
+
 fn icon_cache_dir() -> PathBuf {
     env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
@@ -639,18 +762,23 @@ fn icon_cache_dir() -> PathBuf {
 }
 
 /// Response from the /v1/retro/roms endpoint.
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct RetroGamesResponse {
     pub items: Vec<RetroGame>,
     pub total: u64,
-    pub limit: u32,
+    pub offset: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct RetroRecordPage {
+    pub items: Vec<GameRecord>,
+    pub total: u64,
     pub offset: u32,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CatalogItem, catalog_item_to_game_record};
+    use super::{CatalogItem, RetroGame, catalog_item_to_game_record, retro_game_to_game_record};
 
     #[test]
     fn catalog_item_maps_to_game_record_with_prefix() {
@@ -719,5 +847,28 @@ mod tests {
 
         assert!(record.exec.is_none());
         assert_eq!(record.source, "Flatpak");
+    }
+
+    #[test]
+    fn romm_game_maps_to_a_console_record_with_dedicated_id() {
+        let record = retro_game_to_game_record(
+            RetroGame {
+                id: 42,
+                platform_id: 7,
+                title: "Example ROM".to_string(),
+                summary: Some("A console game".to_string()),
+                cover_path: Some("/assets/example.jpg".to_string()),
+                screenshot_paths: Vec::new(),
+                genres: vec!["RPG".to_string()],
+                release_year: Some(1994),
+            },
+            Some("/tmp/example.jpg".to_string()),
+        );
+
+        assert_eq!(record.id, "romm:42");
+        assert_eq!(record.exec.as_deref(), Some("42"));
+        assert_eq!(record.categories, vec!["Game", "hearthdeck-console:7"]);
+        assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
+        assert_eq!(record.metadata["genres"], serde_json::json!(["RPG"]));
     }
 }

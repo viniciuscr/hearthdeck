@@ -239,7 +239,7 @@ async fn launch_retro_rom(
 }
 
 /// Restarts the fixed `romm.service` systemd unit
-/// (`deploy/systemd/romm.service.example`), if the user has installed it.
+/// (`deploy/systemd/romm.service`), if the user has configured it.
 /// Not a generic "restart any unit" endpoint: the unit name is hardcoded in
 /// `diagnostics::restart_romm_service`, never taken from the request.
 async fn restart_romm_service(

@@ -26,6 +26,7 @@ optdepends=(
   'libretro-flycast: RetroArch core for Sega Dreamcast'
   'cosmic-comp: bare-minimum "COSMIC (Test)" session, unrelated to the Hearthdeck Kiosk session'
   'cosmic-panel: real top bar for the "COSMIC (Test)" session, unrelated to the Hearthdeck Kiosk session'
+  'docker-compose: start an optional local RomM stack with the Hearthdeck session'
 )
 install="${pkgname}.install"
 backup=('etc/pacman.d/hearthdeck.conf')
@@ -57,7 +58,9 @@ package() {
   install -Dm644 packaging/arch/hearthdeck-bridge.socket "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.socket"
   install -Dm644 packaging/arch/hearthdeck-bridge.service "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.service"
   install -Dm644 packaging/arch/hearthdeck-daemon.service "$pkgdir/usr/lib/systemd/user/hearthdeck-daemon.service"
+  install -Dm644 deploy/systemd/romm.service "$pkgdir/usr/lib/systemd/user/romm.service"
   install -Dm644 deploy/systemd/daemon.env.example "$pkgdir/usr/share/doc/hearthdeck/daemon.env.example"
+  install -Dm644 deploy/systemd/romm.env.example "$pkgdir/usr/share/doc/hearthdeck/romm.env.example"
   install -Dm644 packaging/arch/hearthdeck-pacman-repo.conf "$pkgdir/etc/pacman.d/hearthdeck.conf"
   install -Dm644 docs/arch-package.md "$pkgdir/usr/share/doc/hearthdeck/README.md"
   install -Dm644 docs/linux-acceptance.md "$pkgdir/usr/share/doc/hearthdeck/ACCEPTANCE.md"

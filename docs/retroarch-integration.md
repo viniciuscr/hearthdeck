@@ -44,9 +44,9 @@ Gamescope with the smallest possible memory/CPU footprint.
 
 ## Current state (baseline, as of this doc)
 
-- RomM: read-only settings + live console/game browsing only
-  (`lib/retro.dart`, `diagnostics.rs`, `/v1/retro/consoles`,
-  `/v1/retro/games`). No launch, no catalog integration, no saves.
+- RomM: read-only settings plus live console/game browsing
+  (`/v1/retro/consoles`, `/v1/retro/roms`) and dedicated managed launch
+  (`/v1/retro/roms/{id}/launch`). No catalog materialization or saves.
 - RetroArch: not installed by the package, not referenced anywhere in
   `services/` or `packaging/`.
 - Discovery/catalog: RomM is *not* a `DiscoveryProvider`/`CatalogRecord`
@@ -162,7 +162,7 @@ disagrees.
    already source-agnostic and doesn't require catalog-table membership, so
    nothing about launching is actually lost by staying out of the catalog.
    RomM keeps its own dedicated, paginated launch route
-   (`POST /v1/retro/games/{id}/launch`), reusing the session/bridge
+  (`POST /v1/retro/roms/{id}/launch`), reusing the session/bridge
    machinery only. "Feels unified" UX (search, dashboard) stays a
    client-side merge, the same pattern `search.dart` already uses to blend
    catalog results with live RomM search results — no server storage
@@ -197,8 +197,9 @@ disagrees.
 
 ## Starting the RomM server itself
 
-RomM is an external self-hosted server (commonly a podman/docker-compose
-stack), not something Hearthdeck packages or manages the lifecycle of.
+RomM is an external self-hosted server (commonly a Docker Compose stack), not
+something Hearthdeck packages. Its optional Compose lifecycle is managed by a
+systemd user unit when configured.
 Whoever runs it needs it started before it's useful — at session start or at
 boot, not by hand after every login.
 
@@ -207,23 +208,20 @@ boot, not by hand after every login.
 unit (`hearthdeck.target`, `hearthdeck-bridge.socket`, the Kiosk session
 scripts) — never an imperative shell-out embedded in the daemon or bridge.
 `docs/product-foundations.md`'s own rule is explicit: "the daemon... must not
-contain host-specific command construction." Wrapping `podman-compose up -d`
+contain host-specific command construction." Wrapping `docker compose up -d`
 in a daemon startup routine would be exactly that, plus it would reinvent
 what systemd already does correctly for free: restart-on-failure, proper
 start/stop ordering, and boot/session integration.
 
-`deploy/systemd/romm.service.example` is a `systemd --user` oneshot unit
-(`RemainAfterExit=yes`) wrapping `podman-compose up -d`/`down` in the user's
-own compose project directory, `WantedBy=hearthdeck.target` — so it starts
-at the same point `hearthdeck.target` already does ("starts for users at
-their next login", per the README), not tied to system boot. Rootless
-podman wants the user's session (runtime dir, D-Bus) anyway, so tying it to
-the user-session target instead of `multi-user.target` avoids fighting
-rootless podman's own expectations. It is a `.example` template, not
-auto-installed by the Arch package: the compose project's location
-(`/mnt/external/romM/` or wherever) is specific to each install, the same
-reason `daemon.env.example` is shipped as documentation rather than a live
-config.
+`deploy/systemd/romm.service` is an optional `systemd --user` oneshot unit
+(`RemainAfterExit=yes`) wrapping `docker compose up -d`/`down`. The Arch
+package installs it and `hearthdeck.target` wants it, but
+`ConditionPathExists=%h/.config/hearthdeck/romm.env` keeps it inert until the
+user opts in. That environment file supplies the deployment-specific absolute
+`ROMM_COMPOSE_FILE`; an example is installed under
+`/usr/share/doc/hearthdeck/romm.env.example`. This starts RomM with the active
+Hearthdeck user session rather than system boot, and avoids putting host
+command construction in the daemon.
 
 **"A place in the UI to do this kind of stuff":** rather than build a new
 control surface, `service_statuses()` in `diagnostics.rs` — the same
@@ -231,7 +229,7 @@ function that already reports `hearthdeck.target`/daemon/bridge status via
 `systemctl --user show` — now also queries `romm.service`. If the unit isn't
 installed, it reports the same neutral `unavailable` state the function
 already returns for any unit the user's systemd instance doesn't know about,
-so this is safe to query unconditionally. Once the template is installed,
+so this is safe to query unconditionally. Once the environment file is configured,
 RomM's container-stack status shows up in Settings' existing service status
 view next to the daemon and bridge — no new screen, no separate place to go
 looking for whether it's up.

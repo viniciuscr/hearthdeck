@@ -217,12 +217,12 @@ extend it to additional providers; replace it with the bounded asset cache.
 
 ### What Is Not Yet In The Catalog
 
-RomM consoles and games are currently a separate, paginated live view. The
-daemon stores only its connection settings and proxies the configured local
-RomM data; it does not yet materialize those games into `library_items` or
-support their launch. Dashboard tiles/shelves still show fixture content.
-New work must not imply that surface already describes every installed
-source.
+RomM remains a paginated live source rather than catalog material. The daemon
+stores only its connection settings and proxies consoles, ROM pages, artwork,
+and managed RetroArch launch; it does not materialize those games into
+`library_items`. Flutter uses its dedicated Retro view, while the COSMIC
+frontend merges only the selected console's live pages into its Console Games
+surface.
 
 Search (`lib/search.dart`) reads through `CatalogRepository.load()` for PC
 games/apps (the same repository `FullLibraryPage` uses - live when

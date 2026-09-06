@@ -155,10 +155,12 @@ Selecting a game and pressing **Play** launches it through RetroArch. The
 design and phased roadmap for this integration is tracked in
 `docs/retroarch-integration.md`.
 
-If RomM itself runs as a podman-compose stack, `deploy/systemd/romm.service.example`
-starts it alongside the Hearthdeck local session instead of a manual
-`podman-compose up` after every login. Once installed, its status appears in
-Settings' service status view next to the daemon and bridge.
+The Arch package installs an optional `romm.service` that starts an existing
+Docker Compose deployment alongside the Hearthdeck session. Copy
+`/usr/share/doc/hearthdeck/romm.env.example` to
+`~/.config/hearthdeck/romm.env` and set `ROMM_COMPOSE_FILE` to the deployment's
+compose file. Without that config file the unit is skipped. Its status appears
+in Settings' service status view next to the daemon and bridge.
 
 ## Shared Screens
 

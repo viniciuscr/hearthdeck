@@ -23,6 +23,27 @@ The health response reports each discovery and metadata provider as `starting`,
 `ready`, or `degraded`, including its last success, record count, and a safe
 error summary. A degraded provider leaves other catalog sources available.
 
+## RomM
+
+For an existing Docker Compose RomM deployment, configure automatic session
+startup:
+
+```sh
+mkdir -p ~/.config/hearthdeck
+cp /usr/share/doc/hearthdeck/romm.env.example ~/.config/hearthdeck/romm.env
+# Edit ROMM_COMPOSE_FILE to the deployment's absolute compose-file path.
+systemctl --user daemon-reload
+systemctl --user restart hearthdeck.target
+systemctl --user status romm.service
+```
+
+Without `romm.env`, confirm `romm.service` is skipped and the rest of
+`hearthdeck.target` still starts. With it configured, confirm the Compose stack
+starts, the COSMIC frontend shows only platforms with installed ROMs under
+Console Games, selecting a platform loads its ROMs, and launching one creates a
+managed session through RetroArch. Stop `hearthdeck.target` and confirm the
+Compose stack is stopped.
+
 ## Library Scan
 
 Pair a client using the one-time code, then use its bearer token:

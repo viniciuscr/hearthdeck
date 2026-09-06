@@ -1,0 +1,21 @@
+[Unit]
+Description=RomM Docker Compose stack
+Documentation=file:///usr/share/doc/hearthdeck/ROMM.md
+PartOf=hearthdeck.target
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=%h/.config/hearthdeck/romm.env
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=%h/.config/hearthdeck/romm.env
+ExecStart=/usr/bin/docker compose -f ${ROMM_COMPOSE_FILE} up -d
+ExecStop=/usr/bin/docker compose -f ${ROMM_COMPOSE_FILE} down
+TimeoutStartSec=300
+TimeoutStopSec=300
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=hearthdeck.target

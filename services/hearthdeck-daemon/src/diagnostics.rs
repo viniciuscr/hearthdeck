@@ -529,11 +529,8 @@ async fn service_statuses() -> Vec<ServiceStatus> {
         service_status("daemon", "hearthdeck-daemon.service", false),
         service_status("bridge_socket", "hearthdeck-bridge.socket", false),
         service_status("bridge", "hearthdeck-bridge.service", true),
-        // Optional: only present if the user has installed
-        // deploy/systemd/romm.service.example. `service_status` already
-        // reports "unavailable" for an unknown unit, the same neutral state
-        // it reports if the user service manager itself can't be reached, so
-        // this is safe to query unconditionally.
+        // Optional: the packaged unit is skipped until the user supplies its
+        // environment file. This is safe to query unconditionally.
         service_status("romm_container", "romm.service", false),
     );
     vec![session, daemon, bridge_socket, bridge, romm_container]
@@ -588,7 +585,7 @@ async fn service_status(id: &'static str, unit: &'static str, on_demand: bool) -
 }
 
 /// Restarts the optional RomM systemd unit
-/// (`deploy/systemd/romm.service.example`). The unit name is a fixed
+/// (`deploy/systemd/romm.service`). The unit name is a fixed
 /// constant, never caller-supplied: this is a narrowly scoped action on one
 /// specific service, not a generic "restart any unit" capability. A missing
 /// unit fails the same way `systemctl` itself reports it, surfaced to the
@@ -621,11 +618,7 @@ async fn recent_logs() -> LogTail {
             "--lines=400",
             "--unit=hearthdeck-daemon.service",
             "--unit=hearthdeck-bridge.service",
-            // Optional: only present if the user installed
-            // deploy/systemd/romm.service.example. journalctl silently
-            // returns no lines for a unit that has never logged anything,
-            // the same as it already does for the units above before their
-            // first run.
+            // Optional: the unit may be skipped and have no journal entries.
             "--unit=romm.service",
         ])
         .stdin(Stdio::null())
@@ -672,7 +665,7 @@ fn parse_journal_entry(line: &str) -> Option<LogEntry> {
     // display_message's redaction is tuned for Hearthdeck's own structured
     // JSON log lines, where a stray local path or bearer token in an error
     // string would be an accidental leak. romm.service's lines are plain
-    // podman-compose/podman output: paths, image references, and container
+    // Docker Compose output: paths, image references, and container
     // names are the entire point of reading them, not secrets, and that
     // process never has access to Hearthdeck's own tokens. Redacting them
     // the same way would turn the one tab meant to show a real
@@ -754,8 +747,8 @@ fn value_to_text(value: &Value) -> String {
 /// access log (`"request completed"`, previously dropped entirely as noise)
 /// is split into its own `api` source instead of being merged with general
 /// `daemon` events, so the two can be viewed as separate log tabs. Lines
-/// from the optional `romm.service` unit (deploy/systemd/romm.service.example,
-/// podman-compose's own start/stop output) join the same `romm` tab the
+/// from the optional `romm.service` unit (deploy/systemd/romm.service,
+/// Docker Compose's own start/stop output) join the same `romm` tab the
 /// synthesized RomM connectivity-check messages already use (`push_romm_log`),
 /// rather than getting a separate tab, since both are "what's going on with
 /// RomM" from the user's point of view.
@@ -818,6 +811,31 @@ fn truncate_and_redact(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn romm_compose_service_is_optional_and_session_managed() {
+        let service = include_str!("../../../deploy/systemd/romm.service");
+        let deploy_target = include_str!("../../../deploy/systemd/hearthdeck.target");
+        let package_target = include_str!("../../../packaging/arch/hearthdeck.target");
+        let package = include_str!("../../../packaging/arch/PKGBUILD");
+        let justfile = include_str!("../../../justfile");
+
+        assert!(service.contains("ConditionPathExists=%h/.config/hearthdeck/romm.env"));
+        assert!(service.contains("EnvironmentFile=%h/.config/hearthdeck/romm.env"));
+        assert!(service.contains("docker compose -f ${ROMM_COMPOSE_FILE} up -d"));
+        assert!(service.contains("PartOf=hearthdeck.target"));
+        assert!(
+            deploy_target
+                .contains("Wants=hearthdeck-bridge.socket hearthdeck-daemon.service romm.service")
+        );
+        assert!(
+            package_target
+                .contains("Wants=hearthdeck-bridge.socket hearthdeck-daemon.service romm.service")
+        );
+        assert!(package.contains("deploy/systemd/romm.service"));
+        assert!(package.contains("deploy/systemd/romm.env.example"));
+        assert!(justfile.contains("cp deploy/systemd/romm.service"));
+    }
+
+    #[test]
     fn renders_structured_journal_messages_for_the_diagnostics_view() {
         let entry = super::parse_journal_entry(
             r#"{"MESSAGE":"{\"level\":\"INFO\",\"message\":\"discovery completed\",\"source_id\":\"heroic\",\"record_count\":2}","PRIORITY":"6","_SYSTEMD_UNIT":"hearthdeck-daemon.service","__REALTIME_TIMESTAMP":"1760000000000000"}"#,
@@ -854,9 +872,9 @@ mod tests {
 
     #[test]
     fn labels_romm_service_journal_lines_with_the_romm_source_unredacted() {
-        // Plain podman-compose stdout, not Hearthdeck's own structured JSON
-        // log shape - and full of legitimate paths/image refs that a real
-        // failure (like a bad WorkingDirectory) needs to stay readable.
+        // Plain Docker Compose stdout, not Hearthdeck's own structured JSON
+        // log shape, and full of legitimate paths/image refs that a real
+        // configuration failure needs to stay readable.
         let entry = super::parse_journal_entry(
             r#"{"MESSAGE":"Error: WorkingDirectory '/home/alex/mnt/external/romM' not found","PRIORITY":"3","_SYSTEMD_UNIT":"romm.service","__REALTIME_TIMESTAMP":"1760000000000000"}"#,
         )

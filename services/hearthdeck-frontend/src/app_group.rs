@@ -15,6 +15,12 @@ static HOME: LazyLock<AppGroup> = LazyLock::new(|| AppGroup {
     filter: FilterType::None,
 });
 
+const CONSOLE_CATEGORY_PREFIX: &str = "hearthdeck-console:";
+
+pub fn romm_console_category(platform_id: i64) -> String {
+    format!("{CONSOLE_CATEGORY_PREFIX}{platform_id}")
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FilterType {
     /// A list of application IDs to include in the group.
@@ -138,6 +144,17 @@ impl AppGroup {
             self.name.clone()
         }
     }
+
+    pub fn romm_platform_id(&self) -> Option<i64> {
+        let FilterType::Categories { categories, .. } = &self.filter else {
+            return None;
+        };
+        categories.iter().find_map(|category| {
+            category
+                .strip_prefix(CONSOLE_CATEGORY_PREFIX)
+                .and_then(|id| id.parse().ok())
+        })
+    }
 }
 
 /// The fixed top-level navigation tabs shown in the sidebar.
@@ -228,6 +245,13 @@ impl Sections {
 /// Returns true when the entry looks like a console emulator, identified by
 /// its ID or Exec string.
 fn is_emulator_entry(entry: &DesktopEntryData) -> bool {
+    if entry
+        .categories
+        .iter()
+        .any(|category| category.starts_with(CONSOLE_CATEGORY_PREFIX))
+    {
+        return true;
+    }
     const EMULATORS: &[&str] = &[
         "retroarch",
         "dolphin",
@@ -389,41 +413,10 @@ impl AppLibraryConfig {
             "Utility",
             "Video",
         ];
-        const GAME_CATEGORIES: &[&str] = &[
-            "Action",
-            "ActionGame",
-            "Adventure",
-            "AdventureGame",
-            "Arcade",
-            "ArcadeGame",
-            "BoardGame",
-            "CardGame",
-            "Casual",
-            "Fighting",
-            "Horror",
-            "Indie",
-            "KidsGame",
-            "LogicGame",
-            "MMO",
-            "MMORPG",
-            "Platformer",
-            "Puzzle",
-            "Racing",
-            "Roguelike",
-            "RolePlaying",
-            "RPG",
-            "Shooter",
-            "Simulation",
-            "Sports",
-            "SportsGame",
-            "Strategy",
-            "StrategyGame",
-            "Survival",
-        ];
         const STORE_CATEGORY_PREFIX: &str = "hearthdeck-store:";
 
         let mut changed = false;
-        for section in Section::ALL {
+        for section in [Section::PcGames, Section::Applications] {
             let mut categories = BTreeMap::new();
             for entry in entries.iter().filter(|entry| section.matches(entry)) {
                 for category in &entry.categories {
@@ -432,12 +425,7 @@ impl AppLibraryConfig {
                             .iter()
                             .any(|known| category.eq_ignore_ascii_case(known)),
                         Section::PcGames => category.starts_with(STORE_CATEGORY_PREFIX),
-                        Section::ConsoleGames => {
-                            category.starts_with(STORE_CATEGORY_PREFIX)
-                                || GAME_CATEGORIES
-                                    .iter()
-                                    .any(|known| category.eq_ignore_ascii_case(known))
-                        }
+                        Section::ConsoleGames => false,
                     };
                     if category.eq_ignore_ascii_case("game") || !visible {
                         continue;
@@ -481,6 +469,33 @@ impl AppLibraryConfig {
             }
         }
         changed
+    }
+
+    pub fn sync_console_groups(&mut self, platforms: &[(i64, String)]) -> bool {
+        let existing = &self.sections.console_games;
+        let custom_groups = existing
+            .iter()
+            .filter(|group| matches!(group.filter, FilterType::AppIds(_)))
+            .cloned();
+        let mut groups = platforms
+            .iter()
+            .map(|(id, name)| AppGroup {
+                name: name.clone(),
+                icon: "folder-symbolic".to_string(),
+                filter: FilterType::Categories {
+                    categories: vec![romm_console_category(*id)],
+                    include: Vec::new(),
+                    exclude: Vec::new(),
+                },
+            })
+            .collect::<Vec<_>>();
+        groups.extend(custom_groups);
+
+        if existing == &groups {
+            return false;
+        }
+        self.sections.console_games = groups;
+        true
     }
 }
 
@@ -581,6 +596,36 @@ mod tests {
                 .map(|group| group.name())
                 .collect::<Vec<_>>(),
             vec!["GOG"]
+        );
+    }
+
+    #[test]
+    fn console_tabs_follow_live_romm_platforms_not_game_genres() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_category_groups(&[entry("romm:42", &["Game", "RPG", "hearthdeck-console:7"])]);
+        assert!(config.sections.console_games.is_empty());
+
+        config.sync_console_groups(&[(7, "SNES".into()), (9, "PlayStation".into())]);
+        assert_eq!(
+            config
+                .sections
+                .get(Section::ConsoleGames)
+                .iter()
+                .map(|group| group.name())
+                .collect::<Vec<_>>(),
+            vec!["SNES", "PlayStation"]
+        );
+        assert_eq!(config.sections.console_games[0].romm_platform_id(), Some(7));
+
+        config.sync_console_groups(&[(9, "PlayStation".into())]);
+        assert_eq!(
+            config
+                .sections
+                .get(Section::ConsoleGames)
+                .iter()
+                .map(|group| group.name())
+                .collect::<Vec<_>>(),
+            vec!["PlayStation"]
         );
     }
 

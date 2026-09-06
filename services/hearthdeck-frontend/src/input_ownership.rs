@@ -19,6 +19,12 @@ pub enum Event {
     FrontendUnfocused,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LaunchTarget {
+    Catalog(String),
+    Romm(i64),
+}
+
 impl InputOwnership {
     pub fn update(&mut self, event: Event) {
         match event {
@@ -67,24 +73,37 @@ impl InputOwnership {
     }
 }
 
-pub fn managed_catalog_id(value: &str) -> Option<&str> {
-    value
+pub fn managed_launch_target(value: &str) -> Option<LaunchTarget> {
+    if let Some(identifier) = value
         .strip_prefix("hearthdeck:")
         .filter(|identifier| !identifier.is_empty())
+    {
+        return Some(LaunchTarget::Catalog(identifier.to_string()));
+    }
+    value
+        .strip_prefix("romm:")
+        .and_then(|identifier| identifier.parse().ok())
+        .filter(|identifier| *identifier > 0)
+        .map(LaunchTarget::Romm)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Event, InputOwnership, managed_catalog_id};
+    use super::{Event, InputOwnership, LaunchTarget, managed_launch_target};
 
     #[test]
-    fn only_daemon_catalog_ids_are_launchable() {
+    fn only_managed_catalog_and_romm_ids_are_launchable() {
         assert_eq!(
-            managed_catalog_id("hearthdeck:desktop:example"),
-            Some("desktop:example")
+            managed_launch_target("hearthdeck:desktop:example"),
+            Some(LaunchTarget::Catalog("desktop:example".to_string()))
         );
-        assert_eq!(managed_catalog_id("flatpak:example"), None);
-        assert_eq!(managed_catalog_id("hearthdeck:"), None);
+        assert_eq!(
+            managed_launch_target("romm:42"),
+            Some(LaunchTarget::Romm(42))
+        );
+        assert_eq!(managed_launch_target("flatpak:example"), None);
+        assert_eq!(managed_launch_target("hearthdeck:"), None);
+        assert_eq!(managed_launch_target("romm:not-a-number"), None);
     }
 
     #[test]

@@ -7,8 +7,11 @@ CachyOS. It installs:
 - `/usr/bin/hearthdeck-frontend`: the COSMIC (libcosmic) frontend.
 - `/usr/lib/hearthdeck/`: the local bridge and daemon binaries, and the
   Kiosk session script.
-- `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, and
-  API daemon user units.
+- `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, API
+  daemon, and optional Docker Compose RomM user units.
+- `/usr/share/doc/hearthdeck/romm.env.example`: opt-in configuration for the
+  external RomM Compose deployment; `romm.service` is skipped until copied to
+  `~/.config/hearthdeck/romm.env` and updated with an absolute compose path.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck.desktop`: the minimal Hearthdeck
   Kiosk session shown by compatible display managers.
@@ -83,9 +86,11 @@ transaction. The launcher handles activation on demand. The units retain
 Arch systemd user units cannot reliably support directives such as
 `ProtectSystem`, `ReadWritePaths`, or `PrivateTmp`.
 
-`hearthdeck.target` starts the API daemon and owns the
-`hearthdeck-bridge.socket`; the bridge process is socket-activated on its first
-typed request. Future network and Bluetooth bridges will follow the same
+`hearthdeck.target` starts the API daemon, owns the
+`hearthdeck-bridge.socket`, and attempts the optional `romm.service`. The RomM
+unit is skipped unless its environment file exists, so installations without
+RomM are unaffected. The bridge process is socket-activated on its first typed
+request. Future network and Bluetooth bridges will follow the same
 target-plus-socket lifecycle.
 
 If you previously used `just install-services`, its copies in

@@ -149,7 +149,7 @@ paths:
       operationId: restartRommService
       description: >-
         Restarts the fixed romm.service systemd user unit (see
-        deploy/systemd/romm.service.example), if the user has installed it.
+        deploy/systemd/romm.service), if the user has configured it.
         The unit name is not a request parameter.
       security:
         - bearerAuth: []

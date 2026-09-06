@@ -160,6 +160,7 @@ install-services:
   cp deploy/systemd/hearthdeck-daemon.service "$HOME/.config/systemd/user/"
   cp deploy/systemd/hearthdeck-bridge.socket "$HOME/.config/systemd/user/"
   cp deploy/systemd/hearthdeck.target "$HOME/.config/systemd/user/"
+  cp deploy/systemd/romm.service "$HOME/.config/systemd/user/"
   cp services/target/release/hearthdeck-bridge "$HOME/.local/bin/"
   cp services/target/release/hearthdeck-daemon "$HOME/.local/bin/"
   systemctl --user daemon-reload
@@ -167,7 +168,7 @@ install-services:
 
 # Show Linux service status.
 services-status:
-  systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-bridge.service hearthdeck-daemon.service
+  systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-bridge.service hearthdeck-daemon.service romm.service
 
 # Follow Linux service logs.
 services-logs:

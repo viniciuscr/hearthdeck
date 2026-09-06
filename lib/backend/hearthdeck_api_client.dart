@@ -202,7 +202,7 @@ class HearthdeckApiClient {
   }
 
   /// Restarts the fixed `romm.service` systemd unit (see
-  /// deploy/systemd/romm.service.example), if installed. Not a generic
+  /// deploy/systemd/romm.service), if configured. Not a generic
   /// "restart any unit" call: there is no unit name parameter.
   Future<void> restartRommService() async {
     final response = await _client.post(

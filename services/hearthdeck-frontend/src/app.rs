@@ -76,7 +76,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::app_group::{AppGroup, AppLibraryConfig, Section};
 use crate::fl;
-use crate::input_ownership::{Event as InputEvent, InputOwnership, managed_catalog_id};
+use crate::input_ownership::{
+    Event as InputEvent, InputOwnership, LaunchTarget, managed_launch_target,
+};
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::style::{
     CONTENT_HORIZONTAL_PADDING, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
@@ -120,6 +122,8 @@ static CANCEL: LazyLock<String> = LazyLock::new(|| fl!("cancel"));
 static RUN: LazyLock<String> = LazyLock::new(|| fl!("run"));
 const LAUNCH_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(1200);
 const SESSION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+const ROMM_PAGE_SIZE: u32 = 48;
+const ROMM_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 static REMOVE: LazyLock<String> = LazyLock::new(|| fl!("remove"));
 static FLATPAK: LazyLock<String> = LazyLock::new(|| fl!("flatpak"));
 static LOCAL: LazyLock<String> = LazyLock::new(|| fl!("local"));
@@ -376,6 +380,7 @@ struct HearthDeck {
     daemon_client: Option<crate::providers::daemon::DaemonClient>,
     launch_state: LaunchState,
     input_ownership: InputOwnership,
+    romm_request_generation: u64,
 }
 
 impl Default for HearthDeck {
@@ -412,6 +417,7 @@ impl Default for HearthDeck {
             daemon_client: None,
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
+            romm_request_generation: 0,
         }
     }
 }
@@ -514,6 +520,12 @@ enum Message {
     WindowResized(f32),
     DaemonLaunchResult(Result<(), String>),
     ActiveSessionResult(Result<bool, String>),
+    RommPlatforms(Result<Vec<crate::providers::daemon::RetroPlatform>, String>),
+    RommGames {
+        generation: u64,
+        platform_id: Option<i64>,
+        result: Result<crate::providers::daemon::RetroRecordPage, String>,
+    },
     DismissLaunch,
 }
 
@@ -538,6 +550,57 @@ pub fn menu_control_padding() -> Padding {
 }
 
 impl HearthDeck {
+    fn load_romm_platforms(&self, delay: std::time::Duration) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                tokio::time::sleep(delay).await;
+                client
+                    .list_retro_consoles()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::RommPlatforms(result)),
+        )
+    }
+
+    fn current_romm_platform_id(&self) -> Option<Option<i64>> {
+        selected_romm_platform_id(self.cur_section, self.cur_group, &self.config)
+    }
+
+    fn load_romm_page(&mut self, offset: u32) -> Task<Message> {
+        let Some(platform_id) = self.current_romm_platform_id() else {
+            return Task::none();
+        };
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        if offset == 0 {
+            self.romm_request_generation += 1;
+            self.all_entries
+                .retain(|entry| !entry.id.starts_with("romm:"));
+            self.load_apps();
+        }
+        let generation = self.romm_request_generation;
+        Task::perform(
+            async move {
+                client
+                    .list_retro_records(platform_id, ROMM_PAGE_SIZE, offset)
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            move |result| {
+                cosmic::Action::App(Message::RommGames {
+                    generation,
+                    platform_id,
+                    result,
+                })
+            },
+        )
+    }
+
     fn poll_active_session(&self, delay: std::time::Duration) -> Task<Message> {
         let Some(client) = self.daemon_client.clone() else {
             return Task::none();
@@ -700,7 +763,7 @@ impl HearthDeck {
             let Some(client) = self.daemon_client.clone() else {
                 return Task::none();
             };
-            let Some(launch_id) = managed_catalog_id(&app_id).map(str::to_owned) else {
+            let Some(target) = managed_launch_target(&app_id) else {
                 error!("refusing unmanaged application launch: {app_id}");
                 return Task::none();
             };
@@ -709,7 +772,12 @@ impl HearthDeck {
             }
             self.input_ownership.update(InputEvent::LaunchStarted);
             Task::perform(
-                async move { client.launch_app(&launch_id).await },
+                async move {
+                    match target {
+                        LaunchTarget::Catalog(id) => client.launch_app(&id).await,
+                        LaunchTarget::Romm(id) => client.launch_retro_rom(id).await,
+                    }
+                },
                 move |result| match result {
                     Ok(_) => cosmic::Action::App(Message::DaemonLaunchResult(Ok(()))),
                     Err(error) => {
@@ -1040,6 +1108,86 @@ impl cosmic::Application for HearthDeck {
                 self.load_apps();
                 return Task::none();
             }
+            Message::RommPlatforms(result) => {
+                let platforms = match result {
+                    Ok(platforms) => platforms,
+                    Err(error) => {
+                        tracing::debug!(%error, "RomM platforms are not available yet");
+                        return self.load_romm_platforms(ROMM_REFRESH_INTERVAL);
+                    }
+                };
+                let selected_group = self
+                    .cur_group
+                    .and_then(|index| self.config.sections.console_games.get(index))
+                    .cloned();
+                let platforms = platforms
+                    .into_iter()
+                    .filter(|platform| platform.rom_count > 0)
+                    .map(|platform| (platform.id, platform.label().to_string()))
+                    .collect::<Vec<_>>();
+                let changed = self.config.sync_console_groups(&platforms);
+                let refresh = self.load_romm_platforms(ROMM_REFRESH_INTERVAL);
+                if self.cur_section == Section::ConsoleGames {
+                    if changed {
+                        self.cur_group = selected_group.and_then(|selected| {
+                            self.config
+                                .sections
+                                .console_games
+                                .iter()
+                                .position(|group| group == &selected)
+                        });
+                        self.group_keys =
+                            (0..self.config.sections.console_games.len() as u64).collect();
+                    }
+                    if changed
+                        || !self
+                            .all_entries
+                            .iter()
+                            .any(|entry| entry.id.starts_with("romm:"))
+                    {
+                        return Task::batch([self.load_romm_page(0), refresh]);
+                    }
+                }
+                return refresh;
+            }
+            Message::RommGames {
+                generation,
+                platform_id,
+                result,
+            } => {
+                if !romm_page_is_current(
+                    generation,
+                    self.romm_request_generation,
+                    platform_id,
+                    self.current_romm_platform_id(),
+                ) {
+                    return Task::none();
+                }
+                let page = match result {
+                    Ok(page) => page,
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to load RomM games");
+                        return Task::none();
+                    }
+                };
+                let item_count = page.items.len() as u32;
+                for record in page.items {
+                    let entry = Arc::new(record.into_desktop_entry());
+                    if !self
+                        .all_entries
+                        .iter()
+                        .any(|existing| existing.id == entry.id)
+                    {
+                        self.all_entries.push(entry);
+                    }
+                }
+                self.all_entries
+                    .sort_by(|left, right| left.name.cmp(&right.name));
+                self.load_apps();
+                if let Some(next_offset) = next_romm_offset(page.offset, item_count, page.total) {
+                    return self.load_romm_page(next_offset);
+                }
+            }
             Message::UpdateFocused(id) => {
                 self.focused_id = id;
                 let Some(i) = self
@@ -1229,8 +1377,13 @@ impl cosmic::Application for HearthDeck {
                 self.cur_group = None;
                 self.scroll_offset = 0.0;
                 self.group_keys = (0..self.config.sections.get(section).len() as u64).collect();
+                let load = if section == Section::ConsoleGames {
+                    self.load_romm_page(0)
+                } else {
+                    self.filter_apps()
+                };
                 let mut cmds = vec![
-                    self.filter_apps(),
+                    load,
                     iced::widget::scrollable::scroll_to(
                         SCROLLABLE_ID.clone(),
                         AbsoluteOffset {
@@ -1247,8 +1400,13 @@ impl cosmic::Application for HearthDeck {
                 self.search_value.clear();
                 self.cur_group = group;
                 self.scroll_offset = 0.0;
+                let load = if self.cur_section == Section::ConsoleGames {
+                    self.load_romm_page(0)
+                } else {
+                    self.filter_apps()
+                };
                 let mut cmds = vec![
-                    self.filter_apps(),
+                    load,
                     iced::widget::scrollable::scroll_to(
                         SCROLLABLE_ID.clone(),
                         AbsoluteOffset {
@@ -1989,7 +2147,11 @@ impl cosmic::Application for HearthDeck {
 
         let focus_search = text_input::focus(SEARCH_ID.clone());
         let poll_active_session = self_.poll_active_session(std::time::Duration::ZERO);
-        (self_, Task::batch([focus_search, poll_active_session]))
+        let load_romm_platforms = self_.load_romm_platforms(std::time::Duration::ZERO);
+        (
+            self_,
+            Task::batch([focus_search, poll_active_session, load_romm_platforms]),
+        )
     }
 }
 
@@ -2469,9 +2631,45 @@ fn focused_entry_index(focused: &widget::Id, entry_ids: &[widget::Id]) -> Option
     entry_ids.iter().position(|id| id == focused)
 }
 
+fn selected_romm_platform_id(
+    section: Section,
+    group: Option<usize>,
+    config: &AppLibraryConfig,
+) -> Option<Option<i64>> {
+    if section != Section::ConsoleGames {
+        return None;
+    }
+    match group {
+        None => Some(None),
+        Some(index) => config
+            .sections
+            .console_games
+            .get(index)
+            .and_then(AppGroup::romm_platform_id)
+            .map(Some),
+    }
+}
+
+fn romm_page_is_current(
+    response_generation: u64,
+    current_generation: u64,
+    response_platform: Option<i64>,
+    current_platform: Option<Option<i64>>,
+) -> bool {
+    response_generation == current_generation && current_platform == Some(response_platform)
+}
+
+fn next_romm_offset(offset: u32, item_count: u32, total: u64) -> Option<u32> {
+    let next = offset.saturating_add(item_count);
+    (item_count > 0 && u64::from(next) < total).then_some(next)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::focused_entry_index;
+    use super::{
+        focused_entry_index, next_romm_offset, romm_page_is_current, selected_romm_platform_id,
+    };
+    use crate::app_group::{AppLibraryConfig, Section};
     use cosmic::iced::widget;
 
     #[test]
@@ -2482,5 +2680,35 @@ mod tests {
 
         assert_eq!(focused_entry_index(&app, &entries), Some(0));
         assert_eq!(focused_entry_index(&filter, &entries), None);
+    }
+
+    #[test]
+    fn romm_pages_load_only_for_the_selected_console_scope() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string())]);
+
+        assert_eq!(
+            selected_romm_platform_id(Section::ConsoleGames, None, &config),
+            Some(None)
+        );
+        assert_eq!(
+            selected_romm_platform_id(Section::ConsoleGames, Some(0), &config),
+            Some(Some(7))
+        );
+        assert_eq!(
+            selected_romm_platform_id(Section::PcGames, Some(0), &config),
+            None
+        );
+    }
+
+    #[test]
+    fn romm_paging_rejects_stale_results_and_stops_at_total() {
+        assert!(romm_page_is_current(3, 3, Some(7), Some(Some(7))));
+        assert!(!romm_page_is_current(2, 3, Some(7), Some(Some(7))));
+        assert!(!romm_page_is_current(3, 3, Some(7), Some(Some(9))));
+
+        assert_eq!(next_romm_offset(0, 48, 100), Some(48));
+        assert_eq!(next_romm_offset(96, 4, 100), None);
+        assert_eq!(next_romm_offset(0, 0, 100), None);
     }
 }
