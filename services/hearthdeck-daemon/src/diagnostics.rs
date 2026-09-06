@@ -839,17 +839,18 @@ mod tests {
         assert!(log_service.contains("--identifier=cosmic-test-session"));
         assert!(log_service.contains("--identifier=hearthdeck-daemon"));
         assert!(log_service.contains("--identifier=hearthdeck-bridge"));
+        assert!(log_service.contains("--identifier=hearthdeck-input"));
         assert!(log_service.contains("--identifier=hearthdeck-overlay"));
         assert!(log_service.contains("--identifier=romm"));
         assert!(kiosk_session.contains("systemd-cat -t hearthdeck-session"));
         assert!(
             deploy_target.contains(
-                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service romm.service"
+                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service"
             )
         );
         assert!(
             package_target.contains(
-                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service romm.service"
+                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service"
             )
         );
         assert!(package.contains("deploy/systemd/hearthdeck-log.service"));

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use futures::{StreamExt, future::join_all, stream};
-use hearthdeck_protocol::ApplicationSession;
+use hearthdeck_protocol::{ApplicationSession, InputProfile};
 use serde::{Deserialize, Serialize};
 use std::{
     env,
@@ -264,10 +264,15 @@ impl DaemonClient {
     }
 
     /// Launches an application by its catalog item ID.
-    pub async fn launch_app(&self, id: &str) -> Result<ApplicationSession, DaemonError> {
+    pub async fn launch_app(
+        &self,
+        id: &str,
+        input_profile: InputProfile,
+    ) -> Result<ApplicationSession, DaemonError> {
         let response = self
             .http
             .post(self.api_url(&format!("/v1/apps/{}/launch", id)))
+            .query(&[("input_profile", input_profile)])
             .headers(self.auth_headers().await?)
             .send()
             .await
@@ -433,10 +438,15 @@ impl DaemonClient {
     }
 
     /// Launches a retro ROM by its ID.
-    pub async fn launch_retro_rom(&self, rom_id: i64) -> Result<ApplicationSession, DaemonError> {
+    pub async fn launch_retro_rom(
+        &self,
+        rom_id: i64,
+        input_profile: InputProfile,
+    ) -> Result<ApplicationSession, DaemonError> {
         let response = self
             .http
             .post(self.api_url(&format!("/v1/retro/roms/{}/launch", rom_id)))
+            .query(&[("input_profile", input_profile)])
             .headers(self.auth_headers().await?)
             .send()
             .await

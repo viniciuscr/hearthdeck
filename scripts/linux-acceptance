@@ -58,13 +58,38 @@ for unit in \
   hearthdeck.target \
   hearthdeck-log.service \
   hearthdeck-bridge.socket \
-  hearthdeck-daemon.service; do
+  hearthdeck-daemon.service \
+  hearthdeck-input.service; do
   if systemctl --user is-active --quiet "$unit"; then
     pass "$unit is active"
   else
     fail "$unit is not active"
   fi
 done
+
+runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+input_socket="$runtime_dir/hearthdeck-input.sock"
+if [[ -S "$input_socket" ]]; then
+  pass "$input_socket is available"
+else
+  fail "$input_socket is missing"
+fi
+
+if [[ -c /dev/uinput ]]; then
+  pass "/dev/uinput is available"
+else
+  fail "/dev/uinput is missing"
+fi
+if [[ -w /dev/uinput ]]; then
+  pass "/dev/uinput is writable by the active user"
+else
+  fail "/dev/uinput is not writable by the active user"
+fi
+if grep -Fq 'N: Name="Hearthdeck Compatibility Input"' /proc/bus/input/devices; then
+  pass "Hearthdeck virtual input device is registered"
+else
+  fail "Hearthdeck virtual input device is not registered"
+fi
 
 health_file=$(mktemp)
 trap 'rm -f "$health_file"' EXIT
@@ -176,7 +201,7 @@ else
   fail "$log_file is empty or missing"
 fi
 
-for unit in hearthdeck-log.service hearthdeck-daemon.service romm.service; do
+for unit in hearthdeck-log.service hearthdeck-daemon.service hearthdeck-input.service romm.service; do
   if systemctl --user is-failed --quiet "$unit"; then
     fail "$unit is failed"
   fi
@@ -185,7 +210,7 @@ done
 printf '\nAutomated checks: %d passed, %d skipped, %d failed\n' "$passes" "$skips" "$failures"
 if (( failures > 0 )); then
   printf '\nInspect failures with:\n'
-  printf '  systemctl --user status hearthdeck.target hearthdeck-log.service hearthdeck-daemon.service romm.service\n'
+  printf '  systemctl --user status hearthdeck.target hearthdeck-log.service hearthdeck-daemon.service hearthdeck-input.service romm.service\n'
   printf '  tail -n 200 ~/hearthdeck.log\n'
   exit 1
 fi
@@ -196,6 +221,8 @@ Manual checks still required:
   [ ] Hearthdeck opens fullscreen without a panel or desktop behind it.
   [ ] Guide opens the overlay and closing it returns input to Hearthdeck.
   [ ] A regular desktop app and a generated web app both open.
+  [ ] Enabling Controller compatibility maps D-pad/sticks, face/shoulder buttons, triggers, Start, and Select in an app without controller support.
+  [ ] A controller-native game with compatibility disabled receives no duplicate keyboard or mouse input.
   [ ] The launched app receives controller input while Hearthdeck stays idle.
   [ ] Closing the app returns controller navigation to Hearthdeck.
   [ ] A ROM launches through RetroArch and returns cleanly to Hearthdeck.

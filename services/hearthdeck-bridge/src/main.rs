@@ -12,7 +12,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
-use hearthdeck_protocol::{BridgeErrorCode, BridgeRequest, BridgeResponse};
+use hearthdeck_protocol::{BridgeErrorCode, BridgeRequest, BridgeResponse, InputProfile};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
@@ -120,6 +120,8 @@ async fn handle_connection(
 struct ManagedSession {
     session: hearthdeck_protocol::ApplicationSession,
     unit_name: Option<String>,
+    #[serde(default)]
+    input_profile: InputProfile,
 }
 
 /// Hearthdeck is a single-focus console launcher, not a multitasking
@@ -152,6 +154,7 @@ async fn stop_other_active_sessions(
     platform::stop_application(managed.unit_name.as_deref())
         .await
         .context("could not stop previous application session before launching a new one")?;
+    platform::set_input_profile(InputProfile::Native).await?;
     sessions.lock().await.remove(&session_id);
     if let Err(error) = remove_managed_session(session_directory, &session_id).await {
         warn!(session_id, %error, "could not remove stopped application session record");
@@ -200,12 +203,20 @@ async fn handle_request(
             source_id,
             application_id,
             session_id,
+            input_profile,
         } => {
             let _transition = session_transition.lock().await;
             if let Err(error) =
                 stop_other_active_sessions(&source_id, sessions, session_directory).await
             {
                 warn!(source_id, application_id, %error, "registered application launch rejected");
+                return BridgeResponse::Error {
+                    code: BridgeErrorCode::LaunchFailed,
+                    message: error.to_string(),
+                };
+            }
+            if let Err(error) = platform::set_input_profile(input_profile).await {
+                warn!(source_id, application_id, %error, "input compatibility profile rejected");
                 return BridgeResponse::Error {
                     code: BridgeErrorCode::LaunchFailed,
                     message: error.to_string(),
@@ -220,10 +231,12 @@ async fn handle_request(
                         application_id,
                         session_id,
                         launched,
+                        input_profile,
                     )
                     .await
                 }
                 Err(error) => {
+                    sync_input_profile(sessions, session_directory).await;
                     warn!(source_id, application_id, %error, "registered application launch rejected");
                     BridgeResponse::Error {
                         code: BridgeErrorCode::LaunchFailed,
@@ -236,12 +249,20 @@ async fn handle_request(
             runner,
             application_id,
             session_id: _,
+            input_profile,
         } => {
             let _transition = session_transition.lock().await;
             if let Err(error) =
                 stop_other_active_sessions("heroic", sessions, session_directory).await
             {
                 warn!(%error, "Heroic game launch rejected");
+                return BridgeResponse::Error {
+                    code: BridgeErrorCode::LaunchFailed,
+                    message: error.to_string(),
+                };
+            }
+            if let Err(error) = platform::set_input_profile(input_profile).await {
+                warn!(%error, "Heroic input compatibility profile rejected");
                 return BridgeResponse::Error {
                     code: BridgeErrorCode::LaunchFailed,
                     message: error.to_string(),
@@ -263,10 +284,12 @@ async fn handle_request(
                         application_id,
                         HEROIC_SESSION_ID.to_owned(),
                         launched,
+                        input_profile,
                     )
                     .await
                 }
                 Err(error) => {
+                    sync_input_profile(sessions, session_directory).await;
                     warn!(%error, "Heroic game launch rejected");
                     BridgeResponse::Error {
                         code: BridgeErrorCode::LaunchFailed,
@@ -279,12 +302,20 @@ async fn handle_request(
             core_path,
             rom_path,
             session_id,
+            input_profile,
         } => {
             let _transition = session_transition.lock().await;
             if let Err(error) =
                 stop_other_active_sessions("retroarch", sessions, session_directory).await
             {
                 warn!(%error, "RetroArch game launch rejected");
+                return BridgeResponse::Error {
+                    code: BridgeErrorCode::LaunchFailed,
+                    message: error.to_string(),
+                };
+            }
+            if let Err(error) = platform::set_input_profile(input_profile).await {
+                warn!(%error, "RetroArch input compatibility profile rejected");
                 return BridgeResponse::Error {
                     code: BridgeErrorCode::LaunchFailed,
                     message: error.to_string(),
@@ -299,10 +330,12 @@ async fn handle_request(
                         rom_path,
                         session_id,
                         launched,
+                        input_profile,
                     )
                     .await
                 }
                 Err(error) => {
+                    sync_input_profile(sessions, session_directory).await;
                     warn!(%error, "RetroArch game launch rejected");
                     BridgeResponse::Error {
                         code: BridgeErrorCode::LaunchFailed,
@@ -313,9 +346,15 @@ async fn handle_request(
         }
         BridgeRequest::ActiveApplicationSession => {
             let _transition = session_transition.lock().await;
-            let session = active_managed_session(sessions, session_directory)
-                .await
-                .map(|(_, managed)| managed.session);
+            let active = active_managed_session(sessions, session_directory).await;
+            let profile = active
+                .as_ref()
+                .map(|(_, managed)| managed.input_profile)
+                .unwrap_or_default();
+            if let Err(error) = platform::set_input_profile(profile).await {
+                warn!(%error, "could not synchronize active input profile");
+            }
+            let session = active.map(|(_, managed)| managed.session);
             BridgeResponse::ApplicationSession { session }
         }
         BridgeRequest::StopApplicationSession { session_id } => {
@@ -343,6 +382,9 @@ async fn handle_request(
                     {
                         warn!(session_id, %error, "could not remove stopped application session record");
                     }
+                    if let Err(error) = platform::set_input_profile(InputProfile::Native).await {
+                        warn!(%error, "could not reset input profile after application stop");
+                    }
                     info!(session_id, "application session stopped");
                     BridgeResponse::StopAccepted { session_id }
                 }
@@ -362,6 +404,7 @@ async fn register_launch(
     application_id: String,
     session_id: String,
     launched: platform::LaunchedApplication,
+    input_profile: InputProfile,
 ) -> BridgeResponse {
     let session = hearthdeck_protocol::ApplicationSession {
         id: session_id.clone(),
@@ -372,9 +415,11 @@ async fn register_launch(
     let managed = ManagedSession {
         session: session.clone(),
         unit_name: launched.unit_name,
+        input_profile,
     };
     if let Err(error) = save_managed_session(session_directory, &managed).await {
         let _ = platform::stop_application(managed.unit_name.as_deref()).await;
+        let _ = platform::set_input_profile(InputProfile::Native).await;
         warn!(source_id, application_id, %error, "could not persist managed application session");
         return BridgeResponse::Error {
             code: BridgeErrorCode::LaunchFailed,
@@ -387,6 +432,19 @@ async fn register_launch(
         application_id, "registered application launch accepted"
     );
     BridgeResponse::LaunchAccepted { session }
+}
+
+async fn sync_input_profile(
+    sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
+    session_directory: &Path,
+) {
+    let profile = active_managed_session(sessions, session_directory)
+        .await
+        .map(|(_, managed)| managed.input_profile)
+        .unwrap_or_default();
+    if let Err(error) = platform::set_input_profile(profile).await {
+        warn!(%error, "could not restore active input profile");
+    }
 }
 
 async fn active_managed_session(
@@ -540,7 +598,7 @@ mod tests {
         ManagedSession, load_managed_sessions, managed_session_path, save_managed_session,
         select_active_session, should_replace_active_session,
     };
-    use hearthdeck_protocol::{ApplicationSession, ApplicationSessionState};
+    use hearthdeck_protocol::{ApplicationSession, ApplicationSessionState, InputProfile};
     use std::time::{Duration, SystemTime};
 
     fn managed_session() -> ManagedSession {
@@ -552,6 +610,7 @@ mod tests {
                 state: ApplicationSessionState::Running,
             },
             unit_name: Some("hearthdeck-app-session-1.service".to_owned()),
+            input_profile: InputProfile::Native,
         }
     }
 
@@ -585,6 +644,7 @@ mod tests {
                 state: ApplicationSessionState::Running,
             },
             unit_name: Some("hearthdeck-app-session-2.service".to_owned()),
+            input_profile: InputProfile::Desktop,
         };
 
         let selected = select_active_session(vec![

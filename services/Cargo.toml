@@ -4,6 +4,7 @@ members = [
   "hearthdeck-observability",
   "hearthdeck-daemon",
   "hearthdeck-bridge",
+  "hearthdeck-input",
   "hearthdeck-frontend",
   "hearthdeck-overlay",
   "hearthdeck-overlay-spike",

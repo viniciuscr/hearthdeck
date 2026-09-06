@@ -70,6 +70,7 @@ use cosmic::{
     },
 };
 use cosmic_app_list_config::AppListConfig;
+use hearthdeck_protocol::InputProfile;
 use itertools::Itertools;
 use log::error;
 use serde::{Deserialize, Serialize};
@@ -550,6 +551,7 @@ enum Message {
 
 #[derive(Clone, Debug)]
 enum MenuAction {
+    ToggleControllerCompatibility,
     Remove,
 }
 
@@ -791,6 +793,11 @@ impl HearthDeck {
         if let Some(de) = entry {
             let app_id = de.id.clone();
             let title = de.name.clone();
+            let input_profile = if self.config.desktop_input_enabled(&app_id) {
+                InputProfile::Desktop
+            } else {
+                InputProfile::Native
+            };
 
             let Some(client) = self.daemon_client.clone() else {
                 return Task::none();
@@ -806,8 +813,8 @@ impl HearthDeck {
             Task::perform(
                 async move {
                     match target {
-                        LaunchTarget::Catalog(id) => client.launch_app(&id).await,
-                        LaunchTarget::Romm(id) => client.launch_retro_rom(id).await,
+                        LaunchTarget::Catalog(id) => client.launch_app(&id, input_profile).await,
+                        LaunchTarget::Romm(id) => client.launch_retro_rom(id, input_profile).await,
                     }
                 },
                 move |result| match result {
@@ -1723,6 +1730,14 @@ impl cosmic::Application for HearthDeck {
                 let mut tasks = vec![commands::popup::destroy_popup(*MENU_ID)];
                 if let Some(info) = self.menu.take().and_then(|i| self.entry_path_input.get(i)) {
                     match action {
+                        MenuAction::ToggleControllerCompatibility => {
+                            self.config.toggle_desktop_input(&info.id);
+                            if let Some(helper) = self.helper.as_ref()
+                                && let Err(err) = self.config.write_entry(helper)
+                            {
+                                error!("{:?}", err);
+                            }
+                        }
                         MenuAction::Remove => {
                             self.config
                                 .remove_entry(self.cur_section, self.cur_group, &info.id);
@@ -1987,6 +2002,31 @@ impl cosmic::Application for HearthDeck {
             });
             list_column.push(divider::horizontal::light().into());
             list_column.push(pin_to_app_tray.into());
+
+            let compatibility_enabled = self.config.desktop_input_enabled(&menu.id);
+            list_column.push(divider::horizontal::light().into());
+            list_column.push(
+                menu_button(
+                    row![
+                        if compatibility_enabled {
+                            icon::icon(
+                                icon::from_name("checkbox-checked-symbolic")
+                                    .size(ICON_SMALL)
+                                    .into(),
+                            )
+                            .class(cosmic::theme::Svg::Custom(svg_accent.clone()))
+                        } else {
+                            icon::icon(icon::from_name("checkbox-symbolic").size(ICON_SMALL).into())
+                        },
+                        text::body(fl!("controller-compatibility")).size(TEXT_BODY)
+                    ]
+                    .spacing(space_xxs),
+                )
+                .on_press(Message::SelectAction(
+                    MenuAction::ToggleControllerCompatibility,
+                ))
+                .into(),
+            );
 
             if self.cur_group.is_some() {
                 list_column.push(divider::horizontal::light().into());

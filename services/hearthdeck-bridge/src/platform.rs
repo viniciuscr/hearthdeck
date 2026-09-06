@@ -14,12 +14,24 @@ pub const MACOS_APPS_SOURCE: &str = "macos-apps";
 #[cfg(any(target_os = "linux", test))]
 mod linux;
 #[cfg(any(target_os = "linux", test))]
-pub use linux::{discover_applications, launch_application, launch_heroic_game, launch_retro_game};
+pub use linux::{
+    discover_applications, launch_application, launch_heroic_game, launch_retro_game,
+    set_input_profile,
+};
 
 #[cfg(all(target_os = "macos", not(test)))]
 mod macos;
 #[cfg(all(target_os = "macos", not(test)))]
 pub use macos::{discover_applications, launch_application};
+
+#[cfg(all(not(target_os = "linux"), not(test)))]
+pub async fn set_input_profile(profile: hearthdeck_protocol::InputProfile) -> Result<()> {
+    anyhow::ensure!(
+        profile == hearthdeck_protocol::InputProfile::Native,
+        "desktop input compatibility is only supported on Linux"
+    );
+    Ok(())
+}
 
 pub struct LaunchedApplication {
     pub unit_name: Option<String>,

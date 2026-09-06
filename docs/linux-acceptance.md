@@ -11,17 +11,18 @@ just acceptance-linux
 
 The command restarts `hearthdeck.target`, requires the configured RomM stack,
 checks required user units, the daemon health endpoint, running Podman
-containers, `~/hearthdeck.log`, and failed-unit state. It exits nonzero on an
-automated failure and prints the graphical/controller checks that still need a
-person. Run `scripts/linux-acceptance` without `--require-romm` on hosts where
-RomM is intentionally absent.
+containers, the input broker socket and virtual device, `~/hearthdeck.log`, and
+failed-unit state. It exits nonzero on an automated failure and prints the
+graphical/controller checks that still need a person. Run
+`scripts/linux-acceptance` without `--require-romm` on hosts where RomM is
+intentionally absent.
 
 ## Setup
 
 ```sh
 systemctl --user daemon-reload
 systemctl --user enable --now hearthdeck.target
-systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-daemon.service
+systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service
 ```
 
 For local-only development, verify health:
@@ -91,6 +92,24 @@ The bridge intentionally re-discovers the desktop ID locally and creates a
 transient systemd user service; an API client cannot supply an `Exec` command or
 arguments. Query `GET /v1/sessions/active` after launch, then use
 `POST /v1/sessions/{id}/stop` to confirm the managed process exits.
+
+## Controller Compatibility
+
+Confirm `/dev/uinput` is writable by the active user, the broker socket exists
+at `$XDG_RUNTIME_DIR/hearthdeck-input.sock`, and the virtual device appears as
+`Hearthdeck Compatibility Input` in `/proc/bus/input/devices`. If `evtest` is
+installed, select that virtual device and verify the mapped events.
+
+In Full Library, open an application's context menu and enable **Controller
+compatibility**. Launch an application without native controller support and
+verify D-pad/left stick arrow keys, A/Start Enter, B Escape, X Space, Y/Select
+Tab, bumpers Page Up/Page Down, right-stick mouse movement, and trigger mouse
+buttons. Open Guide and confirm the overlay exclusively owns the controller
+while visible. Close the application and confirm no mapped events remain.
+
+Launch a controller-native game with compatibility disabled and confirm it does
+not receive duplicate keyboard or mouse input. Compatibility is deliberately
+per application and disabled by default for this reason.
 
 Select **Hearthdeck Kiosk** in the display manager. Confirm Hearthdeck opens
 fullscreen with no desktop shell behind it (no panel, wallpaper, or other

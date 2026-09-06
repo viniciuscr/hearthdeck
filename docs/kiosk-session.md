@@ -18,7 +18,8 @@ Display manager (SDDM/GDM/greetd/...)
        -> systemctl --user daemon-reload
        -> systemctl --user start hearthdeck-kiosk.target
             -> Requires=/After= hearthdeck.target
-                 -> Wants= hearthdeck-bridge.socket, hearthdeck-daemon.service
+                -> Wants= hearthdeck-bridge.socket, hearthdeck-daemon.service,
+                    hearthdeck-input.service
        -> systemctl --user try-restart hearthdeck-bridge.service
        -> exec gamescope --backend drm --fullscreen --force-grab-cursor -- \
           /usr/bin/hearthdeck
@@ -36,7 +37,7 @@ documented hook for everything it needs started before Gamescope launches
 Hearthdeck — see that unit file's own description. `hearthdeck.target`
 stays the general-purpose target started explicitly by each Hearthdeck
 launcher or session; the Kiosk session's own additional startup dependencies
-(a future gamepad input daemon, network/Bluetooth adapters, etc.) get added to
+(network/Bluetooth adapters, etc.) get added to
 `hearthdeck-kiosk.target`, never to the session script itself. The session
 script's `systemctl --user start` call intentionally still ends in `|| true`
 — Hearthdeck launches either way so its own system-health screen can report
@@ -126,6 +127,20 @@ today so an app can use whichever it prefers; if a native-Wayland app turns
 out invisible the same way, forcing Xwayland (unset `WAYLAND_DISPLAY` for
 the launched process, forcing an X11-capable app down that path) is the
 likely fix, but this hasn't been tested yet.
+
+## Controller compatibility
+
+`hearthdeck-input.service` creates one virtual keyboard/mouse and observes
+physical controllers without an evdev grab. The library context menu enables
+the desktop profile per application; native remains the default. The bridge
+owns profile activation because it also owns the managed-session lifetime, and
+always restores native input when that session stops or launch setup fails.
+
+The broker remaining nonexclusive is intentional. It lets the Guide button
+continue to reach `hearthdeck-overlay`; when the overlay is visible, its own
+exclusive controller grab prevents mapped events from leaking to the launched
+application. Do not enable compatibility for controller-native games: both the
+original gamepad events and emulated keyboard/mouse events would reach them.
 
 ## The incident: a full account, in order
 

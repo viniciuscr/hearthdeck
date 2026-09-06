@@ -1,10 +1,12 @@
 # Hearthdeck Services
 
-The backend is split into two Rust processes:
+The backend is split into three Rust processes:
 
 - `hearthdeck-daemon`: HTTP/WebSocket API, pairing tokens, SQLite state, and events.
 - `hearthdeck-bridge`: Linux desktop-entry scanning and allowlisted, supervised
   app launching.
+- `hearthdeck-input`: opt-in controller-to-keyboard/mouse compatibility for
+  managed applications.
 
 Discovery uses independently registered provider modules. The current
 `desktop-apps` provider scans Freedesktop entries. Future Steam, GOG, Epic,
@@ -38,10 +40,13 @@ a privileged host-side approval path exists; the daemon never invokes pacman,
 Flatpak, Steam, or another package manager directly.
 
 On Linux, `hearthdeck.target` is the systemd user-session root. It starts the
-API daemon and owns `hearthdeck-bridge.socket`; the bridge process starts only
-when a typed daemon request arrives. Future NetworkManager and BlueZ adapters
-will receive their own socket/service pair under the same target rather than
-being folded into the daemon.
+API daemon and input broker and owns `hearthdeck-bridge.socket`; the bridge
+process starts only when a typed daemon request arrives. The bridge activates
+the broker's typed `native` or `desktop` profile through
+`$XDG_RUNTIME_DIR/hearthdeck-input.sock` for the lifetime of each managed
+session. Future NetworkManager and BlueZ adapters will receive their own
+socket/service pair under the same target rather than being folded into the
+daemon.
 
 In the Hearthdeck Kiosk session, the session script starts Gamescope directly
 on the DRM/KMS seat as the sole compositor, with Hearthdeck as its only child;

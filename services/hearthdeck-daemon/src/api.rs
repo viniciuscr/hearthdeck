@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     extract::{
-        Path, State,
+        Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, HeaderValue, StatusCode, header},
@@ -9,7 +9,9 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Datelike, Utc};
-use hearthdeck_protocol::{ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner};
+use hearthdeck_protocol::{
+    ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner, InputProfile,
+};
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -211,6 +213,7 @@ async fn launch_retro_rom(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Path(rom_id): Path<i64>,
+    Query(options): Query<LaunchOptions>,
 ) -> Result<Json<ApplicationSession>, ApiError> {
     authenticate(&state, &headers).await?;
     if !host_capabilities().retro_launch {
@@ -224,6 +227,7 @@ async fn launch_retro_rom(
         core_path: plan.core_path.to_string_lossy().into_owned(),
         rom_path: plan.rom_path.to_string_lossy().into_owned(),
         session_id,
+        input_profile: options.input_profile,
     };
     let response = crate::bridge::request(&state.config.bridge_socket_path, request)
         .await
@@ -449,6 +453,7 @@ async fn launch_app(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(options): Query<LaunchOptions>,
 ) -> Result<Json<ApplicationSession>, ApiError> {
     authenticate(&state, &headers).await?;
     if !host_capabilities().launch {
@@ -474,12 +479,14 @@ async fn launch_app(
             runner,
             application_id,
             session_id,
+            input_profile: options.input_profile,
         }
     } else {
         BridgeRequest::LaunchApplication {
             source_id,
             application_id: launch_id,
             session_id,
+            input_profile: options.input_profile,
         }
     };
     let response = crate::bridge::request(&state.config.bridge_socket_path, request)
@@ -493,6 +500,12 @@ async fn launch_app(
         session: Some(session.clone()),
     });
     Ok(Json(session))
+}
+
+#[derive(Default, Deserialize)]
+struct LaunchOptions {
+    #[serde(default)]
+    input_profile: InputProfile,
 }
 
 fn heroic_launch_target(launch_id: &str) -> Option<(HeroicRunner, String)> {
@@ -930,6 +943,7 @@ mod tests {
     };
     use hearthdeck_protocol::{
         ApplicationSession, ApplicationSessionState, BridgeRequest, BridgeResponse, HeroicRunner,
+        InputProfile,
     };
     use tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -1273,12 +1287,14 @@ mod tests {
                 source_id,
                 application_id,
                 session_id,
+                input_profile,
             } = request
             else {
                 panic!("expected a LaunchApplication request, got {request:?}");
             };
             assert_eq!(source_id, "test-apps");
             assert_eq!(application_id, "test.app");
+            assert_eq!(input_profile, InputProfile::Desktop);
             BridgeResponse::LaunchAccepted {
                 session: ApplicationSession {
                     id: session_id,
@@ -1290,7 +1306,7 @@ mod tests {
         });
         let (status, launched) = response_json(
             router(state.clone()),
-            Request::post("/v1/apps/test:app/launch")
+            Request::post("/v1/apps/test:app/launch?input_profile=desktop")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),

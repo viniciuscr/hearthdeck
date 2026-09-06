@@ -1,0 +1,14 @@
+[Unit]
+Description=Hearthdeck controller compatibility broker
+PartOf=hearthdeck.target
+
+[Service]
+Type=exec
+Environment=RUST_LOG=hearthdeck_input=info
+ExecStart=%h/.local/bin/hearthdeck-input
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hearthdeck-input

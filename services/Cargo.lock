@@ -2781,6 +2781,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hearthdeck-input"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "evdev",
+ "futures-util",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "hearthdeck-observability"
 version = "0.1.0"
 dependencies = [

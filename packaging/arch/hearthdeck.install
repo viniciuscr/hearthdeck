@@ -3,6 +3,9 @@ post_install() {
   # display-manager greeter accounts). Hearthdeck launchers start this target
   # explicitly for the active user.
   systemctl --global disable hearthdeck.target 2>/dev/null || true
+  udevadm control --reload-rules 2>/dev/null || true
+  modprobe uinput 2>/dev/null || true
+  udevadm trigger --subsystem-match=misc --sysname-match=uinput 2>/dev/null || true
   if ! grep -qxF 'Include = /etc/pacman.d/hearthdeck.conf' /etc/pacman.conf; then
     cat >>/etc/pacman.conf <<'EOF'
 

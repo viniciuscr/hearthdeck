@@ -7,15 +7,19 @@ CachyOS. It installs:
 - `/usr/bin/hearthdeck-frontend`: the COSMIC (libcosmic) frontend.
 - `/usr/lib/hearthdeck/linux-acceptance`: target-host service, RomM, API, and
   aggregate-log acceptance checks.
-- `/usr/lib/hearthdeck/`: the local bridge and daemon binaries, and the
-  Kiosk session script.
+- `/usr/lib/hearthdeck/`: the local bridge, daemon, controller compatibility
+  broker, and Kiosk session script.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, API
-  daemon, aggregate log collector, and optional Podman Compose RomM user units.
+  daemon, input broker, aggregate log collector, and optional Podman Compose
+  RomM user units.
+- `/usr/lib/udev/rules.d/70-hearthdeck-uinput.rules` and
+  `/usr/lib/modules-load.d/hearthdeck-uinput.conf`: active-seat access to the
+  virtual input device and boot-time loading of the `uinput` kernel module.
 - `/usr/share/doc/hearthdeck/romm.env.example`: optional path override for the
   external RomM Compose deployment. The service defaults to
   `/mnt/external/romM/podman-compose.yaml` and skips when that file is absent.
 - `~/hearthdeck.log`: recreated at each Hearthdeck session start with combined
-  session, daemon, bridge, overlay, and RomM output.
+  session, daemon, bridge, input broker, overlay, and RomM output.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck.desktop`: the minimal Hearthdeck
   Kiosk session shown by compatible display managers.
@@ -137,6 +141,29 @@ COSMIC focus events return ownership after the app exits or Hearthdeck regains
 focus. The quick-menu overlay reads the Guide button independently and grabs
 the controller exclusively while its menu is visible.
 
+Applications without native controller support can opt into **Controller
+compatibility** from their library context menu. The choice is stored per
+catalog entry and defaults off. While an opted-in managed session is active,
+`hearthdeck-input.service` maps common controls to a virtual keyboard and mouse:
+
+| Controller | Keyboard or mouse |
+|---|---|
+| D-pad or left stick | Arrow keys |
+| A / Start | Enter |
+| B | Escape |
+| X | Space |
+| Y / Select | Tab |
+| Left / right bumper | Page Up / Page Down |
+| Right stick | Mouse movement |
+| Left / right trigger | Right / left mouse button |
+
+The bridge resets the broker to the native profile when a launch fails, exits,
+is stopped, or is replaced. The physical controller is not grabbed, so Guide
+continues to reach the overlay; the overlay's existing exclusive grab takes
+precedence while it is visible. Leave compatibility disabled for games with
+native controller support, or they may receive both controller and emulated
+keyboard/mouse input.
+
 PipeWire/WirePlumber provide audio, while NetworkManager and BlueZ remain
 system services. Their existing connections and paired devices continue to
 work, but Hearthdeck does not yet provide Wi-Fi, Bluetooth, or audio-routing
@@ -171,7 +198,7 @@ remain sample content.
 ## Verify
 
 ```sh
-systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-daemon.service
+systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service
 curl http://127.0.0.1:38400/v1/health
 hearthdeck
 ```

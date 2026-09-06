@@ -2,7 +2,7 @@ pkgname=hearthdeck
 # CI supplies a monotonically increasing version for the GitHub Pages pacman
 # repository. Local builds retain the current release version.
 pkgver="${HEARTHDECK_PKGVER:-1.0.0}"
-pkgrel="${HEARTHDECK_PKGREL:-32}"
+pkgrel="${HEARTHDECK_PKGREL:-33}"
 pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
@@ -48,6 +48,7 @@ package() {
   install -Dm755 scripts/linux-acceptance "$pkgdir/usr/lib/hearthdeck/linux-acceptance"
   install -Dm755 services/target/release/hearthdeck-bridge "$pkgdir/usr/lib/hearthdeck/hearthdeck-bridge"
   install -Dm755 services/target/release/hearthdeck-daemon "$pkgdir/usr/lib/hearthdeck/hearthdeck-daemon"
+  install -Dm755 services/target/release/hearthdeck-input "$pkgdir/usr/lib/hearthdeck/hearthdeck-input"
   # Disposable Gamescope external-overlay spike (see
   # services/hearthdeck-overlay-spike and docs/kiosk-session.md). Remove this
   # line, and the crate, once the finding is confirmed either way.
@@ -58,10 +59,13 @@ package() {
   install -Dm644 packaging/arch/hearthdeck-bridge.socket "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.socket"
   install -Dm644 packaging/arch/hearthdeck-bridge.service "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.service"
   install -Dm644 packaging/arch/hearthdeck-daemon.service "$pkgdir/usr/lib/systemd/user/hearthdeck-daemon.service"
+  install -Dm644 packaging/arch/hearthdeck-input.service "$pkgdir/usr/lib/systemd/user/hearthdeck-input.service"
   install -Dm644 deploy/systemd/hearthdeck-log.service "$pkgdir/usr/lib/systemd/user/hearthdeck-log.service"
   install -Dm644 deploy/systemd/romm.service "$pkgdir/usr/lib/systemd/user/romm.service"
   install -Dm644 deploy/systemd/daemon.env.example "$pkgdir/usr/share/doc/hearthdeck/daemon.env.example"
   install -Dm644 deploy/systemd/romm.env.example "$pkgdir/usr/share/doc/hearthdeck/romm.env.example"
+  install -Dm644 deploy/70-hearthdeck-uinput.rules "$pkgdir/usr/lib/udev/rules.d/70-hearthdeck-uinput.rules"
+  install -Dm644 deploy/hearthdeck-uinput.conf "$pkgdir/usr/lib/modules-load.d/hearthdeck-uinput.conf"
   install -Dm644 packaging/arch/hearthdeck-pacman-repo.conf "$pkgdir/etc/pacman.d/hearthdeck.conf"
   install -Dm644 docs/arch-package.md "$pkgdir/usr/share/doc/hearthdeck/README.md"
   install -Dm644 docs/linux-acceptance.md "$pkgdir/usr/share/doc/hearthdeck/ACCEPTANCE.md"

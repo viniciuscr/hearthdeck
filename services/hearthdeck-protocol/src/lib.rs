@@ -17,11 +17,15 @@ pub enum BridgeRequest {
         source_id: String,
         application_id: String,
         session_id: String,
+        #[serde(default)]
+        input_profile: InputProfile,
     },
     LaunchHeroicGame {
         runner: HeroicRunner,
         application_id: String,
         session_id: String,
+        #[serde(default)]
+        input_profile: InputProfile,
     },
     /// Launches a RetroArch core against a locally cached ROM. The daemon
     /// resolves the platform-to-core mapping and fetches/caches the ROM from
@@ -34,11 +38,21 @@ pub enum BridgeRequest {
         core_path: String,
         rom_path: String,
         session_id: String,
+        #[serde(default)]
+        input_profile: InputProfile,
     },
     ActiveApplicationSession,
     StopApplicationSession {
         session_id: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputProfile {
+    #[default]
+    Native,
+    Desktop,
 }
 
 /// The Heroic runners Hearthdeck can delegate to. The bridge constructs the
@@ -113,6 +127,7 @@ pub enum BridgeErrorCode {
 mod tests {
     use super::{
         ApplicationSession, ApplicationSessionState, BridgeRequest, BridgeResponse, HeroicRunner,
+        InputProfile,
     };
 
     #[test]
@@ -121,6 +136,7 @@ mod tests {
             source_id: "desktop-apps".to_owned(),
             application_id: "org.example.Launcher.desktop".to_owned(),
             session_id: "session-1".to_owned(),
+            input_profile: InputProfile::Desktop,
         };
         let serialized = serde_json::to_value(request).unwrap();
 
@@ -128,6 +144,7 @@ mod tests {
         assert_eq!(serialized["source_id"], "desktop-apps");
         assert_eq!(serialized["application_id"], "org.example.Launcher.desktop");
         assert_eq!(serialized["session_id"], "session-1");
+        assert_eq!(serialized["input_profile"], "desktop");
         assert!(serialized.get("command").is_none());
         assert!(serialized.get("args").is_none());
     }
@@ -156,6 +173,7 @@ mod tests {
             runner: HeroicRunner::Legendary,
             application_id: "Fortnite".to_owned(),
             session_id: "session-1".to_owned(),
+            input_profile: InputProfile::Native,
         };
         let serialized = serde_json::to_value(request).unwrap();
 
@@ -171,6 +189,7 @@ mod tests {
             core_path: "/usr/lib/libretro/snes9x_libretro.so".to_owned(),
             rom_path: "/home/user/.cache/hearthdeck/romm/42.sfc".to_owned(),
             session_id: "session-1".to_owned(),
+            input_profile: InputProfile::Native,
         };
         let serialized = serde_json::to_value(request).unwrap();
 

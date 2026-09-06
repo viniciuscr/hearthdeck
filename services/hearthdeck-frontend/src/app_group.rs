@@ -290,6 +290,8 @@ fn is_emulator_entry(entry: &DesktopEntryData) -> bool {
 pub struct AppLibraryConfig {
     #[serde(default)]
     pub sections: Sections,
+    #[serde(default)]
+    pub desktop_input_apps: Vec<String>,
 }
 
 impl AppLibraryConfig {
@@ -299,6 +301,21 @@ impl AppLibraryConfig {
 
     pub fn helper() -> Option<cosmic_config::Config> {
         cosmic_config::Config::new(APP_ID, Self::version()).ok()
+    }
+
+    pub fn desktop_input_enabled(&self, id: &str) -> bool {
+        self.desktop_input_apps
+            .iter()
+            .any(|configured| configured == id)
+    }
+
+    pub fn toggle_desktop_input(&mut self, id: &str) {
+        if self.desktop_input_enabled(id) {
+            self.desktop_input_apps
+                .retain(|configured| configured != id);
+        } else {
+            self.desktop_input_apps.push(id.to_owned());
+        }
     }
 
     pub fn home() -> &'static AppGroup {
@@ -644,5 +661,17 @@ mod tests {
             group.name == "Favorites"
                 && matches!(&group.filter, FilterType::AppIds(ids) if ids == &["writer"])
         }));
+    }
+
+    #[test]
+    fn desktop_input_can_be_toggled_per_app() {
+        let mut config = AppLibraryConfig::default();
+
+        config.toggle_desktop_input("writer");
+        assert!(config.desktop_input_enabled("writer"));
+        assert!(!config.desktop_input_enabled("terminal"));
+
+        config.toggle_desktop_input("writer");
+        assert!(!config.desktop_input_enabled("writer"));
     }
 }

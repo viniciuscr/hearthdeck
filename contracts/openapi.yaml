@@ -133,6 +133,10 @@ paths:
           required: true
           description: RomM rom ID
           schema: { type: integer }
+        - name: input_profile
+          in: query
+          description: Controller handling for the launched application
+          schema: { type: string, enum: [native, desktop], default: native }
       responses:
         '200':
           description: RetroArch launch accepted
@@ -283,6 +287,10 @@ paths:
           required: true
           schema:
             type: string
+        - name: input_profile
+          in: query
+          description: Controller handling for the launched application
+          schema: { type: string, enum: [native, desktop], default: native }
       responses:
         '200':
           description: Registered desktop app launch accepted
