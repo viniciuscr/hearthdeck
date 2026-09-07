@@ -48,13 +48,13 @@ async fn main() -> Result<()> {
     database.migrate().await?;
     info!("database ready");
 
-    let state = Arc::new(AppState::new(config.clone(), database));
+    let state = AppState::new(config.clone(), database);
     let discovery = discovery::DiscoveryService::start(
         discovery_providers(&config),
         state.catalog.clone(),
         state.events.clone(),
     );
-    let state = Arc::new(AppState::with_discovery((*state).clone(), discovery));
+    let state = AppState::with_discovery(state, discovery);
     state
         .discovery
         .as_ref()
@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
         state.catalog.clone(),
         state.events.clone(),
     );
-    let state = Arc::new(AppState::with_enrichment((*state).clone(), enrichment));
+    let state = Arc::new(AppState::with_enrichment(state, enrichment));
     state
         .enrichment
         .as_ref()
@@ -158,11 +158,6 @@ fn discovery_providers(config: &Config) -> Vec<Arc<dyn discovery::DiscoveryProvi
     vec![Arc::new(
         discovery::providers::macos_apps::MacosAppsProvider::new(config.bridge_socket_path.clone()),
     )]
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn discovery_providers(_config: &Config) -> Vec<Arc<dyn discovery::DiscoveryProvider>> {
-    Vec::new()
 }
 
 #[cfg(target_os = "linux")]

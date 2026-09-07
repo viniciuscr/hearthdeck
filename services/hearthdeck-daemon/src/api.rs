@@ -100,15 +100,6 @@ fn host_capabilities() -> HostCapabilities {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn host_capabilities() -> HostCapabilities {
-    HostCapabilities {
-        launch: false,
-        application_sessions: false,
-        install_requests: false,
-        retro_launch: false,
-    }
-}
 
 async fn create_pairing(
     State(state): State<SharedState>,
