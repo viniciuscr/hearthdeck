@@ -72,7 +72,7 @@ use cosmic::{
 use cosmic_app_list_config::AppListConfig;
 use hearthdeck_protocol::InputProfile;
 use itertools::Itertools;
-use log::error;
+use log::{error, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::app_group::{AppGroup, AppLibraryConfig, Section};
@@ -396,6 +396,7 @@ struct HearthDeck {
     dashboard_notice: Option<DashboardNotice>,
     dashboard_health_generation: u64,
     romm_request_generation: u64,
+    virtual_keyboard: VirtualKeyboard,
 }
 
 impl Default for HearthDeck {
@@ -438,6 +439,7 @@ impl Default for HearthDeck {
             dashboard_notice: None,
             dashboard_health_generation: 0,
             romm_request_generation: 0,
+            virtual_keyboard: VirtualKeyboard::default(),
         }
     }
 }
@@ -642,6 +644,50 @@ enum Message {
         result: Result<crate::providers::daemon::RetroRecordPage, String>,
     },
     DismissLaunch,
+    VirtualKeyboardToggled {
+        target: bool,
+        result: Result<(), String>,
+    },
+}
+
+#[derive(Default)]
+struct VirtualKeyboard {
+    visible: bool,
+    requested_visible: bool,
+    pending_target: Option<bool>,
+}
+
+impl VirtualKeyboard {
+    fn request(&mut self, visible: bool) -> Option<bool> {
+        self.requested_visible = visible;
+        self.next_toggle()
+    }
+
+    fn complete(&mut self, target: bool, succeeded: bool) -> Option<bool> {
+        if self.pending_target != Some(target) {
+            return None;
+        }
+        self.pending_target = None;
+        if !succeeded {
+            return None;
+        }
+        self.visible = target;
+        self.next_toggle()
+    }
+
+    fn did_dismiss_externally(&mut self) {
+        self.visible = false;
+        self.requested_visible = false;
+        self.pending_target = None;
+    }
+
+    fn next_toggle(&mut self) -> Option<bool> {
+        if self.pending_target.is_some() || self.visible == self.requested_visible {
+            return None;
+        }
+        self.pending_target = Some(self.requested_visible);
+        self.pending_target
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -666,6 +712,40 @@ pub fn menu_control_padding() -> Padding {
 }
 
 impl HearthDeck {
+    fn request_virtual_keyboard(&mut self, visible: bool) -> Task<Message> {
+        let Some(target) = self.virtual_keyboard.request(visible) else {
+            return Task::none();
+        };
+        Self::toggle_virtual_keyboard(target)
+    }
+
+    fn toggle_virtual_keyboard(target: bool) -> Task<Message> {
+        Task::perform(
+            async move {
+                let result = tokio::process::Command::new("gamepad-osk")
+                    .arg("--toggle")
+                    .status()
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|status| {
+                        status
+                            .success()
+                            .then_some(())
+                            .ok_or_else(|| format!("gamepad-osk exited with {status}"))
+                    });
+                (target, result)
+            },
+            |(target, result)| {
+                cosmic::Action::App(Message::VirtualKeyboardToggled { target, result })
+            },
+        )
+    }
+
+    fn focus_text_input(&mut self, id: widget::Id) -> Task<Message> {
+        self.focused_id = Some(id.clone());
+        Task::batch([text_input::focus(id), self.request_virtual_keyboard(true)])
+    }
+
     fn load_romm_platforms(&self, delay: std::time::Duration) -> Task<Message> {
         let Some(client) = self.daemon_client.clone() else {
             return Task::none();
@@ -921,8 +1001,10 @@ impl HearthDeck {
         self.menu = None;
         self.group_to_delete = None;
         self.scroll_offset = 0.0;
+        let keyboard = self.request_virtual_keyboard(false);
 
         iced::Task::batch(vec![
+            keyboard,
             destroy_popup(*MENU_ID),
             destroy_layer_surface(*NEW_GROUP_WINDOW_ID),
             destroy_layer_surface(*DELETE_GROUP_WINDOW_ID),
@@ -1052,8 +1134,11 @@ impl HearthDeck {
 
     fn focus_dashboard_id(&mut self, id: widget::Id) -> Task<Message> {
         self.focused_id = Some(id.clone());
-        iced_runtime::task::widget(focus(id))
-            .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id))))
+        Task::batch([
+            iced_runtime::task::widget(focus(id))
+                .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id)))),
+            self.request_virtual_keyboard(false),
+        ])
     }
 
     fn dashboard_horizontal_target(&self, delta: i32) -> Option<widget::Id> {
@@ -1230,6 +1315,7 @@ impl HearthDeck {
         let mut tasks = vec![
             iced_runtime::task::widget(focus(focused))
                 .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id)))),
+            self.request_virtual_keyboard(false),
         ];
         if let Some(y) = self.scroll_offset_for_row(i / GRID_COLUMNS) {
             tasks.push(self.snap_to(SCROLLABLE_ID.clone(), y));
@@ -1250,7 +1336,10 @@ impl HearthDeck {
         }
         if self.focused_is_text_input() {
             return match msg {
-                Message::NextRow | Message::NextCol => self.focus_grid_index(0),
+                Message::NextRow | Message::NextCol => {
+                    self.virtual_keyboard.did_dismiss_externally();
+                    self.focus_grid_index(0)
+                }
                 _ => Task::none(),
             };
         }
@@ -1540,14 +1629,16 @@ impl cosmic::Application for HearthDeck {
             }
             Message::UpdateFocused(id) => {
                 self.focused_id = id;
+                let text_input_focused = self.focused_is_text_input();
+                let keyboard = self.request_virtual_keyboard(text_input_focused);
                 let Some(i) = self
                     .focused_id
                     .as_ref()
                     .and_then(|focused| self.entry_ids.iter().position(|i| i == focused))
                 else {
-                    return Task::none();
+                    return keyboard;
                 };
-                let mut tasks = vec![self.query_viewport_task()];
+                let mut tasks = vec![keyboard, self.query_viewport_task()];
                 if let Some(y) = self.scroll_offset_for_row(i / GRID_COLUMNS) {
                     tasks.push(self.snap_to(SCROLLABLE_ID.clone(), y));
                 }
@@ -1723,8 +1814,7 @@ impl cosmic::Application for HearthDeck {
             }
             Message::OpenSearch => {
                 self.page = Page::Library;
-                self.focused_id = Some(SEARCH_ID.clone());
-                return text_input::focus(SEARCH_ID.clone());
+                return self.focus_text_input(SEARCH_ID.clone());
             }
             Message::InputChanged(value) => {
                 self.search_value = value;
@@ -1749,7 +1839,8 @@ impl cosmic::Application for HearthDeck {
                 return self.activate_dashboard_app(&id);
             }
             Message::ActivateFirstApp => {
-                return self.activate_app(0);
+                let keyboard = self.request_virtual_keyboard(false);
+                return Task::batch([keyboard, self.activate_app(0)]);
             }
             Message::ConfirmFocused(focused) => {
                 self.focused_id = Some(focused.clone());
@@ -1810,7 +1901,11 @@ impl cosmic::Application for HearthDeck {
                         },
                     ),
                 ];
-                cmds.push(text_input::focus(SEARCH_ID.clone()));
+                if self.gamepad_focus_first {
+                    cmds.push(self.request_virtual_keyboard(false));
+                } else {
+                    cmds.push(self.focus_text_input(SEARCH_ID.clone()));
+                }
                 return iced::Task::batch(cmds);
             }
             Message::SelectGroup(group) => {
@@ -1833,8 +1928,10 @@ impl cosmic::Application for HearthDeck {
                         },
                     ),
                 ];
-                if group.is_none() {
-                    cmds.push(text_input::focus(SEARCH_ID.clone()));
+                if group.is_none() && !self.gamepad_focus_first {
+                    cmds.push(self.focus_text_input(SEARCH_ID.clone()));
+                } else {
+                    cmds.push(self.request_virtual_keyboard(false));
                 }
                 return iced::Task::batch(cmds);
             }
@@ -1918,10 +2015,11 @@ impl cosmic::Application for HearthDeck {
                 {
                     error!("{:?}", err);
                 }
+                return self.request_virtual_keyboard(false);
             }
             Message::StartEditName(name) => {
                 self.edit_name = Some(name);
-                return text_input::focus(EDIT_GROUP_ID.clone());
+                return self.focus_text_input(EDIT_GROUP_ID.clone());
             }
             Message::StartNewGroup => {
                 if self.new_group.is_some() {
@@ -1937,7 +2035,7 @@ impl cosmic::Application for HearthDeck {
                         size: None,
                         ..Default::default()
                     }),
-                    text_input::focus(NEW_GROUP_ID.clone()),
+                    self.focus_text_input(NEW_GROUP_ID.clone()),
                 ]);
             }
             Message::NewGroup(group_name) => {
@@ -1954,11 +2052,27 @@ impl cosmic::Application for HearthDeck {
                 {
                     error!("{:?}", err);
                 }
-                return destroy_layer_surface(*NEW_GROUP_WINDOW_ID);
+                return Task::batch([
+                    destroy_layer_surface(*NEW_GROUP_WINDOW_ID),
+                    self.request_virtual_keyboard(false),
+                ]);
             }
             Message::CancelNewGroup => {
                 self.new_group = None;
-                return destroy_layer_surface(*NEW_GROUP_WINDOW_ID);
+                return Task::batch([
+                    destroy_layer_surface(*NEW_GROUP_WINDOW_ID),
+                    self.request_virtual_keyboard(false),
+                ]);
+            }
+            Message::VirtualKeyboardToggled { target, result } => {
+                let succeeded = result.is_ok();
+                if let Err(error) = result {
+                    warn!("could not toggle virtual keyboard: {error}");
+                }
+                let Some(next_target) = self.virtual_keyboard.complete(target, succeeded) else {
+                    return Task::none();
+                };
+                return Self::toggle_virtual_keyboard(next_target);
             }
             Message::OpenContextMenu(rect, i) => {
                 if self.menu.take().is_some() {
@@ -3468,8 +3582,8 @@ fn is_primary_window(id: SurfaceId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DashboardNotice, DashboardShelf, HearthDeck, Page, focused_entry_index, is_primary_window,
-        next_romm_offset, romm_page_is_current, selected_romm_platform_id,
+        DashboardNotice, DashboardShelf, HearthDeck, Page, VirtualKeyboard, focused_entry_index,
+        is_primary_window, next_romm_offset, romm_page_is_current, selected_romm_platform_id,
     };
     use crate::app_group::{AppLibraryConfig, Section};
     use crate::providers::daemon::{HealthResponse, HostCapabilities, ProviderHealthInfo};
@@ -3493,6 +3607,47 @@ mod tests {
             prefers_dgpu: false,
             terminal: false,
         })
+    }
+
+    #[test]
+    fn virtual_keyboard_ignores_duplicate_visibility_requests() {
+        let mut keyboard = VirtualKeyboard::default();
+
+        assert_eq!(keyboard.request(true), Some(true));
+        assert_eq!(keyboard.request(true), None);
+        assert_eq!(keyboard.complete(true, true), None);
+        assert_eq!(keyboard.request(true), None);
+    }
+
+    #[test]
+    fn virtual_keyboard_queues_hide_while_show_is_pending() {
+        let mut keyboard = VirtualKeyboard::default();
+
+        assert_eq!(keyboard.request(true), Some(true));
+        assert_eq!(keyboard.request(false), None);
+        assert_eq!(keyboard.complete(true, true), Some(false));
+        assert_eq!(keyboard.complete(false, true), None);
+    }
+
+    #[test]
+    fn virtual_keyboard_external_dismiss_does_not_toggle_again() {
+        let mut keyboard = VirtualKeyboard::default();
+
+        assert_eq!(keyboard.request(true), Some(true));
+        assert_eq!(keyboard.complete(true, true), None);
+        keyboard.did_dismiss_externally();
+        assert_eq!(keyboard.request(false), None);
+    }
+
+    #[test]
+    fn virtual_keyboard_ignores_completion_after_external_dismiss() {
+        let mut keyboard = VirtualKeyboard::default();
+
+        assert_eq!(keyboard.request(true), Some(true));
+        keyboard.did_dismiss_externally();
+        assert_eq!(keyboard.complete(true, true), None);
+        assert!(!keyboard.visible);
+        assert_eq!(keyboard.request(false), None);
     }
 
     #[test]
