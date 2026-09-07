@@ -993,6 +993,13 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if self.status.is_server_error() {
+            warn!(
+                status_code = self.status.as_u16(),
+                error = %self.message,
+                "API request failed"
+            );
+        }
         let mut body = serde_json::json!({ "error": self.message });
         if let Some(settings) = self.settings {
             body["settings"] = serde_json::to_value(settings).unwrap_or_default();
