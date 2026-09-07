@@ -18,17 +18,18 @@ use super::{DESKTOP_APPS_SOURCE, LaunchedApplication};
 const INPUT_SERVICE: &str = "hearthdeck-input.service";
 const INPUT_SOCKET: &str = "hearthdeck-input.sock";
 
-pub async fn set_input_profile(profile: InputProfile) -> Result<()> {
+pub async fn set_input_profile(profile: InputProfile, retro_osk: bool) -> Result<()> {
     let Some(runtime_directory) = env::var_os("XDG_RUNTIME_DIR") else {
         anyhow::ensure!(
-            profile == InputProfile::Native,
+            profile == InputProfile::Native && !retro_osk,
             "XDG_RUNTIME_DIR is not set"
         );
         return Ok(());
     };
     let socket_path = PathBuf::from(runtime_directory).join(INPUT_SOCKET);
+    let input_service_required = profile == InputProfile::Desktop || retro_osk;
 
-    if profile == InputProfile::Desktop && !socket_path.exists() {
+    if input_service_required && !socket_path.exists() {
         let status = Command::new("systemctl")
             .args(["--user", "start", INPUT_SERVICE])
             .status()
@@ -46,7 +47,7 @@ pub async fn set_input_profile(profile: InputProfile) -> Result<()> {
         }
     }
 
-    if !socket_path.exists() && profile == InputProfile::Native {
+    if !socket_path.exists() && !input_service_required {
         return Ok(());
     }
     anyhow::ensure!(
@@ -54,9 +55,11 @@ pub async fn set_input_profile(profile: InputProfile) -> Result<()> {
         "input compatibility service is unavailable"
     );
 
-    let command = match profile {
-        InputProfile::Native => b"native".as_slice(),
-        InputProfile::Desktop => b"desktop".as_slice(),
+    let command = match (profile, retro_osk) {
+        (InputProfile::Native, false) => b"native".as_slice(),
+        (InputProfile::Desktop, false) => b"desktop".as_slice(),
+        (InputProfile::Native, true) => b"retro-native".as_slice(),
+        (InputProfile::Desktop, true) => b"retro-desktop".as_slice(),
     };
     let socket = UnixDatagram::unbound()?;
     match socket.send_to(command, &socket_path).await {

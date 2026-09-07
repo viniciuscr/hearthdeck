@@ -25,9 +25,12 @@ mod macos;
 pub use macos::{discover_applications, launch_application};
 
 #[cfg(all(not(target_os = "linux"), not(test)))]
-pub async fn set_input_profile(profile: hearthdeck_protocol::InputProfile) -> Result<()> {
+pub async fn set_input_profile(
+    profile: hearthdeck_protocol::InputProfile,
+    retro_osk: bool,
+) -> Result<()> {
     anyhow::ensure!(
-        profile == hearthdeck_protocol::InputProfile::Native,
+        profile == hearthdeck_protocol::InputProfile::Native && !retro_osk,
         "desktop input compatibility is only supported on Linux"
     );
     Ok(())

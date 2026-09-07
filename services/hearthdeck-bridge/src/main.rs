@@ -154,7 +154,7 @@ async fn stop_other_active_sessions(
     platform::stop_application(managed.unit_name.as_deref())
         .await
         .context("could not stop previous application session before launching a new one")?;
-    platform::set_input_profile(InputProfile::Native).await?;
+    platform::set_input_profile(InputProfile::Native, false).await?;
     sessions.lock().await.remove(&session_id);
     if let Err(error) = remove_managed_session(session_directory, &session_id).await {
         warn!(session_id, %error, "could not remove stopped application session record");
@@ -215,7 +215,7 @@ async fn handle_request(
                     message: error.to_string(),
                 };
             }
-            if let Err(error) = platform::set_input_profile(input_profile).await {
+            if let Err(error) = platform::set_input_profile(input_profile, false).await {
                 warn!(source_id, application_id, %error, "input compatibility profile rejected");
                 return BridgeResponse::Error {
                     code: BridgeErrorCode::LaunchFailed,
@@ -261,7 +261,7 @@ async fn handle_request(
                     message: error.to_string(),
                 };
             }
-            if let Err(error) = platform::set_input_profile(input_profile).await {
+            if let Err(error) = platform::set_input_profile(input_profile, false).await {
                 warn!(%error, "Heroic input compatibility profile rejected");
                 return BridgeResponse::Error {
                     code: BridgeErrorCode::LaunchFailed,
@@ -314,7 +314,7 @@ async fn handle_request(
                     message: error.to_string(),
                 };
             }
-            if let Err(error) = platform::set_input_profile(input_profile).await {
+            if let Err(error) = platform::set_input_profile(input_profile, true).await {
                 warn!(%error, "RetroArch input compatibility profile rejected");
                 return BridgeResponse::Error {
                     code: BridgeErrorCode::LaunchFailed,
@@ -347,11 +347,8 @@ async fn handle_request(
         BridgeRequest::ActiveApplicationSession => {
             let _transition = session_transition.lock().await;
             let active = active_managed_session(sessions, session_directory).await;
-            let profile = active
-                .as_ref()
-                .map(|(_, managed)| managed.input_profile)
-                .unwrap_or_default();
-            if let Err(error) = platform::set_input_profile(profile).await {
+            let profile = active.as_ref().map(|(_, managed)| managed);
+            if let Err(error) = sync_managed_input(profile).await {
                 warn!(%error, "could not synchronize active input profile");
             }
             let session = active.map(|(_, managed)| managed.session);
@@ -382,7 +379,9 @@ async fn handle_request(
                     {
                         warn!(session_id, %error, "could not remove stopped application session record");
                     }
-                    if let Err(error) = platform::set_input_profile(InputProfile::Native).await {
+                    if let Err(error) =
+                        platform::set_input_profile(InputProfile::Native, false).await
+                    {
                         warn!(%error, "could not reset input profile after application stop");
                     }
                     info!(session_id, "application session stopped");
@@ -419,7 +418,7 @@ async fn register_launch(
     };
     if let Err(error) = save_managed_session(session_directory, &managed).await {
         let _ = platform::stop_application(managed.unit_name.as_deref()).await;
-        let _ = platform::set_input_profile(InputProfile::Native).await;
+        let _ = platform::set_input_profile(InputProfile::Native, false).await;
         warn!(source_id, application_id, %error, "could not persist managed application session");
         return BridgeResponse::Error {
             code: BridgeErrorCode::LaunchFailed,
@@ -438,13 +437,18 @@ async fn sync_input_profile(
     sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
     session_directory: &Path,
 ) {
-    let profile = active_managed_session(sessions, session_directory)
-        .await
-        .map(|(_, managed)| managed.input_profile)
-        .unwrap_or_default();
-    if let Err(error) = platform::set_input_profile(profile).await {
+    let active = active_managed_session(sessions, session_directory).await;
+    if let Err(error) = sync_managed_input(active.as_ref().map(|(_, managed)| managed)).await {
         warn!(%error, "could not restore active input profile");
     }
+}
+
+async fn sync_managed_input(managed: Option<&ManagedSession>) -> Result<()> {
+    let profile = managed
+        .map(|managed| managed.input_profile)
+        .unwrap_or_default();
+    let retro_osk = managed.is_some_and(|managed| managed.session.source_id == "retroarch");
+    platform::set_input_profile(profile, retro_osk).await
 }
 
 async fn active_managed_session(

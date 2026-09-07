@@ -172,9 +172,12 @@ so NetworkManager changes needing authentication are unavailable from it.
 
 `gamepad-osk` remains optional and external to this package. It must be running
 as its upstream daemon service and have its uinput/input permissions configured
-before `gamepad-osk --toggle` can provide an OSK. Its evdev grab does not
-necessarily suppress Hearthdeck's direct joystick reader, so OSK input isolation
-is not guaranteed until controller input is unified behind one process.
+before `gamepad-osk --toggle` can provide an OSK. During a managed RetroArch
+session, press **Guide/Home + X** to toggle it, matching the Flutter frontend's
+use of the same command. The shortcut is disabled outside RetroArch sessions. Its
+evdev grab does not necessarily suppress Hearthdeck's direct joystick reader, so
+OSK input isolation is not guaranteed until controller input is unified behind
+one process.
 
 The bridge scans the target machine's Freedesktop entries and launches only a
 re-discovered desktop entry. It honors desktop visibility constraints, `Path`,

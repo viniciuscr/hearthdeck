@@ -11,6 +11,7 @@ use evdev::{
     RelativeAxisCode,
 };
 use tokio::net::UnixDatagram;
+use tokio::process::Command;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -21,6 +22,12 @@ const DEVICE_NAME: &str = "Hearthdeck Compatibility Input";
 const SOCKET_NAME: &str = "hearthdeck-input.sock";
 const SCAN_INTERVAL: Duration = Duration::from_secs(2);
 const MOUSE_INTERVAL: Duration = Duration::from_millis(16);
+
+#[derive(Clone, Copy)]
+struct InputMode {
+    compatibility: bool,
+    retro_osk: bool,
+}
 
 #[derive(Clone, Copy)]
 struct AxisRange {
@@ -56,6 +63,8 @@ pub async fn run() -> Result<()> {
     let mut output = create_virtual_device().context("could not create virtual input device")?;
     let (device_tx, mut device_rx) = mpsc::channel(128);
     let mut mapper = Mapper::default();
+    let mut retro_osk = false;
+    let mut guide_devices = HashSet::new();
     let mut active_paths = HashSet::new();
     let mut path_devices = HashMap::new();
     let mut next_device = 1_u64;
@@ -81,12 +90,18 @@ pub async fn run() -> Result<()> {
             Some(message) = device_rx.recv() => {
                 let events = match message {
                     DeviceMessage::Key { device, code, value } => {
-                        map_key(&mut mapper, device, code, value)
+                        if osk_chord(&mut guide_devices, retro_osk, device, code, value) {
+                            tokio::spawn(toggle_virtual_keyboard());
+                            Vec::new()
+                        } else {
+                            map_key(&mut mapper, device, code, value)
+                        }
                     }
                     DeviceMessage::Axis { device, code, value, range } => {
                         map_axis(&mut mapper, device, code, value, range)
                     }
                     DeviceMessage::Disconnected { device, path } => {
+                        guide_devices.remove(&device);
                         if path_devices.get(&path) == Some(&device) {
                             active_paths.remove(&path);
                             path_devices.remove(&path);
@@ -98,20 +113,18 @@ pub async fn run() -> Result<()> {
             }
             received = socket.recv(&mut command) => {
                 let length = received.context("input control socket read failed")?;
-                let events = match &command[..length] {
-                    b"desktop" => {
-                        info!("desktop input compatibility enabled");
-                        mapper.set_active(true)
-                    }
-                    b"native" => {
-                        info!("desktop input compatibility disabled");
-                        mapper.set_active(false)
-                    }
-                    _ => {
-                        warn!("ignored invalid input profile command");
-                        Vec::new()
-                    }
+                let Some(mode) = parse_input_mode(&command[..length]) else {
+                    warn!("ignored invalid input profile command");
+                    continue;
                 };
+                retro_osk = mode.retro_osk;
+                guide_devices.clear();
+                info!(
+                    compatibility = mode.compatibility,
+                    retro_osk,
+                    "input mode updated"
+                );
+                let events = mapper.set_active(mode.compatibility);
                 emit(&mut output, events)?;
             }
             _ = mouse.tick() => {
@@ -126,6 +139,58 @@ pub async fn run() -> Result<()> {
     emit(&mut output, mapper.set_active(false))?;
     let _ = std::fs::remove_file(socket_path);
     Ok(())
+}
+
+fn parse_input_mode(command: &[u8]) -> Option<InputMode> {
+    Some(match command {
+        b"native" => InputMode {
+            compatibility: false,
+            retro_osk: false,
+        },
+        b"desktop" => InputMode {
+            compatibility: true,
+            retro_osk: false,
+        },
+        b"retro-native" => InputMode {
+            compatibility: false,
+            retro_osk: true,
+        },
+        b"retro-desktop" => InputMode {
+            compatibility: true,
+            retro_osk: true,
+        },
+        _ => return None,
+    })
+}
+
+fn osk_chord(
+    guide_devices: &mut HashSet<u64>,
+    enabled: bool,
+    device: u64,
+    code: KeyCode,
+    value: i32,
+) -> bool {
+    if code == KeyCode::BTN_MODE {
+        if value == 0 {
+            guide_devices.remove(&device);
+        } else {
+            guide_devices.insert(device);
+        }
+        return false;
+    }
+    enabled && code == KeyCode::BTN_WEST && value == 1 && guide_devices.contains(&device)
+}
+
+async fn toggle_virtual_keyboard() {
+    match Command::new("gamepad-osk")
+        .args(["--toggle"])
+        .status()
+        .await
+    {
+        Ok(status) if status.success() => info!("virtual keyboard toggled"),
+        Ok(status) => warn!(?status, "gamepad-osk rejected virtual keyboard toggle"),
+        Err(error) => warn!(%error, "could not toggle virtual keyboard"),
+    }
 }
 
 fn socket_path() -> Result<PathBuf> {
@@ -396,7 +461,29 @@ fn output_key_code(key: OutputKey) -> KeyCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{AxisRange, normalize_centered, normalize_trigger};
+    use std::collections::HashSet;
+
+    use evdev::KeyCode;
+
+    use super::{AxisRange, normalize_centered, normalize_trigger, osk_chord, parse_input_mode};
+
+    #[test]
+    fn retro_input_modes_enable_the_osk_chord() {
+        let native = parse_input_mode(b"native").unwrap();
+        let retro = parse_input_mode(b"retro-native").unwrap();
+
+        assert!(!native.retro_osk);
+        assert!(retro.retro_osk);
+        assert!(!retro.compatibility);
+    }
+
+    #[test]
+    fn guide_and_x_toggle_the_osk_only_when_enabled() {
+        let mut guides = HashSet::new();
+        assert!(!osk_chord(&mut guides, true, 1, KeyCode::BTN_MODE, 1));
+        assert!(osk_chord(&mut guides, true, 1, KeyCode::BTN_WEST, 1));
+        assert!(!osk_chord(&mut guides, false, 1, KeyCode::BTN_WEST, 1));
+    }
 
     #[test]
     fn centered_axes_use_device_range() {
