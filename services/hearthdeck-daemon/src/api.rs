@@ -249,8 +249,10 @@ async fn launch_retro_rom(
     let response = crate::bridge::request(&state.config.bridge_socket_path, request)
         .await
         .map_err(ApiError::bad_gateway)?;
-    let BridgeResponse::LaunchAccepted { session } = response else {
-        return Err(ApiError::bad_gateway("bridge rejected retro game launch"));
+    let session = match response {
+        BridgeResponse::LaunchAccepted { session } => session,
+        BridgeResponse::Error { message, .. } => return Err(ApiError::bad_gateway(message)),
+        _ => return Err(ApiError::bad_gateway("bridge rejected retro game launch")),
     };
     if let Err(error) = state.activity.record_launch(activity).await {
         warn!(%error, rom_id, "failed to record retro launch activity");
