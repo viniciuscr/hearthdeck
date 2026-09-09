@@ -250,20 +250,63 @@ pub async fn launch_retro_game(
         .await
         .context("could not create Hearthdeck's RetroArch config directory")?;
     let config_path = config_directory.join("retroarch.cfg");
+    // Regenerated on every launch so the settings Hearthdeck enforces can
+    // never go stale from a previous session's in-game changes (the Knulli
+    // strategy: the launcher rewrites what it must enforce each run, while
+    // the persistent `retroarch.cfg` keeps user/RetroAchievements config
+    // that has to survive). RetroArch layers it over `retroarch.cfg` via
+    // `--appendconfig`, which has higher priority than `-c`.
+    let managed_path = config_directory.join("retroarch.launch.cfg");
+    tokio::fs::write(&managed_path, retroarch_managed_config())
+        .await
+        .context("could not write Hearthdeck's managed RetroArch config")?;
     let unit_name = format!("hearthdeck-app-{session_id}.service");
     launch_with_systemd(
         &unit_name,
-        vec![
-            OsString::from("retroarch"),
-            OsString::from("-c"),
-            config_path.into_os_string(),
-            OsString::from("-L"),
-            core_path.into_os_string(),
-            rom_path.into_os_string(),
-        ],
+        retroarch_command_args(&config_path, &managed_path, &core_path, &rom_path),
         None,
     )
     .await
+}
+
+/// Settings Hearthdeck re-asserts at the start of every RetroArch launch.
+/// Kept as a plain string builder so the exact contents are unit-testable
+/// without touching the filesystem.
+fn retroarch_managed_config() -> String {
+    [
+        // Start in fullscreen, never a desktop window. `video_windowed_fullscreen`
+        // keeps it borderless on the current output instead of switching
+        // modes, which is what compositors (Gamescope, cosmic-comp) expect.
+        "video_fullscreen = \"true\"",
+        "video_windowed_fullscreen = \"true\"",
+        // Bind the physical pad Hearthdeck sees to Player 1 explicitly, so a
+        // second device (e.g. the input service's virtual controller) cannot
+        // take RetroPad slot 1 away from it. Per-console differences are
+        // core-level and go in this file as the list grows; the RetroPad
+        // mapping itself is console-independent (RetroArch autoconfig).
+        "input_player1_joypad_index = \"0\"",
+        "input_autodetect_enable = \"true\"",
+    ]
+    .join("\n")
+        + "\n"
+}
+
+fn retroarch_command_args(
+    config_path: &Path,
+    managed_path: &Path,
+    core_path: &Path,
+    rom_path: &Path,
+) -> Vec<OsString> {
+    vec![
+        OsString::from("retroarch"),
+        OsString::from("-c"),
+        config_path.as_os_str().to_owned(),
+        OsString::from("--appendconfig"),
+        managed_path.as_os_str().to_owned(),
+        OsString::from("-L"),
+        core_path.as_os_str().to_owned(),
+        rom_path.as_os_str().to_owned(),
+    ]
 }
 
 /// Hearthdeck's own RetroArch config directory, never the user's default
@@ -752,12 +795,13 @@ fn desktop_entry_values(content: &str) -> HashMap<&str, &str> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
 
     use super::{
-        desktop_entry_directories_for, parse_desktop_entry, parse_exec,
-        valid_heroic_application_id, validate_retro_core_path_in, validate_retro_rom_path_in,
-        visible_in_desktop,
+        desktop_entry_directories_for, parse_desktop_entry, parse_exec, retroarch_command_args,
+        retroarch_managed_config, valid_heroic_application_id, validate_retro_core_path_in,
+        validate_retro_rom_path_in, visible_in_desktop,
     };
 
     #[tokio::test]
@@ -992,5 +1036,39 @@ mod tests {
         let cache_root = std::fs::canonicalize(cache_directory.path()).unwrap();
 
         assert!(validate_retro_rom_path_in(rom_path.to_str().unwrap(), &cache_root).is_err());
+    }
+
+    #[test]
+    fn managed_retroarch_config_forces_fullscreen_and_player_one() {
+        let config = retroarch_managed_config();
+
+        assert!(config.contains("video_fullscreen = \"true\""));
+        assert!(config.contains("video_windowed_fullscreen = \"true\""));
+        assert!(config.contains("input_player1_joypad_index = \"0\""));
+        assert!(config.ends_with('\n'));
+    }
+
+    #[test]
+    fn retroarch_command_layers_the_managed_config_over_the_base_config() {
+        let args = retroarch_command_args(
+            Path::new("/home/user/.config/hearthdeck/retroarch/retroarch.cfg"),
+            Path::new("/home/user/.config/hearthdeck/retroarch/retroarch.launch.cfg"),
+            Path::new("/usr/lib/libretro/snes9x_libretro.so"),
+            Path::new("/home/user/.cache/hearthdeck/romm/42/Game.sfc"),
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("retroarch"),
+                OsString::from("-c"),
+                OsString::from("/home/user/.config/hearthdeck/retroarch/retroarch.cfg"),
+                OsString::from("--appendconfig"),
+                OsString::from("/home/user/.config/hearthdeck/retroarch/retroarch.launch.cfg"),
+                OsString::from("-L"),
+                OsString::from("/usr/lib/libretro/snes9x_libretro.so"),
+                OsString::from("/home/user/.cache/hearthdeck/romm/42/Game.sfc"),
+            ]
+        );
     }
 }

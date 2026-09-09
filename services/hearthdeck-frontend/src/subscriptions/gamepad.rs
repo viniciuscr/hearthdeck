@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{self, UnboundedSender};
-use gilrs::{Axis, Button, Event, EventType, Gamepad, GamepadId, Gilrs};
+use gilrs::{Axis, Button, Event, EventType, Gamepad, GamepadId, GilrsBuilder};
 use log::{info, warn};
 
 use cosmic::iced::Subscription;
@@ -200,7 +200,13 @@ fn map_button(button: Button) -> Option<GamepadEvent> {
 }
 
 fn gilrs_loop(tx: UnboundedSender<GamepadEvent>) {
-    let mut gilrs = match Gilrs::new() {
+    // Force feedback is disabled on purpose: Hearthdeck never plays rumble
+    // effects, and gilrs enables its force-feedback server by default. That
+    // server re-asserts a (zero-strength) effect on every gamepad on every
+    // tick, so once a pad's device node is unlinked (e.g. the input service
+    // swapping its virtual device when a game closes) it logs
+    // "Failed to modify effect ... ENODEV" forever instead of stopping.
+    let mut gilrs = match GilrsBuilder::new().with_force_feedback(false).build() {
         Ok(gilrs) => {
             info!("Gamepad support enabled");
             gilrs
