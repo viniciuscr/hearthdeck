@@ -65,16 +65,19 @@ pub const CONTENT_HORIZONTAL_PADDING: u16 = 24;
 pub const DASHBOARD_VISIBLE_TILES: usize = 6;
 
 /// Number of columns in the application grid.
-pub const GRID_COLUMNS: usize = 5;
-/// Gap between grid tiles as a fraction of tile width (Xbox: ~6.5%).
-pub const GRID_GAP_RATIO: f32 = 0.065;
+pub const GRID_COLUMNS: usize = 6;
+/// Gap between grid tiles as a fraction of tile width. Tiles are recomputed
+/// from the remaining content width, so a larger ratio shrinks each cover a
+/// little and buys noticeably more air between cards than the Xbox-style 6.5%.
+pub const GRID_GAP_RATIO: f32 = 0.09;
 /// Minimum gap in pixels.
 pub const GRID_GAP_MIN: f32 = 8.0;
 /// Maximum gap in pixels.
-pub const GRID_GAP_MAX: f32 = 24.0;
+pub const GRID_GAP_MAX: f32 = 32.0;
 /// Top padding of the scrollable grid; keeps the focus ring on the first row
-/// from being clipped by the viewport.
-pub const GRID_TOP_PADDING: u16 = 4;
+/// from being clipped by the viewport and gives the first cover row breathing
+/// room below the tab strip.
+pub const GRID_TOP_PADDING: u16 = 12;
 
 /// Width of the 1px vertical dividers.
 pub const DIVIDER_WIDTH: f32 = 1.0;

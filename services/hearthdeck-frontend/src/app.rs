@@ -116,6 +116,14 @@ static APP_ICON: LazyLock<icon::Handle> = LazyLock::new(|| {
 /// Single fixed scrollable id shared by all sections.
 static SCROLLABLE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("section-scrollable"));
 
+/// Horizontal scrollable that keeps the section tab strip on one line.
+static TAB_STRIP_SCROLLABLE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("section-tabs-strip"));
+
+/// Widget id of the group tab that selects the custom group with `key`.
+fn group_tab_id(key: u64) -> Id {
+    Id::new(format!("group-tab-{key}"))
+}
+
 static EDIT_GROUP_ID: LazyLock<Id> = LazyLock::new(|| Id::new("edit_group"));
 static NEW_GROUP_ID: LazyLock<Id> = LazyLock::new(|| Id::new("new_group"));
 static SUBMIT_DELETE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("cancel_delete"));
@@ -479,6 +487,38 @@ impl HearthDeck {
             })
             .collect();
     }
+
+    /// A task that scrolls the single-line tab strip so the currently
+    /// selected group tab is visible. When no custom group is selected the
+    /// strip returns to the leading "all apps" tab.
+    fn reveal_tab_strip(&self) -> Option<Task<Message>> {
+        if self.page != Page::Library {
+            return None;
+        }
+        match self.cur_group {
+            None => Some(iced::widget::scrollable::scroll_to(
+                TAB_STRIP_SCROLLABLE_ID.clone(),
+                AbsoluteOffset {
+                    x: Some(0.0),
+                    y: None,
+                },
+            )),
+            Some(index) => {
+                let key = self.group_keys.get(index).copied()?;
+                Some(
+                    iced_runtime::task::widget(FindTabStripReveal {
+                        scrollable_id: TAB_STRIP_SCROLLABLE_ID.clone(),
+                        tab_id: group_tab_id(key),
+                        viewport: None,
+                        content_width: None,
+                        translation_x: None,
+                        tab: None,
+                    })
+                    .map(|offset| cosmic::Action::App(Message::ScrollTabStrip(offset))),
+                )
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -620,6 +660,9 @@ enum Message {
     LeaveDndOffer(Option<usize>),
     ScrollYOffset(f32, f32),
     ViewportHeight(f32),
+    /// Absolute horizontal scroll offset that keeps the selected tab visible
+    /// inside the single-line tab strip.
+    ScrollTabStrip(f32),
     PinToAppTray(usize),
     UnPinFromAppTray(usize),
     ToggleFavorite(usize),
@@ -1512,6 +1555,73 @@ impl Operation<f32> for FindViewport {
     }
 }
 
+/// An operation that measures how far a group tab sits outside the visible
+/// part of the single-line tab strip, and returns the absolute scroll offset
+/// that would center it. Layout coordinates from the tree are the strip's
+/// natural (unscrolled) positions, so the current scroll offset must be
+/// subtracted before comparing against the viewport.
+struct FindTabStripReveal {
+    scrollable_id: Id,
+    tab_id: Id,
+    viewport: Option<Rectangle>,
+    content_width: Option<f32>,
+    translation_x: Option<f32>,
+    tab: Option<Rectangle>,
+}
+
+impl Operation<f32> for FindTabStripReveal {
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        content_bounds: Rectangle,
+        translation: Vector,
+        _state: &mut dyn operation::Scrollable,
+    ) {
+        if id.is_some_and(|id| id == &self.scrollable_id) {
+            self.viewport = Some(bounds);
+            self.content_width = Some(content_bounds.width);
+            self.translation_x = Some(translation.x);
+        }
+    }
+
+    fn focusable(&mut self, id: Option<&Id>, bounds: Rectangle, _state: &mut dyn Focusable) {
+        if id.is_some_and(|id| id == &self.tab_id) {
+            self.tab = Some(bounds);
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<f32>)) {
+        if self.tab.is_none() {
+            operate(self);
+        }
+    }
+
+    fn finish(&self) -> Outcome<f32> {
+        let Some(viewport) = self.viewport else {
+            return Outcome::None;
+        };
+        let Some(content_width) = self.content_width else {
+            return Outcome::None;
+        };
+        let Some(scroll_x) = self.translation_x else {
+            return Outcome::None;
+        };
+        let Some(tab) = self.tab else {
+            return Outcome::None;
+        };
+        let visible_left = tab.x - scroll_x;
+        if visible_left >= viewport.x && visible_left + tab.width <= viewport.x + viewport.width {
+            // Already fully visible: keep the strip where the user put it.
+            return Outcome::None;
+        }
+        let max = (content_width - viewport.width).max(0.0);
+        let target =
+            (tab.x + tab.width * 0.5 - (viewport.x + viewport.width * 0.5)).clamp(0.0, max);
+        Outcome::Some(target)
+    }
+}
+
 impl cosmic::Application for HearthDeck {
     type Message = Message;
     type Executor = executor::Default;
@@ -1810,7 +1920,11 @@ impl cosmic::Application for HearthDeck {
             Message::OpenLibrary => {
                 self.page = Page::Library;
                 self.focused_id = None;
-                return self.focus_grid_index(0);
+                let mut tasks = vec![self.focus_grid_index(0)];
+                if let Some(task) = self.reveal_tab_strip() {
+                    tasks.push(task);
+                }
+                return iced::Task::batch(tasks);
             }
             Message::OpenSearch => {
                 self.page = Page::Library;
@@ -1906,6 +2020,9 @@ impl cosmic::Application for HearthDeck {
                 } else {
                     cmds.push(self.focus_text_input(SEARCH_ID.clone()));
                 }
+                if let Some(task) = self.reveal_tab_strip() {
+                    cmds.push(task);
+                }
                 return iced::Task::batch(cmds);
             }
             Message::SelectGroup(group) => {
@@ -1932,6 +2049,9 @@ impl cosmic::Application for HearthDeck {
                     cmds.push(self.focus_text_input(SEARCH_ID.clone()));
                 } else {
                     cmds.push(self.request_virtual_keyboard(false));
+                }
+                if let Some(task) = self.reveal_tab_strip() {
+                    cmds.push(task);
                 }
                 return iced::Task::batch(cmds);
             }
@@ -1986,6 +2106,12 @@ impl cosmic::Application for HearthDeck {
                 {
                     error!("{:?}", err);
                 }
+                // Reordering changes the strip geometry, so keep the selected
+                // tab in view after the flex row snaps to its new order.
+                return match self.reveal_tab_strip() {
+                    Some(task) => task,
+                    None => Task::none(),
+                };
             }
             Message::Delete(group) => {
                 self.group_to_delete = Some(group);
@@ -2188,6 +2314,15 @@ impl cosmic::Application for HearthDeck {
             }
             Message::ViewportHeight(height) => {
                 self.viewport_height = height;
+            }
+            Message::ScrollTabStrip(offset) => {
+                return iced::widget::scrollable::scroll_to(
+                    TAB_STRIP_SCROLLABLE_ID.clone(),
+                    AbsoluteOffset {
+                        x: Some(offset),
+                        y: None,
+                    },
+                );
             }
             Message::ConfirmDelete => {
                 let mut cmds = vec![destroy_layer_surface(*DELETE_GROUP_WINDOW_ID)];
@@ -3320,51 +3455,56 @@ impl HearthDeck {
         .id(FILTER_ID.clone())
         .on_press(Message::ToggleFilterMenu);
 
-        // ===== Sub-tab filter row =====
+        // ===== Sub-tab strip =====
         // A tab is a text button with a 4px underline that shows the accent
         // color on the active tab. Both custom group tabs and the locked
         // "all apps" tab share this single builder.
-        let build_tab = |is_active: bool, label: String, on_press: Option<Message>| {
-            let width = tab_width(&label);
-            let tab_btn = button::custom(
-                container(text::body(label).size(TEXT_BODY))
-                    .align_x(Alignment::Center)
-                    .align_y(Alignment::Center)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .padding([space_none, space_m]),
-            )
-            .width(Length::Shrink)
-            .height(Length::Fill)
-            .class(tab_button_class(is_active))
-            .on_press_maybe(on_press);
+        let build_tab =
+            |is_active: bool, label: String, on_press: Option<Message>, id: Option<widget::Id>| {
+                let width = tab_width(&label);
+                let mut tab_btn = button::custom(
+                    container(text::body(label).size(TEXT_BODY))
+                        .align_x(Alignment::Center)
+                        .align_y(Alignment::Center)
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .padding([space_none, space_m]),
+                )
+                .width(Length::Shrink)
+                .height(Length::Fill)
+                .class(tab_button_class(is_active))
+                .on_press_maybe(on_press);
+                if let Some(id) = id {
+                    tab_btn = tab_btn.id(id);
+                }
 
-            let underline = if is_active {
-                container(space::horizontal().width(Length::Fixed(1.0)))
-                    .width(Length::Fill)
-                    .height(Length::Fixed(TAB_UNDERLINE_HEIGHT))
-                    .class(theme::Container::Custom(Box::new(accent_bar)))
-            } else {
-                container(space::horizontal())
-                    .width(Length::Fill)
-                    .height(Length::Fixed(TAB_UNDERLINE_HEIGHT))
+                let underline = if is_active {
+                    container(space::horizontal().width(Length::Fixed(1.0)))
+                        .width(Length::Fill)
+                        .height(Length::Fixed(TAB_UNDERLINE_HEIGHT))
+                        .class(theme::Container::Custom(Box::new(accent_bar)))
+                } else {
+                    container(space::horizontal())
+                        .width(Length::Fill)
+                        .height(Length::Fixed(TAB_UNDERLINE_HEIGHT))
+                };
+
+                // Cap the tab column so the accent underline can span the label
+                // without the Fill widths expanding it (and wrapping) the row.
+                column![tab_btn, underline]
+                    .width(Length::Shrink)
+                    .height(Length::Fixed(TAB_HEIGHT))
+                    .max_width(width)
+                    .align_x(Alignment::Center)
             };
 
-            // Cap the tab column so the accent underline can span the label
-            // without the Fill widths expanding it (and wrapping) the row.
-            column![tab_btn, underline]
-                .width(Length::Shrink)
-                .height(Length::Fixed(TAB_HEIGHT))
-                .max_width(width)
-                .align_x(Alignment::Center)
-        };
-
-        let build_group_tab = |i: usize, group: &crate::app_group::AppGroup| {
+        let build_group_tab = |i: usize, key: u64, group: &crate::app_group::AppGroup| {
             dnd_destination_for_data::<AppletString, Message>(
                 build_tab(
                     self.cur_group == Some(i),
                     group.name(),
                     self.menu.is_none().then_some(Message::SelectGroup(Some(i))),
+                    Some(group_tab_id(key)),
                 ),
                 move |data, _| {
                     Message::FinishDndOffer(
@@ -3382,6 +3522,7 @@ impl HearthDeck {
             self.cur_group.is_none(),
             self.cur_section.all_name(),
             self.menu.is_none().then_some(Message::SelectGroup(None)),
+            None,
         );
 
         let add_tab_btn = button::custom(
@@ -3404,7 +3545,14 @@ impl HearthDeck {
         .class(theme::Button::IconVertical)
         .on_press(Message::StartNewGroup);
 
-        let tab_row = row![
+        // Keep the group tabs on a single line inside a horizontal scrollable:
+        // `reorderable_flex_row` wraps onto extra rows when the strip is
+        // narrower than its tabs, eating header space. Inside a scrollable it
+        // measures with an unbounded width, so every tab stays on one row and
+        // the strip scrolls when stores/platforms/groups overflow. The bottom
+        // padding keeps the active tab's accent underline clear of the overlay
+        // scrollbar.
+        let tab_strip = widget::scrollable::horizontal(
             self.config
                 .sections
                 .get(cur_section)
@@ -3419,14 +3567,20 @@ impl HearthDeck {
                         // drawn on top of each other) and forces a full redraw
                         // every frame while animating. Snap instead.
                         .animation_duration(std::time::Duration::ZERO)
-                        .padding([space_none, space_none])
+                        .padding([space_none, space_none, space_xxs, space_none])
                         .push_locked(GroupRowKey::AllApps, all_apps_tab),
                     |row, (i, group)| {
                         let key = self.group_keys.get(i).copied().unwrap_or(i as u64);
-                        row.push(GroupRowKey::Custom(key), build_group_tab(i, group))
+                        row.push(GroupRowKey::Custom(key), build_group_tab(i, key, group))
                     },
                 )
                 .push_locked(GroupRowKey::NewGroup, add_tab_btn),
+        )
+        .id(TAB_STRIP_SCROLLABLE_ID.clone())
+        .width(Length::Fill);
+
+        let tab_row = row![
+            tab_strip,
             filter_btn,
             container(
                 text::body(fl!("count-items", count = self.entry_path_input.len())).size(TEXT_BODY),
@@ -3521,7 +3675,9 @@ impl HearthDeck {
             sidebar_divider,
             column![
                 container(title_row).padding([space_l, 0, 0, 0]),
-                space::vertical().height(space_xxl),
+                // Keep the tab strip visually attached to its section title:
+                // a full 64px gap pushed the grid too far down the window.
+                space::vertical().height(space_m),
                 container(tab_row).padding([0, 0, 0, 0]),
                 app_scrollable,
             ]
