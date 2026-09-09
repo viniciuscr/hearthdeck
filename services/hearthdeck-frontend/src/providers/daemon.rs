@@ -151,6 +151,21 @@ impl DaemonClient {
         format!("{}{}", self.config.base_url, path)
     }
 
+    /// Converts a non-success daemon response into a [`DaemonError`],
+    /// preferring the daemon's JSON `{"error": ...}` body - which carries the
+    /// bridge's launch-rejection reason (e.g. a RetroArch core/ROM validation
+    /// failure) - over the bare status code, so the launch overlay can tell
+    /// the user *why* a launch failed instead of only showing "502 Bad
+    /// Gateway". Falls back to the status code when the body is not the
+    /// daemon's error JSON (proxy errors, non-daemon endpoints).
+    async fn http_error(response: reqwest::Response) -> DaemonError {
+        let status = response.status();
+        match response.bytes().await {
+            Ok(body) => daemon_error_from_body(status, &body),
+            Err(_) => DaemonError::UnexpectedStatus(status),
+        }
+    }
+
     /// Returns authorization headers for API requests.
     async fn auth_headers(&self) -> Result<reqwest::header::HeaderMap, DaemonError> {
         let token = self
@@ -192,7 +207,7 @@ impl DaemonClient {
             .await
             .map_err(DaemonError::Connection)?;
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
         let pairing = response
             .json::<PairingCodeResponse>()
@@ -212,7 +227,7 @@ impl DaemonClient {
             .await
             .map_err(DaemonError::Connection)?;
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
         response
             .json::<PairingCompleteResponse>()
@@ -232,7 +247,7 @@ impl DaemonClient {
             .map_err(DaemonError::Connection)?;
 
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
 
         response.json().await.map_err(DaemonError::Deserialization)
@@ -249,7 +264,7 @@ impl DaemonClient {
             .map_err(DaemonError::Connection)?;
 
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
 
         response.json().await.map_err(DaemonError::Deserialization)
@@ -265,7 +280,7 @@ impl DaemonClient {
             .await
             .map_err(DaemonError::Connection)?;
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
         let items: Vec<RecentActivityItem> = response
             .json()
@@ -300,7 +315,7 @@ impl DaemonClient {
             .map_err(DaemonError::Connection)?;
 
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
 
         Ok(())
@@ -322,7 +337,7 @@ impl DaemonClient {
             .map_err(DaemonError::Connection)?;
 
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
 
         response.json().await.map_err(DaemonError::Deserialization)
@@ -339,7 +354,7 @@ impl DaemonClient {
             .map_err(DaemonError::Connection)?;
 
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
 
         response.json().await.map_err(DaemonError::Deserialization)
@@ -357,7 +372,7 @@ impl DaemonClient {
             .map_err(DaemonError::Connection)?;
 
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
 
         Ok(())
@@ -374,7 +389,7 @@ impl DaemonClient {
             .map_err(DaemonError::Connection)?;
 
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
 
         response.json().await.map_err(DaemonError::Deserialization)
@@ -413,7 +428,7 @@ impl DaemonClient {
             .map_err(DaemonError::Connection)?;
 
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
 
         response.json().await.map_err(DaemonError::Deserialization)
@@ -501,7 +516,7 @@ impl DaemonClient {
             .map_err(DaemonError::Connection)?;
 
         if !response.status().is_success() {
-            return Err(DaemonError::UnexpectedStatus(response.status()));
+            return Err(Self::http_error(response).await);
         }
 
         response.json().await.map_err(DaemonError::Deserialization)
@@ -689,6 +704,12 @@ pub enum DaemonError {
     #[error("unexpected status: {0}")]
     UnexpectedStatus(reqwest::StatusCode),
 
+    #[error("{status}: {message}")]
+    Api {
+        status: reqwest::StatusCode,
+        message: String,
+    },
+
     #[error("deserialization failed: {0}")]
     Deserialization(reqwest::Error),
 
@@ -704,6 +725,24 @@ pub enum DaemonError {
     #[error("daemon not available")]
     #[allow(dead_code)]
     Unavailable,
+}
+
+/// Maps a daemon error-response body to a [`DaemonError`], surfacing the
+/// `{"error": ...}` message the daemon attaches to launch failures (e.g. a
+/// bridge rejection reason) instead of dropping it for the bare status code.
+fn daemon_error_from_body(status: reqwest::StatusCode, body: &[u8]) -> DaemonError {
+    let message = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|body| {
+            body.get("error")
+                .and_then(serde_json::Value::as_str)
+                .map(|message| message.trim().to_owned())
+                .filter(|message| !message.is_empty())
+        });
+    match message {
+        Some(message) => DaemonError::Api { status, message },
+        None => DaemonError::UnexpectedStatus(status),
+    }
 }
 
 /// A provider that fetches games/apps from the HearthDeck daemon.
@@ -857,9 +896,34 @@ pub struct RetroRecordPage {
 #[cfg(test)]
 mod tests {
     use super::{
-        CatalogItem, RecentActivityItem, RetroGame, catalog_item_to_game_record,
-        recent_activity_to_game_record, retro_game_to_game_record,
+        CatalogItem, DaemonError, RecentActivityItem, RetroGame, catalog_item_to_game_record,
+        daemon_error_from_body, recent_activity_to_game_record, retro_game_to_game_record,
     };
+
+    #[test]
+    fn daemon_error_bodies_surface_the_bridge_launch_reason() {
+        let status = reqwest::StatusCode::BAD_GATEWAY;
+        let body = br#"{"error":"input compatibility service failed to start"}"#;
+
+        assert_eq!(
+            daemon_error_from_body(status, body).to_string(),
+            "502 Bad Gateway: input compatibility service failed to start"
+        );
+    }
+
+    #[test]
+    fn non_daemon_error_bodies_fall_back_to_the_status_code() {
+        let status = reqwest::StatusCode::BAD_GATEWAY;
+
+        assert!(matches!(
+            daemon_error_from_body(status, b"<html>proxy error</html>"),
+            DaemonError::UnexpectedStatus(reqwest::StatusCode::BAD_GATEWAY)
+        ));
+        assert!(matches!(
+            daemon_error_from_body(status, b""),
+            DaemonError::UnexpectedStatus(reqwest::StatusCode::BAD_GATEWAY)
+        ));
+    }
 
     #[test]
     fn catalog_item_maps_to_game_record_with_prefix() {

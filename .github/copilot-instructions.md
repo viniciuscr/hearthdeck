@@ -8,6 +8,20 @@
 
 ---
 
+# Change summaries teach the code
+
+Applies to the final summary of every bug fix or feature. Overrides the short-by-default style above for this output only.
+
+A change summary is not a changelog ("implemented X, fixed Y"). It must leave the reader able to review the diff and reason about the change — written for a senior engineer who is learning Rust:
+
+- **Explain how the code works, not just what it does**: the mechanism of the fix or feature, tied concretely to the code that was written.
+- **Teach the Rust the change relies on**: name the specific constructs and idioms in play and why they behave as they do — ownership/borrowing/lifetimes, traits + generics (incl. monomorphization), enums + exhaustive matching, `Option`/`Result` propagation, error handling (`thiserror`/`anyhow`), `async`/`tokio` patterns, iterators/closures, `Send`/`Sync`, and why a chosen crate over its alternatives.
+- **Assume senior engineering, Rust-novice**: never explain universal concepts (HTTP, SQLite, IPC, events) or Rust 101 (structs, `match`); always explain what a construct guarantees and what it costs.
+- **Justify the adopted solution** against realistic alternatives and name the accepted tradeoffs — the reader should be able to challenge the design after reading.
+- **Proportion over padding**: long enough to teach the change, never long for its own sake.
+
+---
+
 # Project map — Hearthdeck
 
 Flutter (Dart) + Rust monorepo. Linux TV/kiosk game library frontend.
