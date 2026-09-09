@@ -33,11 +33,6 @@ CachyOS. It installs:
   the fullscreen app/game grid, search, sidebar, gamepad navigation, and
   daemon-client integration. The test session does not start a panel or write
   COSMIC panel/theme configuration.
-- `/usr/bin/hearthdeck-overlay-spike`: **temporary**, not a real feature.
-  Disposable hardware-verification tool for an in-progress investigation
-  into a system-wide overlay menu; see `services/hearthdeck-overlay-spike`
-  and `docs/kiosk-session.md`. Remove this bullet once that crate is
-  deleted.
 
 ## Install
 

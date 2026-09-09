@@ -2947,13 +2947,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hearthdeck-overlay-spike"
-version = "0.1.0"
-dependencies = [
- "x11rb",
-]
-
-[[package]]
 name = "hearthdeck-protocol"
 version = "0.1.0"
 dependencies = [

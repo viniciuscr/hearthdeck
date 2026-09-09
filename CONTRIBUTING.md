@@ -188,7 +188,6 @@ cargo build --target x86_64-unknown-linux-gnu --manifest-path services/Cargo.tom
   - `hearthdeck-observability`: Telemetry and logging
   - `hearthdeck-protocol`: Shared types and API contracts
    - `hearthdeck-overlay`: COSMIC quick-menu layer-shell surface
-  - `hearthdeck-overlay-spike`: Temporary spike for overlay investigation
 
 - **`lib/`**: Flutter frontend (Dart)
 - **`test/`**: Flutter tests

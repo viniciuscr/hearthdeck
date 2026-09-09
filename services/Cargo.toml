@@ -7,7 +7,6 @@ members = [
   "hearthdeck-input",
   "hearthdeck-frontend",
   "hearthdeck-overlay",
-  "hearthdeck-overlay-spike",
 ]
 resolver = "3"
 
