@@ -15,6 +15,8 @@ use tracing::{debug, info, warn};
 
 use super::{DESKTOP_APPS_SOURCE, LaunchedApplication};
 
+mod retro_profiles;
+
 const INPUT_SERVICE: &str = "hearthdeck-input.service";
 const INPUT_SOCKET: &str = "hearthdeck-input.sock";
 
@@ -257,9 +259,29 @@ pub async fn launch_retro_game(
     // that has to survive). RetroArch layers it over `retroarch.cfg` via
     // `--appendconfig`, which has higher priority than `-c`.
     let managed_path = config_directory.join("retroarch.launch.cfg");
-    tokio::fs::write(&managed_path, retroarch_managed_config())
+    let autoconfig_directory = config_directory.join("autoconfig");
+    // RetroArch stores profiles under `<joypad_autoconfig_dir>/<input
+    // driver>/`, mirroring how the upstream autoconfig package installs them
+    // (`/usr/share/libretro/autoconfig/udev/`). Arch's `retroarch` package
+    // ships none of those files, so without seeding, a Hearthdeck-managed
+    // install has an empty directory and every pad is reported as "detected
+    // but not configured" (the symptom this seeding fixes).
+    let autoconfig_udev_directory = autoconfig_directory.join("udev");
+    tokio::fs::create_dir_all(&autoconfig_udev_directory)
         .await
-        .context("could not write Hearthdeck's managed RetroArch config")?;
+        .context("could not create Hearthdeck's RetroArch autoconfig directory")?;
+    let seeded = retro_profiles::seed_retroarch_profiles(&autoconfig_udev_directory)
+        .await
+        .context("could not seed Hearthdeck's RetroArch autoconfig profiles")?;
+    if seeded > 0 {
+        info!(seeded, "seeded RetroArch joypad autoconfig profiles");
+    }
+    tokio::fs::write(
+        &managed_path,
+        retroarch_managed_config(&autoconfig_directory),
+    )
+    .await
+    .context("could not write Hearthdeck's managed RetroArch config")?;
     let unit_name = format!("hearthdeck-app-{session_id}.service");
     launch_with_systemd(
         &unit_name,
@@ -272,8 +294,8 @@ pub async fn launch_retro_game(
 /// Settings Hearthdeck re-asserts at the start of every RetroArch launch.
 /// Kept as a plain string builder so the exact contents are unit-testable
 /// without touching the filesystem.
-fn retroarch_managed_config() -> String {
-    [
+fn retroarch_managed_config(autoconfig_directory: &Path) -> String {
+    let mut config = [
         // Start in fullscreen, never a desktop window. `video_windowed_fullscreen`
         // keeps it borderless on the current output instead of switching
         // modes, which is what compositors (Gamescope, cosmic-comp) expect.
@@ -281,14 +303,33 @@ fn retroarch_managed_config() -> String {
         "video_windowed_fullscreen = \"true\"",
         // Bind the physical pad Hearthdeck sees to Player 1 explicitly, so a
         // second device (e.g. the input service's virtual controller) cannot
-        // take RetroPad slot 1 away from it. Per-console differences are
-        // core-level and go in this file as the list grows; the RetroPad
-        // mapping itself is console-independent (RetroArch autoconfig).
+        // take RetroPad slot 1 away from it.
         "input_player1_joypad_index = \"0\"",
         "input_autodetect_enable = \"true\"",
+        // Lock the joypad driver to udev: RetroArch looks for autoconfig
+        // profiles under `<joypad_autoconfig_dir>/<driver>/`, and Hearthdeck
+        // only seeds the `udev/` subdirectory, so another driver would find an
+        // empty folder and report every pad "not configured" again.
+        "input_joypad_driver = \"udev\"",
     ]
-    .join("\n")
-        + "\n"
+    .join("\n");
+    // Point RetroArch at a Hearthdeck-owned autoconfig directory. RetroArch
+    // resolves its autoconfig dir from its own default config location, not
+    // from the `-c` path Hearthdeck passes, so without this line it looks in
+    // `~/.config/retroarch/autoconfig` (empty on a machine that only runs
+    // RetroArch through Hearthdeck) and every pad shows up "not configured"
+    // even though it is detected. `launch_retro_game` seeds the bundled udev
+    // profiles into `.../udev/` before RetroArch starts, so the override is
+    // backed by real profiles rather than an empty directory. The wizard's
+    // "Save Controller Profile" writes into Hearthdeck's config dir too,
+    // where it persists across launches and is safe from the managed-config
+    // reset.
+    config.push('\n');
+    config.push_str(&format!(
+        "joypad_autoconfig_dir = \"{}\"\n",
+        autoconfig_directory.display()
+    ));
+    config
 }
 
 fn retroarch_command_args(
@@ -799,9 +840,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        desktop_entry_directories_for, parse_desktop_entry, parse_exec, retroarch_command_args,
-        retroarch_managed_config, valid_heroic_application_id, validate_retro_core_path_in,
-        validate_retro_rom_path_in, visible_in_desktop,
+        desktop_entry_directories_for, parse_desktop_entry, parse_exec, retro_profiles,
+        retroarch_command_args, retroarch_managed_config, valid_heroic_application_id,
+        validate_retro_core_path_in, validate_retro_rom_path_in, visible_in_desktop,
     };
 
     #[tokio::test]
@@ -1040,11 +1081,17 @@ mod tests {
 
     #[test]
     fn managed_retroarch_config_forces_fullscreen_and_player_one() {
-        let config = retroarch_managed_config();
+        let autoconfig_directory = tempfile::tempdir().unwrap();
+        let config = retroarch_managed_config(autoconfig_directory.path());
 
         assert!(config.contains("video_fullscreen = \"true\""));
         assert!(config.contains("video_windowed_fullscreen = \"true\""));
         assert!(config.contains("input_player1_joypad_index = \"0\""));
+        assert!(config.contains("input_joypad_driver = \"udev\""));
+        assert!(config.contains(&format!(
+            "joypad_autoconfig_dir = \"{}\"",
+            autoconfig_directory.path().display()
+        )));
         assert!(config.ends_with('\n'));
     }
 
@@ -1069,6 +1116,44 @@ mod tests {
                 OsString::from("/usr/lib/libretro/snes9x_libretro.so"),
                 OsString::from("/home/user/.cache/hearthdeck/romm/42/Game.sfc"),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn seeding_populates_the_udev_autoconfig_directory_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let profile_count = retro_profiles::bundled_retroarch_profiles().len();
+        assert!(profile_count > 0);
+
+        let seeded = retro_profiles::seed_retroarch_profiles(directory.path())
+            .await
+            .unwrap();
+        assert_eq!(seeded, profile_count);
+        assert_eq!(directory.path().read_dir().unwrap().count(), profile_count);
+
+        // A second launch must not rewrite anything already seeded.
+        let reseeded = retro_profiles::seed_retroarch_profiles(directory.path())
+            .await
+            .unwrap();
+        assert_eq!(reseeded, 0);
+    }
+
+    #[tokio::test]
+    async fn seeding_preserves_a_profile_the_user_resaved() {
+        let directory = tempfile::tempdir().unwrap();
+        // A shipped profile name that the pad-binding wizard would overwrite
+        // when the user picks "Save Controller Profile".
+        let name = "Microsoft_X-Box_Series_XS_pad.cfg";
+        let custom = "input_driver = \"udev\"\n# user-customised mapping\n";
+        std::fs::write(directory.path().join(name), custom).unwrap();
+
+        retro_profiles::seed_retroarch_profiles(directory.path())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join(name)).unwrap(),
+            custom
         );
     }
 }
