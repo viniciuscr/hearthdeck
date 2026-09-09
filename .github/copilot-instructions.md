@@ -8,17 +8,18 @@
 
 ---
 
-# Change summaries teach the code
+# Change summaries teach the code and the codebase
 
 Applies to the final summary of every bug fix or feature. Overrides the short-by-default style above for this output only.
 
-A change summary is not a changelog ("implemented X, fixed Y"). It must leave the reader able to review the diff and reason about the change — written for a senior engineer who is learning Rust:
+The reader is a senior engineer who is learning Rust — and does not know this codebase well, since most of it was agent-written. A summary is not a changelog ("implemented X, fixed Y"). It is a small lesson that helps them understand the change and, gradually, the system around it. Write so someone who never saw the code can follow:
 
-- **Explain how the code works, not just what it does**: the mechanism of the fix or feature, tied concretely to the code that was written.
-- **Teach the Rust the change relies on**: name the specific constructs and idioms in play and why they behave as they do — ownership/borrowing/lifetimes, traits + generics (incl. monomorphization), enums + exhaustive matching, `Option`/`Result` propagation, error handling (`thiserror`/`anyhow`), `async`/`tokio` patterns, iterators/closures, `Send`/`Sync`, and why a chosen crate over its alternatives.
-- **Assume senior engineering, Rust-novice**: never explain universal concepts (HTTP, SQLite, IPC, events) or Rust 101 (structs, `match`); always explain what a construct guarantees and what it costs.
-- **Justify the adopted solution** against realistic alternatives and name the accepted tradeoffs — the reader should be able to challenge the design after reading.
-- **Proportion over padding**: long enough to teach the change, never long for its own sake.
+- **Place the change first**: name the file/module touched and explain its job in the system in one or two plain sentences. Do not assume they already know what that module does.
+- **Explain the mechanism**: walk through what the code now does and why that fixes the issue or adds the feature, tied concretely to the diff.
+- **Teach the Rust it uses**: when a construct does real work in this change, explain it briefly — what it does and why it is used here (e.g. `?` to propagate errors up, an enum + `match` so the compiler checks every case, why a value is borrowed or cloned). Only what this diff actually uses; no Rust 101 and no term-dumping.
+- **Say why this design**: one or two lines on the realistic alternative and the accepted tradeoff.
+- **Grow their map slowly**: each summary is one step toward understanding the codebase; link back to things explained in earlier changes when it helps. Do not recap the whole architecture.
+- **Stay short**: one-pass read, depth where the change is subtle, silence where it is obvious.
 
 ---
 

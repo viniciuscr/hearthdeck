@@ -260,14 +260,7 @@ pub async fn download_rom_content(
         .await
         .map_err(RommQueryError::Failed)?
         .ok_or(RommQueryError::NotConfigured)?;
-    let mut url = reqwest::Url::parse(&format!(
-        "{}/api/roms/{rom_id}/content/",
-        credentials.base_url
-    ))
-    .map_err(|error| RommQueryError::Failed(error.into()))?;
-    url.path_segments_mut()
-        .map_err(|_| RommQueryError::Failed(anyhow::anyhow!("invalid RomM content URL")))?
-        .push(fs_name);
+    let url = rom_content_url(&credentials.base_url, rom_id, fs_name)?;
     let response = reqwest::Client::new()
         .get(url)
         .bearer_auth(&credentials.token)
@@ -316,6 +309,28 @@ pub async fn download_rom_content(
     file.sync_all()
         .await
         .map_err(|error| RommQueryError::Failed(error.into()))
+}
+
+/// Builds the RomM content-download URL for a rom. Kept as a separate
+/// function so the exact path shape is unit-testable without a network call:
+/// the RetroArch launch path depends on this matching RomM's
+/// `/api/roms/{id}/content/{file_name}` route exactly.
+///
+/// The base path deliberately has no trailing slash after `content`: the url
+/// crate's `path_segments_mut().push` keeps an existing empty final segment,
+/// which would serialize the path as `/content//<file>` and 404 against
+/// RomM's single-slash route.
+fn rom_content_url(
+    base_url: &str,
+    rom_id: i64,
+    fs_name: &str,
+) -> std::result::Result<reqwest::Url, RommQueryError> {
+    let mut url = reqwest::Url::parse(&format!("{base_url}/api/roms/{rom_id}/content"))
+        .map_err(|error| RommQueryError::Failed(error.into()))?;
+    url.path_segments_mut()
+        .map_err(|_| RommQueryError::Failed(anyhow::anyhow!("invalid RomM content URL")))?
+        .push(fs_name);
+    Ok(url)
 }
 
 pub async fn romm_asset(
@@ -945,6 +960,24 @@ mod tests {
         assert!(super::normalized_romm_asset_path("/resources/roms/1/cover.webp").is_err());
         assert!(super::normalized_romm_asset_path("https://example.com/cover.webp").is_err());
         assert!(super::normalized_romm_asset_path("/assets/romm/resources/../secret").is_err());
+    }
+
+    #[test]
+    fn content_url_has_a_single_slash_between_content_and_the_rom_file() {
+        // Regression: the download URL used to serialize as
+        // `/api/roms/{id}/content//<file>` (an empty path segment kept by
+        // `path_segments_mut().push` after a trailing slash), which RomM
+        // answers with 404 because its route is `/content/{file_name}`.
+        let url = super::rom_content_url(
+            "http://127.0.0.1:8080",
+            289,
+            "Advance Guardian Heroes (NA).gba",
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "http://127.0.0.1:8080/api/roms/289/content/Advance%20Guardian%20Heroes%20(NA).gba"
+        );
     }
 
     #[tokio::test]

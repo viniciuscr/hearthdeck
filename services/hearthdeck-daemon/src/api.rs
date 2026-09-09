@@ -100,7 +100,6 @@ fn host_capabilities() -> HostCapabilities {
     }
 }
 
-
 async fn create_pairing(
     State(state): State<SharedState>,
 ) -> Result<Json<PairingResponse>, ApiError> {
