@@ -3108,7 +3108,7 @@ impl HearthDeck {
             space_xxl,
             ..
         } = theme::spacing();
-        let tile_size = dashboard_tile_size(self.window_width, space_l, space_m);
+        let tile_size = dashboard_tile_size(self.window_width, space_l, space_l);
         let nav_button_size = f32::from(space_xl);
         let user_name = current_user_name();
 
@@ -3274,7 +3274,7 @@ impl HearthDeck {
                     .align_y(Alignment::Center)
                     .into()
                 } else {
-                    row(tiles).spacing(space_m).into()
+                    row(tiles).spacing(space_l).into()
                 };
                 column![
                     text::title3(shelf.title()).size(TEXT_HEADER),

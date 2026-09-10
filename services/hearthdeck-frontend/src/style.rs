@@ -87,14 +87,14 @@ pub fn content_horizontal_padding() -> u16 {
 }
 
 /// Number of installed titles shown on the dashboard.
-pub const DASHBOARD_VISIBLE_TILES: usize = 5;
+pub const DASHBOARD_VISIBLE_TILES: usize = 4;
 
 /// Number of columns in the application grid.
-pub const GRID_COLUMNS: usize = 5;
+pub const GRID_COLUMNS: usize = 4;
 /// Gap between grid tiles as a fraction of tile width. Tiles are recomputed
 /// from the remaining content width, so a larger ratio shrinks each cover a
 /// little and buys noticeably more air between cards than the Xbox-style 6.5%.
-pub const GRID_GAP_RATIO: f32 = 0.12;
+pub const GRID_GAP_RATIO: f32 = 0.14;
 
 /// Top padding of the scrollable grid; keeps the focus ring on the first row
 /// from being clipped by the viewport and gives the first cover row breathing
@@ -133,7 +133,7 @@ pub fn grid_gap(window_width: f32) -> f32 {
     // cw = cols * tile + (cols - 1) * ratio * tile = tile * (cols + (cols-1)*ratio)
     let est_tile = cw / (cols + (cols - 1.0) * GRID_GAP_RATIO);
     let s = spacing();
-    (est_tile * GRID_GAP_RATIO).clamp(f32::from(s.space_xxs), f32::from(s.space_l))
+    (est_tile * GRID_GAP_RATIO).clamp(f32::from(s.space_xxs), f32::from(s.space_xl))
 }
 
 /// Compute the tile width from the padded content width.
@@ -153,7 +153,7 @@ pub fn dashboard_tile_size(window_width: f32, horizontal_padding: u16, tile_gap:
     let available = window_width
         - 2.0 * f32::from(horizontal_padding)
         - (DASHBOARD_VISIBLE_TILES - 1) as f32 * f32::from(tile_gap);
-    (available / DASHBOARD_VISIBLE_TILES as f32).clamp(140.0, 300.0)
+    (available / DASHBOARD_VISIBLE_TILES as f32).clamp(140.0, 360.0)
 }
 
 /// Size of the drag-preview icon shown while dragging a tile.
@@ -166,7 +166,7 @@ pub const SOURCE_BADGE: f32 = 28.0;
 // ---------------------------------------------------------------------------
 
 /// Width of the search field.
-pub const SEARCH_WIDTH: f32 = 560.0;
+pub const SEARCH_WIDTH: f32 = 400.0;
 /// Size of the search field's leading icon.
 pub const ICON_SEARCH: u16 = 32;
 /// Padding around the search field's leading icon; 4px at Standard.
@@ -524,10 +524,10 @@ mod tests {
     #[test]
     fn dashboard_tiles_fit_themed_spacing() {
         let window_width = 1200.0;
-        // `space_l` horizontal padding and `space_m` gap between tiles, at
+        // `space_l` horizontal padding and `space_l` gap between tiles, at
         // libcosmic's default (Standard) density.
         let padding = 32;
-        let gap = 24;
+        let gap = 32;
         let occupied = DASHBOARD_VISIBLE_TILES as f32
             * dashboard_tile_size(window_width, padding, gap)
             + (DASHBOARD_VISIBLE_TILES - 1) as f32 * f32::from(gap)
