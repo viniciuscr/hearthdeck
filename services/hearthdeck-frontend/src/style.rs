@@ -87,14 +87,14 @@ pub fn content_horizontal_padding() -> u16 {
 }
 
 /// Number of installed titles shown on the dashboard.
-pub const DASHBOARD_VISIBLE_TILES: usize = 6;
+pub const DASHBOARD_VISIBLE_TILES: usize = 5;
 
 /// Number of columns in the application grid.
-pub const GRID_COLUMNS: usize = 6;
+pub const GRID_COLUMNS: usize = 5;
 /// Gap between grid tiles as a fraction of tile width. Tiles are recomputed
 /// from the remaining content width, so a larger ratio shrinks each cover a
 /// little and buys noticeably more air between cards than the Xbox-style 6.5%.
-pub const GRID_GAP_RATIO: f32 = 0.09;
+pub const GRID_GAP_RATIO: f32 = 0.12;
 
 /// Top padding of the scrollable grid; keeps the focus ring on the first row
 /// from being clipped by the viewport and gives the first cover row breathing
@@ -153,13 +153,13 @@ pub fn dashboard_tile_size(window_width: f32, horizontal_padding: u16, tile_gap:
     let available = window_width
         - 2.0 * f32::from(horizontal_padding)
         - (DASHBOARD_VISIBLE_TILES - 1) as f32 * f32::from(tile_gap);
-    (available / DASHBOARD_VISIBLE_TILES as f32).clamp(120.0, 220.0)
+    (available / DASHBOARD_VISIBLE_TILES as f32).clamp(140.0, 300.0)
 }
 
 /// Size of the drag-preview icon shown while dragging a tile.
-pub const TILE_DRAG_ICON: f32 = 72.0;
+pub const TILE_DRAG_ICON: f32 = 88.0;
 /// Size of the source badge overlaid on the tile artwork corner.
-pub const SOURCE_BADGE: f32 = 24.0;
+pub const SOURCE_BADGE: f32 = 28.0;
 
 // ---------------------------------------------------------------------------
 // Top bar & controls
@@ -168,7 +168,7 @@ pub const SOURCE_BADGE: f32 = 24.0;
 /// Width of the search field.
 pub const SEARCH_WIDTH: f32 = 560.0;
 /// Size of the search field's leading icon.
-pub const ICON_SEARCH: u16 = 28;
+pub const ICON_SEARCH: u16 = 32;
 /// Padding around the search field's leading icon; 4px at Standard.
 pub fn search_icon_padding() -> u16 {
     spacing().space_xxxs
@@ -226,14 +226,14 @@ pub const MENU_MAX_HEIGHT: f32 = 800.0;
 // ---------------------------------------------------------------------------
 
 /// Largest icons: sidebar header and dialog artwork.
-pub const ICON_LARGE: u16 = 48;
+pub const ICON_LARGE: u16 = 64;
 /// Icons inside body-sized controls (storage, filter, add group).
-pub const ICON_BODY: u16 = 20;
+pub const ICON_BODY: u16 = 24;
 /// Icons inside title-row action buttons (rename/delete); also the width/height
 /// of those icon buttons.
 pub const ICON_TILE_ACTION: f32 = 32.0;
 /// Small icons and inline spacers (menu checkboxes, source badges).
-pub const ICON_SMALL: u16 = 16;
+pub const ICON_SMALL: u16 = 20;
 
 // ---------------------------------------------------------------------------
 // Focus rings
@@ -524,8 +524,10 @@ mod tests {
     #[test]
     fn dashboard_tiles_fit_themed_spacing() {
         let window_width = 1200.0;
+        // `space_l` horizontal padding and `space_m` gap between tiles, at
+        // libcosmic's default (Standard) density.
         let padding = 32;
-        let gap = 16;
+        let gap = 24;
         let occupied = DASHBOARD_VISIBLE_TILES as f32
             * dashboard_tile_size(window_width, padding, gap)
             + (DASHBOARD_VISIBLE_TILES - 1) as f32 * f32::from(gap)

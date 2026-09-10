@@ -2833,6 +2833,20 @@ impl cosmic::Application for HearthDeck {
             .into()
     }
 
+    fn system_theme_update(
+        &mut self,
+        _keys: &[&'static str],
+        _new_theme: &cosmic::cosmic_theme::Theme,
+    ) -> Task<Message> {
+        // The theme also carries COSMIC's density (spacing) and roundness, and
+        // the entry icons are rasterized at the tile size those produce. Rebuild
+        // them so a live density change stays crisp instead of a scaled blur;
+        // the icon cache is keyed by (icon, size), so a color-only change is
+        // just a cache hit.
+        self.update_entry_metadata();
+        Task::none()
+    }
+
     fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![
             listen_with(|e, status, id| match e {
@@ -3034,6 +3048,26 @@ impl cosmic::Application for HearthDeck {
 
         self_.load_apps();
 
+        // libcosmic's `system_preference()` falls back to a *fixed* `Theme::dark()`
+        // when the theme-mode config cannot be read yet. The minimal COSMIC test
+        // session runs no settings daemon, so that file may not exist when this
+        // app starts, and libcosmic only applies later theme/mode changes while
+        // the active theme is a `System` one. A fixed fallback therefore leaves
+        // the app stuck on its startup colors until it is restarted. Force a
+        // system-tracked theme: keep the preference when it is already `System`,
+        // otherwise choose by the brightness that was applied at startup.
+        let preference = cosmic::theme::system_preference();
+        let theme = if matches!(
+            &preference.theme_type,
+            cosmic::theme::ThemeType::System { .. }
+        ) {
+            preference
+        } else if preference.theme_type.is_dark() {
+            cosmic::theme::system_dark()
+        } else {
+            cosmic::theme::system_light()
+        };
+
         let fullscreen = window::set_mode(SurfaceId::RESERVED, window::Mode::Fullscreen);
         let dashboard_focus = self_
             .dashboard_entry_ids()
@@ -3050,6 +3084,7 @@ impl cosmic::Application for HearthDeck {
         (
             self_,
             Task::batch([
+                cosmic::command::set_theme::<Message>(theme),
                 fullscreen,
                 focus_dashboard,
                 poll_active_session,
@@ -3073,7 +3108,7 @@ impl HearthDeck {
             space_xxl,
             ..
         } = theme::spacing();
-        let tile_size = dashboard_tile_size(self.window_width, space_l, space_s);
+        let tile_size = dashboard_tile_size(self.window_width, space_l, space_m);
         let nav_button_size = f32::from(space_xl);
         let user_name = current_user_name();
 
@@ -3239,7 +3274,7 @@ impl HearthDeck {
                     .align_y(Alignment::Center)
                     .into()
                 } else {
-                    row(tiles).spacing(space_s).into()
+                    row(tiles).spacing(space_m).into()
                 };
                 column![
                     text::title3(shelf.title()).size(TEXT_HEADER),
