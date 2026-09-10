@@ -9,11 +9,13 @@
 //! and colors) are used as-is so the app still follows the user's system
 //! theme — they are already a centralized design-token system.
 
+use cosmic::Element;
 use cosmic::Theme;
 use cosmic::iced::core::{Background, Border, Color, Shadow};
+use cosmic::iced::{ContentFit, Length};
 use cosmic::theme::Button;
 use cosmic::widget::button::Catalog;
-use cosmic::widget::{button, container};
+use cosmic::widget::{button, container, icon};
 
 // ---------------------------------------------------------------------------
 // Typography
@@ -194,9 +196,11 @@ pub fn filter_button_height() -> f32 {
 pub fn tab_height() -> f32 {
     f32::from(spacing().space_xl)
 }
-/// Height of the accent underline of the active tab; 4px at Standard.
+/// Height of the accent underline of the active tab. A fixed hairline rather
+/// than a density token: it is a 1px-scale accent, so scaling it with the
+/// spacing scale made it visibly too thick at higher densities.
 pub fn tab_underline_height() -> f32 {
-    f32::from(spacing().space_xxxs)
+    4.0
 }
 /// Per-character text advance used to estimate a tab's intrinsic width.
 const TAB_CHAR_ADVANCE: f32 = 0.6;
@@ -239,14 +243,43 @@ pub const ICON_SMALL: u16 = 20;
 // Focus rings
 // ---------------------------------------------------------------------------
 
-/// Thickness of the solid inner focus ring shared by every focusable element
-/// (sidebar items, tabs and grid tiles).
-pub const FOCUS_RING_WIDTH: f32 = 5.0;
-/// Thickness of the translucent ring drawn just outside the focus ring, which
-/// reads as a soft glow.
-const FOCUS_GLOW_WIDTH: f32 = 3.0;
-/// Opacity of the glow ring.
-const FOCUS_GLOW_ALPHA: f32 = 0.4;
+/// Thickness of the focus ring shared by every focusable element (sidebar
+/// items, tabs and grid tiles).
+pub const FOCUS_RING_WIDTH: f32 = 4.0;
+
+// ---------------------------------------------------------------------------
+// Surfaces
+// ---------------------------------------------------------------------------
+
+/// The corner radius shared by every card-like surface: grid and dashboard
+/// tiles, the artwork they contain, and tile label scrims. Single source of
+/// truth, derived from COSMIC's corner radii so the Round / Slightly round /
+/// Square setting applies everywhere at once.
+pub fn surface_radius(theme: &Theme) -> [f32; 4] {
+    theme.cosmic().corner_radii.radius_m
+}
+
+fn active_surface_radius() -> [f32; 4] {
+    surface_radius(&cosmic::theme::active())
+}
+
+/// Renders an icon as artwork clipped to the shared surface radius.
+///
+/// Every raster image the app displays goes through here, so rounded corners
+/// are a design-system primitive rather than a per-widget decision. Entry
+/// icons are always raster by this point (the icon cache rasterizes SVGs); an
+/// SVG handle falls back to the plain icon, which has no clip.
+pub fn artwork<'a, M: 'a>(handle: &icon::Handle, width: Length, height: Length) -> Element<'a, M> {
+    match &handle.data {
+        icon::Data::Image(image) => cosmic::widget::image::Image::new(image.clone())
+            .content_fit(ContentFit::Fill)
+            .border_radius(active_surface_radius())
+            .width(width)
+            .height(height)
+            .into(),
+        icon::Data::Svg(_) => handle.clone().icon().width(width).height(height).into(),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Container styles
@@ -260,7 +293,7 @@ const FOCUS_GLOW_ALPHA: f32 = 0.4;
 /// unreadable here. Only the bottom corners follow the tile radius; the top
 /// edge meets the artwork and stays square.
 pub fn tile_label_overlay(theme: &Theme) -> container::Style {
-    let radius = theme.cosmic().corner_radii.radius_m;
+    let radius = surface_radius(theme);
     container::Style {
         text_color: Some(Color::WHITE),
         icon_color: Some(Color::WHITE),
@@ -272,6 +305,28 @@ pub fn tile_label_overlay(theme: &Theme) -> container::Style {
         })),
         border: Border {
             radius: [0.0, 0.0, radius[2], radius[3]].into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
+/// Background for the source badge overlaid on tile artwork. A card-like
+/// surface, so it shares the same radius and colors as the tile instead of
+/// borrowing a different preset.
+pub fn source_badge(theme: &Theme) -> container::Style {
+    let t = theme.cosmic();
+    let on = t.background(theme.transparent).component.on;
+    container::Style {
+        text_color: Some(on.into()),
+        icon_color: Some(on.into()),
+        background: Some(Background::Color(
+            t.background(theme.transparent).component.base.into(),
+        )),
+        border: Border {
+            radius: surface_radius(theme).into(),
             width: 0.0,
             color: Color::TRANSPARENT,
         },
@@ -359,23 +414,14 @@ fn chip_background(alpha: f32, theme: &Theme) -> Background {
     Background::Color(color)
 }
 
-/// Applies the shared selection ring to a button style.
-///
-/// iced only draws hard-edged rings on buttons - its button shadow is an offset
-/// rectangle, not a blur - so the glow is layered opacity instead of a real
-/// blur: a solid accent border with a wider, translucent accent outline just
-/// outside it. `outline_width` is deliberately re-enabled here (COSMIC's own
-/// focused style draws a thin outline) because the surrounding padding is wide
-/// enough to contain the extra ring.
+/// Applies the shared focus ring to a button style: a single solid accent
+/// border.
 fn focus_ring(mut style: button::Style, focused: bool, theme: &Theme) -> button::Style {
     if focused {
-        let accent = theme.cosmic().accent.base;
         style.border_width = FOCUS_RING_WIDTH;
-        style.border_color = accent.into();
-        let mut glow: Color = accent.into();
-        glow.a = FOCUS_GLOW_ALPHA;
-        style.outline_width = FOCUS_GLOW_WIDTH;
-        style.outline_color = glow;
+        style.border_color = theme.cosmic().accent.base.into();
+        style.outline_width = 0.0;
+        style.outline_color = Color::TRANSPARENT;
     }
     style
 }
@@ -468,49 +514,31 @@ pub fn tab_button_class(selected: bool) -> Button {
     }
 }
 
-/// Grid tile appearance: a rounded corner plus a hairline outline so cover art
-/// does not bleed into the background while unfocused. Focus swaps the
-/// hairline for the accent glow.
-fn tile_style(
-    mut style: button::Style,
-    focused: bool,
-    selected: bool,
-    theme: &Theme,
-) -> button::Style {
-    style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-    if !focused && !selected {
-        style.border_width = 1.0;
-        style.border_color = theme.cosmic().bg_divider().into();
-    }
+/// Grid tile appearance: the shared surface radius, plus the focus ring when
+/// the tile is focused. Exactly one border is ever drawn.
+fn tile_style(mut style: button::Style, focused: bool, theme: &Theme) -> button::Style {
+    style.border_radius = surface_radius(theme).into();
     focus_ring(style, focused, theme)
 }
 
-/// Grid tile buttons: focused tiles get the shared single accent ring so
-/// selection is clearly visible, matching the reference's prominent frame.
-/// Tiles have rounded corners matching the Xbox-style card design.
+/// Grid tile buttons: focused tiles get the shared accent ring so selection is
+/// clearly visible. Tiles have the shared surface corner radius.
 pub fn tile_button_class(selected: bool) -> Button {
     Button::Custom {
         active: Box::new(move |focused, theme| {
             tile_style(
                 theme.active(focused, selected, &Button::IconVertical),
                 focused,
-                selected,
                 theme,
             )
         }),
         disabled: Box::new(move |theme| {
-            tile_style(
-                theme.disabled(&Button::IconVertical),
-                false,
-                selected,
-                theme,
-            )
+            tile_style(theme.disabled(&Button::IconVertical), false, theme)
         }),
         hovered: Box::new(move |focused, theme| {
             tile_style(
                 theme.hovered(focused, selected, &Button::IconVertical),
                 focused,
-                selected,
                 theme,
             )
         }),
@@ -518,7 +546,6 @@ pub fn tile_button_class(selected: bool) -> Button {
             tile_style(
                 theme.pressed(focused, selected, &Button::IconVertical),
                 focused,
-                selected,
                 theme,
             )
         }),

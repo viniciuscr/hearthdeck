@@ -2,6 +2,7 @@
 
 use crate::app::AppSource;
 use core::str;
+use cosmic::Element;
 use cosmic::iced::alignment::Vertical;
 use cosmic::iced::clipboard::mime::{AllowedMimeTypes, AsMimeTypes};
 use cosmic::iced::core::alignment::Horizontal;
@@ -10,11 +11,10 @@ use cosmic::iced::core::{
     Alignment, Clipboard, Event, Length, Rectangle, Shell, Widget, layout, mouse, overlay, renderer,
 };
 use cosmic::iced::widget::{column, text};
-use cosmic::iced::{ContentFit, Size, Vector};
+use cosmic::iced::{Size, Vector};
 use cosmic::widget::{
-    button, container, dnd_source, icon, image, {self},
+    button, container, dnd_source, icon, {self},
 };
-use cosmic::{Element, theme};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::iter;
@@ -23,34 +23,11 @@ use std::rc::Rc;
 use std::str::FromStr;
 
 use crate::style::{
-    ICON_SMALL, SOURCE_BADGE, TEXT_TILE_LABEL, TILE_DRAG_ICON, tile_button_class,
-    tile_label_overlay,
+    ICON_SMALL, SOURCE_BADGE, TEXT_TILE_LABEL, TILE_DRAG_ICON, artwork, source_badge,
+    tile_button_class, tile_label_overlay,
 };
 
 pub const MIME_TYPE: &str = "text/uri-list";
-
-/// Builds tile artwork with corners clipped to `radius`.
-///
-/// Entry icons are always raster by the time they reach a tile - the icon cache
-/// rasterizes SVGs - so iced's image widget can apply a border radius to the
-/// clip. libcosmic's `Icon` widget does not expose that, which is why tiles
-/// used to render square corners regardless of the theme's roundness.
-fn tile_artwork<'a, M: 'a>(
-    handle: &icon::Handle,
-    radius: [f32; 4],
-    width: Length,
-    height: Length,
-) -> Element<'a, M> {
-    match &handle.data {
-        icon::Data::Image(image) => image::Image::new(image.clone())
-            .content_fit(ContentFit::Fill)
-            .border_radius(radius)
-            .width(width)
-            .height(height)
-            .into(),
-        icon::Data::Svg(_) => handle.clone().icon().width(width).height(height).into(),
-    }
-}
 
 /// A widget that can be dragged and dropped.
 #[allow(missing_debug_implementations)]
@@ -81,8 +58,6 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
         on_finish: Option<Message>,
         on_cancel: Option<Message>,
     ) -> Self {
-        let tile_radius = theme::active().cosmic().corner_radii.radius_m;
-
         let (source_icon, source_suffix_len) = match source {
             Some((source, source_icon_handle)) => {
                 let source_name = source.to_string();
@@ -90,7 +65,7 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
                     source_icon_handle.as_ref().map(|i| {
                         Element::from(
                             container(app_source_icon(i.clone()))
-                                .class(cosmic::theme::Container::Card)
+                                .class(cosmic::theme::Container::Custom(Box::new(source_badge)))
                                 .width(Length::Fixed(SOURCE_BADGE))
                                 .height(Length::Fixed(SOURCE_BADGE))
                                 .align_x(Horizontal::Center)
@@ -121,7 +96,7 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
             button::custom(
                 container(
                     column![
-                        tile_artwork(&icon_handle, tile_radius, Length::Fill, Length::Fill),
+                        artwork(&icon_handle, Length::Fill, Length::Fill),
                         container(text(name).size(TEXT_TILE_LABEL).width(Length::Fill))
                             .padding([2, 6])
                             .width(Length::Fill)
@@ -149,9 +124,8 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
         )
         .drag_icon(move |_| {
             (
-                tile_artwork(
+                artwork(
                     &icon_handle,
-                    tile_radius,
                     Length::Fixed(TILE_DRAG_ICON),
                     Length::Fixed(TILE_DRAG_ICON),
                 ),

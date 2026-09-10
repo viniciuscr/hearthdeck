@@ -3652,9 +3652,9 @@ impl HearthDeck {
         // `reorderable_flex_row` wraps onto extra rows when the strip is
         // narrower than its tabs, eating header space. Inside a scrollable it
         // measures with an unbounded width, so every tab stays on one row and
-        // the strip scrolls when stores/platforms/groups overflow. The bottom
-        // padding keeps the active tab's accent underline clear of the overlay
-        // scrollbar.
+        // the strip scrolls when stores/platforms/groups overflow. The
+        // scrollbar is hidden but scrolling still works, so overflow never
+        // steals header space.
         let tab_strip = widget::scrollable::horizontal(
             self.config
                 .sections
@@ -3670,7 +3670,6 @@ impl HearthDeck {
                         // drawn on top of each other) and forces a full redraw
                         // every frame while animating. Snap instead.
                         .animation_duration(std::time::Duration::ZERO)
-                        .padding([space_none, space_none, space_xxs, space_none])
                         .push_locked(GroupRowKey::AllApps, all_apps_tab),
                     |row, (i, group)| {
                         let key = self.group_keys.get(i).copied().unwrap_or(i as u64);
@@ -3680,7 +3679,9 @@ impl HearthDeck {
                 .push_locked(GroupRowKey::NewGroup, add_tab_btn),
         )
         .id(TAB_STRIP_SCROLLABLE_ID.clone())
-        .width(Length::Fill);
+        .width(Length::Fill)
+        .scrollbar_width(0)
+        .scroller_width(0);
 
         let tab_row = row![
             tab_strip,
