@@ -369,6 +369,8 @@ struct HearthDeck {
     all_entries: Vec<Arc<DesktopEntryData>>,
     recent_entries: Vec<Arc<DesktopEntryData>>,
     menu: Option<usize>,
+    /// Highlighted entry within the open context menu, navigated by the gamepad.
+    menu_selection: usize,
     helper: Option<Config>,
     config: AppLibraryConfig,
     cur_section: Section,
@@ -416,6 +418,7 @@ impl Default for HearthDeck {
             all_entries: Default::default(),
             recent_entries: Default::default(),
             menu: Default::default(),
+            menu_selection: Default::default(),
             helper: Default::default(),
             config: Default::default(),
             cur_section: Section::PcGames,
@@ -1377,6 +1380,17 @@ impl HearthDeck {
         if self.new_group.is_some() || self.group_to_delete.is_some() {
             return Task::none();
         }
+        if self.menu.is_some() {
+            // While the context menu is open the D-pad moves its highlight
+            // instead of the grid selection behind it.
+            let delta = match msg {
+                Message::PrevRow | Message::PrevCol => -1,
+                Message::NextRow | Message::NextCol => 1,
+                _ => 0,
+            };
+            self.move_menu_selection(delta);
+            return Task::none();
+        }
         if self.focused_is_text_input() {
             return match msg {
                 Message::NextRow | Message::NextCol => {
@@ -1397,14 +1411,9 @@ impl HearthDeck {
         if self.launch_state.is_visible() {
             return Task::none();
         }
-        if let Some(i) = self.menu {
-            // A context menu is open: confirm its primary action, which is
-            // launching the app it was opened for.
-            self.menu = None;
-            return Task::batch(vec![
-                commands::popup::destroy_popup(*MENU_ID),
-                self.update(Message::ActivateApp(i)),
-            ]);
+        if self.menu.is_some() {
+            // A context menu is open: confirm its highlighted entry.
+            return self.activate_menu_entry(self.menu_selection);
         }
         iced_runtime::task::widget(find_focused())
             .map(|id| cosmic::Action::App(Message::ConfirmFocused(id)))
@@ -1452,6 +1461,52 @@ impl HearthDeck {
             bounds: None,
         })
         .map(move |rect| cosmic::Action::App(Message::OpenContextMenu(rect, i)))
+    }
+
+    /// Number of entries the context menu shows for the current selection.
+    /// Mirrors the order built in `view_window` for `MENU_ID`.
+    fn menu_entry_count(&self) -> usize {
+        // Run, pin, favorite, controller compatibility, plus remove when the
+        // app belongs to a group.
+        4 + usize::from(self.cur_group.is_some())
+    }
+
+    /// Move the context-menu highlight by `delta`, wrapping at both ends.
+    fn move_menu_selection(&mut self, delta: i32) {
+        let count = self.menu_entry_count();
+        if count == 0 {
+            return;
+        }
+        let current = self.menu_selection.min(count - 1) as i32;
+        self.menu_selection = (current + delta).rem_euclid(count as i32) as usize;
+    }
+
+    /// Activate the context-menu entry at `index`, the gamepad confirm action.
+    fn activate_menu_entry(&mut self, index: usize) -> Task<Message> {
+        let Some(i) = self.menu else {
+            return Task::none();
+        };
+        let pinned = self
+            .entry_path_input
+            .get(i)
+            .is_some_and(|entry| self.app_list_config.favorites.contains(&entry.id));
+        match index {
+            1 if pinned => self.update(Message::UnPinFromAppTray(i)),
+            1 => self.update(Message::PinToAppTray(i)),
+            2 => self.update(Message::ToggleFavorite(i)),
+            3 => self.update(Message::SelectAction(
+                MenuAction::ToggleControllerCompatibility,
+            )),
+            4 if self.cur_group.is_some() => self.update(Message::SelectAction(MenuAction::Remove)),
+            // Run, and any out-of-range index, launches the app.
+            _ => {
+                self.menu = None;
+                Task::batch(vec![
+                    commands::popup::destroy_popup(*MENU_ID),
+                    self.update(Message::ActivateApp(i)),
+                ])
+            }
+        }
     }
 
     /// Handle switching to a neighbouring section with the shoulder buttons.
@@ -2205,6 +2260,7 @@ impl cosmic::Application for HearthDeck {
                     return destroy_popup(*MENU_ID);
                 } else {
                     self.menu = Some(i);
+                    self.menu_selection = 0;
                     let offset = self.scroll_offset as i32;
                     return cosmic::surface::surface_task(simple_popup(
                         LiveSettings::default,
@@ -2586,6 +2642,7 @@ impl cosmic::Application for HearthDeck {
             list_column.push(
                 menu_button(text::body(RUN.clone()).size(TEXT_BODY))
                     .on_press(Message::ActivateApp(*i))
+                    .selected(self.menu_selection == 0)
                     .into(),
             );
 
@@ -2618,7 +2675,8 @@ impl cosmic::Application for HearthDeck {
                 Message::UnPinFromAppTray(*i)
             } else {
                 Message::PinToAppTray(*i)
-            });
+            })
+            .selected(self.menu_selection == 1);
             list_column.push(divider::horizontal::light().into());
             list_column.push(pin_to_app_tray.into());
 
@@ -2642,6 +2700,7 @@ impl cosmic::Application for HearthDeck {
                     .spacing(space_xxs),
                 )
                 .on_press(Message::ToggleFavorite(*i))
+                .selected(self.menu_selection == 2)
                 .into(),
             );
 
@@ -2667,6 +2726,7 @@ impl cosmic::Application for HearthDeck {
                 .on_press(Message::SelectAction(
                     MenuAction::ToggleControllerCompatibility,
                 ))
+                .selected(self.menu_selection == 3)
                 .into(),
             );
 
@@ -2675,6 +2735,7 @@ impl cosmic::Application for HearthDeck {
                 list_column.push(
                     menu_button(text::body(REMOVE.clone()).size(TEXT_BODY))
                         .on_press(Message::SelectAction(MenuAction::Remove))
+                        .selected(self.menu_selection == 4)
                         .into(),
                 );
             }
@@ -2788,7 +2849,12 @@ impl cosmic::Application for HearthDeck {
                 {
                     Some(Message::WindowFocusChanged(false))
                 }
-                cosmic::iced::Event::Window(WindowEvent::Resized(size)) => {
+                // Only the main window drives the layout. Popups (context menu)
+                // and dialogs are separate surfaces, and letting their size
+                // overwrite `window_width` reflows the whole grid.
+                cosmic::iced::Event::Window(WindowEvent::Resized(size))
+                    if is_primary_window(id) =>
+                {
                     Some(Message::WindowResized(size.width))
                 }
                 cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyReleased {
