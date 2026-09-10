@@ -30,14 +30,15 @@ import 'package:hearthdeck/virtual_keyboard.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets('dashboard renders reusable shelves and pinned applications', (
+  testWidgets('dashboard renders reusable shelves and recent lists', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(const HearthdeckApp());
 
     expect(find.text('Orbit'), findsOneWidget);
-    expect(find.text('Discover something new'), findsOneWidget);
-    expect(find.byType(TvShelf), findsNWidgets(3));
+    expect(find.text('Recently played'), findsOneWidget);
+    expect(find.text('Recent apps'), findsOneWidget);
+    expect(find.byType(TvShelf), findsAtLeastNWidgets(2));
   });
 
   testWidgets('full library opens from the dashboard action', (
@@ -986,7 +987,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(ContentDetailsPage), findsNothing);
-    expect(find.text('Discover something new'), findsOneWidget);
+    expect(find.text('Recently played'), findsOneWidget);
   });
 
   testWidgets('the controller B button dismisses the details route', (
@@ -1003,7 +1004,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(ContentDetailsPage), findsNothing);
-    expect(find.text('Discover something new'), findsOneWidget);
+    expect(find.text('Recently played'), findsOneWidget);
   });
 
   testWidgets(
@@ -1104,7 +1105,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
 
-    expect(FocusManager.instance.primaryFocus?.debugLabel, 'Stream');
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'Arcade');
   });
 
   testWidgets('section titles align with their shelf content at any width', (
@@ -1117,8 +1118,10 @@ void main() {
       tester.view.physicalSize = size;
       await tester.pumpWidget(const HearthdeckApp());
 
-      final title = find.byKey(const ValueKey<String>('shelf-title-discover'));
-      final firstTile = find.byKey(const ValueKey<String>('tile-library'));
+      final title = find.byKey(
+        const ValueKey<String>('shelf-title-recently-played'),
+      );
+      final firstTile = find.byKey(const ValueKey<String>('tile-orbit'));
 
       expect(tester.getTopLeft(title).dx, tester.getTopLeft(firstTile).dx);
     }

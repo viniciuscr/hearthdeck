@@ -50,16 +50,41 @@ pub const SIDEBAR_RATIO: f32 = 0.23;
 pub const SIDEBAR_MIN_WIDTH: f32 = 200.0;
 /// Maximum sidebar width in pixels.
 pub const SIDEBAR_MAX_WIDTH: f32 = 440.0;
-/// Height of the sidebar header (app icon + user name).
-pub const SIDEBAR_HEADER_HEIGHT: f32 = 80.0;
-/// Height of each fixed navigation item in the sidebar.
-pub const SIDEBAR_ITEM_HEIGHT: f32 = 56.0;
-/// Width of the accent bar shown next to the active sidebar section.
+/// Width of the accent bar shown next to the active sidebar section. A stroke
+/// thickness rather than a spacing value, so it stays fixed across densities.
 pub const SIDEBAR_ACCENT_BAR_WIDTH: f32 = 6.0;
-/// Height of the accent bar shown next to the active sidebar section.
-pub const SIDEBAR_ACCENT_BAR_HEIGHT: f32 = 40.0;
-/// Horizontal padding inside the main content panel.
-pub const CONTENT_HORIZONTAL_PADDING: u16 = 24;
+
+/// The active theme's spacing scale - COSMIC's Compact/Standard/Spacious
+/// density choice. Sizes below are built from these tokens instead of fixed
+/// pixels, so the whole layout follows the system setting.
+fn spacing() -> cosmic::cosmic_theme::Spacing {
+    cosmic::theme::spacing()
+}
+
+/// Height of the sidebar header (app icon + user name); 80px at Standard.
+pub fn sidebar_header_height() -> f32 {
+    let s = spacing();
+    f32::from(s.space_xl + s.space_l)
+}
+
+/// Height of each fixed navigation item in the sidebar; 56px at Standard.
+pub fn sidebar_item_height() -> f32 {
+    let s = spacing();
+    f32::from(s.space_l + s.space_m)
+}
+
+/// Height of the accent bar shown next to the active sidebar section; 40px at
+/// Standard.
+pub fn sidebar_accent_bar_height() -> f32 {
+    let s = spacing();
+    f32::from(s.space_l + s.space_xxs)
+}
+
+/// Horizontal padding inside the main content panel, taken from the active
+/// theme's spacing scale so it grows and shrinks with COSMIC's density setting.
+pub fn content_horizontal_padding() -> u16 {
+    spacing().space_m
+}
 
 /// Number of installed titles shown on the dashboard.
 pub const DASHBOARD_VISIBLE_TILES: usize = 6;
@@ -70,14 +95,14 @@ pub const GRID_COLUMNS: usize = 6;
 /// from the remaining content width, so a larger ratio shrinks each cover a
 /// little and buys noticeably more air between cards than the Xbox-style 6.5%.
 pub const GRID_GAP_RATIO: f32 = 0.09;
-/// Minimum gap in pixels.
-pub const GRID_GAP_MIN: f32 = 8.0;
-/// Maximum gap in pixels.
-pub const GRID_GAP_MAX: f32 = 32.0;
+
 /// Top padding of the scrollable grid; keeps the focus ring on the first row
 /// from being clipped by the viewport and gives the first cover row breathing
-/// room below the tab strip.
-pub const GRID_TOP_PADDING: u16 = 12;
+/// room below the tab strip. Taken from the theme's spacing scale so it follows
+/// the density setting.
+pub fn grid_top_padding() -> u16 {
+    spacing().space_xs
+}
 
 /// Width of the 1px vertical dividers.
 pub const DIVIDER_WIDTH: f32 = 1.0;
@@ -96,7 +121,7 @@ pub fn content_width(window_width: f32) -> f32 {
     window_width
         - sidebar_width(window_width)
         - DIVIDER_WIDTH
-        - 2.0 * f32::from(CONTENT_HORIZONTAL_PADDING)
+        - 2.0 * f32::from(content_horizontal_padding())
 }
 
 /// Compute the gap between grid tiles from the tile width.
@@ -107,7 +132,8 @@ pub fn grid_gap(window_width: f32) -> f32 {
     let cols = GRID_COLUMNS as f32;
     // cw = cols * tile + (cols - 1) * ratio * tile = tile * (cols + (cols-1)*ratio)
     let est_tile = cw / (cols + (cols - 1.0) * GRID_GAP_RATIO);
-    (est_tile * GRID_GAP_RATIO).clamp(GRID_GAP_MIN, GRID_GAP_MAX)
+    let s = spacing();
+    (est_tile * GRID_GAP_RATIO).clamp(f32::from(s.space_xxs), f32::from(s.space_l))
 }
 
 /// Compute the tile width from the padded content width.
@@ -143,23 +169,35 @@ pub const SOURCE_BADGE: f32 = 24.0;
 pub const SEARCH_WIDTH: f32 = 560.0;
 /// Size of the search field's leading icon.
 pub const ICON_SEARCH: u16 = 28;
-/// Padding around the search field's leading icon.
-pub const SEARCH_ICON_PADDING: f32 = 4.0;
+/// Padding around the search field's leading icon; 4px at Standard.
+pub fn search_icon_padding() -> u16 {
+    spacing().space_xxxs
+}
 /// Width of the inline "rename" input next to the page title.
 pub const EDIT_NAME_INPUT_WIDTH: f32 = 280.0;
-/// Height of the icon buttons next to the page title (rename/delete).
-pub const TITLE_ACTION_HEIGHT: f32 = 48.0;
-/// Height of the filter button on the tab row.
-pub const FILTER_BUTTON_HEIGHT: f32 = 40.0;
+/// Height of the icon buttons next to the page title (rename/delete); 48px at
+/// Standard.
+pub fn title_action_height() -> f32 {
+    f32::from(spacing().space_xl)
+}
+/// Height of the filter button on the tab row; 40px at Standard.
+pub fn filter_button_height() -> f32 {
+    let s = spacing();
+    f32::from(s.space_l + s.space_xxs)
+}
 
 // ---------------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------------
 
-/// Height of a tab (button + underline).
-pub const TAB_HEIGHT: f32 = 48.0;
-/// Height of the accent underline of the active tab.
-pub const TAB_UNDERLINE_HEIGHT: f32 = 4.0;
+/// Height of a tab (button + underline); 48px at Standard.
+pub fn tab_height() -> f32 {
+    f32::from(spacing().space_xl)
+}
+/// Height of the accent underline of the active tab; 4px at Standard.
+pub fn tab_underline_height() -> f32 {
+    f32::from(spacing().space_xxxs)
+}
 /// Per-character text advance used to estimate a tab's intrinsic width.
 const TAB_CHAR_ADVANCE: f32 = 0.6;
 /// Fixed horizontal padding included in the estimated tab width.
@@ -210,10 +248,15 @@ pub const FOCUS_RING_WIDTH: f32 = 4.0;
 // ---------------------------------------------------------------------------
 
 /// Dark semi-transparent overlay for tile labels at the bottom of game cards.
-pub fn tile_label_overlay(theme: &Theme) -> container::Style {
+///
+/// The scrim is always dark because it sits on top of cover artwork, not on
+/// the theme background, so the label uses a fixed light color instead of the
+/// theme's `on_bg_color` - that is *dark* under a light theme and would be
+/// unreadable here.
+pub fn tile_label_overlay(_theme: &Theme) -> container::Style {
     container::Style {
-        text_color: Some(theme.cosmic().on_bg_color().into()),
-        icon_color: Some(theme.cosmic().on_bg_color().into()),
+        text_color: Some(Color::WHITE),
+        icon_color: Some(Color::WHITE),
         background: Some(Background::Color(Color {
             r: 0.0,
             g: 0.0,
@@ -231,32 +274,31 @@ pub fn tile_label_overlay(theme: &Theme) -> container::Style {
 }
 
 /// Opaque launch layer shown while a selected game is starting.
+///
+/// Uses the theme's own background at near-full opacity rather than a fixed
+/// dark color, so the default text colors stay readable under a light theme.
 pub fn launch_overlay(theme: &Theme) -> container::Style {
+    let t = theme.cosmic();
+    let mut background: Color = t.bg_color().into();
+    background.a = 0.97;
     container::Style {
-        text_color: Some(theme.cosmic().on_bg_color().into()),
-        icon_color: Some(theme.cosmic().accent_color().into()),
-        background: Some(Background::Color(Color {
-            r: 0.02,
-            g: 0.025,
-            b: 0.03,
-            a: 0.97,
-        })),
+        text_color: Some(t.on_bg_color().into()),
+        icon_color: Some(t.accent_color().into()),
+        background: Some(Background::Color(background)),
         ..container::Style::default()
     }
 }
 
-/// Radius of the accent indicator bars/underlines.
-const ACCENT_BAR_RADIUS: f32 = 2.0;
-
 /// Accent bar: the indicator next to the active sidebar section and the
-/// underline of the active tab.
+/// underline of the active tab. Its corner radius comes from the theme so it
+/// follows COSMIC's Round/Slightly-round/Square setting.
 pub fn accent_bar(theme: &Theme) -> container::Style {
     container::Style {
         text_color: None,
         icon_color: None,
         background: Some(Background::Color(Color::from(theme.cosmic().accent.base))),
         border: Border {
-            radius: [ACCENT_BAR_RADIUS; 4].into(),
+            radius: theme.cosmic().corner_radii.radius_xs.into(),
             width: 0.0,
             color: Color::TRANSPARENT,
         },
@@ -444,9 +486,27 @@ pub fn tile_button_class(selected: bool) -> Button {
 #[cfg(test)]
 mod tests {
     use super::{
-        CONTENT_HORIZONTAL_PADDING, DASHBOARD_VISIBLE_TILES, GRID_COLUMNS, content_width,
-        dashboard_tile_size, grid_gap, sidebar_width, tile_height, tile_width,
+        DASHBOARD_VISIBLE_TILES, GRID_COLUMNS, content_horizontal_padding, content_width,
+        dashboard_tile_size, filter_button_height, grid_gap, grid_top_padding, search_icon_padding,
+        sidebar_accent_bar_height, sidebar_header_height, sidebar_item_height, sidebar_width,
+        tab_height, tab_underline_height, tile_height, tile_width, title_action_height,
     };
+
+    #[test]
+    fn theme_metrics_match_standard_density() {
+        // The test process uses libcosmic's default (Standard) density, so the
+        // theme-derived sizes must reproduce the pixel values they replaced.
+        assert_eq!(sidebar_header_height(), 80.0);
+        assert_eq!(sidebar_item_height(), 56.0);
+        assert_eq!(sidebar_accent_bar_height(), 40.0);
+        assert_eq!(title_action_height(), 48.0);
+        assert_eq!(filter_button_height(), 40.0);
+        assert_eq!(tab_height(), 48.0);
+        assert_eq!(tab_underline_height(), 4.0);
+        assert_eq!(content_horizontal_padding(), 24);
+        assert_eq!(grid_top_padding(), 12);
+        assert_eq!(search_icon_padding(), 4);
+    }
 
     #[test]
     fn grid_fits_inside_padded_content() {
@@ -456,7 +516,7 @@ mod tests {
 
         assert!((occupied - content_width(window_width)).abs() < 0.01);
         assert!(
-            occupied + sidebar_width(window_width) + 2.0 * f32::from(CONTENT_HORIZONTAL_PADDING)
+            occupied + sidebar_width(window_width) + 2.0 * f32::from(content_horizontal_padding())
                 <= window_width
         );
     }

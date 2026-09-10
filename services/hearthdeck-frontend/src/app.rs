@@ -82,15 +82,15 @@ use crate::input_ownership::{
 };
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::style::{
-    CONTENT_HORIZONTAL_PADDING, DASHBOARD_VISIBLE_TILES, DIALOG_ACTION_WIDTH, DIALOG_WIDTH,
-    DIVIDER_WIDTH, EDIT_NAME_INPUT_WIDTH, FILTER_BUTTON_HEIGHT, GRID_COLUMNS, GRID_TOP_PADDING,
-    ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION, MENU_MAX_HEIGHT,
-    MENU_MAX_WIDTH, SEARCH_ICON_PADDING, SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_HEIGHT,
-    SIDEBAR_ACCENT_BAR_WIDTH, SIDEBAR_HEADER_HEIGHT, SIDEBAR_ITEM_HEIGHT, TAB_HEIGHT,
-    TAB_UNDERLINE_HEIGHT, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE,
-    TITLE_ACTION_HEIGHT, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, dashboard_nav_button_class,
-    dashboard_tile_size, grid_gap, launch_overlay, root_background, section_button_class,
-    sidebar_divider, sidebar_width, tab_button_class, tab_width, tile_height, tile_width,
+    DASHBOARD_VISIBLE_TILES, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
+    EDIT_NAME_INPUT_WIDTH, GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL,
+    ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_WIDTH,
+    TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH,
+    accent_bar, content_horizontal_padding, dashboard_nav_button_class, dashboard_tile_size,
+    filter_button_height, grid_gap, grid_top_padding, launch_overlay, root_background,
+    search_icon_padding, section_button_class, sidebar_accent_bar_height, sidebar_divider,
+    sidebar_header_height, sidebar_item_height, sidebar_width, tab_button_class, tab_height,
+    tab_underline_height, tab_width, tile_height, tile_width, title_action_height,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
@@ -3336,7 +3336,7 @@ impl HearthDeck {
                     inner,
                     container(space::horizontal().width(Length::Fixed(SIDEBAR_ACCENT_BAR_WIDTH)))
                         .width(Length::Fixed(SIDEBAR_ACCENT_BAR_WIDTH))
-                        .height(Length::Fixed(SIDEBAR_ACCENT_BAR_HEIGHT))
+                        .height(Length::Fixed(sidebar_accent_bar_height()))
                         .class(theme::Container::Custom(Box::new(accent_bar))),
                 ]
                 .align_y(Alignment::Center)
@@ -3350,7 +3350,7 @@ impl HearthDeck {
                     .width(Length::Fill)
                     .height(Length::Fill),
             )
-            .height(Length::Fixed(SIDEBAR_ITEM_HEIGHT))
+            .height(Length::Fixed(sidebar_item_height()))
             .width(Length::Fill)
             .class(section_button_class(is_active))
             .on_press(Message::SelectSection(section))
@@ -3367,7 +3367,7 @@ impl HearthDeck {
             .align_y(Alignment::Center),
         )
         .width(Length::Fill)
-        .height(Length::Fixed(SIDEBAR_HEADER_HEIGHT))
+        .height(Length::Fixed(sidebar_header_height()))
         .align_y(Vertical::Center)
         .padding([0, space_l]);
 
@@ -3445,7 +3445,7 @@ impl HearthDeck {
                         }
                         b
                     })
-                    .height(Length::Fixed(TITLE_ACTION_HEIGHT))
+                    .height(Length::Fixed(title_action_height()))
                     .align_y(Vertical::Center),
                     text(fl!("rename")).size(TEXT_HEADER),
                     tooltip::Position::Bottom
@@ -3461,7 +3461,7 @@ impl HearthDeck {
                         .class(Button::Icon)
                         .on_press_maybe(self.cur_group.map(Message::Delete))
                     )
-                    .height(Length::Fixed(TITLE_ACTION_HEIGHT))
+                    .height(Length::Fixed(title_action_height()))
                     .align_y(Vertical::Center),
                     text(fl!("delete")).size(TEXT_HEADER),
                     tooltip::Position::Bottom
@@ -3491,7 +3491,7 @@ impl HearthDeck {
                             icon::icon(icon::from_name("system-search-symbolic").into())
                                 .size(ICON_SEARCH)
                         )
-                        .padding(SEARCH_ICON_PADDING)
+                        .padding(search_icon_padding())
                         .into(),
                     )
                     .id(SEARCH_ID.clone())
@@ -3515,7 +3515,7 @@ impl HearthDeck {
             .align_y(Alignment::Center)
             .padding([space_none, space_m]),
         )
-        .height(Length::Fixed(FILTER_BUTTON_HEIGHT))
+        .height(Length::Fixed(filter_button_height()))
         .width(Length::Shrink)
         .class(section_button_class(false))
         .id(FILTER_ID.clone())
@@ -3547,19 +3547,19 @@ impl HearthDeck {
                 let underline = if is_active {
                     container(space::horizontal().width(Length::Fixed(1.0)))
                         .width(Length::Fill)
-                        .height(Length::Fixed(TAB_UNDERLINE_HEIGHT))
+                        .height(Length::Fixed(tab_underline_height()))
                         .class(theme::Container::Custom(Box::new(accent_bar)))
                 } else {
                     container(space::horizontal())
                         .width(Length::Fill)
-                        .height(Length::Fixed(TAB_UNDERLINE_HEIGHT))
+                        .height(Length::Fixed(tab_underline_height()))
                 };
 
                 // Cap the tab column so the accent underline can span the label
                 // without the Fill widths expanding it (and wrapping) the row.
                 column![tab_btn, underline]
                     .width(Length::Shrink)
-                    .height(Length::Fixed(TAB_HEIGHT))
+                    .height(Length::Fixed(tab_height()))
                     .max_width(width)
                     .align_x(Alignment::Center)
             };
@@ -3606,7 +3606,7 @@ impl HearthDeck {
             .height(Length::Fill)
             .padding([space_none, space_m]),
         )
-        .height(Length::Fixed(TAB_HEIGHT))
+        .height(Length::Fixed(tab_height()))
         .width(Length::Shrink)
         .class(theme::Button::IconVertical)
         .on_press(Message::StartNewGroup);
@@ -3718,7 +3718,7 @@ impl HearthDeck {
                     .width(Length::Fill)
                     .spacing(grid_gap(self.window_width))
                     // padding on top needed to avoid focus highlight clipping
-                    .padding([GRID_TOP_PADDING, 0, space_xxl, 0]),
+                    .padding([grid_top_padding(), 0, space_xxl, 0]),
             )
             .on_scroll(|viewport| {
                 let offset = viewport.absolute_offset();
@@ -3748,7 +3748,7 @@ impl HearthDeck {
                 app_scrollable,
             ]
             .width(Length::Fill)
-            .padding([0, CONTENT_HORIZONTAL_PADDING]),
+            .padding([0, content_horizontal_padding()]),
         ]
         .height(Length::Fill);
 

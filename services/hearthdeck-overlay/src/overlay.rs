@@ -153,6 +153,12 @@ const CLOSE_FAILED_ITEMS: [(&str, Message); 2] = [
     ("Resume", Message::ResumeApp),
 ];
 
+/// Width of the centered card. Not a theme token: COSMIC's spacing/density
+/// scale changes how much air the card has *inside* itself, not how wide the
+/// menu wants to be. Kept fixed so the quick menu reads the same at every
+/// density setting.
+const CARD_WIDTH: f32 = 420.0;
+
 struct Overlay {
     core: Core,
     window_id: window::Id,
@@ -248,6 +254,19 @@ impl cosmic::Application for Overlay {
             return text("").into();
         }
 
+        // Read the active theme once and pull the user's spacing/density and
+        // brightness choices out of it, instead of hardcoding pixels. COSMIC
+        // exposes these through the same theme object the rest of libcosmic's
+        // widgets use, so the quick menu tracks Settings > Appearance the same
+        // way COSMIC's own dialogs do: `space_*` values change with the
+        // Compact/Standard/Spacious option, and `is_dark` with the light/dark
+        // preference. The card's corner radius and colors already come from
+        // the `Dialog` container preset below, which reads `corner_radii` and
+        // the theme palette for us.
+        let theme = cosmic::theme::active();
+        let cosmic = theme.cosmic();
+        let spacing = cosmic.spacing;
+
         let menu: Element<'_, Message> = match self.state.status {
             Status::Menu => {
                 let mut items = list_column();
@@ -281,7 +300,9 @@ impl cosmic::Application for Overlay {
                 ])
             }
         }
-        .spacing(12)
+        // A small, theme-scaled gap between the heading and the list, rather
+        // than a fixed pixel value.
+        .spacing(spacing.space_s)
         .align_x(Alignment::Center)
         .into();
 
@@ -291,17 +312,24 @@ impl cosmic::Application for Overlay {
         // full-screen dim scrim, rather than the menu floating edge-to-edge
         // with nothing but the scrim behind it.
         let card = container(menu)
-            .width(Length::Fixed(420.0))
-            .padding(20)
+            .width(Length::Fixed(CARD_WIDTH))
+            .padding(spacing.space_m)
             .class(cosmic::theme::Container::Dialog(true));
+
+        // COSMIC has no modal-scrim token, so only the scrim's opacity is
+        // derived from the theme: a dark theme can afford a stronger dim,
+        // while a light theme needs a lighter one or the whole desktop behind
+        // the card goes black. The hue stays neutral so the card keeps the
+        // same relative contrast in either theme.
+        let scrim_alpha = if cosmic.is_dark { 0.6 } else { 0.4 };
 
         container(card)
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
-            .style(|_theme| container::Style {
-                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.6).into()),
+            .style(move |_theme| container::Style {
+                background: Some(Color::from_rgba(0.0, 0.0, 0.0, scrim_alpha).into()),
                 ..Default::default()
             })
             .into()
