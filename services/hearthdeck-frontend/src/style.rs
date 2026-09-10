@@ -239,9 +239,14 @@ pub const ICON_SMALL: u16 = 20;
 // Focus rings
 // ---------------------------------------------------------------------------
 
-/// Thickness of the single selection ring shared by every focusable element
+/// Thickness of the solid inner focus ring shared by every focusable element
 /// (sidebar items, tabs and grid tiles).
-pub const FOCUS_RING_WIDTH: f32 = 4.0;
+pub const FOCUS_RING_WIDTH: f32 = 5.0;
+/// Thickness of the translucent ring drawn just outside the focus ring, which
+/// reads as a soft glow.
+const FOCUS_GLOW_WIDTH: f32 = 3.0;
+/// Opacity of the glow ring.
+const FOCUS_GLOW_ALPHA: f32 = 0.4;
 
 // ---------------------------------------------------------------------------
 // Container styles
@@ -352,17 +357,23 @@ fn chip_background(alpha: f32, theme: &Theme) -> Background {
     Background::Color(color)
 }
 
-/// Applies the shared single selection ring to a button style. COSMIC's base
-/// button style also draws a thin accent outline *outside* the bounds on
-/// focus; that ring gets clipped at viewport edges (e.g. the left edge of the
-/// grid scrollable), so it is disabled everywhere and only the border below is
-/// used.
+/// Applies the shared selection ring to a button style.
+///
+/// iced only draws hard-edged rings on buttons - its button shadow is an offset
+/// rectangle, not a blur - so the glow is layered opacity instead of a real
+/// blur: a solid accent border with a wider, translucent accent outline just
+/// outside it. `outline_width` is deliberately re-enabled here (COSMIC's own
+/// focused style draws a thin outline) because the surrounding padding is wide
+/// enough to contain the extra ring.
 fn focus_ring(mut style: button::Style, focused: bool, theme: &Theme) -> button::Style {
     if focused {
+        let accent = theme.cosmic().accent.base;
         style.border_width = FOCUS_RING_WIDTH;
-        style.border_color = theme.cosmic().accent.base.into();
-        style.outline_width = 0.0;
-        style.outline_color = Color::TRANSPARENT;
+        style.border_color = accent.into();
+        let mut glow: Color = accent.into();
+        glow.a = FOCUS_GLOW_ALPHA;
+        style.outline_width = FOCUS_GLOW_WIDTH;
+        style.outline_color = glow;
     }
     style
 }
@@ -404,7 +415,7 @@ pub fn section_button_class(selected: bool) -> Button {
             let mut style = theme.active(focused, false, &Button::IconVertical);
             style.border_radius = theme.cosmic().corner_radii.radius_m.into();
             if selected {
-                style.background = Some(chip_background(0.22, theme));
+                style.background = Some(chip_background(0.18, theme));
                 style.text_color = Some(theme.cosmic().on_bg_color().into());
                 style.icon_color = Some(theme.cosmic().on_bg_color().into());
             }
@@ -414,14 +425,14 @@ pub fn section_button_class(selected: bool) -> Button {
         hovered: Box::new(move |focused, theme| {
             let mut style = theme.hovered(focused, false, &Button::IconVertical);
             style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            style.background = Some(chip_background(if selected { 0.22 } else { 0.08 }, theme));
+            style.background = Some(chip_background(if selected { 0.18 } else { 0.06 }, theme));
             focus_ring(style, focused, theme)
         }),
         pressed: Box::new(move |focused, theme| {
             let mut style = theme.pressed(focused, false, &Button::IconVertical);
             style.border_radius = theme.cosmic().corner_radii.radius_m.into();
             if selected {
-                style.background = Some(chip_background(0.22, theme));
+                style.background = Some(chip_background(0.18, theme));
             }
             focus_ring(style, focused, theme)
         }),
@@ -455,30 +466,59 @@ pub fn tab_button_class(selected: bool) -> Button {
     }
 }
 
+/// Grid tile appearance: a rounded corner plus a hairline outline so cover art
+/// does not bleed into the background while unfocused. Focus swaps the
+/// hairline for the accent glow.
+fn tile_style(
+    mut style: button::Style,
+    focused: bool,
+    selected: bool,
+    theme: &Theme,
+) -> button::Style {
+    style.border_radius = theme.cosmic().corner_radii.radius_s.into();
+    if !focused && !selected {
+        style.border_width = 1.0;
+        style.border_color = theme.cosmic().bg_divider().into();
+    }
+    focus_ring(style, focused, theme)
+}
+
 /// Grid tile buttons: focused tiles get the shared single accent ring so
 /// selection is clearly visible, matching the reference's prominent frame.
 /// Tiles have rounded corners matching the Xbox-style card design.
 pub fn tile_button_class(selected: bool) -> Button {
     Button::Custom {
         active: Box::new(move |focused, theme| {
-            let mut style = theme.active(focused, selected, &Button::IconVertical);
-            style.border_radius = theme.cosmic().corner_radii.radius_s.into();
-            focus_ring(style, focused, theme)
+            tile_style(
+                theme.active(focused, selected, &Button::IconVertical),
+                focused,
+                selected,
+                theme,
+            )
         }),
         disabled: Box::new(move |theme| {
-            let mut style = theme.disabled(&Button::IconVertical);
-            style.border_radius = theme.cosmic().corner_radii.radius_s.into();
-            style
+            tile_style(
+                theme.disabled(&Button::IconVertical),
+                false,
+                selected,
+                theme,
+            )
         }),
         hovered: Box::new(move |focused, theme| {
-            let mut style = theme.hovered(focused, selected, &Button::IconVertical);
-            style.border_radius = theme.cosmic().corner_radii.radius_s.into();
-            focus_ring(style, focused, theme)
+            tile_style(
+                theme.hovered(focused, selected, &Button::IconVertical),
+                focused,
+                selected,
+                theme,
+            )
         }),
         pressed: Box::new(move |focused, theme| {
-            let mut style = theme.pressed(focused, selected, &Button::IconVertical);
-            style.border_radius = theme.cosmic().corner_radii.radius_s.into();
-            focus_ring(style, focused, theme)
+            tile_style(
+                theme.pressed(focused, selected, &Button::IconVertical),
+                focused,
+                selected,
+                theme,
+            )
         }),
     }
 }

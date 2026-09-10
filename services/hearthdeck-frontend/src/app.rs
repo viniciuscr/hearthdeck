@@ -3435,7 +3435,9 @@ impl HearthDeck {
         )
         .width(Length::Fixed(sidebar_width(self.window_width)))
         .height(Length::Fill)
-        .padding([0, 0, space_m, 0]);
+        // Inset the navigation items from the window edge and the divider so the
+        // selected chip reads as a rounded pill instead of a full-bleed bar.
+        .padding([0, space_xs, space_m, space_xs]);
 
         // ===== Top bar: title + search =====
         let title_element: Element<'_, Message> = if let Some(edit_name) = self.edit_name.as_ref() {
