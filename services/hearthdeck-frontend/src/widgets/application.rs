@@ -10,9 +10,9 @@ use cosmic::iced::core::{
     Alignment, Clipboard, Event, Length, Rectangle, Shell, Widget, layout, mouse, overlay, renderer,
 };
 use cosmic::iced::widget::{column, text};
-use cosmic::iced::{Size, Vector};
+use cosmic::iced::{ContentFit, Size, Vector};
 use cosmic::widget::{
-    button, container, dnd_source, icon, {self},
+    button, container, dnd_source, icon, image, {self},
 };
 use cosmic::{Element, theme};
 use std::borrow::Cow;
@@ -28,6 +28,29 @@ use crate::style::{
 };
 
 pub const MIME_TYPE: &str = "text/uri-list";
+
+/// Builds tile artwork with corners clipped to `radius`.
+///
+/// Entry icons are always raster by the time they reach a tile - the icon cache
+/// rasterizes SVGs - so iced's image widget can apply a border radius to the
+/// clip. libcosmic's `Icon` widget does not expose that, which is why tiles
+/// used to render square corners regardless of the theme's roundness.
+fn tile_artwork<'a, M: 'a>(
+    handle: &icon::Handle,
+    radius: [f32; 4],
+    width: Length,
+    height: Length,
+) -> Element<'a, M> {
+    match &handle.data {
+        icon::Data::Image(image) => image::Image::new(image.clone())
+            .content_fit(ContentFit::Fill)
+            .border_radius(radius)
+            .width(width)
+            .height(height)
+            .into(),
+        icon::Data::Svg(_) => handle.clone().icon().width(width).height(height).into(),
+    }
+}
 
 /// A widget that can be dragged and dropped.
 #[allow(missing_debug_implementations)]
@@ -58,7 +81,7 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
         on_finish: Option<Message>,
         on_cancel: Option<Message>,
     ) -> Self {
-        let cosmic::cosmic_theme::Spacing { .. } = theme::active().cosmic().spacing;
+        let tile_radius = theme::active().cosmic().corner_radii.radius_m;
 
         let (source_icon, source_suffix_len) = match source {
             Some((source, source_icon_handle)) => {
@@ -98,11 +121,7 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
             button::custom(
                 container(
                     column![
-                        icon_handle
-                            .clone()
-                            .icon()
-                            .width(Length::Fill)
-                            .height(Length::Fill),
+                        tile_artwork(&icon_handle, tile_radius, Length::Fill, Length::Fill),
                         container(text(name).size(TEXT_TILE_LABEL).width(Length::Fill))
                             .padding([2, 6])
                             .width(Length::Fill)
@@ -130,12 +149,12 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
         )
         .drag_icon(move |_| {
             (
-                icon_handle
-                    .clone()
-                    .icon()
-                    .width(Length::Fixed(TILE_DRAG_ICON))
-                    .height(Length::Fixed(TILE_DRAG_ICON))
-                    .into(),
+                tile_artwork(
+                    &icon_handle,
+                    tile_radius,
+                    Length::Fixed(TILE_DRAG_ICON),
+                    Length::Fixed(TILE_DRAG_ICON),
+                ),
                 tree::State::None,
                 cosmic::iced::Vector::ZERO,
             )

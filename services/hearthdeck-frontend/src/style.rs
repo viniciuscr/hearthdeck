@@ -257,8 +257,10 @@ const FOCUS_GLOW_ALPHA: f32 = 0.4;
 /// The scrim is always dark because it sits on top of cover artwork, not on
 /// the theme background, so the label uses a fixed light color instead of the
 /// theme's `on_bg_color` - that is *dark* under a light theme and would be
-/// unreadable here.
-pub fn tile_label_overlay(_theme: &Theme) -> container::Style {
+/// unreadable here. Only the bottom corners follow the tile radius; the top
+/// edge meets the artwork and stays square.
+pub fn tile_label_overlay(theme: &Theme) -> container::Style {
+    let radius = theme.cosmic().corner_radii.radius_m;
     container::Style {
         text_color: Some(Color::WHITE),
         icon_color: Some(Color::WHITE),
@@ -269,7 +271,7 @@ pub fn tile_label_overlay(_theme: &Theme) -> container::Style {
             a: 0.65,
         })),
         border: Border {
-            radius: [0.0; 4].into(),
+            radius: [0.0, 0.0, radius[2], radius[3]].into(),
             width: 0.0,
             color: Color::TRANSPARENT,
         },
@@ -475,7 +477,7 @@ fn tile_style(
     selected: bool,
     theme: &Theme,
 ) -> button::Style {
-    style.border_radius = theme.cosmic().corner_radii.radius_s.into();
+    style.border_radius = theme.cosmic().corner_radii.radius_m.into();
     if !focused && !selected {
         style.border_width = 1.0;
         style.border_color = theme.cosmic().bg_divider().into();
