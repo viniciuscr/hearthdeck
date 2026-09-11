@@ -20,16 +20,17 @@ use cosmic::iced::core::{
 };
 use cosmic::{Element, Renderer, Theme};
 
-/// How long the push takes. Short enough to feel immediate on a TV, long
-/// enough for the motion to read as a slide rather than a cut.
-pub const DURATION: Duration = Duration::from_millis(220);
-
 /// Slides `to` over `from`, then hands control back to the caller.
+///
+/// The duration is passed in rather than defaulted here so the value lives in
+/// the app's design tokens (`crate::style`), matching libcosmic's own animating
+/// widgets, which expose a configurable `duration`.
 #[allow(missing_debug_implementations)]
 pub struct PageTransition<'a, Message> {
     from: Element<'a, Message>,
     to: Element<'a, Message>,
     started_at: Instant,
+    duration: Duration,
     /// `+1.0` when the incoming page enters from the right (forward
     /// navigation), `-1.0` when it enters from the left (back navigation).
     direction: f32,
@@ -41,6 +42,7 @@ impl<'a, Message> PageTransition<'a, Message> {
         from: Element<'a, Message>,
         to: Element<'a, Message>,
         started_at: Instant,
+        duration: Duration,
         direction: f32,
         on_finished: Message,
     ) -> Self {
@@ -48,6 +50,7 @@ impl<'a, Message> PageTransition<'a, Message> {
             from,
             to,
             started_at,
+            duration,
             direction,
             on_finished,
         }
@@ -56,7 +59,7 @@ impl<'a, Message> PageTransition<'a, Message> {
     /// Eased progress in `0.0..=1.0` from the outgoing to the incoming page.
     fn progress(&self) -> f32 {
         let elapsed = Instant::now().saturating_duration_since(self.started_at);
-        let raw = (elapsed.as_secs_f32() / DURATION.as_secs_f32()).clamp(0.0, 1.0);
+        let raw = (elapsed.as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0);
         cosmic::anim::smootherstep(raw)
     }
 }
@@ -124,7 +127,7 @@ where
         );
 
         if let Event::Window(window::Event::RedrawRequested(now)) = event {
-            if now.saturating_duration_since(self.started_at) < DURATION {
+            if now.saturating_duration_since(self.started_at) < self.duration {
                 shell.request_redraw();
             } else {
                 shell.publish(self.on_finished.clone());

@@ -85,13 +85,14 @@ use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchSt
 use crate::style::{
     DASHBOARD_VISIBLE_TILES, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
     EDIT_NAME_INPUT_WIDTH, GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL,
-    ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_WIDTH,
-    TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH,
-    accent_bar, content_horizontal_padding, dashboard_nav_button_class, dashboard_tile_size,
-    filter_button_height, grid_gap, grid_top_padding, launch_overlay, root_background,
-    search_icon_padding, section_button_class, sidebar_accent_bar_height, sidebar_divider,
-    sidebar_header_height, sidebar_item_height, sidebar_width, tab_button_class, tab_height,
-    tab_underline_height, tab_width, tile_height, tile_width, title_action_height,
+    ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION, SEARCH_WIDTH,
+    SIDEBAR_ACCENT_BAR_WIDTH, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE,
+    WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, content_horizontal_padding,
+    dashboard_nav_button_class, dashboard_tile_size, filter_button_height, grid_gap,
+    grid_top_padding, launch_overlay, root_background, search_icon_padding, section_button_class,
+    sidebar_accent_bar_height, sidebar_divider, sidebar_header_height, sidebar_item_height,
+    sidebar_width, tab_button_class, tab_height, tab_underline_height, tab_width, tile_height,
+    tile_width, title_action_height,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
@@ -2661,6 +2662,7 @@ impl cosmic::Application for HearthDeck {
                 self.page_element(animation.from),
                 self.page_element(self.page),
                 animation.started_at,
+                PAGE_TRANSITION_DURATION,
                 animation.direction,
                 Message::PageTransitionFinished,
             )

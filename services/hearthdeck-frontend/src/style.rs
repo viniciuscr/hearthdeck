@@ -16,6 +16,7 @@ use cosmic::iced::{ContentFit, Length};
 use cosmic::theme::Button;
 use cosmic::widget::button::Catalog;
 use cosmic::widget::{button, container, icon};
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Typography
@@ -37,6 +38,19 @@ pub const TEXT_BODY: f32 = 14.0 * TEXT_SCALE;
 pub const TEXT_CAPTION: f32 = 12.0 * TEXT_SCALE;
 /// Tile label text.
 pub const TEXT_TILE_LABEL: f32 = 13.0 * TEXT_SCALE;
+
+// ---------------------------------------------------------------------------
+// Motion
+//
+// COSMIC ships no theme-level animation timing, so the frontend owns its own
+// motion tokens here. Widgets take a duration as a parameter (the same shape as
+// libcosmic's own `toggler`/`cards`); the values themselves live only here.
+// ---------------------------------------------------------------------------
+
+/// Duration of the horizontal push between the Dashboard and the Library.
+/// Short enough to feel immediate on a TV, long enough to read as a slide
+/// rather than a cut.
+pub const PAGE_TRANSITION_DURATION: Duration = Duration::from_millis(220);
 
 // ---------------------------------------------------------------------------
 // Window & layout (proportional — sizes computed from window_width)
