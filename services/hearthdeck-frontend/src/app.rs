@@ -86,8 +86,8 @@ use crate::style::{
     DASHBOARD_VISIBLE_TILES, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
     EDIT_NAME_INPUT_WIDTH, GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL,
     ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION, SEARCH_WIDTH,
-    SIDEBAR_ACCENT_BAR_WIDTH, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE,
-    WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, content_horizontal_padding,
+    SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER,
+    TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, content_horizontal_padding,
     dashboard_nav_button_class, dashboard_tile_size, filter_button_height, grid_gap,
     grid_top_padding, launch_overlay, root_background, search_icon_padding, section_button_class,
     sidebar_accent_bar_height, sidebar_divider, sidebar_header_height, sidebar_item_height,
@@ -97,7 +97,7 @@ use crate::style::{
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
 use crate::widgets::application::{AppletString, ApplicationButton};
-use crate::widgets::transition::PageTransition;
+use crate::widgets::transition::{PageTransition, TabTransition};
 
 // popovers should show options, but also the desktop info options
 // should be a way to add apps to groups
@@ -414,6 +414,9 @@ struct HearthDeck {
     /// by [`PAGE_TRANSITION_DURATION`] and cleared by
     /// [`HearthDeck::expire_page_animation`].
     page_animation: Option<PageAnimation>,
+    /// In-flight tab slide, if any. Bounded by [`TAB_TRANSITION_DURATION`] and
+    /// cleared by [`HearthDeck::advance_tab_animation`].
+    tab_animation: Option<TabAnimation>,
     /// Timestamp of the current frame, refreshed by the `window::frames()`
     /// subscription while a transition is in flight (the application's `update`
     /// does not receive it the way raw iced's does).
@@ -463,6 +466,7 @@ impl Default for HearthDeck {
             romm_request_generation: 0,
             virtual_keyboard: VirtualKeyboard::default(),
             page_animation: None,
+            tab_animation: None,
             now: Instant::now(),
         }
     }
@@ -551,6 +555,18 @@ enum Page {
 struct PageAnimation {
     from: Page,
     started_at: Instant,
+}
+
+/// State for a tab (group) change: the target is applied under the transition's
+/// cover, once the outgoing grid has slid off-stage.
+#[derive(Clone, Copy, Debug)]
+struct TabAnimation {
+    target: Option<usize>,
+    started_at: Instant,
+    /// `+1.0` when the incoming tab sits to the right of the outgoing one.
+    direction: f32,
+    /// Whether the pending `target` has been applied yet.
+    swapped: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1088,6 +1104,87 @@ impl HearthDeck {
         }) {
             self.page_animation = None;
         }
+    }
+
+    /// Applies a tab (group) selection: reset the view state, reload the grid and
+    /// move focus. Called on a tick, underneath the slide's opaque cover.
+    fn apply_group(&mut self, group: Option<usize>) -> Task<Message> {
+        self.edit_name = None;
+        self.search_value.clear();
+        self.cur_group = group;
+        self.scroll_offset = 0.0;
+        let load = if self.cur_section == Section::ConsoleGames {
+            self.load_romm_page(0)
+        } else {
+            self.filter_apps()
+        };
+        let mut cmds = vec![
+            load,
+            iced::widget::scrollable::scroll_to(
+                SCROLLABLE_ID.clone(),
+                AbsoluteOffset {
+                    x: Some(0.0),
+                    y: Some(0.0),
+                },
+            ),
+        ];
+        if group.is_none() && !self.gamepad_focus_first {
+            cmds.push(self.focus_text_input(SEARCH_ID.clone()));
+        } else {
+            cmds.push(self.request_virtual_keyboard(false));
+        }
+        if let Some(task) = self.reveal_tab_strip() {
+            cmds.push(task);
+        }
+        iced::Task::batch(cmds)
+    }
+
+    /// Starts the directional slide for a tab change. The grid itself is only
+    /// swapped once the cover is opaque (see [`HearthDeck::advance_tab_animation`]),
+    /// so the outgoing content slides off before the incoming one slides on.
+    fn begin_tab_animation(&mut self, target: Option<usize>) {
+        let from = tab_position(self.cur_group);
+        let to = tab_position(target);
+        self.now = Instant::now();
+        self.tab_animation = Some(TabAnimation {
+            target,
+            started_at: self.now,
+            direction: if to >= from { 1.0 } else { -1.0 },
+            swapped: false,
+        });
+    }
+
+    /// Eased `0.0..=1.0` progress of the tab slide, if one is in flight.
+    fn tab_progress(&self) -> Option<f32> {
+        let animation = self.tab_animation?;
+        let elapsed = self.now.saturating_duration_since(animation.started_at);
+        let raw = (elapsed.as_secs_f32() / TAB_TRANSITION_DURATION.as_secs_f32()).clamp(0.0, 1.0);
+        Some(cosmic::anim::smootherstep(raw))
+    }
+
+    /// Drives the tab slide: apply the pending tab under cover at the midpoint,
+    /// then drop the animation once it has run its course.
+    fn advance_tab_animation(&mut self) -> Task<Message> {
+        let Some(animation) = self.tab_animation else {
+            return Task::none();
+        };
+        let Some(progress) = self.tab_progress() else {
+            return Task::none();
+        };
+
+        if progress >= 1.0 {
+            self.tab_animation = None;
+            return Task::none();
+        }
+
+        if progress >= 0.5 && !animation.swapped {
+            if let Some(animation) = self.tab_animation.as_mut() {
+                animation.swapped = true;
+            }
+            return self.apply_group(animation.target);
+        }
+
+        Task::none()
     }
 
     pub fn close(&mut self) -> Task<Message> {
@@ -2145,34 +2242,13 @@ impl cosmic::Application for HearthDeck {
                 return iced::Task::batch(cmds);
             }
             Message::SelectGroup(group) => {
-                self.edit_name = None;
-                self.search_value.clear();
-                self.cur_group = group;
-                self.scroll_offset = 0.0;
-                let load = if self.cur_section == Section::ConsoleGames {
-                    self.load_romm_page(0)
-                } else {
-                    self.filter_apps()
-                };
-                let mut cmds = vec![
-                    load,
-                    iced::widget::scrollable::scroll_to(
-                        SCROLLABLE_ID.clone(),
-                        AbsoluteOffset {
-                            x: Some(0.0),
-                            y: Some(0.0),
-                        },
-                    ),
-                ];
-                if group.is_none() && !self.gamepad_focus_first {
-                    cmds.push(self.focus_text_input(SEARCH_ID.clone()));
-                } else {
-                    cmds.push(self.request_virtual_keyboard(false));
+                if group == self.cur_group {
+                    // Re-selecting the active tab: keep the current behaviour of
+                    // refreshing, but skip the slide.
+                    return self.apply_group(group);
                 }
-                if let Some(task) = self.reveal_tab_strip() {
-                    cmds.push(task);
-                }
-                return iced::Task::batch(cmds);
+                self.begin_tab_animation(group);
+                return Task::none();
             }
             // TODO: wire the filter popover. The button and total-item count
             // are already in place; this message currently does nothing.
@@ -2648,6 +2724,7 @@ impl cosmic::Application for HearthDeck {
             Message::Animate(now) => {
                 self.now = now;
                 self.expire_page_animation();
+                return self.advance_tab_animation();
             }
         }
         Task::none()
@@ -3017,10 +3094,10 @@ impl cosmic::Application for HearthDeck {
 
         subs.push(provider_records_subscription());
 
-        // Only subscribe to the frame clock while a page transition is in
-        // flight, so an idle window schedules no redraws at all. This is iced's documented
+        // Only subscribe to the frame clock while a transition is in flight, so
+        // an idle window schedules no redraws at all. This is iced's documented
         // way to drive application animations: see `iced::window::frames`.
-        if self.page_animation.is_some() {
+        if self.page_animation.is_some() || self.tab_animation.is_some() {
             subs.push(window::frames().map(|(_window, at)| Message::Animate(at)));
         }
 
@@ -3838,7 +3915,7 @@ impl HearthDeck {
             })
             .collect();
 
-        let app_scrollable = container(
+        let app_grid = container(
             scrollable(
                 column(app_grid_list)
                     .width(Length::Fill)
@@ -3856,6 +3933,17 @@ impl HearthDeck {
             .height(Length::Fill),
         )
         .height(Length::Fill);
+
+        // A tab change slides the whole grid area; the swap happens under cover.
+        let app_scrollable: Element<'_, Message> = match self.tab_progress() {
+            Some(progress) => {
+                let direction = self
+                    .tab_animation
+                    .map_or(1.0, |animation| animation.direction);
+                TabTransition::new(app_grid.into(), progress, direction).into()
+            }
+            None => app_grid.into(),
+        };
 
         let sidebar_divider = container(space::horizontal())
             .width(Length::Fixed(DIVIDER_WIDTH))
@@ -3888,6 +3976,12 @@ impl HearthDeck {
 
 fn focused_entry_index(focused: &widget::Id, entry_ids: &[widget::Id]) -> Option<usize> {
     entry_ids.iter().position(|id| id == focused)
+}
+
+/// Position of a tab within the strip: the "all apps" tab is 0, custom groups
+/// follow in order. Used to pick the slide direction.
+fn tab_position(group: Option<usize>) -> i32 {
+    group.map_or(0, |index| index as i32 + 1)
 }
 
 fn selected_romm_platform_id(
@@ -3930,8 +4024,9 @@ fn is_primary_window(id: SurfaceId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DashboardNotice, DashboardShelf, HearthDeck, Page, VirtualKeyboard, focused_entry_index,
-        is_primary_window, next_romm_offset, romm_page_is_current, selected_romm_platform_id,
+        DashboardNotice, DashboardShelf, HearthDeck, Page, TAB_TRANSITION_DURATION,
+        VirtualKeyboard, focused_entry_index, is_primary_window, next_romm_offset,
+        romm_page_is_current, selected_romm_platform_id,
     };
     use crate::app_group::{AppLibraryConfig, Section};
     use crate::providers::daemon::{HealthResponse, HostCapabilities, ProviderHealthInfo};
@@ -4084,6 +4179,82 @@ mod tests {
 
         assert!(app.page_animation.is_none());
         assert_eq!(app.page, Page::Library);
+    }
+
+    /// Ages the in-flight tab slide by `elapsed` so a tick lands at a known
+    /// point in the transition.
+    fn age_tab_slide(app: &mut HearthDeck, elapsed: std::time::Duration) {
+        let animation = app.tab_animation.as_mut().expect("tab slide in flight");
+        animation.started_at = std::time::Instant::now() - elapsed;
+    }
+
+    #[test]
+    fn switching_tabs_starts_a_directional_slide() {
+        let mut app = HearthDeck::default();
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::SelectGroup(Some(1)),
+        );
+
+        let animation = app.tab_animation.expect("tab slide");
+        assert_eq!(animation.target, Some(1));
+        assert_eq!(animation.direction, 1.0);
+        // The grid is not swapped until the cover is opaque.
+        assert_eq!(app.cur_group, None);
+    }
+
+    #[test]
+    fn tab_direction_follows_strip_order() {
+        let mut app = HearthDeck {
+            cur_group: Some(2),
+            ..Default::default()
+        };
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::SelectGroup(None),
+        );
+
+        assert_eq!(app.tab_animation.expect("tab slide").direction, -1.0);
+    }
+
+    #[test]
+    fn reselecting_the_current_tab_does_not_slide() {
+        let mut app = HearthDeck::default();
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::SelectGroup(None),
+        );
+
+        assert!(app.tab_animation.is_none());
+    }
+
+    #[test]
+    fn the_tab_slide_swaps_under_cover_then_clears() {
+        let mut app = HearthDeck::default();
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::SelectGroup(Some(2)),
+        );
+
+        // Midway: the pending tab is applied, still covered.
+        age_tab_slide(&mut app, TAB_TRANSITION_DURATION / 2);
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::Animate(std::time::Instant::now()),
+        );
+        assert_eq!(app.cur_group, Some(2));
+        assert!(app.tab_animation.is_some_and(|animation| animation.swapped));
+
+        // Past the end: the slide is dropped.
+        age_tab_slide(&mut app, TAB_TRANSITION_DURATION);
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::Animate(std::time::Instant::now()),
+        );
+        assert!(app.tab_animation.is_none());
     }
 
     #[test]

@@ -47,9 +47,15 @@ pub const TEXT_TILE_LABEL: f32 = 13.0 * TEXT_SCALE;
 // libcosmic's own `toggler`/`cards`); the values themselves live only here.
 // ---------------------------------------------------------------------------
 
-/// Duration of the fade-through between the Dashboard and the Library. Sits in
-/// the 167-333 ms band that Fluent gives for page transitions.
-pub const PAGE_TRANSITION_DURATION: Duration = Duration::from_millis(240);
+/// Duration of the fade-through between the Dashboard and the Library. Longer
+/// than the tab slide because a cross-fade reads as slower than a slide; sits in
+/// the 167-333 ms band Fluent gives for page transitions.
+pub const PAGE_TRANSITION_DURATION: Duration = Duration::from_millis(320);
+
+/// Duration of the directional slide when switching tabs. Shorter than the page
+/// fade: tabs are switched often, and a shared-axis slide carries its own sense
+/// of direction.
+pub const TAB_TRANSITION_DURATION: Duration = Duration::from_millis(240);
 
 // ---------------------------------------------------------------------------
 // Window & layout (proportional — sizes computed from window_width)
