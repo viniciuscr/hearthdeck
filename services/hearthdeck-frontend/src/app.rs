@@ -410,9 +410,14 @@ struct HearthDeck {
     dashboard_health_generation: u64,
     romm_request_generation: u64,
     virtual_keyboard: VirtualKeyboard,
-    /// In-flight Dashboard<->Library slide, if any. Cleared by the transition
-    /// widget once its duration has elapsed.
+    /// In-flight Dashboard<->Library fade-through transition, if any. Bounded
+    /// by [`PAGE_TRANSITION_DURATION`] and cleared by
+    /// [`HearthDeck::expire_page_animation`].
     page_animation: Option<PageAnimation>,
+    /// Timestamp of the current frame, refreshed by the `window::frames()`
+    /// subscription while a transition is in flight (the application's `update`
+    /// does not receive it the way raw iced's does).
+    now: Instant,
 }
 
 impl Default for HearthDeck {
@@ -458,6 +463,7 @@ impl Default for HearthDeck {
             romm_request_generation: 0,
             virtual_keyboard: VirtualKeyboard::default(),
             page_animation: None,
+            now: Instant::now(),
         }
     }
 }
@@ -538,16 +544,13 @@ enum Page {
     Library,
 }
 
-/// State for the Dashboard<->Library push transition. The pages themselves are
-/// rebuilt from `self`, so only the origin, start time and direction need to
-/// be remembered.
+/// State for the Dashboard<->Library fade-through transition. The pages
+/// themselves are rebuilt from `self`, so only the origin and start time need
+/// to be remembered.
 #[derive(Clone, Copy, Debug)]
 struct PageAnimation {
     from: Page,
     started_at: Instant,
-    /// `+1.0` when the incoming page enters from the right, `-1.0` from the
-    /// left. See [`PageTransition`].
-    direction: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -709,8 +712,8 @@ enum Message {
         result: Result<crate::providers::daemon::RetroRecordPage, String>,
     },
     DismissLaunch,
-    /// The page slide finished; drop the transition widget.
-    PageTransitionFinished,
+    /// Redraw tick for an in-flight page transition, carrying the frame time.
+    Animate(Instant),
     VirtualKeyboardToggled {
         target: bool,
         result: Result<(), String>,
@@ -1050,9 +1053,9 @@ impl HearthDeck {
         }
     }
 
-    /// Switches the visible page, starting a horizontal push transition when
-    /// the page actually changes. Re-selecting the current page snaps instead
-    /// of animating to the same place.
+    /// Switches the visible page, starting a fade-through transition when the
+    /// page actually changes. Re-selecting the current page snaps instead of
+    /// fading to the same place.
     fn switch_page(&mut self, to: Page) {
         if self.page == to {
             self.page_animation = None;
@@ -1060,13 +1063,31 @@ impl HearthDeck {
         }
         let from = self.page;
         self.page = to;
+        // Take the frame clock once so the first drawn frame is at progress 0.
+        self.now = Instant::now();
         self.page_animation = Some(PageAnimation {
             from,
-            started_at: Instant::now(),
-            // Dashboard is the left/"home" page and Library the right one, so
-            // forward navigation enters from the right and Back reverses it.
-            direction: if to == Page::Dashboard { -1.0 } else { 1.0 },
+            started_at: self.now,
         });
+    }
+
+    /// Eased `0.0..=1.0` progress of `animation` at the current frame.
+    fn transition_progress(&self, animation: &PageAnimation) -> f32 {
+        let elapsed = self.now.saturating_duration_since(animation.started_at);
+        let raw = (elapsed.as_secs_f32() / PAGE_TRANSITION_DURATION.as_secs_f32()).clamp(0.0, 1.0);
+        cosmic::anim::smootherstep(raw)
+    }
+
+    /// Drops a transition that has run its course. Called on every message so a
+    /// transition can never outlive [`PAGE_TRANSITION_DURATION`], even if a redraw
+    /// tick is missed.
+    fn expire_page_animation(&mut self) {
+        if self.page_animation.is_some_and(|animation| {
+            Instant::now().saturating_duration_since(animation.started_at)
+                >= PAGE_TRANSITION_DURATION
+        }) {
+            self.page_animation = None;
+        }
     }
 
     pub fn close(&mut self) -> Task<Message> {
@@ -1728,6 +1749,9 @@ impl cosmic::Application for HearthDeck {
     }
 
     fn update(&mut self, message: Message) -> Task<Self::Message> {
+        // A transition must never outlive its duration, whatever message
+        // happens to arrive next.
+        self.expire_page_animation();
         match message {
             Message::ProviderRecords(records) => {
                 let new_entries: Vec<_> = records
@@ -2621,8 +2645,9 @@ impl cosmic::Application for HearthDeck {
             Message::DismissLaunch => {
                 self.launch_state.update(LaunchEvent::Dismiss);
             }
-            Message::PageTransitionFinished => {
-                self.page_animation = None;
+            Message::Animate(now) => {
+                self.now = now;
+                self.expire_page_animation();
             }
         }
         Task::none()
@@ -2661,10 +2686,7 @@ impl cosmic::Application for HearthDeck {
             return PageTransition::new(
                 self.page_element(animation.from),
                 self.page_element(self.page),
-                animation.started_at,
-                PAGE_TRANSITION_DURATION,
-                animation.direction,
-                Message::PageTransitionFinished,
+                self.transition_progress(animation),
             )
             .into();
         }
@@ -2994,6 +3016,13 @@ impl cosmic::Application for HearthDeck {
         }
 
         subs.push(provider_records_subscription());
+
+        // Only subscribe to the frame clock while a page transition is in
+        // flight, so an idle window schedules no redraws at all. This is iced's documented
+        // way to drive application animations: see `iced::window::frames`.
+        if self.page_animation.is_some() {
+            subs.push(window::frames().map(|(_window, at)| Message::Animate(at)));
+        }
 
         Subscription::batch(subs)
     }
@@ -4011,22 +4040,20 @@ mod tests {
     }
 
     #[test]
-    fn a_page_change_starts_a_slide_in_the_travel_direction() {
+    fn a_page_change_transitions_from_the_previous_page() {
         let mut app = HearthDeck::default();
 
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenLibrary);
-        let forward = app.page_animation.expect("forward slide");
+        let forward = app.page_animation.expect("forward transition");
         assert_eq!(forward.from, Page::Dashboard);
-        assert_eq!(forward.direction, 1.0);
 
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::Close);
-        let back = app.page_animation.expect("back slide");
+        let back = app.page_animation.expect("back transition");
         assert_eq!(back.from, Page::Library);
-        assert_eq!(back.direction, -1.0);
     }
 
     #[test]
-    fn reselecting_the_current_page_does_not_slide() {
+    fn reselecting_the_current_page_does_not_transition() {
         let mut app = HearthDeck::default();
 
         let _ =
@@ -4041,15 +4068,18 @@ mod tests {
     }
 
     #[test]
-    fn finishing_the_slide_drops_the_transition() {
+    fn finishing_the_transition_drops_it() {
         let mut app = HearthDeck::default();
 
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenLibrary);
         assert!(app.page_animation.is_some());
 
+        // Age the transition past its duration, then deliver a redraw tick.
+        let animation = app.page_animation.as_mut().expect("transition in flight");
+        animation.started_at = std::time::Instant::now() - std::time::Duration::from_secs(1);
         let _ = <HearthDeck as cosmic::Application>::update(
             &mut app,
-            super::Message::PageTransitionFinished,
+            super::Message::Animate(std::time::Instant::now()),
         );
 
         assert!(app.page_animation.is_none());

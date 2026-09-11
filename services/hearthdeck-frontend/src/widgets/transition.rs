@@ -1,66 +1,31 @@
-//! A horizontal push transition between two full-window pages.
+//! A fade-through transition between two full-window pages.
 //!
-//! Both pages are laid out at the window bounds once, then drawn inside a
-//! clipped layer and offset horizontally by an eased progress value. The
-//! offset is applied at *draw* time, so the transition never rebuilds the
-//! widget tree or re-runs layout: a frame is just another `draw`.
-//!
-//! The widget drives its own frames. While the transition is in flight it
-//! asks for a redraw on every `RedrawRequested` event; once the duration has
-//! elapsed it publishes `on_finished` so the caller can drop it. An idle
-//! window therefore schedules no redraws and pays nothing for this widget.
-
-use std::time::{Duration, Instant};
+//! See `docs/frontend-animations.md` for the animation model and the design
+//! rationale. The widget is purely presentational: the caller supplies eased
+//! `progress`. Over the first half the outgoing page fades out under a cover of
+//! the surface colour; the incoming page is swapped in under full cover and
+//! fades back out over the second half. The app owns the timing and the frames.
 
 use cosmic::iced::core::Renderer as _;
 use cosmic::iced::core::widget::{Operation, Tree};
 use cosmic::iced::core::{
-    Clipboard, Event, Length, Rectangle, Shell, Size, Vector, Widget, layout, mouse, overlay,
-    renderer, window,
+    Background, Clipboard, Color, Event, Length, Rectangle, Shell, Size, Vector, Widget, layout,
+    mouse, overlay, renderer,
 };
 use cosmic::{Element, Renderer, Theme};
 
-/// Slides `to` over `from`, then hands control back to the caller.
-///
-/// The duration is passed in rather than defaulted here so the value lives in
-/// the app's design tokens (`crate::style`), matching libcosmic's own animating
-/// widgets, which expose a configurable `duration`.
+/// Cross-fades `to` in while `from` fades out, through the surface colour.
 #[allow(missing_debug_implementations)]
 pub struct PageTransition<'a, Message> {
     from: Element<'a, Message>,
     to: Element<'a, Message>,
-    started_at: Instant,
-    duration: Duration,
-    /// `+1.0` when the incoming page enters from the right (forward
-    /// navigation), `-1.0` when it enters from the left (back navigation).
-    direction: f32,
-    on_finished: Message,
+    /// Eased progress in `0.0..=1.0` from the outgoing to the incoming page.
+    progress: f32,
 }
 
 impl<'a, Message> PageTransition<'a, Message> {
-    pub fn new(
-        from: Element<'a, Message>,
-        to: Element<'a, Message>,
-        started_at: Instant,
-        duration: Duration,
-        direction: f32,
-        on_finished: Message,
-    ) -> Self {
-        Self {
-            from,
-            to,
-            started_at,
-            duration,
-            direction,
-            on_finished,
-        }
-    }
-
-    /// Eased progress in `0.0..=1.0` from the outgoing to the incoming page.
-    fn progress(&self) -> f32 {
-        let elapsed = Instant::now().saturating_duration_since(self.started_at);
-        let raw = (elapsed.as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0);
-        cosmic::anim::smootherstep(raw)
+    pub fn new(from: Element<'a, Message>, to: Element<'a, Message>, progress: f32) -> Self {
+        Self { from, to, progress }
     }
 }
 
@@ -113,7 +78,7 @@ where
         viewport: &Rectangle,
     ) {
         // Only the incoming page takes input; the outgoing one is on its way
-        // out and must not react to a stray event mid-slide.
+        // out and must not react to a stray event mid-transition.
         let to_layout = layout.children().nth(1).unwrap();
         self.to.as_widget_mut().update(
             &mut tree.children[1],
@@ -125,14 +90,6 @@ where
             shell,
             viewport,
         );
-
-        if let Event::Window(window::Event::RedrawRequested(now)) = event {
-            if now.saturating_duration_since(self.started_at) < self.duration {
-                shell.request_redraw();
-            } else {
-                shell.publish(self.on_finished.clone());
-            }
-        }
     }
 
     fn draw(
@@ -146,43 +103,42 @@ where
         viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
-        let travelled = bounds.width * self.progress();
 
+        // Only the page on the near side of the swap is ever partly visible, so
+        // one is drawn per frame rather than both.
         let mut children = layout.children();
         let from_layout = children.next().unwrap();
         let to_layout = children.next().unwrap();
+        let (index, page, page_layout, phase) = if self.progress < 0.5 {
+            (0, &self.from, from_layout, self.progress * 2.0)
+        } else {
+            (1, &self.to, to_layout, (1.0 - self.progress) * 2.0)
+        };
 
-        // Clip the pair to the window, then translate each page: the outgoing
-        // one leaves in `-direction`, the incoming one arrives from
-        // `+direction`. Both move in lockstep, so they stay edge-to-edge.
-        renderer.with_layer(bounds, |renderer| {
-            renderer.with_translation(Vector::new(-self.direction * travelled, 0.0), |renderer| {
-                self.from.as_widget().draw(
-                    &tree.children[0],
-                    renderer,
-                    theme,
-                    style,
-                    from_layout,
-                    cursor,
-                    viewport,
-                );
-            });
+        page.as_widget().draw(
+            &tree.children[index],
+            renderer,
+            theme,
+            style,
+            page_layout,
+            cursor,
+            viewport,
+        );
 
-            renderer.with_translation(
-                Vector::new(self.direction * (bounds.width - travelled), 0.0),
-                |renderer| {
-                    self.to.as_widget().draw(
-                        &tree.children[1],
-                        renderer,
-                        theme,
-                        style,
-                        to_layout,
-                        cursor,
-                        viewport,
-                    );
-                },
-            );
-        });
+        // The cover is the page's own surface colour, so a full cover is
+        // indistinguishable from the page background and the swap is hidden.
+        let mut surface = match crate::style::root_background(theme).background {
+            Some(Background::Color(color)) => color,
+            _ => Color::BLACK,
+        };
+        surface.a = cosmic::anim::smootherstep(phase.clamp(0.0, 1.0));
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds,
+                ..renderer::Quad::default()
+            },
+            surface,
+        );
     }
 
     fn operate(

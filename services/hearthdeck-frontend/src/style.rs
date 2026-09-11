@@ -47,10 +47,9 @@ pub const TEXT_TILE_LABEL: f32 = 13.0 * TEXT_SCALE;
 // libcosmic's own `toggler`/`cards`); the values themselves live only here.
 // ---------------------------------------------------------------------------
 
-/// Duration of the horizontal push between the Dashboard and the Library.
-/// Short enough to feel immediate on a TV, long enough to read as a slide
-/// rather than a cut.
-pub const PAGE_TRANSITION_DURATION: Duration = Duration::from_millis(220);
+/// Duration of the fade-through between the Dashboard and the Library. Sits in
+/// the 167-333 ms band that Fluent gives for page transitions.
+pub const PAGE_TRANSITION_DURATION: Duration = Duration::from_millis(240);
 
 // ---------------------------------------------------------------------------
 // Window & layout (proportional — sizes computed from window_width)
