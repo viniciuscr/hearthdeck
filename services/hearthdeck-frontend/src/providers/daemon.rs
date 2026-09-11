@@ -128,12 +128,24 @@ pub struct RetroPlatform {
     pub name: String,
     pub display_name: Option<String>,
     pub rom_count: u64,
+    #[serde(default)]
+    pub url_logo: Option<String>,
 }
 
 impl RetroPlatform {
     pub fn label(&self) -> &str {
         self.display_name.as_deref().unwrap_or(&self.name)
     }
+}
+
+/// A RomM console ready for the frontend: its label and, when RomM exposed
+/// one, a locally cached logo path.
+#[derive(Clone, Debug)]
+pub struct RetroConsole {
+    pub id: i64,
+    pub label: String,
+    pub rom_count: u64,
+    pub icon: Option<String>,
 }
 
 impl DaemonClient {
@@ -378,8 +390,9 @@ impl DaemonClient {
         Ok(())
     }
 
-    /// Lists available retro consoles from RomM.
-    pub async fn list_retro_consoles(&self) -> Result<Vec<RetroPlatform>, DaemonError> {
+    /// Lists available retro consoles from RomM, caching each console's logo
+    /// locally so the dashboard rail can render it without re-downloading.
+    pub async fn list_retro_consoles(&self) -> Result<Vec<RetroConsole>, DaemonError> {
         let response = self
             .http
             .get(self.api_url("/v1/retro/consoles"))
@@ -392,7 +405,33 @@ impl DaemonClient {
             return Err(Self::http_error(response).await);
         }
 
-        response.json().await.map_err(DaemonError::Deserialization)
+        let platforms: Vec<RetroPlatform> = response
+            .json()
+            .await
+            .map_err(DaemonError::Deserialization)?;
+
+        Ok(
+            stream::iter(platforms.into_iter().map(|platform| async move {
+                let icon = match platform.url_logo.as_deref() {
+                    Some(url) if url.starts_with("http://") || url.starts_with("https://") => {
+                        let url = url.to_owned();
+                        tokio::task::spawn_blocking(move || cache_icon(&url))
+                            .await
+                            .unwrap_or(None)
+                    }
+                    _ => None,
+                };
+                RetroConsole {
+                    id: platform.id,
+                    label: platform.label().to_owned(),
+                    rom_count: platform.rom_count,
+                    icon,
+                }
+            }))
+            .buffered(4)
+            .collect()
+            .await,
+        )
     }
 
     /// Lists retro ROMs, optionally filtered by platform.
@@ -450,7 +489,10 @@ impl DaemonClient {
                 retro_game_to_game_record(game, icon)
             }
         }))
-        .buffered(8)
+        // A page is only returned once every cover in it is cached, so this
+        // concurrency directly bounds first-paint latency; the daemon asset
+        // endpoint is loopback/served by RomM, so 16 parallel covers is safe.
+        .buffered(16)
         .collect()
         .await;
         Ok(RetroRecordPage {

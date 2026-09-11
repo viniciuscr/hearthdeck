@@ -36,6 +36,11 @@ pub struct RommPlatform {
     pub slug: Option<String>,
     #[serde(default)]
     pub fs_slug: Option<String>,
+    /// Absolute URL of the platform logo RomM resolved from its metadata
+    /// providers (IGDB/SteamGridDB/etc.); absent when the platform is
+    /// unidentified.
+    #[serde(default)]
+    pub url_logo: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

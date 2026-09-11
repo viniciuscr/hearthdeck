@@ -21,7 +21,7 @@ use cosmic::{
     cosmic_config::{Config, ConfigGet, CosmicConfigEntry},
     cosmic_theme::Spacing,
     dbus_activation,
-    desktop::{DesktopEntryData, fde::PathSource, load_desktop_file},
+    desktop::{DesktopEntryData, fde::IconSource, fde::PathSource, load_desktop_file},
     iced::{
         self, Alignment, Length, Limits, Subscription,
         event::listen_with,
@@ -409,6 +409,15 @@ struct HearthDeck {
     dashboard_notice: Option<DashboardNotice>,
     dashboard_health_generation: u64,
     romm_request_generation: u64,
+    /// Cached local logo path per RomM platform id, used by the dashboard's
+    /// console rail.
+    romm_platform_icons: HashMap<i64, String>,
+    /// Next RomM page offset for the active console scope. `None` means the
+    /// current scope has no further pages to fetch.
+    romm_next_offset: Option<u32>,
+    /// Whether a RomM page request is in flight, so scrolling and the periodic
+    /// platform refresh cannot queue duplicate pages.
+    romm_loading_page: bool,
     virtual_keyboard: VirtualKeyboard,
     /// In-flight Dashboard<->Library fade-through transition, if any. Bounded
     /// by [`PAGE_TRANSITION_DURATION`] and cleared by
@@ -464,6 +473,9 @@ impl Default for HearthDeck {
             dashboard_notice: None,
             dashboard_health_generation: 0,
             romm_request_generation: 0,
+            romm_platform_icons: HashMap::new(),
+            romm_next_offset: None,
+            romm_loading_page: false,
             virtual_keyboard: VirtualKeyboard::default(),
             page_animation: None,
             tab_animation: None,
@@ -716,7 +728,7 @@ enum Message {
     WindowResized(f32),
     DaemonLaunchResult(Result<(), String>),
     ActiveSessionResult(Result<bool, String>),
-    RommPlatforms(Result<Vec<crate::providers::daemon::RetroPlatform>, String>),
+    RommPlatforms(Result<Vec<crate::providers::daemon::RetroConsole>, String>),
     RecentEntries(Result<Vec<crate::providers::GameRecord>, String>),
     DashboardHealth {
         generation: u64,
@@ -862,12 +874,20 @@ impl HearthDeck {
         let Some(client) = self.daemon_client.clone() else {
             return Task::none();
         };
+        // Only one page request may be in flight. Reloading from the start
+        // (offset 0) is always allowed: it bumps the generation so any older
+        // in-flight page is discarded when it lands.
+        if offset > 0 && self.romm_loading_page {
+            return Task::none();
+        }
         if offset == 0 {
             self.romm_request_generation += 1;
             self.all_entries
                 .retain(|entry| !entry.id.starts_with("romm:"));
+            self.romm_next_offset = None;
             self.load_apps();
         }
+        self.romm_loading_page = true;
         let generation = self.romm_request_generation;
         Task::perform(
             async move {
@@ -1943,21 +1963,25 @@ impl cosmic::Application for HearthDeck {
                 return Task::none();
             }
             Message::RommPlatforms(result) => {
-                let platforms = match result {
-                    Ok(platforms) => platforms,
+                let consoles = match result {
+                    Ok(consoles) => consoles,
                     Err(error) => {
                         tracing::debug!(%error, "RomM platforms are not available yet");
                         return self.load_romm_platforms(ROMM_REFRESH_INTERVAL);
                     }
                 };
+                self.romm_platform_icons = consoles
+                    .iter()
+                    .filter_map(|console| console.icon.clone().map(|icon| (console.id, icon)))
+                    .collect();
                 let selected_group = self
                     .cur_group
                     .and_then(|index| self.config.sections.console_games.get(index))
                     .cloned();
-                let platforms = platforms
-                    .into_iter()
-                    .filter(|platform| platform.rom_count > 0)
-                    .map(|platform| (platform.id, platform.label().to_string()))
+                let platforms = consoles
+                    .iter()
+                    .filter(|console| console.rom_count > 0)
+                    .map(|console| (console.id, console.label.clone()))
                     .collect::<Vec<_>>();
                 let changed = self.config.sync_console_groups(&platforms);
                 let refresh = self.load_romm_platforms(ROMM_REFRESH_INTERVAL);
@@ -1973,12 +1997,16 @@ impl cosmic::Application for HearthDeck {
                         self.group_keys =
                             (0..self.config.sections.console_games.len() as u64).collect();
                     }
-                    if changed
-                        || !self
+                    // Fetch the first page only when nothing is loaded for this
+                    // scope and no request is already in flight. Further pages
+                    // load on demand as the grid is scrolled.
+                    let needs_initial_page = !self.romm_loading_page
+                        && self.romm_next_offset.is_none()
+                        && !self
                             .all_entries
                             .iter()
-                            .any(|entry| entry.id.starts_with("romm:"))
-                    {
+                            .any(|entry| entry.id.starts_with("romm:"));
+                    if changed || needs_initial_page {
                         return Task::batch([self.load_romm_page(0), refresh]);
                     }
                 }
@@ -2000,6 +2028,7 @@ impl cosmic::Application for HearthDeck {
                 let page = match result {
                     Ok(page) => page,
                     Err(error) => {
+                        self.romm_loading_page = false;
                         tracing::warn!(%error, "failed to load RomM games");
                         return Task::none();
                     }
@@ -2015,11 +2044,27 @@ impl cosmic::Application for HearthDeck {
                         self.all_entries.push(entry);
                     }
                 }
-                self.all_entries
-                    .sort_by(|left, right| left.name.cmp(&right.name));
+                self.romm_loading_page = false;
+                self.romm_next_offset = next_romm_offset(page.offset, item_count, page.total);
+                // Deliberately no re-sort. RomM already returns name order, and
+                // sorting the combined catalog here moved already-rendered
+                // tiles each time a later page landed (visible reflow). Pages
+                // are appended in order; more load on scroll.
                 self.load_apps();
-                if let Some(next_offset) = next_romm_offset(page.offset, item_count, page.total) {
-                    return self.load_romm_page(next_offset);
+                // While a search is active, the local filter must see the whole
+                // scope, so keep pulling pages until it is exhausted. Plain
+                // browsing stays on-demand.
+                if !self.search_value.is_empty()
+                    && let Some(offset) = self.romm_next_offset
+                {
+                    return self.load_romm_page(offset);
+                }
+                // Load just enough further pages to fill the viewport.
+                if let Some(offset) = self.romm_next_offset {
+                    let loaded_rows = self.entry_path_input.len().div_ceil(GRID_COLUMNS) as f32;
+                    if loaded_rows < self.visible_row_count() + 1.0 {
+                        return self.load_romm_page(offset);
+                    }
                 }
             }
             Message::UpdateFocused(id) => {
@@ -2220,7 +2265,17 @@ impl cosmic::Application for HearthDeck {
             }
             Message::InputChanged(value) => {
                 self.search_value = value;
-                return self.filter_apps();
+                let filter = self.filter_apps();
+                // Console search filters the loaded RomM entries locally, so an
+                // active query has to pull the remaining pages.
+                if self.cur_section == Section::ConsoleGames
+                    && !self.search_value.is_empty()
+                    && !self.romm_loading_page
+                    && let Some(offset) = self.romm_next_offset
+                {
+                    return Task::batch([filter, self.load_romm_page(offset)]);
+                }
+                return filter;
             }
             Message::Close => {
                 if self.launch_state.is_visible() {
@@ -2582,6 +2637,18 @@ impl cosmic::Application for HearthDeck {
             Message::ScrollYOffset(y, viewport_height) => {
                 self.scroll_offset = y;
                 self.viewport_height = viewport_height;
+                // Infinite scroll for the RomM console grid: load the next page
+                // once the viewport nears the end of what is loaded.
+                if self.cur_section == Section::ConsoleGames
+                    && !self.romm_loading_page
+                    && let Some(offset) = self.romm_next_offset
+                {
+                    let total_rows = self.entry_path_input.len().div_ceil(GRID_COLUMNS) as f32;
+                    let content_height = total_rows * self.grid_row_height();
+                    if y + viewport_height >= content_height - self.grid_row_height() {
+                        return self.load_romm_page(offset);
+                    }
+                }
             }
             Message::ViewportHeight(height) => {
                 self.viewport_height = height;
@@ -3529,13 +3596,32 @@ impl HearthDeck {
         let consoles_section: Option<Element<'_, Message>> = {
             let consoles = self.dashboard_consoles();
             (!consoles.is_empty()).then(|| {
+                // RomM supplies a logo per platform; fall back to a generic
+                // gamepad glyph when a platform is unidentified or its logo
+                // could not be cached.
+                let console_logo = |group: &AppGroup| -> Element<'_, Message> {
+                    if let Some(path) = group
+                        .romm_platform_id()
+                        .and_then(|id| self.romm_platform_icons.get(&id))
+                    {
+                        icon::icon(crate::icon_cache::entry_icon_handle(
+                            &IconSource::Path(PathBuf::from(path)),
+                            u32::from(ICON_LARGE),
+                        ))
+                        .size(ICON_LARGE)
+                        .into()
+                    } else {
+                        icon::icon(icon::from_name("input-gaming-symbolic").into())
+                            .size(ICON_BODY)
+                            .into()
+                    }
+                };
                 let chips: Vec<Element<'_, Message>> = consoles
                     .into_iter()
                     .map(|(index, group)| {
                         button::custom(
                             row![
-                                icon::icon(icon::from_name("input-gaming-symbolic").into())
-                                    .size(ICON_BODY),
+                                console_logo(group),
                                 text::body(group.name()).size(TEXT_BODY),
                             ]
                             .spacing(space_s)
@@ -4147,7 +4233,10 @@ mod tests {
         romm_page_is_current, selected_romm_platform_id,
     };
     use crate::app_group::{AppGroup, AppLibraryConfig, FilterType, Section};
-    use crate::providers::daemon::{HealthResponse, HostCapabilities, ProviderHealthInfo};
+    use crate::providers::GameRecord;
+    use crate::providers::daemon::{
+        HealthResponse, HostCapabilities, ProviderHealthInfo, RetroConsole, RetroRecordPage,
+    };
     use cosmic::{
         desktop::{DesktopEntryData, fde::IconSource},
         iced::widget,
@@ -4675,5 +4764,93 @@ mod tests {
         assert_eq!(next_romm_offset(0, 48, 100), Some(48));
         assert_eq!(next_romm_offset(96, 4, 100), None);
         assert_eq!(next_romm_offset(0, 0, 100), None);
+    }
+
+    fn romm_record(id: i64, name: &str, platform_id: i64) -> GameRecord {
+        GameRecord {
+            id: format!("romm:{id}"),
+            name: name.to_string(),
+            exec: Some(id.to_string()),
+            icon: None,
+            path: None,
+            categories: vec!["Game".into(), format!("hearthdeck-console:{platform_id}")],
+            terminal: false,
+            prefers_dgpu: false,
+            source: "RomM".into(),
+            metadata: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn romm_pages_append_in_order_instead_of_resorting() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string())]);
+        let mut app = HearthDeck {
+            config,
+            cur_section: Section::ConsoleGames,
+            cur_group: Some(0),
+            ..Default::default()
+        };
+
+        // Page 0 then page 1, in the daemon's name order. A name sort over the
+        // combined catalog would reorder page 1 before page 0 ("Alpha" vs
+        // "Zeta"); the grid must instead keep arrival order.
+        for (offset, items) in [
+            (0_u32, vec![romm_record(1, "Zeta", 7)]),
+            (48, vec![romm_record(2, "Alpha", 7)]),
+        ] {
+            let _ = <HearthDeck as cosmic::Application>::update(
+                &mut app,
+                super::Message::RommGames {
+                    generation: 0,
+                    platform_id: Some(7),
+                    result: Ok(RetroRecordPage {
+                        items,
+                        total: 2,
+                        offset,
+                    }),
+                },
+            );
+        }
+
+        let names: Vec<&str> = app
+            .entry_path_input
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, ["Zeta", "Alpha"]);
+        // The last page ends pagination.
+        assert_eq!(app.romm_next_offset, None);
+        assert!(!app.romm_loading_page);
+    }
+
+    #[test]
+    fn romm_platform_logos_feed_the_dashboard_rail() {
+        let mut app = HearthDeck::default();
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::RommPlatforms(Ok(vec![
+                RetroConsole {
+                    id: 7,
+                    label: "SNES".into(),
+                    rom_count: 3,
+                    icon: Some("/tmp/snes.png".into()),
+                },
+                RetroConsole {
+                    id: 9,
+                    label: "Mega Drive".into(),
+                    rom_count: 0,
+                    icon: Some("/tmp/mega-drive.png".into()),
+                },
+            ])),
+        );
+
+        assert_eq!(
+            app.romm_platform_icons.get(&7).map(String::as_str),
+            Some("/tmp/snes.png")
+        );
+        // A platform with no games gets no tab, but its logo is still cached.
+        assert_eq!(app.config.sections.console_games.len(), 1);
+        assert!(app.romm_platform_icons.contains_key(&9));
     }
 }
