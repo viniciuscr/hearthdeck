@@ -29,6 +29,23 @@ impl<'a, Message> PageTransition<'a, Message> {
     }
 }
 
+/// Whether the outgoing page is still on the near side of the swap.
+fn showing_from(progress: f32) -> bool {
+    progress < 0.5
+}
+
+/// Cover opacity for an eased `progress` in `0.0..=1.0`: clear at both ends,
+/// fully opaque at the midpoint where the pages swap.
+fn cover_alpha(progress: f32) -> f32 {
+    let phase = if showing_from(progress) {
+        progress * 2.0
+    } else {
+        (1.0 - progress) * 2.0
+    };
+
+    cosmic::anim::smootherstep(phase.clamp(0.0, 1.0))
+}
+
 impl<'a, Message> Widget<Message, Theme, Renderer> for PageTransition<'a, Message>
 where
     Message: Clone + 'a,
@@ -109,10 +126,10 @@ where
         let mut children = layout.children();
         let from_layout = children.next().unwrap();
         let to_layout = children.next().unwrap();
-        let (index, page, page_layout, phase) = if self.progress < 0.5 {
-            (0, &self.from, from_layout, self.progress * 2.0)
+        let (index, page, page_layout) = if showing_from(self.progress) {
+            (0, &self.from, from_layout)
         } else {
-            (1, &self.to, to_layout, (1.0 - self.progress) * 2.0)
+            (1, &self.to, to_layout)
         };
 
         page.as_widget().draw(
@@ -131,14 +148,22 @@ where
             Some(Background::Color(color)) => color,
             _ => Color::BLACK,
         };
-        surface.a = cosmic::anim::smootherstep(phase.clamp(0.0, 1.0));
-        renderer.fill_quad(
-            renderer::Quad {
-                bounds,
-                ..renderer::Quad::default()
-            },
-            surface,
-        );
+        surface.a = cover_alpha(self.progress);
+
+        // It must go in its own layer, allocated after the page's own layers.
+        // iced_wgpu renders layers in allocation order (`Layer::iter`), so a
+        // plain quad added to the current layer would be painted *under* any
+        // clipped child such as the page's `scrollable`. A freshly pushed layer
+        // is the only way to guarantee the cover sits on top.
+        renderer.with_layer(bounds, |renderer| {
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds,
+                    ..renderer::Quad::default()
+                },
+                surface,
+            );
+        });
     }
 
     fn operate(
@@ -198,5 +223,28 @@ where
 {
     fn from(widget: PageTransition<'a, Message>) -> Self {
         Element::new(widget)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cover_alpha, showing_from};
+
+    #[test]
+    fn the_page_swaps_at_the_midpoint() {
+        assert!(showing_from(0.0));
+        assert!(showing_from(0.49));
+        assert!(!showing_from(0.5));
+        assert!(!showing_from(1.0));
+    }
+
+    #[test]
+    fn the_cover_is_opaque_only_at_the_swap() {
+        assert_eq!(cover_alpha(0.0), 0.0);
+        assert_eq!(cover_alpha(0.5), 1.0);
+        assert_eq!(cover_alpha(1.0), 0.0);
+
+        assert!((0.0..1.0).contains(&cover_alpha(0.25)));
+        assert!((0.0..1.0).contains(&cover_alpha(0.75)));
     }
 }
