@@ -67,7 +67,9 @@ use cosmic::{
         button::{self},
         divider,
         dnd_destination::dnd_destination_for_data,
-        icon, scrollable, space, svg, text, text_input, tooltip,
+        icon, scrollable, space, svg, text, text_input,
+        toaster::{self, Toast, ToastId, Toasts},
+        tooltip,
     },
 };
 use cosmic_app_list_config::AppListConfig;
@@ -108,7 +110,6 @@ static FILTER_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter"));
 static DASHBOARD_HOME_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-home"));
 static DASHBOARD_LIBRARY_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-library"));
 static DASHBOARD_SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-search"));
-static DASHBOARD_NOTICE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-notice"));
 
 static APP_ICON: LazyLock<icon::Handle> = LazyLock::new(|| {
     icon::from_svg_bytes(include_bytes!(
@@ -406,7 +407,16 @@ struct HearthDeck {
     launch_state: LaunchState,
     input_ownership: InputOwnership,
     system_status: SystemStatus,
-    dashboard_notice: Option<DashboardNotice>,
+    /// Transient user-facing alerts, rendered with libcosmic's toaster so the
+    /// dashboard stays a browsing surface instead of an alert log.
+    toasts: Toasts<Message>,
+    /// Reachability of the Hearthdeck background service, tracked so an alert
+    /// fires only when its state flips rather than on every health poll.
+    /// `None` until the first result arrives.
+    backend_available: Option<bool>,
+    /// Providers the daemon last reported as degraded. Compared against each
+    /// new health result so the alert fires only when the set changes.
+    degraded_providers: Vec<String>,
     dashboard_health_generation: u64,
     romm_request_generation: u64,
     /// Cached local logo path per RomM platform id, used by the dashboard's
@@ -470,7 +480,9 @@ impl Default for HearthDeck {
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
             system_status: SystemStatus::default(),
-            dashboard_notice: None,
+            toasts: Toasts::new(Message::DismissToast),
+            backend_available: None,
+            degraded_providers: Vec::new(),
             dashboard_health_generation: 0,
             romm_request_generation: 0,
             romm_platform_icons: HashMap::new(),
@@ -589,41 +601,42 @@ enum DashboardShelf {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum DashboardNotice {
-    BackendUnavailable,
-    ProvidersDegraded(Vec<String>),
-    RefreshFailed,
+enum DashboardHealthError {
+    /// The daemon could not be reached at all (not running, wrong address, or a
+    /// rejected pairing token).
+    Unreachable,
+    /// The daemon answered, but with an error status or an API error message.
+    Service(String),
+    /// The daemon answered with a body we could not parse, which usually means
+    /// the frontend and daemon versions disagree.
+    Protocol(String),
 }
 
-impl DashboardNotice {
-    fn from_health(health: &crate::providers::daemon::HealthResponse) -> Option<Self> {
-        let providers = health
-            .providers
-            .iter()
-            .filter(|provider| provider.status == "degraded")
-            .map(|provider| provider.id.clone())
-            .collect::<Vec<_>>();
-        (!providers.is_empty()).then_some(Self::ProvidersDegraded(providers))
+/// Splits the daemon's error types into the three cases a user can act on,
+/// keeping the raw `reqwest` detail out of the alert text.
+fn dashboard_health_error(error: crate::providers::daemon::DaemonError) -> DashboardHealthError {
+    use crate::providers::daemon::DaemonError;
+    match error {
+        DaemonError::Api { message, .. } => DashboardHealthError::Service(message),
+        DaemonError::UnexpectedStatus(status) => DashboardHealthError::Service(status.to_string()),
+        DaemonError::Deserialization(error) => DashboardHealthError::Protocol(error.to_string()),
+        DaemonError::Connection(_)
+        | DaemonError::InvalidBaseUrl(_)
+        | DaemonError::InvalidToken(_)
+        | DaemonError::PairingRequiresLoopback
+        | DaemonError::Unavailable => DashboardHealthError::Unreachable,
     }
+}
 
-    fn title(&self) -> String {
-        match self {
-            Self::BackendUnavailable => fl!("backend-unavailable"),
-            Self::ProvidersDegraded(providers) if providers.len() == 1 => {
-                fl!("library-source-degraded")
-            }
-            Self::ProvidersDegraded(_) => fl!("library-sources-degraded"),
-            Self::RefreshFailed => fl!("library-refresh-failed"),
-        }
-    }
-
-    fn detail(&self) -> String {
-        match self {
-            Self::BackendUnavailable => fl!("backend-unavailable-detail"),
-            Self::ProvidersDegraded(providers) => providers.join(", "),
-            Self::RefreshFailed => fl!("library-refresh-failed-detail"),
-        }
-    }
+/// Provider ids the daemon reports as degraded: discovery failed, but the
+/// source is still registered rather than removed.
+fn degraded_providers(health: &crate::providers::daemon::HealthResponse) -> Vec<String> {
+    health
+        .providers
+        .iter()
+        .filter(|provider| provider.status == "degraded")
+        .map(|provider| provider.id.clone())
+        .collect()
 }
 
 impl DashboardShelf {
@@ -732,9 +745,13 @@ enum Message {
     RecentEntries(Result<Vec<crate::providers::GameRecord>, String>),
     DashboardHealth {
         generation: u64,
-        result: Result<crate::providers::daemon::HealthResponse, String>,
+        result: Result<crate::providers::daemon::HealthResponse, DashboardHealthError>,
     },
-    RefreshDashboardNotice,
+    /// The user pressed Retry on an alert: dismiss it and re-run the failed
+    /// operation (health check, or a provider rescan when sources degraded).
+    RetryDashboardAlert(ToastId),
+    /// The user closed an alert, or its display duration elapsed.
+    DismissToast(ToastId),
     DashboardRescanResult(Result<(), String>),
     SystemStatus(SystemStatus),
     RommGames {
@@ -941,33 +958,48 @@ impl HearthDeck {
         Task::perform(
             async move {
                 tokio::time::sleep(delay).await;
-                client.health().await.map_err(|error| error.to_string())
+                client.health().await.map_err(|error| {
+                    log::debug!("dashboard health is not available: {error}");
+                    dashboard_health_error(error)
+                })
             },
             move |result| cosmic::Action::App(Message::DashboardHealth { generation, result }),
         )
     }
 
-    fn refresh_dashboard_notice(&mut self) -> Task<Message> {
+    /// Shows a transient alert through libcosmic's toaster. When `retry` is set
+    /// the alert carries a Retry action wired to [`Message::RetryDashboardAlert`].
+    fn push_alert(&mut self, message: String, retry: bool) -> Task<Message> {
+        let mut toast = Toast::new(message).duration(std::time::Duration::from_secs(20));
+        if retry {
+            toast = toast.action(fl!("retry"), Message::RetryDashboardAlert);
+        }
+        self.toasts.push(toast).map(cosmic::Action::App)
+    }
+
+    fn retry_dashboard_alert(&mut self, id: ToastId) -> Task<Message> {
+        self.toasts.remove(id);
         let Some(client) = self.daemon_client.clone() else {
             return Task::none();
         };
-        if matches!(
-            self.dashboard_notice,
-            Some(DashboardNotice::ProvidersDegraded(_))
-        ) {
-            Task::perform(
-                async move {
-                    client
-                        .rescan_library()
-                        .await
-                        .map_err(|error| error.to_string())
-                },
-                |result| cosmic::Action::App(Message::DashboardRescanResult(result)),
-            )
-        } else {
+        let rescan = !self.degraded_providers.is_empty();
+        // Forget the memoized state so a running Retry that doesn't fix the
+        // problem alerts again instead of silently doing nothing.
+        self.backend_available = None;
+        self.degraded_providers.clear();
+        if !rescan {
             self.dashboard_health_generation += 1;
-            self.load_dashboard_health(std::time::Duration::ZERO)
+            return self.load_dashboard_health(std::time::Duration::ZERO);
         }
+        Task::perform(
+            async move {
+                client
+                    .rescan_library()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::DashboardRescanResult(result)),
+        )
     }
 
     fn load_recent_activity(&self, delay: std::time::Duration) -> Task<Message> {
@@ -1465,19 +1497,9 @@ impl HearthDeck {
         ];
         if focused.is_some_and(|id| nav_ids.contains(id)) {
             return if delta > 0 {
-                self.dashboard_notice
-                    .as_ref()
-                    .map(|_| DASHBOARD_NOTICE_ID.clone())
-                    .or_else(|| rows.first()?.first().cloned())
+                rows.first()?.first().cloned()
             } else {
                 None
-            };
-        }
-        if focused.is_some_and(|id| id == &*DASHBOARD_NOTICE_ID) {
-            return if delta < 0 {
-                Some(DASHBOARD_HOME_ID.clone())
-            } else {
-                rows.first()?.first().cloned()
             };
         }
         for (row_index, row) in rows.iter().enumerate() {
@@ -1487,11 +1509,7 @@ impl HearthDeck {
                 continue;
             };
             if delta < 0 && row_index == 0 {
-                return Some(if self.dashboard_notice.is_some() {
-                    DASHBOARD_NOTICE_ID.clone()
-                } else {
-                    DASHBOARD_HOME_ID.clone()
-                });
+                return Some(DASHBOARD_HOME_ID.clone());
             }
             let target_row = row_index as i32 + delta;
             if target_row < 0 || target_row >= rows.len() as i32 {
@@ -2310,9 +2328,6 @@ impl cosmic::Application for HearthDeck {
                 if focused == *DASHBOARD_SEARCH_ID {
                     return self.update(Message::OpenSearch);
                 }
-                if focused == *DASHBOARD_NOTICE_ID {
-                    return self.refresh_dashboard_notice();
-                }
                 if self.page == Page::Dashboard {
                     if let Some(index) = self.dashboard_console_id_for_widget(&focused) {
                         return self.open_console(index);
@@ -2796,38 +2811,62 @@ impl cosmic::Application for HearthDeck {
                 if generation != self.dashboard_health_generation {
                     return Task::none();
                 }
-                let notice_was_focused = self
-                    .focused_id
-                    .as_ref()
-                    .is_some_and(|focused| focused == &*DASHBOARD_NOTICE_ID);
-                self.dashboard_notice = match result {
-                    Ok(health) => DashboardNotice::from_health(&health),
-                    Err(error) => {
-                        log::debug!("dashboard health is not available: {error}");
-                        Some(DashboardNotice::BackendUnavailable)
+                let mut alerts = Task::none();
+                match result {
+                    Ok(health) => {
+                        if self.backend_available == Some(false) {
+                            alerts = self.push_alert(fl!("backend-restored"), false);
+                        }
+                        self.backend_available = Some(true);
+                        let degraded = degraded_providers(&health);
+                        if degraded != self.degraded_providers {
+                            if !degraded.is_empty() {
+                                let message = if degraded.len() == 1 {
+                                    fl!("library-source-degraded", source = degraded[0].clone())
+                                } else {
+                                    fl!("library-sources-degraded", count = degraded.len())
+                                };
+                                alerts = Task::batch([alerts, self.push_alert(message, true)]);
+                            }
+                            self.degraded_providers = degraded;
+                        }
                     }
-                };
-                let poll = self.load_dashboard_health(DASHBOARD_HEALTH_POLL_INTERVAL);
-                if notice_was_focused && self.dashboard_notice.is_none() {
-                    let id = self
-                        .dashboard_entry_ids()
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| DASHBOARD_HOME_ID.clone());
-                    return Task::batch([self.focus_dashboard_id(id), poll]);
+                    Err(error) => {
+                        // Alert on the transition into failure, not on every poll.
+                        if self.backend_available != Some(false) {
+                            let message = match &error {
+                                DashboardHealthError::Unreachable => fl!("backend-unavailable"),
+                                DashboardHealthError::Service(reason) => {
+                                    fl!("backend-error", reason = reason.clone())
+                                }
+                                DashboardHealthError::Protocol(reason) => {
+                                    fl!("backend-protocol-mismatch", reason = reason.clone())
+                                }
+                            };
+                            alerts = self.push_alert(message, true);
+                        }
+                        self.backend_available = Some(false);
+                        self.degraded_providers.clear();
+                    }
                 }
-                return poll;
+                let poll = self.load_dashboard_health(DASHBOARD_HEALTH_POLL_INTERVAL);
+                return Task::batch([alerts, poll]);
             }
-            Message::RefreshDashboardNotice => {
-                return self.refresh_dashboard_notice();
+            Message::RetryDashboardAlert(id) => {
+                return self.retry_dashboard_alert(id);
+            }
+            Message::DismissToast(id) => {
+                self.toasts.remove(id);
             }
             Message::DashboardRescanResult(result) => {
+                let mut alerts = Task::none();
                 if let Err(error) = result {
                     log::warn!("dashboard library refresh failed: {error}");
-                    self.dashboard_notice = Some(DashboardNotice::RefreshFailed);
+                    alerts = self.push_alert(fl!("library-refresh-failed", reason = error), true);
                 }
                 self.dashboard_health_generation += 1;
-                return self.load_dashboard_health(std::time::Duration::from_secs(1));
+                let health = self.load_dashboard_health(std::time::Duration::from_secs(1));
+                return Task::batch([alerts, health]);
             }
             Message::RecentEntries(result) => match result {
                 Ok(records) => {
@@ -2841,7 +2880,6 @@ impl cosmic::Application for HearthDeck {
                             DASHBOARD_HOME_ID.clone(),
                             DASHBOARD_LIBRARY_ID.clone(),
                             DASHBOARD_SEARCH_ID.clone(),
-                            DASHBOARD_NOTICE_ID.clone(),
                         ];
                         let focus_is_valid = self.focused_id.as_ref().is_some_and(|focused| {
                             nav_ids.contains(focused) || entry_ids.contains(focused)
@@ -2897,20 +2935,22 @@ impl cosmic::Application for HearthDeck {
     }
 
     fn view<'a>(&'a self) -> Element<'a, Message> {
-        if self.launch_state.is_visible() {
-            return self.view_launch_overlay();
-        }
-
-        if let Some(animation) = &self.page_animation {
-            return PageTransition::new(
+        let content: Element<'a, Message> = if self.launch_state.is_visible() {
+            self.view_launch_overlay()
+        } else if let Some(animation) = &self.page_animation {
+            PageTransition::new(
                 self.page_element(animation.from),
                 self.page_element(self.page),
                 self.transition_progress(animation),
             )
-            .into();
-        }
+            .into()
+        } else {
+            self.page_element(self.page)
+        };
 
-        self.page_element(self.page)
+        // Alerts float above whatever page is showing, including the launch
+        // overlay, so a daemon outage is visible wherever the user is.
+        toaster::toaster(&self.toasts, content)
     }
 
     fn view_window<'a>(&'a self, id: SurfaceId) -> Element<'a, Message> {
@@ -3515,32 +3555,6 @@ impl HearthDeck {
         .align_y(Alignment::Center)
         .height(Length::Fixed(f32::from(space_xxl)));
 
-        let notice = self.dashboard_notice.as_ref().map(|notice| {
-            container(
-                button::custom(
-                    row![
-                        icon::icon(icon::from_name("dialog-warning-symbolic").into())
-                            .size(ICON_BODY),
-                        column![
-                            text::body(notice.title()).size(TEXT_BODY),
-                            text::caption(notice.detail()).size(TEXT_CAPTION),
-                        ]
-                        .spacing(space_xs),
-                        space::horizontal(),
-                        icon::icon(icon::from_name("view-refresh-symbolic").into()).size(ICON_BODY),
-                    ]
-                    .spacing(space_s)
-                    .align_y(Alignment::Center),
-                )
-                .id(DASHBOARD_NOTICE_ID.clone())
-                .on_press(Message::RefreshDashboardNotice)
-                .padding([space_s, space_m])
-                .width(Length::Fill),
-            )
-            .class(theme::Container::Card)
-            .width(Length::Fill)
-        });
-
         let shelves: Vec<Element<'_, Message>> = self
             .dashboard_shelves()
             .into_iter()
@@ -3642,10 +3656,7 @@ impl HearthDeck {
             })
         };
 
-        let mut content = column![top_bar].spacing(space_m);
-        if let Some(notice) = notice {
-            content = content.push(notice);
-        }
+        let content = column![top_bar].spacing(space_m);
         let mut lower = column![].spacing(space_l);
         if let Some(consoles) = consoles_section {
             lower = lower.push(consoles);
@@ -4228,8 +4239,8 @@ fn is_primary_window(id: SurfaceId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DashboardNotice, DashboardShelf, HearthDeck, Page, TAB_TRANSITION_DURATION,
-        VirtualKeyboard, focused_entry_index, is_primary_window, next_romm_offset,
+        DashboardShelf, HearthDeck, Page, TAB_TRANSITION_DURATION, VirtualKeyboard,
+        degraded_providers, focused_entry_index, is_primary_window, next_romm_offset,
         romm_page_is_current, selected_romm_platform_id,
     };
     use crate::app_group::{AppGroup, AppLibraryConfig, FilterType, Section};
@@ -4629,74 +4640,31 @@ mod tests {
             last_attempt_at: None,
         };
 
+        assert!(degraded_providers(&health(vec![provider("heroic", "ready")])).is_empty());
         assert_eq!(
-            DashboardNotice::from_health(&health(vec![provider("heroic", "ready")])),
-            None
-        );
-        assert_eq!(
-            DashboardNotice::from_health(&health(vec![
+            degraded_providers(&health(vec![
                 provider("heroic", "degraded"),
                 provider("desktop-apps", "ready"),
             ])),
-            Some(DashboardNotice::ProvidersDegraded(vec!["heroic".into()]))
+            vec!["heroic".to_string()]
         );
     }
 
     #[test]
-    fn dashboard_notice_sits_between_navigation_and_shelves() {
+    fn dashboard_vertical_navigation_walks_from_nav_into_the_first_row() {
         let mut app = HearthDeck {
             all_entries: vec![entry("game")],
-            dashboard_notice: Some(DashboardNotice::BackendUnavailable),
             focused_id: Some(super::DASHBOARD_HOME_ID.clone()),
             ..Default::default()
         };
         let first_entry = app.dashboard_entry_rows()[0][0].clone();
 
-        assert_eq!(
-            app.dashboard_vertical_target(1),
-            Some(super::DASHBOARD_NOTICE_ID.clone())
-        );
-        app.focused_id = Some(super::DASHBOARD_NOTICE_ID.clone());
         assert_eq!(app.dashboard_vertical_target(1), Some(first_entry.clone()));
         app.focused_id = Some(first_entry);
         assert_eq!(
             app.dashboard_vertical_target(-1),
-            Some(super::DASHBOARD_NOTICE_ID.clone())
+            Some(super::DASHBOARD_HOME_ID.clone())
         );
-    }
-
-    #[test]
-    fn clearing_a_focused_dashboard_notice_restores_shelf_focus() {
-        let mut app = HearthDeck {
-            all_entries: vec![entry("game")],
-            dashboard_notice: Some(DashboardNotice::BackendUnavailable),
-            focused_id: Some(super::DASHBOARD_NOTICE_ID.clone()),
-            ..Default::default()
-        };
-        let expected = app.dashboard_entry_rows()[0][0].clone();
-        let health = HealthResponse {
-            version: "test".into(),
-            lan_enabled: false,
-            transport: "http".into(),
-            providers: Vec::new(),
-            capabilities: HostCapabilities {
-                launch: true,
-                application_sessions: true,
-                install_requests: false,
-                retro_launch: true,
-            },
-        };
-
-        let _ = <HearthDeck as cosmic::Application>::update(
-            &mut app,
-            super::Message::DashboardHealth {
-                generation: 0,
-                result: Ok(health),
-            },
-        );
-
-        assert_eq!(app.dashboard_notice, None);
-        assert_eq!(app.focused_id, Some(expected));
     }
 
     #[test]
