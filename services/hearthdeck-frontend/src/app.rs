@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
+use std::time::Instant;
 
 use clap::Parser;
 use cosmic::iced::window;
@@ -95,6 +96,7 @@ use crate::style::{
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
 use crate::widgets::application::{AppletString, ApplicationButton};
+use crate::widgets::transition::PageTransition;
 
 // popovers should show options, but also the desktop info options
 // should be a way to add apps to groups
@@ -407,6 +409,9 @@ struct HearthDeck {
     dashboard_health_generation: u64,
     romm_request_generation: u64,
     virtual_keyboard: VirtualKeyboard,
+    /// In-flight Dashboard<->Library slide, if any. Cleared by the transition
+    /// widget once its duration has elapsed.
+    page_animation: Option<PageAnimation>,
 }
 
 impl Default for HearthDeck {
@@ -451,6 +456,7 @@ impl Default for HearthDeck {
             dashboard_health_generation: 0,
             romm_request_generation: 0,
             virtual_keyboard: VirtualKeyboard::default(),
+            page_animation: None,
         }
     }
 }
@@ -529,6 +535,18 @@ enum Page {
     #[default]
     Dashboard,
     Library,
+}
+
+/// State for the Dashboard<->Library push transition. The pages themselves are
+/// rebuilt from `self`, so only the origin, start time and direction need to
+/// be remembered.
+#[derive(Clone, Copy, Debug)]
+struct PageAnimation {
+    from: Page,
+    started_at: Instant,
+    /// `+1.0` when the incoming page enters from the right, `-1.0` from the
+    /// left. See [`PageTransition`].
+    direction: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -690,6 +708,8 @@ enum Message {
         result: Result<crate::providers::daemon::RetroRecordPage, String>,
     },
     DismissLaunch,
+    /// The page slide finished; drop the transition widget.
+    PageTransitionFinished,
     VirtualKeyboardToggled {
         target: bool,
         result: Result<(), String>,
@@ -1027,6 +1047,25 @@ impl HearthDeck {
         } else {
             iced::Task::none()
         }
+    }
+
+    /// Switches the visible page, starting a horizontal push transition when
+    /// the page actually changes. Re-selecting the current page snaps instead
+    /// of animating to the same place.
+    fn switch_page(&mut self, to: Page) {
+        if self.page == to {
+            self.page_animation = None;
+            return;
+        }
+        let from = self.page;
+        self.page = to;
+        self.page_animation = Some(PageAnimation {
+            from,
+            started_at: Instant::now(),
+            // Dashboard is the left/"home" page and Library the right one, so
+            // forward navigation enters from the right and Back reverses it.
+            direction: if to == Page::Dashboard { -1.0 } else { 1.0 },
+        });
     }
 
     pub fn close(&mut self) -> Task<Message> {
@@ -1963,7 +2002,7 @@ impl cosmic::Application for HearthDeck {
                 return self.focus_grid_index(0);
             }
             Message::OpenDashboard => {
-                self.page = Page::Dashboard;
+                self.switch_page(Page::Dashboard);
                 self.focused_id = None;
                 let id = self
                     .dashboard_entry_ids()
@@ -1973,7 +2012,7 @@ impl cosmic::Application for HearthDeck {
                 return self.focus_dashboard_id(id);
             }
             Message::OpenLibrary => {
-                self.page = Page::Library;
+                self.switch_page(Page::Library);
                 self.focused_id = None;
                 let mut tasks = vec![self.focus_grid_index(0)];
                 if let Some(task) = self.reveal_tab_strip() {
@@ -1982,7 +2021,7 @@ impl cosmic::Application for HearthDeck {
                 return iced::Task::batch(tasks);
             }
             Message::OpenSearch => {
-                self.page = Page::Library;
+                self.switch_page(Page::Library);
                 return self.focus_text_input(SEARCH_ID.clone());
             }
             Message::InputChanged(value) => {
@@ -2581,6 +2620,9 @@ impl cosmic::Application for HearthDeck {
             Message::DismissLaunch => {
                 self.launch_state.update(LaunchEvent::Dismiss);
             }
+            Message::PageTransitionFinished => {
+                self.page_animation = None;
+            }
         }
         Task::none()
     }
@@ -2611,13 +2653,21 @@ impl cosmic::Application for HearthDeck {
 
     fn view<'a>(&'a self) -> Element<'a, Message> {
         if self.launch_state.is_visible() {
-            self.view_launch_overlay()
-        } else {
-            match self.page {
-                Page::Dashboard => self.view_dashboard(),
-                Page::Library => self.view_main_content(),
-            }
+            return self.view_launch_overlay();
         }
+
+        if let Some(animation) = &self.page_animation {
+            return PageTransition::new(
+                self.page_element(animation.from),
+                self.page_element(self.page),
+                animation.started_at,
+                animation.direction,
+                Message::PageTransitionFinished,
+            )
+            .into();
+        }
+
+        self.page_element(self.page)
     }
 
     fn view_window<'a>(&'a self, id: SurfaceId) -> Element<'a, Message> {
@@ -3098,6 +3148,13 @@ impl cosmic::Application for HearthDeck {
 }
 
 impl HearthDeck {
+    fn page_element<'a>(&'a self, page: Page) -> Element<'a, Message> {
+        match page {
+            Page::Dashboard => self.view_dashboard(),
+            Page::Library => self.view_main_content(),
+        }
+    }
+
     fn view_dashboard<'a>(&'a self) -> Element<'a, Message> {
         let Spacing {
             space_xs,
@@ -3949,6 +4006,52 @@ mod tests {
 
         assert_eq!(app.page, Page::Library);
         assert_eq!(app.focused_id, Some(super::SEARCH_ID.clone()));
+    }
+
+    #[test]
+    fn a_page_change_starts_a_slide_in_the_travel_direction() {
+        let mut app = HearthDeck::default();
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenLibrary);
+        let forward = app.page_animation.expect("forward slide");
+        assert_eq!(forward.from, Page::Dashboard);
+        assert_eq!(forward.direction, 1.0);
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::Close);
+        let back = app.page_animation.expect("back slide");
+        assert_eq!(back.from, Page::Library);
+        assert_eq!(back.direction, -1.0);
+    }
+
+    #[test]
+    fn reselecting_the_current_page_does_not_slide() {
+        let mut app = HearthDeck::default();
+
+        let _ =
+            <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenDashboard);
+        assert!(app.page_animation.is_none());
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSearch);
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenLibrary);
+
+        assert_eq!(app.page, Page::Library);
+        assert!(app.page_animation.is_none());
+    }
+
+    #[test]
+    fn finishing_the_slide_drops_the_transition() {
+        let mut app = HearthDeck::default();
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenLibrary);
+        assert!(app.page_animation.is_some());
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::PageTransitionFinished,
+        );
+
+        assert!(app.page_animation.is_none());
+        assert_eq!(app.page, Page::Library);
     }
 
     #[test]
