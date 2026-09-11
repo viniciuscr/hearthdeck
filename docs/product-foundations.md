@@ -61,30 +61,23 @@ Do not assign a local meaning to B that differs from it.
 `B` (gamepad) and Escape (keyboard) are handled by one global, focus-independent
 mechanism instead of per-screen code:
 
-- `lib/main.dart` registers a single `HardwareKeyboard.instance.addHandler`
-  for the lifetime of the app. It fires for every `Escape` key event
-  regardless of what currently has focus, and routes it through the same
-  `_handleBackIntent` logic (dismiss a focused writable text field via
-  `unfocusWritableEditableText`, else `maybePop` the app's global
-  `navigatorKey`).
-- The framework's own default `Escape -> DismissIntent` keyboard shortcut is
-  removed from `MaterialApp.shortcuts` so it cannot also fire through the
-  focus tree and cause a double pop alongside the handler above.
-- Gamepad Back reaches the same `_handleBackIntent` logic through the
-  `TvBackIntent` `Actions` handler in `MaterialApp.builder`.
+- The frontend's top-level `Application::subscription()` maps the Escape key
+  and the gamepad `Back` button to the same back intent, so it fires
+  regardless of which widget currently holds focus.
+- Gamepad Back arrives through the `gilrs` subscription
+  (`subscriptions/gamepad.rs`) as `GamepadEvent::Back`, not through a
+  per-widget key handler.
+- Both paths must run the ordered dismissals above before closing the current
+  route.
 
-Screens must **not** reintroduce a local `Focus`/`Shortcuts`-based Escape
-handler. Flutter dispatches key events starting from `primaryFocus` and
-bubbles *up* the tree, so a per-screen `Focus(onKeyEvent: ...)` widget only
-receives Escape once something inside that screen actually holds focus. When
-a screen has no `autofocus: true` anywhere, `primaryFocus` sits on the
-route's own scope (an ancestor of that widget), and the handler is
-unreachable until the user happens to hover or otherwise focus something on
-the page. This was a real bug (Service status screen: Escape only worked
-after hovering the refresh button) and is exactly why Back is a single
-app-wide listener now rather than a per-screen concern. See the regression
-test `Escape leaves the Service status screen even when nothing on it has
-ever been focused or hovered` in `test/widget_test.dart`.
+Screens must **not** reintroduce a local, widget-scoped Escape handler. Key
+events reach the application subscription rather than the focused widget, so a
+per-widget handler would only fire once something inside that screen holds
+focus and could double-fire alongside the global one. This was a real bug in
+the former Flutter client (Service status screen: Escape only worked after
+hovering the refresh button), and it is exactly why Back is a single app-wide
+concern now; the Flutter-only regression test that covered it was removed with
+that client.
 
 ### Focus Is The Navigation State
 
@@ -96,10 +89,11 @@ The focused control is the user's cursor. Every interactive element must:
 - have a useful semantic label and a visible label or icon meaning;
 - work with controller, keyboard, and pointer without changing its result.
 
-Use `TvFocusable`, `TvDirectionalFocusNavigation`, and the shared TV controls
-before creating a custom focus implementation. A custom control needs an
-explicit focus, activation, semantics, scroll-visibility, and return-focus
-plan. A screen must not strand focus after a dialog closes or a list reloads.
+Use the shared focus helpers (`focusable::{Focusable, find_focused, focus}`)
+and the common widget focus/activation plumbing before creating a custom focus
+implementation. A custom control needs an explicit focus, activation,
+semantics, scroll-visibility, and return-focus plan. A screen must not strand
+focus after a dialog closes or a list reloads.
 
 For a destructive action, A opens a clearly focused confirmation surface; it
 does not immediately destroy data. The safe or cancel action is the initial
@@ -128,10 +122,10 @@ and classify that item. They are separate on purpose:
 ```text
 host or installed-client data  -> discovery provider -> library_items
 local authoritative metadata   -> metadata provider  -> catalog_enrichments
-                                                   \-> catalog read model -> API -> Flutter
+                                                   \-> catalog read model -> API -> frontend
 ```
 
-The daemon never performs enrichment during a Flutter request. The client
+The daemon never performs enrichment during a frontend request. The client
 receives one already-joined read model and does not infer metadata from a
 provider name or application title.
 
@@ -211,8 +205,8 @@ link actions. The target media design is a daemon-owned asset cache that
 downloads, validates, sizes, evicts, and serves artwork locally. Frontend code
 must not treat a provider URL as a trusted local asset.
 
-**Current gap:** Heroic artwork URLs are still passed to Flutter and loaded
-directly. This is a transitional implementation, not the asset policy. Do not
+**Current gap:** Heroic artwork URLs are still passed to the frontend and
+loaded directly. This is a transitional implementation, not the asset policy. Do not
 extend it to additional providers; replace it with the bounded asset cache.
 
 ### What Is Not Yet In The Catalog
@@ -220,30 +214,26 @@ extend it to additional providers; replace it with the bounded asset cache.
 RomM remains a paginated live source rather than catalog material. The daemon
 stores only its connection settings and proxies consoles, ROM pages, artwork,
 and managed RetroArch launch; it does not materialize those games into
-`library_items`. Flutter uses its dedicated Retro view, while the COSMIC
-frontend merges only the selected console's live pages into its Console Games
-surface.
+`library_items`. The former Flutter client used its own dedicated Retro view;
+the Rust frontend merges only the selected console's live pages into its
+Console Games surface.
 
-Search (`lib/search.dart`) reads through `CatalogRepository.load()` for PC
-games/apps (the same repository `FullLibraryPage` uses - live when
-configured, fixture-backed `MockCatalogRepository` otherwise) and issues a
-live, debounced query against `GET /v1/retro/roms?q=...` for console games,
-so it is no longer a separate fixture list. A `LibraryCategory` chip
-(All/PC games/Apps/Console games) scopes which of those sources is queried;
-opening search from a specific section (e.g. the Console games screen's own
-Search button) only pre-selects that chip as a default - the user can widen
-it back to All. `platform_id` on `/v1/retro/roms` is optional specifically so
-an unscoped search can span every console at once, forwarded to RomM's own
-`search_term`, rather than requiring the client to page through every
-console's full library to filter locally.
+Search filters the catalog the frontend has already loaded from the daemon.
+The former Flutter client also issued a live, debounced
+query against `GET /v1/retro/roms?q=...` and merged console games into its
+results; that client-side merge was removed with the Flutter client. The Rust
+frontend instead browses console games through the Console Games section.
+`platform_id` on `/v1/retro/roms` stays optional so a query can span every
+console at once, forwarded to RomM's own `search_term`, rather than requiring
+the client to page through every console's full library to filter locally.
 
 ## Service Architecture
 
 The client, daemon, bridge, and host each have a narrow responsibility:
 
 ```text
-Flutter client
-  controller focus, routes, rendering, repository boundary
+frontend client
+  controller focus, routes, rendering, daemon client boundary
        | paired HTTP(S) requests and WebSocket events
 hearthdeck-daemon
   API, pairing, SQLite, catalog joins, schedules, provider health, events
@@ -257,8 +247,8 @@ host desktop entries, transient systemd user services, direct-connect or (Heroic
 The daemon owns the public contract, persistent state, and background work. It
 must not contain host-specific command construction. The bridge owns Linux
 integration and re-discovers an item before launch; it receives typed IDs, not
-shell commands or `Exec` strings. Flutter depends on `CatalogRepository`, not
-on a provider, transport, Linux API, or database schema.
+shell commands or `Exec` strings. The frontend depends on the daemon's typed
+API, not on a provider, transport, Linux API, or database schema.
 
 On Linux, `hearthdeck.target` starts the daemon and owns the bridge socket. The
 socket has a user-only `0600` mode and activates the bridge only when the daemon
@@ -300,7 +290,7 @@ compete with games and media applications.
 - Do not add an always-running process when a daemon module, socket activation,
   or an existing host service is sufficient.
 - Do not do discovery, enrichment, image downloads, or blocking host work on
-  the Flutter UI path.
+  the frontend UI path.
 - Bound queues, payload sizes, event history, result pages, retries, image
   dimensions, asset cache size, and diagnostic output. Coalesce repeated work.
 - Store durable catalog state in SQLite and keep only the working set in

@@ -43,9 +43,9 @@ just check
 ```
 
 This runs:
-- Formatting validation (Dart + Rust)
-- Rust compilation and tests
-- Flutter analysis and tests
+- Formatting validation (`cargo fmt`)
+- Rust service compilation and tests
+- Frontend crate linting and tests
 
 ## Skipping the Hook (Not Recommended)
 
@@ -114,7 +114,7 @@ See **CONTRIBUTING.md** → "Common Errors and Fixes" → "wayland-protocols not
 
 The pre-push hook runs **locally** before push. After pushing, GitHub Actions runs the `code-quality.yml` workflow which performs **additional** validation:
 
-- Full test suites (Rust + Flutter)
+- Full test suites (Rust)
 - Strict linting (Clippy with warnings-as-errors in release mode)
 - Package building (Arch Linux)
 

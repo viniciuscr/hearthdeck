@@ -1,5 +1,5 @@
 - Prefer `tracing` logging over ad hoc prints in Rust services.
-- Keep platform-specific behavior behind adapters; shared API/catalog logic must not branch on macOS/Linux/Android.
+- Keep platform-specific behavior behind adapters; shared API/catalog logic must not branch on macOS/Linux.
 - Discovery uses independent provider snapshots and per-source workers; a failed provider must not clobber another source.
 - Bridge launches are validated locally and executed through systemd user units, not raw shell commands from the daemon.
 - Controller navigation is a product contract, not an implementation detail; avoid local Escape/Back shortcuts that bypass the global handler.

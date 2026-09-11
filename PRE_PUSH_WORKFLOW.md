@@ -45,7 +45,7 @@ Quick Start
 Pre-Commit Workflow
 ├── Format Check
 ├── Build & Test (Services)
-├── Build & Test (Flutter App)
+├── Lint & Test (Frontend)
 └── Full Validation
 
 Pre-Push Validation
@@ -121,7 +121,7 @@ This recipe runs the same validation as the git hook but without attempting a pu
 
 ---
 
-### 5. **`.github/workflows/code-quality.yml`** - Enhanced CI Gatekeeping
+### 5. **`.github/workflows/code-quality.yml`** - Enhanced CI Gatekeeping (Rust only)
 
 **Location**: `/hearthdeck/.github/workflows/code-quality.yml`
 
@@ -135,11 +135,6 @@ This recipe runs the same validation as the git hook but without attempting a pu
 - ✅ Full test suite: `cargo test --workspace`
 - ✅ Strict linting: `cargo clippy --workspace --all-targets --release -- -D warnings`
 - ✅ Caching for faster subsequent runs
-
-#### Job: `check-flutter` (Ubuntu with Flutter)
-- ✅ Dart formatting check: `dart format --output=none --set-exit-if-changed`
-- ✅ Flutter analysis: `flutter analyze`
-- ✅ Full test suite: `flutter test`
 
 #### Job: `validate-ci-readiness`
 - ✅ Confirms all quality gates passed before allowing workflow completion
@@ -283,7 +278,6 @@ git push
 - **Pre-push hook** runs `mise exec --` to access project toolchains
 - **CI workflow** uses Arch Linux container (matches CI build environment)
 - **Rust version pinned** to 1.97.1 (dtolnay/rust-toolchain@1.97.1)
-- **Flutter version pinned** to 3.44.8
 - **Cache** strategy prevents rebuild on every push (after first push)
 
 ---

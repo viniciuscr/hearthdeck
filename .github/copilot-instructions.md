@@ -26,51 +26,54 @@ The reader is a senior engineer who is learning Rust — and does not know this 
 
 # Project map — Hearthdeck
 
-Flutter (Dart) + Rust monorepo. Linux TV/kiosk game library frontend.
+Rust monorepo. Linux TV/kiosk game library frontend built on COSMIC (iced/libcosmic).
 
 ## Top-level layout
 
 | Path | What lives there |
 |------|-----------------|
-| `lib/` | Flutter app (all Dart source) |
-| `services/` | Rust workspace: daemon, bridge, protocol, observability, overlay |
+| `services/` | Rust workspace: frontend, daemon, bridge, protocol, observability, overlay, input |
 | `docs/` | Architecture docs (backend-architecture, kiosk-session, observability, etc.) |
-| `deploy/` | systemd units, packaging |
+| `deploy/` | systemd units |
+| `packaging/` | Arch Linux package build |
 | `scripts/` | Build/dev helper scripts |
-| `test/` | Flutter tests |
+| `contracts/` | OpenAPI contract |
 | `justfile` | All dev commands — start here |
 
 ## Key services (under `services/`)
 
 | Crate | Role |
 |-------|------|
+| `hearthdeck-frontend` | COSMIC (iced/libcosmic) TV UI; talks to the daemon over the paired API. |
 | `hearthdeck-daemon` | HTTP/WebSocket API, SQLite state, discovery, pairing. `Type=notify` systemd unit. |
 | `hearthdeck-bridge` | Linux-only desktop-entry discovery + allowlisted launches. Socket-activated. |
 | `hearthdeck-protocol` | Shared types between daemon and client. |
 | `hearthdeck-observability` | Shared tracing/metrics setup. |
-| `hearthdeck-overlay` | COSMIC layer-shell overlay surface (Rust/libcosmic). |
+| `hearthdeck-overlay` | COSMIC layer-shell overlay surface. |
+| `hearthdeck-input` | Gamepad/input broker. |
 
-## Key Flutter entry points (under `lib/`)
+## Key frontend entry points (under `services/hearthdeck-frontend/src/`)
 
 | File | Role |
 |------|------|
-| `main.dart` | App entry point |
-| `tv_components.dart` | Shared TV-UI primitives (`TvFocusable`, `TvTwoPaneLayout`, etc.) |
-| `full_library.dart` | Main catalog surface |
-| `settings/` | Settings screens |
-| `backend/` | Backend API client |
-| `catalog/` | Catalog models and repository |
+| `main.rs` | App entry point |
+| `app.rs` | Application state, navigation, views |
+| `app_group.rs` | Sections, groups, catalog filtering |
+| `style.rs` | Design tokens and widget styles |
+| `widgets/` | Reusable widgets (application tile, transitions) |
+| `providers/` | Daemon client and record models |
+| `subscriptions/` | Gamepad and event subscriptions |
 
 ## Dev commands (all via `just`)
 
 ```
-just setup            # install toolchains + Flutter deps
-just app              # run Flutter client
-just app-live ...     # run with live backend (needs BACKEND_URL + PAIRING_TOKEN)
-just dev              # Flutter + backend together
-just check            # format + all tests
-just check-services   # Rust check/test/clippy only
-just test-app         # Flutter analyze + tests
+just setup            # install toolchains
+just dev              # frontend + backend together
+just run-frontend     # run the COSMIC frontend
+just check            # format + all checks/tests
+just check-services   # Rust backend check/test/clippy
+just check-frontend   # frontend clippy
+just test-frontend    # frontend tests
 just build-services   # release Rust build
 just install-services # install systemd units for local testing
 just services-status  # check running services
@@ -82,7 +85,7 @@ just logs-errors      # error-only journal
 ## Architecture invariants
 
 - Navigation is controller-first; Back is a global contract — no per-screen Escape handlers.
-- Reuse `Tv*` widgets before adding new UI machinery.
+- Reuse the shared widgets and layout helpers before adding new UI machinery.
 - Platform-specific behavior stays behind adapters; shared API/catalog must not branch on OS.
 - Launches always go through transient systemd user units (never raw shell from daemon).
 - Discovery providers are independent; one failure must not clobber another source.
@@ -96,6 +99,6 @@ just logs-errors      # error-only journal
 
 ## Validation rule
 
-- Frontend change → `just test-app`
+- Frontend change → `just test-frontend` (lint with `just check-frontend`)
 - Backend change → `just check-services`
 - Cross-cutting → `just check`

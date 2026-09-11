@@ -3,7 +3,7 @@
 ## Components
 
 ```text
-Paired Flutter client (Linux or Android)
+Paired frontend client (Linux)
     |
     | HTTPS + bearer token, WebSocket events
     v
@@ -30,7 +30,7 @@ target.
 ## Platform Adaptation Rules
 
 Platform-specific behavior must terminate at an adapter boundary. Shared API,
-database, catalog, discovery scheduling, and Flutter repository code must not
+database, catalog, discovery scheduling, and frontend client code must not
 branch on macOS, Linux, or Android.
 
 | Concern | Linux host | macOS development host | Android client |
@@ -38,11 +38,11 @@ branch on macOS, Linux, or Android.
 | Application discovery | `desktop-apps` provider | `macos-apps` provider | None |
 | Application launch | Supervised systemd user scope | LaunchServices `open -b` adapter | Never launches host apps directly |
 | Backend transport | Local daemon | Local integration daemon | Paired HTTPS daemon |
-| Flutter platform code | No Linux-specific discovery code | macOS entitlements only | Android network/security config only |
+| Client platform code | No Linux-specific discovery code | macOS entitlements only | Android network/security config only |
 
 The daemon chooses providers with compile-time target guards. A provider emits
-the same `CatalogRecord` shape on every host. Flutter groups sources by the
-backend `source_id`, not by platform names. This keeps future Steam, GOG, Epic,
+the same `CatalogRecord` shape on every host. The frontend groups sources by
+the backend `source_id`, not by platform names. This keeps future Steam, GOG, Epic,
 emulator, movie, and streaming providers portable at the contract level.
 
 ## Discovery Providers
@@ -89,7 +89,7 @@ daemon starts
   -> each provider scans independently
   -> CatalogStore.replace_source(source_id, records) commits one source snapshot
   -> daemon emits library_changed { source_id, record_count }
-  -> connected Flutter ApiCatalogRepository reloads GET /v1/library
+  -> connected frontend DaemonClient reloads GET /v1/library
 ```
 
 The first scan runs automatically at daemon startup. Later refreshes are
@@ -99,26 +99,24 @@ The request endpoint returns `202 Accepted`; completion is communicated by the
 
 ## Frontend Catalog Boundary
 
-The Flutter UI depends on `CatalogRepository`, never on an HTTP client or a
-provider name. Implementations are:
+The frontend depends on the daemon library read model, never on a provider
+name. The Rust `DaemonClient` (`providers/daemon.rs`) reads `CatalogItem`
+records from `GET /v1/library` and classifies them into Games and
+category-based App views from canonical `kind` and `metadata.categories`.
+Desktop-entry and AppStream categories therefore classify applications
+without a frontend provider-specific branch. (The former Flutter
+`CatalogRepository`/`MockCatalogRepository` abstraction was removed with the
+Flutter client.)
 
-- `MockCatalogRepository`: fixture sources for macOS UI development and tests.
-- `ApiCatalogRepository`: converts daemon library records into Games and
-  category-based App tabs from canonical `kind` and `metadata.categories`.
-  Desktop-entry and AppStream categories therefore classify applications
-  without a frontend provider-specific branch.
-
-`FullLibraryPage` accepts a repository by injection. The default factory uses
-an explicit API repository when both `HEARTHDECK_BACKEND_URL` and
-`HEARTHDECK_PAIRING_TOKEN` are supplied as Dart defines. Packaged Linux builds
-use a local repository that pairs with the loopback daemon at runtime; macOS UI
-development and tests retain mock catalog content. Selecting a tile opens shared
-details; the primary action delegates launch to the repository.
+Packaged Linux builds pair with the loopback daemon at runtime. The client
+reads `HEARTHDECK_BACKEND_URL` and `HEARTHDECK_PAIRING_TOKEN` from the
+environment to use an explicit remote endpoint. Selecting a tile opens shared
+details; the primary action delegates launch to the daemon.
 
 `just dev` creates a temporary loopback pairing after daemon startup and starts
-Flutter through `app-live`, so Full Library uses real discovered catalog data
-in development. The dashboard and search remain static fixture surfaces until
-their own catalog repositories are introduced.
+the COSMIC frontend, so the library uses real discovered catalog data in
+development. The dashboard shelves and library search read the same daemon
+catalog.
 
 ## Provider Health
 
@@ -178,7 +176,7 @@ flows. It is not included in the public API contract.
 Install and enable `hearthdeck.target` from the systemd **user** units in
 `deploy/systemd/`. A user service owns graphical application launches. The
 Hearthdeck Kiosk session's script execs Gamescope directly on the DRM/KMS seat
-with the Flutter client as its only child; there is no separate desktop
+with the frontend as its only child; there is no separate desktop
 compositor in front of it. The bridge launches registered desktop
 applications and RetroArch games as direct clients of that same session
 (confirmed on real hardware that a second Gamescope process joining it as a
@@ -191,6 +189,6 @@ Configure LAN TLS through
 ## Next Slice
 
 Add a host pairing screen that displays the pairing code and TLS fingerprint,
-then store the paired endpoint/token in the Flutter client using platform
-secure storage. After that, replace static library models with `GET /v1/library`
+then store the paired endpoint/token in the frontend client using secure
+storage. After that, replace static library models with `GET /v1/library`
 and use WebSocket events to refresh the UI.

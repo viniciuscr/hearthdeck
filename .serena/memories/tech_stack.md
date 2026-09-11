@@ -1,5 +1,4 @@
-- Flutter / Dart 3.12.2.
 - Rust workspace under `services/`.
+- Frontend: COSMIC `iced`/`libcosmic` layer-shell UI in the `hearthdeck-frontend` crate; `gilrs` for gamepad input.
 - Backend stack: `axum`, `axum-server`/Rustls, `tokio`, `tracing`, `reqwest`, SQLite.
-- Frontend stack: `dynamic_color`, `flutter_gamepads`, `shared_preferences`, `http`.
 - Linux packaging/deployment uses systemd user units and Arch packaging (`PKGBUILD`, pacman package, `just`, `mise`).

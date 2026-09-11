@@ -10,7 +10,7 @@ Welcome to the Hearthdeck project! This guide covers the development workflow, p
 just setup
 ```
 
-This installs project-pinned versions of all toolchains (Rust, Flutter, etc.) using `mise`.
+This installs project-pinned versions of all toolchains (Rust and `just`) using `mise`.
 
 ### 2. Set Up Git Hooks (Recommended)
 
@@ -30,7 +30,7 @@ Run these checks **before committing** to catch errors early:
 ```bash
 just format
 ```
-Formats all Dart (Flutter) and Rust code. This fixes most formatting issues automatically.
+Formats all Rust code with `cargo fmt`. This fixes most formatting issues automatically.
 
 ### Build & Test (Services)
 ```bash
@@ -38,17 +38,18 @@ just check-services
 ```
 Runs cargo check, tests, and clippy linting on all backend services. Must pass before pushing.
 
-### Build & Test (Flutter App)
+### Lint & Test (Frontend)
 ```bash
-just check-app
+just check-frontend   # Clippy on the hearthdeck-frontend crate
+just test-frontend    # Run the frontend crate's tests
 ```
-Analyzes, tests, and builds the macOS debug app. Catches Dart issues early.
+Lints the COSMIC TV UI crate and runs its tests. Catches frontend issues early.
 
 ### Full Validation (All Components)
 ```bash
 just check
 ```
-Runs format, check-services, and check-app in sequence. Use this before creating a PR.
+Runs format, check-services, check-frontend, and test-frontend in sequence. Use this before creating a PR.
 
 ## Pre-Push Validation
 
@@ -122,7 +123,7 @@ git add .
 git commit -m "chore: apply rustfmt formatting"
 ```
 
-### Error: `cargo clippy` reports warnings in release mode
+### Error: `cargo clippy` reports warnings
 **Cause**: Code violates Clippy linting rules (enforced as errors in CI).  
 **Example**:
 ```rust
@@ -134,7 +135,8 @@ for x in vec {
 
 **Fix**: Use the suggestion from Clippy output:
 ```bash
-just check-services  # Runs clippy and shows suggestions
+just check-services  # Runs clippy on the Rust services
+just check-frontend  # Runs clippy on the frontend crate
 # Apply suggested changes, e.g., convert to iterator:
 ```
 
@@ -158,7 +160,7 @@ cargo build --target x86_64-unknown-linux-gnu --manifest-path services/Cargo.tom
 
 ## Workflow: Creating a PR
 
-1. **Make changes** to Flutter or Rust code
+1. **Make changes** to Rust code (services or frontend)
 2. **Run pre-commit checks**:
    ```bash
    just check
@@ -174,10 +176,9 @@ cargo build --target x86_64-unknown-linux-gnu --manifest-path services/Cargo.tom
    git push origin your-branch
    ```
 6. **PR opens** and GitHub Actions runs the full CI suite:
-   - Flutter analysis and tests
    - Rust formatting check
    - Rust compilation and tests
-   - Clippy linting (warnings = errors)
+   - Clippy linting (warnings = errors), including the frontend crate
    - Arch Linux package build
 
 ## Architecture Overview
@@ -187,11 +188,13 @@ cargo build --target x86_64-unknown-linux-gnu --manifest-path services/Cargo.tom
   - `hearthdeck-bridge`: Linux desktop environment integration
   - `hearthdeck-observability`: Telemetry and logging
   - `hearthdeck-protocol`: Shared types and API contracts
-   - `hearthdeck-overlay`: COSMIC quick-menu layer-shell surface
+  - `hearthdeck-overlay`: COSMIC quick-menu layer-shell surface
+  - `hearthdeck-frontend`: COSMIC layer-shell TV launcher UI
 
-- **`lib/`**: Flutter frontend (Dart)
-- **`test/`**: Flutter tests
+- **`packaging/`**: Distribution packaging (e.g. Arch Linux)
+- **`deploy/`**: systemd units and deployment assets
 - **`docs/`**: Architecture and design documentation
+- **`scripts/`**: Build and development helper scripts
 - **`.github/workflows/`**: CI/CD pipeline (GitHub Actions)
 
 ## Testing
@@ -211,10 +214,13 @@ just check-services
 cargo test --manifest-path services/Cargo.toml -p hearthdeck-daemon
 ```
 
-### Frontend (Dart/Flutter)
+### Frontend (Rust)
 ```bash
-# Run Flutter tests:
-just test-app
+# Run the frontend crate's tests:
+just test-frontend
+
+# Lint the frontend crate:
+just check-frontend
 ```
 
 ## Troubleshooting

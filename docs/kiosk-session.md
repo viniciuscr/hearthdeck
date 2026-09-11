@@ -4,7 +4,7 @@ This document exists because this session broke, got "fixed" three different
 ways by three different guesses at which commit actually worked, and each
 guess was wrong in a way that took real time to untangle. Read this fully
 before touching `packaging/arch/hearthdeck-session`,
-`linux/runner/my_application.cc`, or anything claiming to be an in-game
+`services/hearthdeck-frontend/`, or anything claiming to be an in-game
 overlay.
 
 ## What actually runs, in order
@@ -57,8 +57,8 @@ import, the bridge would silently believe it's running outside the Kiosk
 session — even while genuinely inside it — and skip that assignment.
 
 The same import happens a second time, for different variables, from a
-different place: Hearthdeck's own native startup (`my_application.cc`)
-imports `DISPLAY`/`WAYLAND_DISPLAY` into systemd `--user` too. This has to
+different place: Hearthdeck's own native startup imports
+`DISPLAY`/`WAYLAND_DISPLAY` into systemd `--user` too. This has to
 happen there and not in the session script, because Gamescope only assigns
 those two once it starts — which is after the script has already `exec`'d
 into it and lost the ability to run anything else. Without this second
@@ -171,8 +171,9 @@ lesson" below for why that distinction matters).
    tree.
 
 4. **The overlay was wired into Hearthdeck's own session startup.**
-   Hearthdeck's GTK runner (`linux/runner/my_application.cc`) started
-   started `hearthdeck-overlay` as its own child immediately after the
+   Hearthdeck's native startup (the Flutter/GTK runner at the time, since
+   removed with the Flutter client) started `hearthdeck-overlay` as its own
+   child immediately after the
    first frame rendered, *unconditionally*, for the entire time Hearthdeck
    was running — not only while a game was active. The outer session's
    `gamescope` invocation also gained `--expose-wayland` to let that

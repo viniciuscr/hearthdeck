@@ -56,7 +56,7 @@ For catalog synchronization, expect this lifecycle in order:
 2. `discovery started` with `source_id`.
 3. `catalog source replaced` with `record_count`.
 4. `discovery completed` with `duration_ms`.
-5. A `library_changed` WebSocket event to live Flutter clients.
+5. A `library_changed` WebSocket event to live frontend clients.
 
 ## Operations
 

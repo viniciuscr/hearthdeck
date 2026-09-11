@@ -665,6 +665,9 @@ enum Message {
     FocusGridFirst,
     OpenDashboard,
     OpenLibrary,
+    /// Open the Library on a console's tab. The payload is the console's
+    /// index within the Console Games tab strip.
+    OpenConsole(usize),
     OpenSearch,
     Close,
     ActivateApp(usize),
@@ -1307,22 +1310,88 @@ impl HearthDeck {
         }
     }
 
+    /// Consoles offered on the dashboard, derived from the live RomM platform
+    /// list rather than any fixed set. Each entry keeps its index within the
+    /// Console Games tab strip so a selection can open the matching tab.
+    /// Custom (user-created) groups are skipped: they are not consoles.
+    fn dashboard_consoles(&self) -> Vec<(usize, &AppGroup)> {
+        self.config
+            .sections
+            .console_games
+            .iter()
+            .enumerate()
+            .filter(|(_, group)| group.romm_platform_id().is_some())
+            .collect()
+    }
+
+    fn dashboard_console_id_for_widget(&self, id: &widget::Id) -> Option<usize> {
+        self.dashboard_consoles()
+            .into_iter()
+            .find_map(|(index, _)| (dashboard_console_id(index) == *id).then_some(index))
+    }
+
+    /// Opens the Library on the Console Games section with `index`'s tab
+    /// selected. Used when the dashboard console rail is activated.
+    fn open_console(&mut self, index: usize) -> Task<Message> {
+        if self.config.sections.console_games.get(index).is_none() {
+            return Task::none();
+        }
+        self.edit_name = None;
+        self.search_value.clear();
+        self.cur_section = Section::ConsoleGames;
+        self.cur_group = Some(index);
+        self.scroll_offset = 0.0;
+        // The dashboard is what the user was just on, so jump straight to the
+        // tab without replaying a tab slide.
+        self.tab_animation = None;
+        self.group_keys = (0..self.config.sections.console_games.len() as u64).collect();
+        self.switch_page(Page::Library);
+        self.focused_id = None;
+
+        let mut cmds = vec![
+            self.load_romm_page(0),
+            iced::widget::scrollable::scroll_to(
+                SCROLLABLE_ID.clone(),
+                AbsoluteOffset {
+                    x: Some(0.0),
+                    y: Some(0.0),
+                },
+            ),
+        ];
+        if let Some(task) = self.reveal_tab_strip() {
+            cmds.push(task);
+        }
+        cmds.push(self.focus_grid_index(0));
+        iced::Task::batch(cmds)
+    }
+
     fn dashboard_entry_ids(&self) -> Vec<widget::Id> {
         self.dashboard_entry_rows().into_iter().flatten().collect()
     }
 
     fn dashboard_entry_rows(&self) -> Vec<Vec<widget::Id>> {
-        self.dashboard_shelves()
+        let consoles: Vec<widget::Id> = self
+            .dashboard_consoles()
             .into_iter()
-            .filter_map(|(shelf, entries)| {
-                (!entries.is_empty()).then(|| {
-                    entries
-                        .into_iter()
-                        .map(|entry| shelf.widget_id(&entry.id))
-                        .collect()
-                })
-            })
-            .collect()
+            .map(|(index, _)| dashboard_console_id(index))
+            .collect();
+        let mut rows: Vec<Vec<widget::Id>> = Vec::new();
+        if !consoles.is_empty() {
+            rows.push(consoles);
+        }
+        rows.extend(
+            self.dashboard_shelves()
+                .into_iter()
+                .filter_map(|(shelf, entries)| {
+                    (!entries.is_empty()).then(|| {
+                        entries
+                            .into_iter()
+                            .map(|entry| shelf.widget_id(&entry.id))
+                            .collect()
+                    })
+                }),
+        );
+        rows
     }
 
     fn dashboard_entry_id_for_widget(&self, id: &widget::Id) -> Option<String> {
@@ -2142,6 +2211,9 @@ impl cosmic::Application for HearthDeck {
                 }
                 return iced::Task::batch(tasks);
             }
+            Message::OpenConsole(index) => {
+                return self.open_console(index);
+            }
             Message::OpenSearch => {
                 self.switch_page(Page::Library);
                 return self.focus_text_input(SEARCH_ID.clone());
@@ -2187,6 +2259,9 @@ impl cosmic::Application for HearthDeck {
                     return self.refresh_dashboard_notice();
                 }
                 if self.page == Page::Dashboard {
+                    if let Some(index) = self.dashboard_console_id_for_widget(&focused) {
+                        return self.open_console(index);
+                    }
                     let Some(entry_id) = self.dashboard_entry_id_for_widget(&focused) else {
                         return Task::none();
                     };
@@ -3449,13 +3524,50 @@ impl HearthDeck {
             })
             .collect();
 
+        // Console rail. The entries come from the live RomM platform list, so
+        // this only appears once the library has reported consoles with games.
+        let consoles_section: Option<Element<'_, Message>> = {
+            let consoles = self.dashboard_consoles();
+            (!consoles.is_empty()).then(|| {
+                let chips: Vec<Element<'_, Message>> = consoles
+                    .into_iter()
+                    .map(|(index, group)| {
+                        button::custom(
+                            row![
+                                icon::icon(icon::from_name("input-gaming-symbolic").into())
+                                    .size(ICON_BODY),
+                                text::body(group.name()).size(TEXT_BODY),
+                            ]
+                            .spacing(space_s)
+                            .align_y(Alignment::Center),
+                        )
+                        .id(dashboard_console_id(index))
+                        .padding([space_s, space_l])
+                        .class(section_button_class(false))
+                        .on_press(Message::OpenConsole(index))
+                        .into()
+                    })
+                    .collect();
+                column![
+                    text::title3(fl!("consoles")).size(TEXT_HEADER),
+                    container(row(chips).spacing(space_m).wrap()).padding([space_m, 0, 0, 0]),
+                ]
+                .into()
+            })
+        };
+
         let mut content = column![top_bar].spacing(space_m);
         if let Some(notice) = notice {
             content = content.push(notice);
         }
+        let mut lower = column![].spacing(space_l);
+        if let Some(consoles) = consoles_section {
+            lower = lower.push(consoles);
+        }
+        lower = lower.push(column(shelves).spacing(space_l));
         let content = content
             .push(space::vertical().height(Length::Fill))
-            .push(column(shelves).spacing(space_l))
+            .push(lower)
             .push(space::vertical().height(space_xxl))
             .width(Length::Fill)
             .height(Length::Fill)
@@ -3978,6 +4090,12 @@ fn focused_entry_index(focused: &widget::Id, entry_ids: &[widget::Id]) -> Option
     entry_ids.iter().position(|id| id == focused)
 }
 
+/// Widget id of the dashboard tile for the console at `index` within the
+/// Console Games tab strip.
+fn dashboard_console_id(index: usize) -> widget::Id {
+    widget::Id::from(format!("dashboard-console-{index}"))
+}
+
 /// Position of a tab within the strip: the "all apps" tab is 0, custom groups
 /// follow in order. Used to pick the slide direction.
 fn tab_position(group: Option<usize>) -> i32 {
@@ -4028,7 +4146,7 @@ mod tests {
         VirtualKeyboard, focused_entry_index, is_primary_window, next_romm_offset,
         romm_page_is_current, selected_romm_platform_id,
     };
-    use crate::app_group::{AppLibraryConfig, Section};
+    use crate::app_group::{AppGroup, AppLibraryConfig, FilterType, Section};
     use crate::providers::daemon::{HealthResponse, HostCapabilities, ProviderHealthInfo};
     use cosmic::{
         desktop::{DesktopEntryData, fde::IconSource},
@@ -4336,6 +4454,69 @@ mod tests {
             app.dashboard_entry_id_for_widget(&rows[0][0]),
             Some("recent-a".into())
         );
+    }
+
+    #[test]
+    fn dashboard_lists_consoles_from_the_live_platforms() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string())]);
+        // A user-created folder in the console section is not a console.
+        config.sections.console_games.push(AppGroup {
+            name: "My folder".into(),
+            icon: String::new(),
+            filter: FilterType::AppIds(vec!["x".into()]),
+        });
+
+        let app = HearthDeck {
+            config,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            app.dashboard_consoles()
+                .into_iter()
+                .map(|(index, group)| (index, group.name()))
+                .collect::<Vec<_>>(),
+            vec![(0, "SNES".to_string())]
+        );
+        // The console rail leads the dashboard's focusable rows.
+        assert_eq!(app.dashboard_entry_rows()[0].len(), 1);
+    }
+
+    #[test]
+    fn opening_a_dashboard_console_selects_its_tab() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string()), (9, "Mega Drive".to_string())]);
+        let mut app = HearthDeck {
+            config,
+            ..Default::default()
+        };
+
+        let _ =
+            <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenConsole(1));
+
+        assert_eq!(app.page, Page::Library);
+        assert_eq!(app.cur_section, Section::ConsoleGames);
+        assert_eq!(app.cur_group, Some(1));
+    }
+
+    #[test]
+    fn confirming_a_dashboard_console_opens_its_tab() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string())]);
+        let mut app = HearthDeck {
+            config,
+            ..Default::default()
+        };
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::ConfirmFocused(super::dashboard_console_id(0)),
+        );
+
+        assert_eq!(app.page, Page::Library);
+        assert_eq!(app.cur_section, Section::ConsoleGames);
+        assert_eq!(app.cur_group, Some(0));
     }
 
     #[test]

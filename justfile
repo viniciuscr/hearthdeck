@@ -1,6 +1,5 @@
 set shell := ["zsh", "-cu"]
 services_manifest := "services/Cargo.toml"
-dart_sources := "lib test"
 
 default:
   @just --list
@@ -12,33 +11,14 @@ list:
 # Install all project-pinned toolchains.
 setup:
   mise install
-  mise exec -- flutter pub get
 
-# Run the Flutter application on the selected device.
-app device="macos":
-  mise exec -- flutter run -d {{device}}
+# Run the bridge, local API daemon, and COSMIC frontend together.
+dev:
+  ./scripts/dev
 
-# Run Flutter against a paired Hearthdeck API catalog.
-app-live url token device="macos":
-  mise exec -- flutter run -d {{device}} --dart-define=HEARTHDECK_BACKEND_URL={{url}} --dart-define=HEARTHDECK_PAIRING_TOKEN={{token}}
-
-# Run the bridge, local API daemon, and Flutter app together.
-dev device="macos":
-  ./scripts/dev {{device}}
-
-# Analyze, test, and build the Flutter macOS debug application.
-check-app: test-app
-  mise exec -- flutter build macos --debug
-
-# Format Flutter and Rust source files.
+# Format Rust source files.
 format:
-  mise exec -- dart format {{dart_sources}}
   mise exec -- cargo fmt --manifest-path {{services_manifest}} --all
-
-# Analyze and test the Flutter client.
-test-app:
-  mise exec -- flutter analyze
-  mise exec -- flutter test
 
 # Build, test, and lint the Rust backend workspace.
 check-services:
@@ -99,7 +79,7 @@ test-frontend:
   mise exec -- cargo test --manifest-path {{services_manifest}} -p hearthdeck-frontend
 
 # Run all portable project checks.
-check: format check-services check-frontend test-frontend test-app
+check: format check-services check-frontend test-frontend
 
 # Validate code before pushing: format check, release build, and clippy lint.
 pre-push-check:
@@ -120,16 +100,12 @@ pre-push-check:
   @echo ""
   @echo "✨ All checks passed! Push when ready."
 
-# Run source validation in CI after Flutter and Rust have been installed.
+# Run source validation in CI after Rust has been installed.
 ci-check:
-  flutter pub get
-  dart format --output=none --set-exit-if-changed {{dart_sources}}
   cargo fmt --manifest-path {{services_manifest}} --all -- --check
   cargo check --manifest-path {{services_manifest}} --workspace
   cargo test --manifest-path {{services_manifest}} --workspace
   cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets -- -D warnings
-  flutter analyze
-  flutter test
 
 # Build the Arch Linux package from the current source checkout.
 ci-package-arch:

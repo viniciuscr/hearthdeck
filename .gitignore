@@ -1,16 +1,12 @@
 # Miscellaneous
-*.class
-*.log
 *.pyc
 *.swp
 .DS_Store
 .atom/
 .build/
 .buildlog/
-.history
+.history/
 .svn/
-.swiftpm/
-migrate_working_dir/
 
 # IntelliJ related
 *.iml
@@ -22,27 +18,6 @@ migrate_working_dir/
 # VS Code which you may wish to be included in version control, so this line
 # is commented out by default.
 #.vscode/
-
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
-.dart_tool/
-.flutter-plugins-dependencies
-.pub-cache/
-.pub/
-/build/
-/coverage/
-
-# Symbolication related
-app.*.symbols
-
-# Obfuscation related
-app.*.map.json
-
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
 
 # Rust build artifacts
 /services/target/
@@ -80,8 +55,3 @@ app.*.map.json
 .env.*
 !.env.example
 /coverage/lcov.info
-
-# Machine/employer-specific network config for the docker/ test sandbox
-# (e.g. an internal PyPI mirror with embedded credentials). See
-# docker/pip.conf.example.
-/docker/pip.conf

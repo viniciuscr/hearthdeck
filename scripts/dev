@@ -1,10 +1,9 @@
 #!/bin/zsh
 set -e
 
-device="${1:-macos}"
 runtime_dir=$(mktemp -d /tmp/hearthdeck-dev.XXXXXX)
 log_dir="${HEARTHDECK_DEV_LOG_DIR:-$runtime_dir}"
-flutter_command="${HEARTHDECK_DEV_FLUTTER_COMMAND:-}"
+frontend_command="${HEARTHDECK_DEV_FRONTEND_COMMAND:-}"
 
 # Build through the project task runner before isolating service runtime state.
 just build-services-debug
@@ -73,7 +72,7 @@ pairing_code=$(curl --fail --silent -X POST http://127.0.0.1:38401/v1/pairing | 
   ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("code")')
 pairing_token=$(curl --fail --silent -X POST http://127.0.0.1:38400/v1/pairing/complete \
   -H 'content-type: application/json' \
-  --data "{\"code\":\"$pairing_code\",\"client_name\":\"hearthdeck-dev-$device\"}" | \
+  --data "{\"code\":\"$pairing_code\",\"client_name\":\"hearthdeck-dev\"}" | \
   ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("token")')
 
 for attempt in {1..100}; do
@@ -88,11 +87,14 @@ for attempt in {1..100}; do
 done
 
 if [[ "${catalog_count:-0}" -eq 0 ]]; then
-  print -u2 "Hearthdeck catalog is still empty; Flutter will continue and reload on the next provider event."
+  print -u2 "Hearthdeck catalog is still empty; the frontend will continue and reload on the next provider event."
 fi
 
-if [[ -n "$flutter_command" ]]; then
-  eval "$flutter_command"
+if [[ -n "$frontend_command" ]]; then
+  eval "$frontend_command"
 else
-  just app-live http://127.0.0.1:38400 "$pairing_token" "$device"
+  env \
+    HEARTHDECK_BACKEND_URL="http://127.0.0.1:38400" \
+    HEARTHDECK_PAIRING_TOKEN="$pairing_token" \
+    ./services/target/debug/hearthdeck-frontend
 fi

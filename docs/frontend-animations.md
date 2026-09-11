@@ -37,6 +37,16 @@ transition's lifetime must be bounded by the application, not by a widget.
   `duration: Duration` field with a local default (toggler 200 ms, cards 200 ms,
   `reorderable_flex_row` 180 ms) exposed through a builder method.
 
+## Two transitions, two patterns
+
+Hearthdeck has two motion patterns because the navigation has two kinds of
+relationship:
+
+| Change | Relationship | Pattern | Duration |
+| --- | --- | --- | --- |
+| Dashboard <-> Library | Sibling top-level destinations | Fade through | `PAGE_TRANSITION_DURATION` (320 ms) |
+| Tab (group) change in the Library | Peers on an ordered strip | Shared axis X | `TAB_TRANSITION_DURATION` (240 ms) |
+
 ## Why a fade through, not a lateral push
 
 The Dashboard <-> Library transition is a change between two **sibling top-level
@@ -69,6 +79,26 @@ with the surface colour at full opacity at the midpoint, swap, and fade the
 cover back out. Because the cover is the page's own `root_background`, full
 cover is indistinguishable from the background.
 
+### Renderer gotcha: layer order
+
+iced_wgpu renders its layers in **allocation order** — `for layer in
+self.layers.iter()` in `iced_wgpu::Renderer::render`, over the layers allocated
+by `graphics::layer::Stack`. A plain quad added to the current layer is painted
+*under* any clipped child that pushed a later layer, such as a `scrollable`.
+
+The surface cover must therefore be drawn inside its own `renderer.with_layer(...)`
+call, allocated after the page's layers, or it is painted underneath the page
+and the fade silently disappears (the transition reads as a hard cut). This is
+exactly the regression the first fade-through implementation shipped with. Any
+future full-screen overlay drawn from a widget's `draw` hits the same rule.
+
+`with_layer(bounds, f)` pushes a new clipped layer; because the page has already
+allocated its own layers by the time the cover is drawn, the cover's layer has a
+higher index and is composited last. Layer merging does not fold it back under:
+`Stack::merge` only joins a candidate when `candidate.end() <= target.start()`
+and the bounds are equal, and a page root layer containing text reports
+`end() == 5` against the cover's `start() == 1`.
+
 ## How Hearthdeck does it
 
 The Dashboard <-> Library fade through is the reference implementation
@@ -78,8 +108,8 @@ The Dashboard <-> Library fade through is the reference implementation
    `PageAnimation { from, started_at }`. `switch_page` flips `self.page`
    immediately (so routing and tests are unaffected) and records the origin.
 2. **One clock, only when needed.** `subscription()` adds
-   `window::frames().map(|(_, at)| Message::Animate(at))` *only* while
-   `page_animation.is_some()`. An idle window has no frames subscription and
+   `window::frames().map(|(_, at)| Message::Animate(at))` *only* while a page or
+   tab transition is in flight. An idle window has no frames subscription and
    schedules no redraws at all.
 3. **Progress is derived in `view()`.** `transition_progress` maps
    `now - started_at` through `cosmic::anim::smootherstep` to an eased `0..=1`.
@@ -94,12 +124,37 @@ The Dashboard <-> Library fade through is the reference implementation
    surface-colour cover sized by `smootherstep` of the half-phase. It owns no
    timing, requests no redraws, and removes nothing.
 
+### Tabs: shared-axis slide
+
+A tab strip *is* an ordered set of peers with a spatial relationship, so tabs are
+the one place a lateral slide is correct (Material shared axis X). The
+implementation deliberately differs from the page fade in one key way: it renders
+**one** child, never two.
+
+- `HearthDeck::tab_animation` holds the target tab, start time, direction and a
+  `swapped` flag. `begin_tab_animation` records it **without changing `cur_group`**,
+  so the outgoing grid is still the current data.
+- `TabTransition` (`widgets/transition.rs`) draws that single grid sliding out in
+  `-direction` while the surface cover rises, then the swapped grid sliding in
+  from `+direction` while the cover falls. `slide(progress, direction, width)`
+  returns `(offset_x, cover_alpha)` and is unit-tested.
+- The swap happens on a tick, under the opaque cover: `advance_tab_animation`
+  calls `apply_group` once `progress >= 0.5` and clears the animation at
+  `progress >= 1.0`.
+- Because only one grid is ever in the tree, no two grids are laid out per frame
+  and the shared entry `Id`s never collide. Rendering two live grids would
+  duplicate those ids and re-lay out every tile every frame.
+
+Direction comes from `tab_position` (the "all apps" tab is 0, groups follow), so
+the grid slides left when moving right along the strip and vice versa.
+
 ### Where timings live
 
 All motion timing is a design token in `style.rs`, in the `Motion` section:
 
 ```rust
-pub const PAGE_TRANSITION_DURATION: Duration = Duration::from_millis(220);
+pub const PAGE_TRANSITION_DURATION: Duration = Duration::from_millis(320);
+pub const TAB_TRANSITION_DURATION: Duration = Duration::from_millis(240);
 ```
 
 Widgets take a duration as a parameter (the same shape as libcosmic's widgets);
@@ -123,11 +178,12 @@ they never define their own. Add a token here rather than a literal in a view.
   `update`. An animation that never terminates keeps forcing full redraws, which
   is exactly the failure that made library scrolling sluggish: a lingering
   transition kept redrawing both pages inside a clipping layer on every frame.
-- **Keep the transition short.** On TV/kiosk hardware, ~120-220 ms reads as
-  fluid. Long transitions multiply full-window redraws.
+- **Keep transitions short.** The two `Motion` tokens (240 ms tab, 320 ms page)
+  sit inside Fluent's 167-333 ms band. Much longer starts to feel sluggish and
+  multiplies full-window redraws.
 - **Do not animate backdrops.** `docs/appearance-system.md` forbids procedural
-  animation, shaders, or periodic repainting in `TvBackdrop`; content and
-  navigation are animated instead.
+  animation, shaders, or periodic repainting in the backdrop surface; content
+  and navigation are animated instead.
 
 ## Related decisions
 

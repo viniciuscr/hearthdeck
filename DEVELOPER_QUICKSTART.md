@@ -11,8 +11,9 @@ just setup
 
 ```bash
 just format          # Auto-format code
-just check-services  # Build + test Rust
-just check-app       # Build + test Flutter
+just check-services  # Build + test Rust services
+just check-frontend  # Lint the Rust frontend
+just test-frontend   # Test the Rust frontend
 ```
 
 Or all at once:
@@ -43,7 +44,7 @@ just pre-push-check
 | Formatting issues | `cargo fmt --manifest-path services/Cargo.toml --all` |
 | Build fails | `cargo build --manifest-path services/Cargo.toml --workspace --release` |
 | Clippy warnings | `cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets --release` |
-| Flutter formatting | `dart format lib test` |
+| Frontend clippy warnings | `just check-frontend` |
 
 ## Documentation
 
@@ -57,16 +58,18 @@ just pre-push-check
 just setup              # Install toolchains
 just check              # Pre-commit validation
 just pre-push-check     # Pre-push validation
-just build-services     # Release build
-just check-services     # Tests + Clippy
-just format             # Format Dart + Rust
+just build-services     # Release build (services)
+just build-frontend     # Release build (frontend)
+just check-services     # Tests + Clippy (services)
+just check-frontend     # Clippy (frontend)
+just test-frontend      # Tests (frontend)
+just format             # Format Rust
 ```
 
 ## Environment
 
 - **Rust version**: 1.97.1 (via `mise`)
-- **Flutter version**: 3.44.8 (via `mise`)
-- **Tool manager**: `mise` (installs in `just setup`)
+- **Tool manager**: `mise` (installs Rust and `just` in `just setup`)
 
 ## Getting Help
 

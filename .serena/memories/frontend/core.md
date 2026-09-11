@@ -1,6 +1,6 @@
-- Flutter catalog UI is repository-driven.
-- macOS/tests use `MockCatalogRepository`; live API only when both `HEARTHDECK_BACKEND_URL` and `HEARTHDECK_PAIRING_TOKEN` are provided (see `just app-live`).
-- `FullLibraryPage` is the main live-catalog surface; dashboard/search stay fixture-backed until explicitly replaced.
+- The frontend is the `hearthdeck-frontend` crate under `services/`: a COSMIC (`iced`/`libcosmic`) layer-shell TV UI.
+- It is daemon-driven: `providers/daemon.rs` (`DaemonClient`) reads the paired HTTP API; `HEARTHDECK_BACKEND_URL` and `HEARTHDECK_PAIRING_TOKEN` select the endpoint.
+- `app.rs` holds the `HearthDeck` application state and the Dashboard/Library views; `app_group.rs` owns `Section`/`AppGroup` and catalog filtering.
 - Navigation is controller-first: Back is a global contract, focus is the cursor, and per-screen Escape handlers should not be reintroduced.
-- Reuse the shared `Tv*` controls/layouts (`TvFocusable`, `TvDirectionalFocusNavigation`, `TvTwoPaneLayout`, etc.) before adding new UI machinery.
-- Native/standard Flutter behavior is preferred over custom wrappers when possible.
+- Reuse the shared widgets and layout helpers before adding new UI machinery.
+- Motion timing lives in `style.rs` design tokens, not inline literals.

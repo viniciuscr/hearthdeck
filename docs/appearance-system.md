@@ -6,9 +6,9 @@ the meaning of status, focus, or actions.
 
 ## Tokens
 
-`TvPalette` provides semantic roles rather than page-specific color values. It
-uses a fixed role scale inspired by Radix-style step allocation, not Material
-seed generation:
+The frontend palette provides semantic roles rather than page-specific color
+values. It uses a fixed role scale inspired by Radix-style step allocation, not
+Material seed generation:
 
 - `canvas`, `surface`, `surfaceMuted`, and `surfaceRaised` form the neutral
   elevation ladder. Surfaces always get lighter as they stack on a dark canvas.
@@ -31,8 +31,8 @@ appearance selections are preserved.
 
 ## Backdrops
 
-Every application route uses `TvBackdrop`, with a route-specific origin only
-for the Edge wash treatment.
+Every application route uses the shared backdrop, with a route-specific origin
+only for the Edge wash treatment.
 
 | Treatment | Intent | Cost |
 | --- | --- | --- |
@@ -53,8 +53,8 @@ indicators. Focus has both a high-contrast border and a surface change.
 ## Persistence And Sync
 
 The daemon stores the canonical host-user appearance settings in the existing
-SQLite database. The client keeps a compact versioned `SharedPreferences`
-snapshot containing the palette, backdrop, daemon revision, and pending flag.
+SQLite database. The client keeps a compact versioned local settings snapshot
+containing the palette, backdrop, daemon revision, and pending flag.
 
 1. Startup reads only the local snapshot, so normal launch has no network or
    daemon wait and no late palette flicker.

@@ -168,7 +168,7 @@ so NetworkManager changes needing authentication are unavailable from it.
 `gamepad-osk` remains optional and external to this package. It must be running
 as its upstream daemon service and have its uinput/input permissions configured
 before `gamepad-osk --toggle` can provide an OSK. During a managed RetroArch
-session, press **Guide/Home + X** to toggle it, matching the Flutter frontend's
+session, press **Guide/Home + X** to toggle it, matching the Rust frontend's
 use of the same command. The shortcut is disabled outside RetroArch sessions. Its
 OSK opens and closes automatically when a text input gains or loses focus in the
 COSMIC frontend, including search, group rename, and new-group inputs. Its

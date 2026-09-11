@@ -127,7 +127,7 @@ pub struct LogTail {
     pub entries: Vec<LogEntry>,
 }
 
-/// Stable identifier for where a log line came from. The Flutter client
+/// Stable identifier for where a log line came from. The COSMIC frontend
 /// groups the diagnostics log tail into tabs keyed on this value: `daemon`
 /// and `bridge` come from their respective systemd journals, `api` is the
 /// daemon's own per-request access log (normally noisy, so it's split out

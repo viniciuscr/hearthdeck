@@ -151,8 +151,8 @@ disagrees.
    conflict resolution turns out to matter in practice.
 6. **RomM does not join the catalog/`DiscoveryProvider` registry. Launch
    and catalog-membership are separate decisions.** `GET /v1/library` has
-   no pagination (`CatalogStore::list()`, `api.rs:list_library`) and Flutter
-   loads the whole thing into memory per search keystroke (`search.dart`).
+   no pagination (`CatalogStore::list()`, `api.rs:list_library`) and the
+   frontend loads the whole thing into memory and filters it per keystroke.
    RomM libraries routinely run into the thousands of ROMs; treating RomM
    as a `DiscoveryProvider` would mean `replace_source` reinserting
    thousands of rows on a timer and shipping them all in one unpaginated
@@ -164,9 +164,10 @@ disagrees.
    RomM keeps its own dedicated, paginated launch route
   (`POST /v1/retro/roms/{id}/launch`), reusing the session/bridge
    machinery only. "Feels unified" UX (search, dashboard) stays a
-   client-side merge, the same pattern `search.dart` already uses to blend
-   catalog results with live RomM search results — no server storage
-   unification required. Catalog pagination is real, worth doing
+   client-side concern rather than a server-side catalog merge — no server
+   storage unification required. (The removed Flutter client blended
+   catalog results with live RomM search results client-side.) Catalog
+   pagination is real, worth doing
    eventually for any future large-library source (Steam will hit the same
    wall), but it is an independent project, not a blocker here.
 7. **Live pass-through sources (RomM today, others later) get a formal
@@ -178,7 +179,7 @@ disagrees.
    filters (`favorite`, `playable`, `missing`, `has_ra`, `has_saves`,
    `has_states`, `genres`, `regions`, `tags`, each with a per-field
    `any`/`all`/`none` logic operator). Rather than hand-writing bespoke
-   Rust structs and Dart plumbing per capability forever, or forcing every
+   Rust structs and client plumbing per capability forever, or forcing every
    future live source through one flattened generic query language and
    losing fidelity, each adapter declares its own capabilities (supported
    sort fields, filter fields and their kind) and implements one shared
@@ -189,9 +190,9 @@ disagrees.
    `filters: BTreeMap<String, Vec<String>>` into RomM's real query params.
    Health for this adapter joins the same `/v1/health` array discovery
    providers use (tagged `kind: "live_proxy"`), replacing today's bespoke
-   `RommDiagnostic` block that lives outside it. The Dart-side equivalent
-   (a `LiveLibrarySource` interface for `search.dart` to iterate over
-   generically) is deliberately deferred until a second live source exists
+   `RommDiagnostic` block that lives outside it. The client-side equivalent
+   (a generic live-library interface for the frontend to iterate over)
+   is deliberately deferred until a second live source exists
    — building that abstraction for one case would be guessing at its
    shape.
 
@@ -294,7 +295,7 @@ Each phase is scoped to be doable in one sitting and independently useful.
   test discipline). Added `retro_launch` to `HostCapabilities`
   (`true` on Linux, `false` on macOS/other, matching
   `application_sessions`'s pattern), threaded through `openapi.yaml` and the
-  Dart client. Implemented the bridge side ahead of schedule since the
+  frontend `DaemonClient`. Implemented the bridge side ahead of schedule since the
   match on `BridgeRequest` is exhaustive: `launch_retro_game` in
   `platform/linux.rs` execs `retroarch` directly (decision 1) via
   `launch_with_systemd(..., wrap_in_gamescope: true)`, against a
@@ -328,16 +329,12 @@ Each phase is scoped to be doable in one sitting and independently useful.
   replace `list_retro_roms`'s current hardcoded 4-param passthrough with
   full forwarding of RomM's real filter/sort capabilities, and move RomM
   health into the shared `/v1/health` array.
-- **Phase 5 — Flutter. DONE (dedicated Retro tab only).** Added
-  `HearthdeckApiClient.launchRetroRom`, a "Play" primary action
-  (`ContentAction(id: 'launch', ...)`) on every RomM game's
-  `ContentDetails`, and wired `ContentDetailsPage.onPrimaryAction` in
-  `retro.dart` to call it, with the same request/error snackbar UX
-  `full_library.dart` already uses for catalog launches. Not wired in
-  `search.dart`'s merged results yet — that screen has no
-  `onPrimaryAction` for any source today, catalog or RomM, so this isn't a
-  RomM-specific gap. This is also the intended manual test surface: open
-  the app, go to **Retro**, pick a console and a game, press **Play**.
+- **Phase 5 — Flutter client. DONE, later removed.** Added a RomM launch
+  call (a "Play" primary action) to every RomM game's detail view in the
+  Flutter client's dedicated Retro tab, reusing the launch request/error
+  UX it already had for catalog items. That client was removed when the
+  frontend was replaced by the Rust/iced app; the Rust frontend browses
+  RomM through its Console Games section, so this phase is historical.
 - **Phase 6 — Save-file sync.** RomM sync-orchestrator client (hash local
   saves in the Hearthdeck-owned RetroArch save directory, POST to RomM,
   execute the returned plan).
@@ -354,7 +351,6 @@ Each phase is scoped to be doable in one sitting and independently useful.
 ## Next concrete step
 
 Phases 0, 1, and 2 are done, along with the code for Phase 3 and the launch
-route for Phase 4. Next up is Phase 5 (Flutter "Play" action wired to
-`POST /v1/retro/roms/{id}/launch`), or the `RemoteLibraryAdapter`
-half of Phase 4 if richer RomM search/filter/sort is wanted first — both are
-independent of each other.
+route for Phase 4. Phase 5 targeted the now-removed Flutter client. Next up
+is the `RemoteLibraryAdapter` half of Phase 4 if richer RomM
+search/filter/sort is wanted.

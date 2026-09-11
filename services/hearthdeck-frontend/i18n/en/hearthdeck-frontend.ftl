@@ -1,6 +1,7 @@
 hearthdeck = HearthDeck
 pc-games = PC Games
 console-games = Console Games
+consoles = Consoles
 applications = Applications
 cosmic-library-home = Library Home
 cosmic-office = Office
