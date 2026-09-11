@@ -23,7 +23,7 @@ use cosmic::{
     dbus_activation,
     desktop::{DesktopEntryData, fde::IconSource, fde::PathSource, load_desktop_file},
     iced::{
-        self, Alignment, Length, Limits, Subscription,
+        self, Alignment, ContentFit, Length, Limits, Subscription,
         event::listen_with,
         executor,
         id::Id,
@@ -85,9 +85,9 @@ use crate::input_ownership::{
 };
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::style::{
-    DASHBOARD_VISIBLE_TILES, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
-    EDIT_NAME_INPUT_WIDTH, GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL,
-    ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION, SEARCH_WIDTH,
+    DASHBOARD_RAIL_TILES, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH, EDIT_NAME_INPUT_WIDTH,
+    GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION,
+    MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION, SEARCH_WIDTH,
     SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER,
     TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, content_horizontal_padding,
     dashboard_nav_button_class, dashboard_tile_size, filter_button_height, grid_gap,
@@ -99,6 +99,7 @@ use crate::style::{
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
 use crate::widgets::application::{AppletString, ApplicationButton};
+use crate::widgets::rail::{rail, rail_item};
 use crate::widgets::transition::{PageTransition, TabTransition};
 
 // popovers should show options, but also the desktop info options
@@ -110,6 +111,10 @@ static FILTER_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter"));
 static DASHBOARD_HOME_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-home"));
 static DASHBOARD_LIBRARY_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-library"));
 static DASHBOARD_SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-search"));
+
+/// Rail key for the dashboard console list, which is not a shelved catalog
+/// section, so it needs its own stable scrollable id.
+const CONSOLES_RAIL_KEY: &str = "consoles";
 
 static APP_ICON: LazyLock<icon::Handle> = LazyLock::new(|| {
     icon::from_svg_bytes(include_bytes!(
@@ -1010,7 +1015,7 @@ impl HearthDeck {
             async move {
                 tokio::time::sleep(delay).await;
                 client
-                    .recent_records(DASHBOARD_VISIBLE_TILES as u32)
+                    .recent_records(DASHBOARD_RAIL_TILES as u32)
                     .await
                     .map_err(|error| error.to_string())
             },
@@ -1290,13 +1295,13 @@ impl HearthDeck {
         let recent = self
             .recent_entries
             .iter()
-            .take(DASHBOARD_VISIBLE_TILES)
+            .take(DASHBOARD_RAIL_TILES)
             .collect::<Vec<_>>();
         let favorites = self
             .config
             .favorite_entries(&self.all_entries)
             .into_iter()
-            .take(DASHBOARD_VISIBLE_TILES)
+            .take(DASHBOARD_RAIL_TILES)
             .collect::<Vec<_>>();
         let show_library = recent.is_empty() && favorites.is_empty();
         let mut shelves = vec![
@@ -1306,10 +1311,7 @@ impl HearthDeck {
         if show_library {
             shelves.push((
                 DashboardShelf::Library,
-                self.all_entries
-                    .iter()
-                    .take(DASHBOARD_VISIBLE_TILES)
-                    .collect(),
+                self.all_entries.iter().take(DASHBOARD_RAIL_TILES).collect(),
             ));
         }
         shelves
@@ -1421,29 +1423,64 @@ impl HearthDeck {
         self.dashboard_entry_rows().into_iter().flatten().collect()
     }
 
-    fn dashboard_entry_rows(&self) -> Vec<Vec<widget::Id>> {
+    /// Rails shown on the dashboard, in visual order, each paired with its key
+    /// and the exact card ids it renders. Focus navigation and scroll-into-view
+    /// both derive from this single definition of the layout, so the console
+    /// rail and the shelves cannot drift apart.
+    fn dashboard_rails(&self) -> Vec<(&'static str, Vec<widget::Id>)> {
+        let mut rails: Vec<(&'static str, Vec<widget::Id>)> = Vec::new();
         let consoles: Vec<widget::Id> = self
             .dashboard_consoles()
             .into_iter()
             .map(|(index, _)| dashboard_console_id(index))
             .collect();
-        let mut rows: Vec<Vec<widget::Id>> = Vec::new();
         if !consoles.is_empty() {
-            rows.push(consoles);
+            rails.push((CONSOLES_RAIL_KEY, consoles));
         }
-        rows.extend(
+        rails.extend(
             self.dashboard_shelves()
                 .into_iter()
                 .filter_map(|(shelf, entries)| {
                     (!entries.is_empty()).then(|| {
-                        entries
-                            .into_iter()
-                            .map(|entry| shelf.widget_id(&entry.id))
-                            .collect()
+                        (
+                            shelf.key(),
+                            entries
+                                .into_iter()
+                                .map(|entry| shelf.widget_id(&entry.id))
+                                .collect(),
+                        )
                     })
                 }),
         );
-        rows
+        rails
+    }
+
+    fn dashboard_entry_rows(&self) -> Vec<Vec<widget::Id>> {
+        self.dashboard_rails()
+            .into_iter()
+            .map(|(_, ids)| ids)
+            .collect()
+    }
+
+    /// Scrolls the rail holding `id` so the focused card is in view. Cards are
+    /// uniform, so the offset is index * (card + gap); iced clamps it at the
+    /// ends, which keeps the leading cards visible when moving back left.
+    fn reveal_dashboard_rail(&self, id: &widget::Id) -> Option<Task<Message>> {
+        let spacing = theme::spacing();
+        let card = dashboard_tile_size(self.window_width, spacing.space_l, spacing.space_l);
+        let gap = f32::from(spacing.space_l);
+        for (key, ids) in self.dashboard_rails() {
+            if let Some(index) = ids.iter().position(|candidate| candidate == id) {
+                return Some(iced::widget::scrollable::scroll_to(
+                    dashboard_rail_id(key),
+                    AbsoluteOffset {
+                        x: Some(index as f32 * (card + gap)),
+                        y: None,
+                    },
+                ));
+            }
+        }
+        None
     }
 
     fn dashboard_entry_id_for_widget(&self, id: &widget::Id) -> Option<String> {
@@ -1459,11 +1496,15 @@ impl HearthDeck {
 
     fn focus_dashboard_id(&mut self, id: widget::Id) -> Task<Message> {
         self.focused_id = Some(id.clone());
-        Task::batch([
-            iced_runtime::task::widget(focus(id))
+        let mut tasks = vec![
+            iced_runtime::task::widget(focus(id.clone()))
                 .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id)))),
             self.request_virtual_keyboard(false),
-        ])
+        ];
+        if let Some(reveal) = self.reveal_dashboard_rail(&id) {
+            tasks.push(reveal);
+        }
+        Task::batch(tasks)
     }
 
     fn dashboard_horizontal_target(&self, delta: i32) -> Option<widget::Id> {
@@ -3555,113 +3596,91 @@ impl HearthDeck {
         .align_y(Alignment::Center)
         .height(Length::Fixed(f32::from(space_xxl)));
 
-        let shelves: Vec<Element<'_, Message>> = self
+        let rails: Vec<Element<'_, Message>> = self
             .dashboard_shelves()
             .into_iter()
             .map(|(shelf, entries)| {
-                let tiles: Vec<Element<'_, Message>> = entries
+                let cards: Vec<Element<'_, Message>> = entries
                     .into_iter()
                     .map(|entry| {
-                        ApplicationButton::new(
+                        rail_item(
                             shelf.widget_id(&entry.id),
                             &entry.name,
                             crate::icon_cache::entry_icon_handle(&entry.icon, tile_size as u32),
-                            &entry.path,
                             tile_size,
-                            tile_size,
-                            |_| Message::CloseContextMenu,
-                            Some(Message::ActivateDashboardApp(entry.id.clone())),
-                            None,
-                            false,
-                            None,
-                            None,
-                            None,
                         )
+                        .on_press(Message::ActivateDashboardApp(entry.id.clone()))
                         .into()
                     })
                     .collect();
-                let rail: Element<'_, Message> = if tiles.is_empty() {
-                    container(
-                        row![
-                            icon::icon(APP_ICON.clone()).size(ICON_BODY),
-                            text::body(shelf.empty_message()).size(TEXT_BODY),
-                        ]
-                        .spacing(space_s)
-                        .align_y(Alignment::Center),
-                    )
-                    .width(Length::Fill)
-                    .height(Length::Fixed(f32::from(space_xxl)))
-                    .align_x(Horizontal::Left)
-                    .align_y(Alignment::Center)
+                let empty: Element<'_, Message> = container(
+                    row![
+                        icon::icon(APP_ICON.clone()).size(ICON_BODY),
+                        text::body(shelf.empty_message()).size(TEXT_BODY),
+                    ]
+                    .spacing(space_s)
+                    .align_y(Alignment::Center),
+                )
+                .width(Length::Fill)
+                .height(Length::Fixed(tile_size))
+                .align_x(Horizontal::Left)
+                .align_y(Alignment::Center)
+                .into();
+                rail(dashboard_rail_id(shelf.key()), shelf.title(), tile_size)
+                    .items(cards)
+                    .empty(empty)
                     .into()
-                } else {
-                    row(tiles).spacing(space_l).into()
-                };
-                column![
-                    text::title3(shelf.title()).size(TEXT_HEADER),
-                    container(rail).padding([space_m, 0, 0, 0]),
-                ]
-                .into()
             })
             .collect();
 
-        // Console rail. The entries come from the live RomM platform list, so
-        // this only appears once the library has reported consoles with games.
-        let consoles_section: Option<Element<'_, Message>> = {
+        // Console rail: the same card and rail as every shelf, just fed from
+        // the live RomM platform list instead of the catalog.
+        let consoles_rail: Option<Element<'_, Message>> = {
             let consoles = self.dashboard_consoles();
             (!consoles.is_empty()).then(|| {
-                // RomM supplies a logo per platform; fall back to a generic
-                // gamepad glyph when a platform is unidentified or its logo
-                // could not be cached.
-                let console_logo = |group: &AppGroup| -> Element<'_, Message> {
-                    if let Some(path) = group
-                        .romm_platform_id()
-                        .and_then(|id| self.romm_platform_icons.get(&id))
-                    {
-                        icon::icon(crate::icon_cache::entry_icon_handle(
-                            &IconSource::Path(PathBuf::from(path)),
-                            u32::from(ICON_LARGE),
-                        ))
-                        .size(ICON_LARGE)
-                        .into()
-                    } else {
-                        icon::icon(icon::from_name("input-gaming-symbolic").into())
-                            .size(ICON_BODY)
-                            .into()
-                    }
-                };
-                let chips: Vec<Element<'_, Message>> = consoles
+                let cards: Vec<Element<'_, Message>> = consoles
                     .into_iter()
                     .map(|(index, group)| {
-                        button::custom(
-                            row![
-                                console_logo(group),
-                                text::body(group.name()).size(TEXT_BODY),
-                            ]
-                            .spacing(space_s)
-                            .align_y(Alignment::Center),
-                        )
-                        .id(dashboard_console_id(index))
-                        .padding([space_s, space_l])
-                        .class(section_button_class(false))
-                        .on_press(Message::OpenConsole(index))
-                        .into()
+                        // Logos are wordmarks, so contain them instead of
+                        // cropping; fall back to a generic glyph when a platform
+                        // is unidentified or its logo could not be cached.
+                        let handle = group
+                            .romm_platform_id()
+                            .and_then(|id| self.romm_platform_icons.get(&id))
+                            .map(|path| {
+                                crate::icon_cache::entry_icon_handle(
+                                    &IconSource::Path(PathBuf::from(path)),
+                                    tile_size as u32,
+                                )
+                            })
+                            .unwrap_or_else(|| {
+                                crate::icon_cache::icon_cache_handle(
+                                    "input-gaming-symbolic",
+                                    ICON_LARGE,
+                                )
+                            });
+                        rail_item(dashboard_console_id(index), group.name(), handle, tile_size)
+                            .fit(ContentFit::Contain)
+                            .on_press(Message::OpenConsole(index))
+                            .into()
                     })
                     .collect();
-                column![
-                    text::title3(fl!("consoles")).size(TEXT_HEADER),
-                    container(row(chips).spacing(space_m).wrap()).padding([space_m, 0, 0, 0]),
-                ]
+                rail(
+                    dashboard_rail_id(CONSOLES_RAIL_KEY),
+                    fl!("consoles"),
+                    tile_size,
+                )
+                .items(cards)
                 .into()
             })
         };
 
         let content = column![top_bar].spacing(space_m);
         let mut lower = column![].spacing(space_l);
-        if let Some(consoles) = consoles_section {
+        if let Some(consoles) = consoles_rail {
             lower = lower.push(consoles);
         }
-        lower = lower.push(column(shelves).spacing(space_l));
+        lower = lower.push(column(rails).spacing(space_l));
         let content = content
             .push(space::vertical().height(Length::Fill))
             .push(lower)
@@ -4191,6 +4210,11 @@ fn focused_entry_index(focused: &widget::Id, entry_ids: &[widget::Id]) -> Option
 /// Console Games tab strip.
 fn dashboard_console_id(index: usize) -> widget::Id {
     widget::Id::from(format!("dashboard-console-{index}"))
+}
+
+/// Scrollable id of the dashboard rail with `key`.
+fn dashboard_rail_id(key: &str) -> widget::Id {
+    widget::Id::from(format!("dashboard-rail-{key}"))
 }
 
 /// Position of a tab within the strip: the "all apps" tab is 0, custom groups
@@ -4790,6 +4814,26 @@ mod tests {
         // The last page ends pagination.
         assert_eq!(app.romm_next_offset, None);
         assert!(!app.romm_loading_page);
+    }
+
+    #[test]
+    fn dashboard_rails_are_the_single_layout_definition() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string())]);
+        let app = HearthDeck {
+            config,
+            all_entries: vec![entry("game")],
+            ..Default::default()
+        };
+
+        let rails = app.dashboard_rails();
+        // The console rail leads, then the shelves, and focus navigation must
+        // be derived from exactly the same definition.
+        assert_eq!(rails[0].0, super::CONSOLES_RAIL_KEY);
+        assert_eq!(
+            app.dashboard_entry_rows(),
+            rails.into_iter().map(|(_, ids)| ids).collect::<Vec<_>>()
+        );
     }
 
     #[test]

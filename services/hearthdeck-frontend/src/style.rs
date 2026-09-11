@@ -110,6 +110,10 @@ pub fn content_horizontal_padding() -> u16 {
 /// Number of installed titles shown on the dashboard.
 pub const DASHBOARD_VISIBLE_TILES: usize = 4;
 
+/// Number of cards a dashboard rail may hold. The rail scrolls horizontally,
+/// so this only bounds how much it fetches and renders up front.
+pub const DASHBOARD_RAIL_TILES: usize = 12;
+
 /// Number of columns in the application grid.
 pub const GRID_COLUMNS: usize = 4;
 /// Gap between grid tiles as a fraction of tile width. Tiles are recomputed
@@ -282,22 +286,35 @@ fn active_surface_radius() -> [f32; 4] {
     surface_radius(&cosmic::theme::active())
 }
 
-/// Renders an icon as artwork clipped to the shared surface radius.
+/// Renders an icon as artwork clipped to the shared surface radius, with an
+/// explicit `ContentFit`. Game covers want [`ContentFit::Cover`] while logos
+/// and other non-cover art want [`ContentFit::Contain`].
 ///
 /// Every raster image the app displays goes through here, so rounded corners
 /// are a design-system primitive rather than a per-widget decision. Entry
 /// icons are always raster by this point (the icon cache rasterizes SVGs); an
 /// SVG handle falls back to the plain icon, which has no clip.
-pub fn artwork<'a, M: 'a>(handle: &icon::Handle, width: Length, height: Length) -> Element<'a, M> {
+pub fn artwork_fit<'a, M: 'a>(
+    handle: &icon::Handle,
+    fit: ContentFit,
+    width: Length,
+    height: Length,
+) -> Element<'a, M> {
     match &handle.data {
         icon::Data::Image(image) => cosmic::widget::image::Image::new(image.clone())
-            .content_fit(ContentFit::Fill)
+            .content_fit(fit)
             .border_radius(active_surface_radius())
             .width(width)
             .height(height)
             .into(),
         icon::Data::Svg(_) => handle.clone().icon().width(width).height(height).into(),
     }
+}
+
+/// Artwork scaled to fill its bounds, for cover art that is expected to be
+/// cropped to the surface.
+pub fn artwork<'a, M: 'a>(handle: &icon::Handle, width: Length, height: Length) -> Element<'a, M> {
+    artwork_fit(handle, ContentFit::Fill, width, height)
 }
 
 // ---------------------------------------------------------------------------
