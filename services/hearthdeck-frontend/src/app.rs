@@ -427,6 +427,11 @@ struct HearthDeck {
     /// Cached local logo path per RomM platform id, used by the dashboard's
     /// console rail.
     romm_platform_icons: HashMap<i64, String>,
+    /// Authoritative game count per RomM platform id, straight from the
+    /// consoles endpoint. The Console Games grid lazy-loads pages, so the
+    /// number of loaded entries grows as the user scrolls; this is the stable
+    /// total the header should show instead of `entry_path_input.len()`.
+    romm_platform_counts: HashMap<i64, u64>,
     /// Next RomM page offset for the active console scope. `None` means the
     /// current scope has no further pages to fetch.
     romm_next_offset: Option<u32>,
@@ -491,6 +496,7 @@ impl Default for HearthDeck {
             dashboard_health_generation: 0,
             romm_request_generation: 0,
             romm_platform_icons: HashMap::new(),
+            romm_platform_counts: HashMap::new(),
             romm_next_offset: None,
             romm_loading_page: false,
             virtual_keyboard: VirtualKeyboard::default(),
@@ -1052,6 +1058,31 @@ impl HearthDeck {
         match self.cur_group {
             None => AppLibraryConfig::home(),
             Some(i) => &self.config.sections.get(self.cur_section)[i],
+        }
+    }
+
+    /// The game total the Console Games header should show for the current
+    /// scope, from RomM's own console metadata rather than the number of pages
+    /// lazy-loaded so far. A selected console uses its `rom_count`; the "all
+    /// consoles" tab sums every platform. Returns `None` when the console
+    /// totals are not known yet (before the first consoles response), so the
+    /// caller can fall back to the loaded count.
+    fn console_total_count(&self) -> Option<usize> {
+        match self.cur_group {
+            Some(index) => self
+                .config
+                .sections
+                .console_games
+                .get(index)
+                .and_then(AppGroup::romm_platform_id)
+                .and_then(|id| self.romm_platform_counts.get(&id))
+                .map(|count| *count as usize),
+            None => (!self.romm_platform_counts.is_empty()).then(|| {
+                self.romm_platform_counts
+                    .values()
+                    .map(|count| *count as usize)
+                    .sum()
+            }),
         }
     }
 
@@ -2032,6 +2063,10 @@ impl cosmic::Application for HearthDeck {
                 self.romm_platform_icons = consoles
                     .iter()
                     .filter_map(|console| console.icon.clone().map(|icon| (console.id, icon)))
+                    .collect();
+                self.romm_platform_counts = consoles
+                    .iter()
+                    .map(|console| (console.id, console.rom_count))
                     .collect();
                 let selected_group = self
                     .cur_group
@@ -3747,6 +3782,17 @@ impl HearthDeck {
         let cur_section = self.cur_section;
         let cur_group = self.current_group();
 
+        // The Console Games grid lazy-loads pages, so its "N items" label must
+        // not track the loaded-page count (which climbs as the user scrolls).
+        // Use RomM's own per-console total unless a local search is narrowing
+        // the visible set, where the loaded count *is* the result count.
+        let item_count = if cur_section == Section::ConsoleGames && self.search_value.is_empty() {
+            self.console_total_count()
+                .unwrap_or(self.entry_path_input.len())
+        } else {
+            self.entry_path_input.len()
+        };
+
         let user_name = current_user_name();
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
         let disk_free = human_size(available_disk_bytes(&home));
@@ -4079,10 +4125,8 @@ impl HearthDeck {
         let tab_row = row![
             tab_strip,
             filter_btn,
-            container(
-                text::body(fl!("count-items", count = self.entry_path_input.len())).size(TEXT_BODY),
-            )
-            .align_y(Vertical::Center),
+            container(text::body(fl!("count-items", count = item_count)).size(TEXT_BODY),)
+                .align_y(Vertical::Center),
         ]
         .spacing(space_m)
         .align_y(Alignment::Center)
@@ -4864,5 +4908,27 @@ mod tests {
         // A platform with no games gets no tab, but its logo is still cached.
         assert_eq!(app.config.sections.console_games.len(), 1);
         assert!(app.romm_platform_icons.contains_key(&9));
+        // The authoritative per-console totals are kept separately from the
+        // lazy-loaded grid entries.
+        assert_eq!(app.romm_platform_counts.get(&7), Some(&3));
+        assert_eq!(app.console_total_count(), Some(3));
+    }
+
+    #[test]
+    fn console_header_uses_romm_totals_not_the_loaded_pages() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string())]);
+        let mut app = HearthDeck {
+            config,
+            cur_section: Section::ConsoleGames,
+            cur_group: Some(0),
+            ..Default::default()
+        };
+        // Only two entries are lazy-loaded so far, but RomM reports 240 games
+        // on the console: the header must show the console total, not 2.
+        app.romm_platform_counts.insert(7, 240);
+        app.entry_path_input = vec![entry("one"), entry("two")];
+
+        assert_eq!(app.console_total_count(), Some(240));
     }
 }

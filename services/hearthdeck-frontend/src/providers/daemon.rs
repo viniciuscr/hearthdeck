@@ -128,8 +128,11 @@ pub struct RetroPlatform {
     pub name: String,
     pub display_name: Option<String>,
     pub rom_count: u64,
+    /// Ordered RomM asset paths for this console's bundled artwork. The
+    /// daemon hands us candidates (filesystem slug, then slug, then default);
+    /// we try each through the asset proxy until one loads.
     #[serde(default)]
-    pub url_logo: Option<String>,
+    pub artwork_paths: Vec<String>,
 }
 
 impl RetroPlatform {
@@ -410,28 +413,32 @@ impl DaemonClient {
             .await
             .map_err(DaemonError::Deserialization)?;
 
-        Ok(
-            stream::iter(platforms.into_iter().map(|platform| async move {
-                let icon = match platform.url_logo.as_deref() {
-                    Some(url) if url.starts_with("http://") || url.starts_with("https://") => {
-                        let url = url.to_owned();
-                        tokio::task::spawn_blocking(move || cache_icon(&url))
-                            .await
-                            .unwrap_or(None)
+        Ok(stream::iter(platforms.into_iter().map(|platform| {
+            let client = self;
+            async move {
+                // RomM serves console art as static files whose extension
+                // varies per platform (mostly `.svg`, a few only `.ico`). The
+                // daemon gives us the ordered candidates; fetch the first one
+                // that resolves, falling back to the generic glyph when none
+                // do.
+                let mut icon = None;
+                for path in &platform.artwork_paths {
+                    if let Some(cached) = client.cache_retro_cover_path(Some(path)).await {
+                        icon = Some(cached);
+                        break;
                     }
-                    _ => None,
-                };
+                }
                 RetroConsole {
                     id: platform.id,
                     label: platform.label().to_owned(),
                     rom_count: platform.rom_count,
                     icon,
                 }
-            }))
-            .buffered(4)
-            .collect()
-            .await,
-        )
+            }
+        }))
+        .buffered(4)
+        .collect::<Vec<RetroConsole>>()
+        .await)
     }
 
     /// Lists retro ROMs, optionally filtered by platform.
@@ -884,7 +891,10 @@ fn cached_icon(key: &str) -> Option<String> {
     let mut hasher = DefaultHasher::new();
     hasher.write(key.as_bytes());
     let stem = format!("{:016x}", hasher.finish());
-    ["jpg", "png", "webp"]
+    // `svg` and `ico` matter for RomM's bundled console art, which is served
+    // in those formats; omitting them made platform icons re-download on every
+    // refresh because the cache lookup never matched.
+    ["jpg", "jpeg", "png", "webp", "svg", "ico"]
         .into_iter()
         .map(|extension| icon_cache_dir().join(format!("{stem}.{extension}")))
         .find(|path| path.metadata().is_ok_and(|metadata| metadata.len() >= 16))
@@ -905,10 +915,22 @@ fn cache_icon_bytes(key: &str, extension: &str, bytes: &[u8]) -> Option<String> 
 }
 
 fn image_extension(content_type: Option<&str>) -> &'static str {
-    match content_type {
-        Some(value) if value.eq_ignore_ascii_case("image/png") => "png",
-        Some(value) if value.eq_ignore_ascii_case("image/webp") => "webp",
-        _ => "jpg",
+    let Some(content_type) = content_type else {
+        return "jpg";
+    };
+    let content_type = content_type.to_ascii_lowercase();
+    if content_type.starts_with("image/png") {
+        "png"
+    } else if content_type.starts_with("image/webp") {
+        "webp"
+    } else if content_type.starts_with("image/svg") {
+        "svg"
+    } else if content_type.contains("icon") {
+        // Covers both `image/x-icon` and `image/vnd.microsoft.icon`; RomM's
+        // bundled console art ships `.ico` for platforms with no `.svg`.
+        "ico"
+    } else {
+        "jpg"
     }
 }
 

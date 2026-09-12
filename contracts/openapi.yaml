@@ -556,6 +556,14 @@ components:
         rom_count: { type: integer, minimum: 0 }
         slug: { type: [string, 'null'] }
         fs_slug: { type: [string, 'null'] }
+        url_logo: { type: [string, 'null'] }
+        # Ordered candidate paths (relative to the RomM server) for the
+        # platform's bundled console artwork. The client tries each through
+        # /v1/retro/assets until one loads, mirroring RomM's own fallback
+        # chain. Never empty for a platform read live from RomM.
+        artwork_paths:
+          type: array
+          items: { type: string }
     RetroGamePage:
       type: object
       required: [items, total, limit, offset]

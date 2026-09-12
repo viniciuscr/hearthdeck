@@ -38,9 +38,55 @@ pub struct RommPlatform {
     pub fs_slug: Option<String>,
     /// Absolute URL of the platform logo RomM resolved from its metadata
     /// providers (IGDB/SteamGridDB/etc.); absent when the platform is
-    /// unidentified.
+    /// unidentified. Kept for completeness but no longer used for tiles:
+    /// these are wide wordmarks that read poorly at tile size.
     #[serde(default)]
     pub url_logo: Option<String>,
+    /// Ordered candidate paths (relative to the RomM server) for this
+    /// platform's bundled console artwork. Mirrors RomM's own
+    /// `RPlatformIcon` fallback chain so the client can try each through the
+    /// asset proxy until one exists. Populated from `romm_platforms`, so it
+    /// is empty on the raw `/api/platforms` deserialization (RomM does not
+    /// send this field; the server cannot know its own host's static paths).
+    #[serde(default, skip_deserializing)]
+    pub artwork_paths: Vec<String>,
+}
+
+/// Candidate RomM artwork paths for a platform, in RomM's own `RPlatformIcon`
+/// order: filesystem slug first (RomM names its bundled console art by the
+/// platform folder), then the canonical slug, then the shared default.
+///
+/// The daemon only names the candidates; it deliberately does not probe RomM
+/// to learn which file exists. The client walks the list through the
+/// `/v1/retro/assets` proxy and caches the first one that loads, so an
+/// unidentified platform costs a couple of local requests instead of making
+/// every `/v1/retro/consoles` call probe the network.
+fn platform_artwork_paths(platform: &RommPlatform) -> Vec<String> {
+    fn candidate(slug: &str, extension: &str) -> String {
+        format!("/assets/platforms/{slug}.{extension}")
+    }
+
+    let normalized = |value: Option<&String>| {
+        value
+            .map(|slug| slug.trim().to_ascii_lowercase())
+            .filter(|slug| !slug.is_empty())
+    };
+    let fs_slug = normalized(platform.fs_slug.as_ref());
+    let slug = normalized(platform.slug.as_ref());
+
+    let mut paths = Vec::new();
+    if let Some(fs_slug) = fs_slug.as_deref() {
+        paths.push(candidate(fs_slug, "svg"));
+        paths.push(candidate(fs_slug, "ico"));
+    }
+    if let Some(slug) = slug.as_deref()
+        && Some(slug) != fs_slug.as_deref()
+    {
+        paths.push(candidate(slug, "svg"));
+        paths.push(candidate(slug, "ico"));
+    }
+    paths.push(candidate("default", "ico"));
+    paths
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -166,7 +212,11 @@ pub async fn romm_platforms(
         .await
         .map_err(RommQueryError::Failed)?
         .ok_or(RommQueryError::NotConfigured)?;
-    query_romm(&credentials).await
+    let mut platforms = query_romm(&credentials).await?;
+    for platform in &mut platforms {
+        platform.artwork_paths = platform_artwork_paths(platform);
+    }
+    Ok(platforms)
 }
 
 pub async fn romm_games(
@@ -533,11 +583,13 @@ fn normalized_romm_asset_path(value: &str) -> anyhow::Result<String> {
     } else {
         format!("/{path}")
     };
-    if !path.starts_with("/assets/romm/resources/")
-        || path.contains("..")
-        || path.contains('#')
-        || path.contains("//")
-    {
+    // Two RomM asset roots are allowed: per-ROM artwork under
+    // `/assets/romm/resources/` and the bundled per-platform console art under
+    // `/assets/platforms/`. Everything else is rejected so the proxy cannot be
+    // walked into arbitrary server paths.
+    let allowed =
+        path.starts_with("/assets/romm/resources/") || path.starts_with("/assets/platforms/");
+    if !allowed || path.contains("..") || path.contains('#') || path.contains("//") {
         anyhow::bail!("invalid RomM artwork path");
     }
     Ok(path)
@@ -965,6 +1017,66 @@ mod tests {
         assert!(super::normalized_romm_asset_path("/resources/roms/1/cover.webp").is_err());
         assert!(super::normalized_romm_asset_path("https://example.com/cover.webp").is_err());
         assert!(super::normalized_romm_asset_path("/assets/romm/resources/../secret").is_err());
+    }
+
+    #[test]
+    fn allows_platform_artwork_under_the_asset_proxy() {
+        // RomM's bundled console art lives under a different root than per-ROM
+        // artwork, so the proxy allowlist has to include it explicitly.
+        assert_eq!(
+            super::normalized_romm_asset_path("/assets/platforms/snes.svg").unwrap(),
+            "/assets/platforms/snes.svg"
+        );
+        assert!(super::normalized_romm_asset_path("/assets/platforms/../secret").is_err());
+        assert!(super::normalized_romm_asset_path("/assets/other/nes.svg").is_err());
+    }
+
+    #[test]
+    fn platform_artwork_prefers_the_filesystem_slug_then_the_slug_then_default() {
+        let platform = super::RommPlatform {
+            id: 7,
+            name: "Super Nintendo".to_owned(),
+            display_name: None,
+            rom_count: 3,
+            slug: Some("snes".to_owned()),
+            fs_slug: Some("super-nintendo".to_owned()),
+            url_logo: None,
+            artwork_paths: Vec::new(),
+        };
+
+        assert_eq!(
+            super::platform_artwork_paths(&platform),
+            vec![
+                "/assets/platforms/super-nintendo.svg",
+                "/assets/platforms/super-nintendo.ico",
+                "/assets/platforms/snes.svg",
+                "/assets/platforms/snes.ico",
+                "/assets/platforms/default.ico",
+            ]
+        );
+    }
+
+    #[test]
+    fn platform_artwork_deduplicates_matching_slugs_and_trims_case() {
+        let platform = super::RommPlatform {
+            id: 7,
+            name: "Game Boy".to_owned(),
+            display_name: None,
+            rom_count: 1,
+            slug: Some("GB".to_owned()),
+            fs_slug: Some("gb".to_owned()),
+            url_logo: None,
+            artwork_paths: Vec::new(),
+        };
+
+        assert_eq!(
+            super::platform_artwork_paths(&platform),
+            vec![
+                "/assets/platforms/gb.svg",
+                "/assets/platforms/gb.ico",
+                "/assets/platforms/default.ico",
+            ]
+        );
     }
 
     #[test]
