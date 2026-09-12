@@ -203,21 +203,29 @@ disagrees.
    user-supplied shader directory.** Arch packages the upstream slang shader
    collection; the bridge maps a core filename to one preset under
    `/usr/share/libretro/shaders/shaders_slang` (CRT mask for 2D CRT-era
-   consoles, an LCD grid for handhelds, no preset for 3D-era cores) and sets
-   `video_shader` plus `video_driver = "vulkan"` in the managed config.
-   Rationale: slang presets need a modern GL/Vulkan context the default `gl`
-   driver cannot provide. `vulkan` is the better fit for the Gamescope/KMS
-   sessions Hearthdeck runs in (Gamescope is itself a Vulkan compositor) and
-   for the Vulkan-rendered 3D cores; `glcore` is the fallback if a GL-only
-   core is ever added to the shaded set. The driver is a named constant
-   (`RETRO_SHADER_VIDEO_DRIVER`), only overridden when a preset actually
-   applies, so an install without the shaders package keeps its previous
-   default driver and a missing preset degrades to an unshaded launch instead
-   of failing. Keying on the core keeps the platform→core decision in one
-   place while naturally covering consoles that share a core (Dolphin =
-   GC/Wii, Genesis Plus GX = MD/MS/GG/Sega CD). Per-user preset overrides are
-   future work, alongside the core-install configurability in open
-   question 2.
+   consoles, an LCD grid for handhelds, no preset for 3D-era cores). The
+   managed config pins `video_driver = "vulkan"` for **every** launch (not
+   only shaded ones), with a per-core override table `VIDEO_DRIVER_BY_CORE`
+   that pins Flycast to `glcore`.
+   Rationale: RetroArch's compiled default is `gl`, which cannot load slang
+   presets at all and mis-sizes hardware-rendered cores under the
+   Gamescope/KMS sessions Hearthdeck runs in — the Dolphin/GameCube core
+   showed up as a small centered window while software cores were fine, and
+   it was the only core left on the default driver because it receives no
+   shader. `vulkan` fits Gamescope (itself a Vulkan compositor) and is
+   supported by every core in `retro.rs`'s table. Flycast is the exception:
+   its libretro Vulkan renderer segfaults on the resolution change an
+   FMV-to-gameplay transition produces (flyinghead/flycast#2082, #2442), so
+   it is pinned to `glcore` — the modern GL driver, which keeps hardware
+   rendering and a slang-capable context without the buggy Vulkan path.
+   Default and override are named constants (`RETRO_VIDEO_DRIVER_DEFAULT`,
+   `VIDEO_DRIVER_BY_CORE`), so each is one explicit decision, and a missing
+   preset still degrades to an unshaded launch instead of failing. Keying
+   presets on the core keeps the platform→core decision in one place while
+   naturally covering consoles that share a core (Dolphin = GC/Wii, Genesis
+   Plus GX = MD/MS/GG/Sega CD). Per-user preset and per-core core-option
+   overrides are future work, alongside the core-install configurability in
+   open question 2.
 
 ## Starting the RomM server itself
 

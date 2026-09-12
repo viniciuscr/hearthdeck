@@ -241,17 +241,30 @@ const RETRO_CORE_DIRECTORIES: [&str; 1] = ["/usr/lib/libretro"];
 /// RetroArch setup.
 const RETRO_SHADER_DIRECTORY: &str = "/usr/share/libretro/shaders/shaders_slang";
 
-/// Video driver forced for launches that apply a shader preset.
+/// Video driver Hearthdeck pins for a launch unless the core overrides it.
 ///
-/// Slang presets need a modern context, so RetroArch's default `gl` driver
-/// cannot load them; `glcore` and `vulkan` both can. `vulkan` is chosen here
-/// because it is the natural fit for the Gamescope/KMS sessions Hearthdeck
-/// runs in (Gamescope is a Vulkan compositor) and because the 3D-era cores
-/// are Vulkan-rendered. Every core that actually receives a shader in
-/// `SHADER_PRESET_BY_CORE` is software-rendered, so this does not strand a
-/// GL-only core; if one is ever added to the shaded set, switch this to
-/// `glcore` instead.
-const RETRO_SHADER_VIDEO_DRIVER: &str = "vulkan";
+/// RetroArch's compiled default is `gl`. That is wrong for Hearthdeck in two
+/// ways: `gl` cannot load slang shader presets at all, and it behaves
+/// differently for hardware-rendered cores under the Gamescope/KMS sessions
+/// Hearthdeck runs in (the Dolphin/GameCube core in particular came up as a
+/// small centered window while software cores were fine). `vulkan` is the
+/// natural fit for Gamescope (itself a Vulkan compositor) and is supported by
+/// every core in `retro.rs`'s table. Pinned unconditionally so a launch's
+/// behaviour does not depend on whether a shader happened to apply.
+const RETRO_VIDEO_DRIVER_DEFAULT: &str = "vulkan";
+
+/// Per-core driver overrides, keyed on the core filename like
+/// `SHADER_PRESET_BY_CORE`.
+///
+/// Flycast is the one core that cannot take the `vulkan` default. Its libretro
+/// Vulkan renderer has documented segfaults (flyinghead/flycast#2082 and #2442,
+/// the latter right after the resolution-change `SET_SYSTEM_AV_INFO` an
+/// FMV-to-gameplay transition produces), so it is pinned to `glcore` -- the
+/// modern GL driver, which keeps hardware rendering and a slang-capable
+/// context while avoiding the buggy Vulkan path. `gl` would also avoid it, but
+/// it is the pre-3.1 driver that mis-sized Dolphin under Gamescope, so it is
+/// not the floor we want for another hardware-rendered core.
+const VIDEO_DRIVER_BY_CORE: &[(&str, &str)] = &[("flycast_libretro.so", "glcore")];
 
 /// Per-core shader preset, relative to `RETRO_SHADER_DIRECTORY`.
 ///
@@ -312,6 +325,23 @@ fn shader_preset_for_core_in(core_path: &Path, shader_directory: &Path) -> Optio
     preset_path.is_file().then_some(preset_path)
 }
 
+/// The video driver to pin for a core: its override if it has one, otherwise
+/// the Hearthdeck default. Returns `&'static str` because every driver name is
+/// a compile-time literal, so the caller can hold it for the rest of the
+/// launch without owning it.
+fn video_driver_for_core(core_path: &Path) -> &'static str {
+    core_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|core_filename| {
+            VIDEO_DRIVER_BY_CORE
+                .iter()
+                .find(|(core, _)| *core == core_filename)
+                .map(|(_, driver)| *driver)
+        })
+        .unwrap_or(RETRO_VIDEO_DRIVER_DEFAULT)
+}
+
 /// Launches a RetroArch core against a ROM the daemon has already resolved
 /// and cached locally. Mirrors `launch_application`'s discipline: the bridge
 /// re-validates both paths itself rather than trusting the daemon's copy,
@@ -329,6 +359,7 @@ pub async fn launch_retro_game(
     // (no preset for this core, or the shaders package is not installed) is
     // the normal unshaded launch, not an error.
     let shader_preset = shader_preset_for_core(&core_path);
+    let video_driver = video_driver_for_core(&core_path);
     let config_directory = retro_config_directory();
     tokio::fs::create_dir_all(&config_directory)
         .await
@@ -360,7 +391,11 @@ pub async fn launch_retro_game(
     }
     tokio::fs::write(
         &managed_path,
-        retroarch_managed_config(&autoconfig_directory, shader_preset.as_deref()),
+        retroarch_managed_config(
+            &autoconfig_directory,
+            shader_preset.as_deref(),
+            video_driver,
+        ),
     )
     .await
     .context("could not write Hearthdeck's managed RetroArch config")?;
@@ -379,7 +414,11 @@ pub async fn launch_retro_game(
 /// Settings Hearthdeck re-asserts at the start of every RetroArch launch.
 /// Kept as a plain string builder so the exact contents are unit-testable
 /// without touching the filesystem.
-fn retroarch_managed_config(autoconfig_directory: &Path, shader_preset: Option<&Path>) -> String {
+fn retroarch_managed_config(
+    autoconfig_directory: &Path,
+    shader_preset: Option<&Path>,
+    video_driver: &str,
+) -> String {
     let mut config = [
         // Start in fullscreen, never a desktop window. `video_windowed_fullscreen`
         // keeps it borderless on the current output instead of switching
@@ -414,12 +453,12 @@ fn retroarch_managed_config(autoconfig_directory: &Path, shader_preset: Option<&
         "joypad_autoconfig_dir = \"{}\"\n",
         autoconfig_directory.display()
     ));
-    // A slang preset needs a modern GL/Vulkan context; RetroArch's default
-    // `gl` driver cannot load one. The driver is a named constant so this is
-    // one explicit, documented decision rather than a literal buried in a
-    // formatted string; see `RETRO_SHADER_VIDEO_DRIVER`.
+    // Pinned for every launch, not just shaded ones: RetroArch's default `gl`
+    // driver cannot load slang presets and mis-sizes hardware-rendered cores
+    // under Gamescope. Resolved per core because Flycast needs `glcore`; see
+    // `RETRO_VIDEO_DRIVER_DEFAULT` and `VIDEO_DRIVER_BY_CORE`.
+    config.push_str(&format!("video_driver = \"{video_driver}\"\n"));
     if let Some(preset) = shader_preset {
-        config.push_str(&format!("video_driver = \"{RETRO_SHADER_VIDEO_DRIVER}\"\n"));
         config.push_str("video_shader_enable = \"true\"\n");
         config.push_str(&format!("video_shader = \"{}\"\n", preset.display()));
         config.push_str(&format!(
@@ -937,10 +976,11 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        RETRO_SHADER_VIDEO_DRIVER, SHADER_PRESET_BY_CORE, desktop_entry_directories_for,
-        parse_desktop_entry, parse_exec, retro_profiles, retroarch_command_args,
-        retroarch_managed_config, shader_preset_for_core_in, valid_heroic_application_id,
-        validate_retro_core_path_in, validate_retro_rom_path_in, visible_in_desktop,
+        RETRO_VIDEO_DRIVER_DEFAULT, SHADER_PRESET_BY_CORE, VIDEO_DRIVER_BY_CORE,
+        desktop_entry_directories_for, parse_desktop_entry, parse_exec, retro_profiles,
+        retroarch_command_args, retroarch_managed_config, shader_preset_for_core_in,
+        valid_heroic_application_id, validate_retro_core_path_in, validate_retro_rom_path_in,
+        video_driver_for_core, visible_in_desktop,
     };
 
     #[tokio::test]
@@ -1180,7 +1220,7 @@ mod tests {
     #[test]
     fn managed_retroarch_config_forces_fullscreen_and_player_one() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
-        let config = retroarch_managed_config(autoconfig_directory.path(), None);
+        let config = retroarch_managed_config(autoconfig_directory.path(), None, "vulkan");
 
         assert!(config.contains("video_fullscreen = \"true\""));
         assert!(config.contains("video_windowed_fullscreen = \"true\""));
@@ -1199,21 +1239,53 @@ mod tests {
         let preset =
             Path::new("/usr/share/libretro/shaders/shaders_slang/crt/crt-guest-advanced.slangp");
 
-        let config = retroarch_managed_config(autoconfig_directory.path(), Some(preset));
+        let config = retroarch_managed_config(autoconfig_directory.path(), Some(preset), "vulkan");
 
-        assert!(config.contains(&format!("video_driver = \"{RETRO_SHADER_VIDEO_DRIVER}\"")));
+        assert!(config.contains("video_driver = \"vulkan\""));
         assert!(config.contains("video_shader_enable = \"true\""));
         assert!(config.contains(&format!("video_shader = \"{}\"", preset.display())));
     }
 
     #[test]
-    fn managed_retroarch_config_leaves_the_video_driver_alone_without_a_shader() {
+    fn managed_retroarch_config_pins_the_video_driver_without_a_shader() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
 
-        let config = retroarch_managed_config(autoconfig_directory.path(), None);
+        let config = retroarch_managed_config(autoconfig_directory.path(), None, "vulkan");
 
-        assert!(!config.contains("video_driver"));
+        // The driver is pinned for every launch; only the shader lines depend on
+        // a preset applying.
+        assert!(config.contains("video_driver = \"vulkan\""));
         assert!(!config.contains("video_shader"));
+    }
+
+    #[test]
+    fn resolves_a_per_core_video_driver_override() {
+        // Flycast is the override: its libretro Vulkan renderer segfaults on the
+        // FMV-to-gameplay resolution change, so it is pinned to `glcore`.
+        assert_eq!(
+            video_driver_for_core(Path::new("/usr/lib/libretro/flycast_libretro.so")),
+            "glcore"
+        );
+        // Every other core gets the Hearthdeck default.
+        assert_eq!(
+            video_driver_for_core(Path::new("/usr/lib/libretro/snes9x_libretro.so")),
+            RETRO_VIDEO_DRIVER_DEFAULT
+        );
+        assert_eq!(
+            video_driver_for_core(Path::new("/usr/lib/libretro/dolphin_libretro.so")),
+            RETRO_VIDEO_DRIVER_DEFAULT
+        );
+        // Every override names a real core and a driver that is not the default.
+        for (core, driver) in VIDEO_DRIVER_BY_CORE {
+            assert!(
+                core.ends_with("_libretro.so"),
+                "{core} is not a core filename"
+            );
+            assert_ne!(
+                *driver, RETRO_VIDEO_DRIVER_DEFAULT,
+                "{core} overrides to the default"
+            );
+        }
     }
 
     #[test]
