@@ -234,6 +234,84 @@ pub async fn launch_heroic_game(
 /// boundary regardless of how a core got there.
 const RETRO_CORE_DIRECTORIES: [&str; 1] = ["/usr/lib/libretro"];
 
+/// Where Arch's `libretro-shaders-slang` package installs its `.slangp`
+/// presets. Hearthdeck only ever points RetroArch at an absolute preset
+/// path under here, never at a user's own shader directory, so the applied
+/// look is the same on every install and cannot drift from a desktop
+/// RetroArch setup.
+const RETRO_SHADER_DIRECTORY: &str = "/usr/share/libretro/shaders/shaders_slang";
+
+/// Video driver forced for launches that apply a shader preset.
+///
+/// Slang presets need a modern context, so RetroArch's default `gl` driver
+/// cannot load them; `glcore` and `vulkan` both can. `vulkan` is chosen here
+/// because it is the natural fit for the Gamescope/KMS sessions Hearthdeck
+/// runs in (Gamescope is a Vulkan compositor) and because the 3D-era cores
+/// are Vulkan-rendered. Every core that actually receives a shader in
+/// `SHADER_PRESET_BY_CORE` is software-rendered, so this does not strand a
+/// GL-only core; if one is ever added to the shaded set, switch this to
+/// `glcore` instead.
+const RETRO_SHADER_VIDEO_DRIVER: &str = "vulkan";
+
+/// Per-core shader preset, relative to `RETRO_SHADER_DIRECTORY`.
+///
+/// Keyed on the core filename rather than the platform: `retro.rs` already
+/// owns the platform→core decision, and several consoles share one core
+/// (Dolphin is GameCube and Wii; Genesis Plus GX covers Mega Drive, Master
+/// System, Game Gear and Sega CD). The split below is the practical one -
+/// CRT-era 2D consoles get a CRT mask, handhelds get an LCD grid, and the
+/// 3D-era cores deliberately get no entry so they render unfiltered. If the
+/// preset file is absent (shaders package not installed) the launch simply
+/// proceeds unshaded, so this can never hard-fail a game.
+const SHADER_PRESET_BY_CORE: &[(&str, &str)] = &[
+    // CRT-era home consoles.
+    ("fceumm_libretro.so", "crt/crt-guest-advanced.slangp"),
+    ("snes9x_libretro.so", "crt/crt-guest-advanced.slangp"),
+    (
+        "genesis_plus_gx_libretro.so",
+        "crt/crt-guest-advanced.slangp",
+    ),
+    ("picodrive_libretro.so", "crt/crt-guest-advanced.slangp"),
+    ("mednafen_psx_libretro.so", "crt/crt-guest-advanced.slangp"),
+    (
+        "mupen64plus_next_libretro.so",
+        "crt/crt-guest-advanced.slangp",
+    ),
+    ("parallel_n64_libretro.so", "crt/crt-guest-advanced.slangp"),
+    (
+        "mednafen_pce_fast_libretro.so",
+        "crt/crt-guest-advanced.slangp",
+    ),
+    (
+        "mednafen_supergrafx_libretro.so",
+        "crt/crt-guest-advanced.slangp",
+    ),
+    ("kronos_libretro.so", "crt/crt-guest-advanced.slangp"),
+    ("mame_libretro.so", "crt/crt-guest-advanced.slangp"),
+    // Handhelds: an LCD pixel grid instead of a CRT mask.
+    ("mgba_libretro.so", "handheld/lcd-grid-v2.slangp"),
+    ("gambatte_libretro.so", "handheld/lcd-grid-v2.slangp"),
+    ("desmume_libretro.so", "handheld/lcd-grid-v2.slangp"),
+    ("melonds_libretro.so", "handheld/lcd-grid-v2.slangp"),
+    ("ppsspp_libretro.so", "handheld/lcd-grid-v2.slangp"),
+];
+
+/// The preset to apply for a core, if the shaders package is installed.
+/// Split from the filesystem check so the lookup is unit-testable against a
+/// temp directory, mirroring `validate_retro_core_path_in`.
+fn shader_preset_for_core(core_path: &Path) -> Option<PathBuf> {
+    shader_preset_for_core_in(core_path, Path::new(RETRO_SHADER_DIRECTORY))
+}
+
+fn shader_preset_for_core_in(core_path: &Path, shader_directory: &Path) -> Option<PathBuf> {
+    let core_filename = core_path.file_name()?.to_str()?;
+    let (_, preset) = SHADER_PRESET_BY_CORE
+        .iter()
+        .find(|(core, _)| *core == core_filename)?;
+    let preset_path = shader_directory.join(preset);
+    preset_path.is_file().then_some(preset_path)
+}
+
 /// Launches a RetroArch core against a ROM the daemon has already resolved
 /// and cached locally. Mirrors `launch_application`'s discipline: the bridge
 /// re-validates both paths itself rather than trusting the daemon's copy,
@@ -247,6 +325,10 @@ pub async fn launch_retro_game(
 ) -> Result<LaunchedApplication> {
     let core_path = validate_retro_core_path(core_path)?;
     let rom_path = validate_retro_rom_path(rom_path)?;
+    // Resolved once and threaded through the managed config below. `None`
+    // (no preset for this core, or the shaders package is not installed) is
+    // the normal unshaded launch, not an error.
+    let shader_preset = shader_preset_for_core(&core_path);
     let config_directory = retro_config_directory();
     tokio::fs::create_dir_all(&config_directory)
         .await
@@ -278,10 +360,13 @@ pub async fn launch_retro_game(
     }
     tokio::fs::write(
         &managed_path,
-        retroarch_managed_config(&autoconfig_directory),
+        retroarch_managed_config(&autoconfig_directory, shader_preset.as_deref()),
     )
     .await
     .context("could not write Hearthdeck's managed RetroArch config")?;
+    if let Some(preset) = shader_preset.as_deref() {
+        info!(preset = %preset.display(), "applying RetroArch shader preset");
+    }
     let unit_name = format!("hearthdeck-app-{session_id}.service");
     launch_with_systemd(
         &unit_name,
@@ -294,7 +379,7 @@ pub async fn launch_retro_game(
 /// Settings Hearthdeck re-asserts at the start of every RetroArch launch.
 /// Kept as a plain string builder so the exact contents are unit-testable
 /// without touching the filesystem.
-fn retroarch_managed_config(autoconfig_directory: &Path) -> String {
+fn retroarch_managed_config(autoconfig_directory: &Path, shader_preset: Option<&Path>) -> String {
     let mut config = [
         // Start in fullscreen, never a desktop window. `video_windowed_fullscreen`
         // keeps it borderless on the current output instead of switching
@@ -329,6 +414,18 @@ fn retroarch_managed_config(autoconfig_directory: &Path) -> String {
         "joypad_autoconfig_dir = \"{}\"\n",
         autoconfig_directory.display()
     ));
+    // A slang preset needs a modern GL/Vulkan context; RetroArch's default
+    // `gl` driver cannot load one. The driver is a named constant so this is
+    // one explicit, documented decision rather than a literal buried in a
+    // formatted string; see `RETRO_SHADER_VIDEO_DRIVER`.
+    if let Some(preset) = shader_preset {
+        config.push_str(&format!("video_driver = \"{RETRO_SHADER_VIDEO_DRIVER}\"\n"));
+        config.push_str("video_shader_enable = \"true\"\n");
+        config.push_str(&format!("video_shader = \"{}\"\n", preset.display()));
+        config.push_str(&format!(
+            "video_shader_dir = \"{RETRO_SHADER_DIRECTORY}\"\n"
+        ));
+    }
     config
 }
 
@@ -840,8 +937,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        desktop_entry_directories_for, parse_desktop_entry, parse_exec, retro_profiles,
-        retroarch_command_args, retroarch_managed_config, valid_heroic_application_id,
+        RETRO_SHADER_VIDEO_DRIVER, SHADER_PRESET_BY_CORE, desktop_entry_directories_for,
+        parse_desktop_entry, parse_exec, retro_profiles, retroarch_command_args,
+        retroarch_managed_config, shader_preset_for_core_in, valid_heroic_application_id,
         validate_retro_core_path_in, validate_retro_rom_path_in, visible_in_desktop,
     };
 
@@ -1082,7 +1180,7 @@ mod tests {
     #[test]
     fn managed_retroarch_config_forces_fullscreen_and_player_one() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
-        let config = retroarch_managed_config(autoconfig_directory.path());
+        let config = retroarch_managed_config(autoconfig_directory.path(), None);
 
         assert!(config.contains("video_fullscreen = \"true\""));
         assert!(config.contains("video_windowed_fullscreen = \"true\""));
@@ -1093,6 +1191,76 @@ mod tests {
             autoconfig_directory.path().display()
         )));
         assert!(config.ends_with('\n'));
+    }
+
+    #[test]
+    fn managed_retroarch_config_applies_a_shader_preset_when_given_one() {
+        let autoconfig_directory = tempfile::tempdir().unwrap();
+        let preset =
+            Path::new("/usr/share/libretro/shaders/shaders_slang/crt/crt-guest-advanced.slangp");
+
+        let config = retroarch_managed_config(autoconfig_directory.path(), Some(preset));
+
+        assert!(config.contains(&format!("video_driver = \"{RETRO_SHADER_VIDEO_DRIVER}\"")));
+        assert!(config.contains("video_shader_enable = \"true\""));
+        assert!(config.contains(&format!("video_shader = \"{}\"", preset.display())));
+    }
+
+    #[test]
+    fn managed_retroarch_config_leaves_the_video_driver_alone_without_a_shader() {
+        let autoconfig_directory = tempfile::tempdir().unwrap();
+
+        let config = retroarch_managed_config(autoconfig_directory.path(), None);
+
+        assert!(!config.contains("video_driver"));
+        assert!(!config.contains("video_shader"));
+    }
+
+    #[test]
+    fn resolves_a_shader_preset_only_when_the_file_exists() {
+        let shader_directory = tempfile::tempdir().unwrap();
+        let preset = shader_directory
+            .path()
+            .join("crt/crt-guest-advanced.slangp");
+        std::fs::create_dir_all(preset.parent().unwrap()).unwrap();
+        std::fs::write(&preset, b"# shader preset\n").unwrap();
+
+        let resolved = shader_preset_for_core_in(
+            Path::new("/usr/lib/libretro/snes9x_libretro.so"),
+            shader_directory.path(),
+        );
+        assert_eq!(resolved.as_deref(), Some(preset.as_path()));
+
+        // A core the table deliberately leaves unfiltered (3D-era cores) gets
+        // no preset even though the shaders package is installed.
+        assert!(
+            shader_preset_for_core_in(
+                Path::new("/usr/lib/libretro/dolphin_libretro.so"),
+                shader_directory.path(),
+            )
+            .is_none()
+        );
+
+        // A mapped core still gets no preset when the shaders package is not
+        // installed, so the launch proceeds unshaded rather than failing.
+        let empty_directory = tempfile::tempdir().unwrap();
+        assert!(
+            shader_preset_for_core_in(
+                Path::new("/usr/lib/libretro/snes9x_libretro.so"),
+                empty_directory.path(),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn every_shader_preset_references_a_known_shader_collection_file() {
+        for (core, preset) in SHADER_PRESET_BY_CORE {
+            assert!(
+                preset.ends_with(".slangp"),
+                "{core} maps to {preset}, which is not a slang preset"
+            );
+        }
     }
 
     #[test]

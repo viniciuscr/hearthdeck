@@ -47,8 +47,11 @@ Gamescope with the smallest possible memory/CPU footprint.
 - RomM: read-only settings plus live console/game browsing
   (`/v1/retro/consoles`, `/v1/retro/roms`) and dedicated managed launch
   (`/v1/retro/roms/{id}/launch`). No catalog materialization or saves.
-- RetroArch: not installed by the package, not referenced anywhere in
-  `services/` or `packaging/`.
+- RetroArch: `retroarch` plus a curated set of `libretro-*` cores ship as
+  package dependencies/optional dependencies (`packaging/arch/PKGBUILD`);
+  the daemon resolves platform→core and the bridge launches the core under
+  Hearthdeck's own config directory. `libretro-shaders-slang` is optional and
+  supplies the per-console shader presets the bridge applies (decision 8).
 - Discovery/catalog: RomM is *not* a `DiscoveryProvider`/`CatalogRecord`
   source (only Heroic and desktop/macOS apps are). It is a separate
   direct-proxy surface.
@@ -195,6 +198,26 @@ disagrees.
    is deliberately deferred until a second live source exists
    — building that abstraction for one case would be guessing at its
    shape.
+
+8. **Shaders are per-core presets from `libretro-shaders-slang`, not a
+   user-supplied shader directory.** Arch packages the upstream slang shader
+   collection; the bridge maps a core filename to one preset under
+   `/usr/share/libretro/shaders/shaders_slang` (CRT mask for 2D CRT-era
+   consoles, an LCD grid for handhelds, no preset for 3D-era cores) and sets
+   `video_shader` plus `video_driver = "vulkan"` in the managed config.
+   Rationale: slang presets need a modern GL/Vulkan context the default `gl`
+   driver cannot provide. `vulkan` is the better fit for the Gamescope/KMS
+   sessions Hearthdeck runs in (Gamescope is itself a Vulkan compositor) and
+   for the Vulkan-rendered 3D cores; `glcore` is the fallback if a GL-only
+   core is ever added to the shaded set. The driver is a named constant
+   (`RETRO_SHADER_VIDEO_DRIVER`), only overridden when a preset actually
+   applies, so an install without the shaders package keeps its previous
+   default driver and a missing preset degrades to an unshaded launch instead
+   of failing. Keying on the core keeps the platform→core decision in one
+   place while naturally covering consoles that share a core (Dolphin =
+   GC/Wii, Genesis Plus GX = MD/MS/GG/Sega CD). Per-user preset overrides are
+   future work, alongside the core-install configurability in open
+   question 2.
 
 ## Starting the RomM server itself
 

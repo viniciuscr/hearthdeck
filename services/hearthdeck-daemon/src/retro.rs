@@ -23,29 +23,119 @@ use crate::{
 const CORE_DIRECTORY: &str = "/usr/lib/libretro";
 
 /// Platform `fs_slug` (RomM's on-disk-folder-naming slug, e.g. "snes",
-/// "n64") to libretro core filename. Starter set matching the cores added
-/// to `packaging/arch/PKGBUILD`'s `optdepends`; see
-/// docs/retroarch-integration.md open question 2 for the plan to make this
-/// on-demand and user-configurable instead of a fixed table.
+/// "ngc") to libretro core filename.
+///
+/// Each console lists every slug spelling we have seen RomM (or the
+/// metadata providers behind it) emit for that platform, because a single
+/// console is genuinely addressable by several names: RomM's own
+/// folder-naming `fs_slug` ("ngc"), the provider slug ("gamecube"), and
+/// hand-written variants. A miss here is the "core is not configured"
+/// failure users hit even though the core is installed under
+/// `/usr/lib/libretro`, so the aliases are deliberately broad.
+///
+/// Only cores Arch actually packages at the time of writing are listed;
+/// `packaging/arch/PKGBUILD`'s `optdepends` mirrors this file and the
+/// `every_pkgbuild_optdepend_core_has_a_platform_mapping` test keeps the two
+/// in sync. See docs/retroarch-integration.md open question 2 for the plan to
+/// make this on-demand and user-configurable instead of a fixed table.
 const CORE_BY_PLATFORM_SLUG: &[(&str, &str)] = &[
+    // Nintendo Entertainment System / Famicom / Famicom Disk System.
     ("nes", "fceumm_libretro.so"),
     ("famicom", "fceumm_libretro.so"),
+    ("fds", "fceumm_libretro.so"),
+    ("nintendo-entertainment-system", "fceumm_libretro.so"),
+    // Super Nintendo / Super Famicom.
     ("snes", "snes9x_libretro.so"),
+    ("sfc", "snes9x_libretro.so"),
     ("sfam", "snes9x_libretro.so"),
-    ("genesis-slash-megadrive", "genesis_plus_gx_libretro.so"),
+    ("super-famicom", "snes9x_libretro.so"),
+    ("super-nintendo", "snes9x_libretro.so"),
+    ("super-nintendo-entertainment-system", "snes9x_libretro.so"),
+    // Sega Genesis / Mega Drive, Master System, Game Gear, Sega CD.
     ("genesis", "genesis_plus_gx_libretro.so"),
+    ("genesis-slash-megadrive", "genesis_plus_gx_libretro.so"),
     ("megadrive", "genesis_plus_gx_libretro.so"),
+    ("mega-drive", "genesis_plus_gx_libretro.so"),
+    ("sega-mega-drive", "genesis_plus_gx_libretro.so"),
+    ("sega-genesis", "genesis_plus_gx_libretro.so"),
+    ("sms", "genesis_plus_gx_libretro.so"),
+    ("mastersystem", "genesis_plus_gx_libretro.so"),
+    ("master-system", "genesis_plus_gx_libretro.so"),
+    ("sega-master-system", "genesis_plus_gx_libretro.so"),
+    ("gg", "genesis_plus_gx_libretro.so"),
+    ("gamegear", "genesis_plus_gx_libretro.so"),
+    ("game-gear", "genesis_plus_gx_libretro.so"),
+    ("sega-game-gear", "genesis_plus_gx_libretro.so"),
+    ("segacd", "genesis_plus_gx_libretro.so"),
+    ("sega-cd", "genesis_plus_gx_libretro.so"),
+    ("mega-cd", "genesis_plus_gx_libretro.so"),
+    ("mega-cd-slash-sega-cd", "genesis_plus_gx_libretro.so"),
+    // Sega 32X (Genesis Plus GX does not emulate it).
+    ("sega32x", "picodrive_libretro.so"),
+    ("32x", "picodrive_libretro.so"),
+    ("sega-32x", "picodrive_libretro.so"),
+    // Game Boy / Game Boy Color / Game Boy Advance.
     ("gb", "mgba_libretro.so"),
+    ("gameboy", "mgba_libretro.so"),
+    ("game-boy", "mgba_libretro.so"),
     ("gbc", "mgba_libretro.so"),
+    ("gameboy-color", "mgba_libretro.so"),
+    ("game-boy-color", "mgba_libretro.so"),
     ("gba", "mgba_libretro.so"),
+    ("gameboy-advance", "mgba_libretro.so"),
+    ("game-boy-advance", "mgba_libretro.so"),
+    // Nintendo 64.
     ("n64", "mupen64plus_next_libretro.so"),
     ("nintendo-64", "mupen64plus_next_libretro.so"),
-    ("ps", "beetle_psx_libretro.so"),
-    ("psx", "beetle_psx_libretro.so"),
-    ("playstation", "beetle_psx_libretro.so"),
+    ("nintendo64", "mupen64plus_next_libretro.so"),
+    // GameCube / Wii (one Dolphin core covers both).
+    ("ngc", "dolphin_libretro.so"),
+    ("gc", "dolphin_libretro.so"),
+    ("gamecube", "dolphin_libretro.so"),
+    ("game-cube", "dolphin_libretro.so"),
+    ("nintendo-gamecube", "dolphin_libretro.so"),
+    ("nintendo-game-cube", "dolphin_libretro.so"),
+    ("wii", "dolphin_libretro.so"),
+    ("nintendo-wii", "dolphin_libretro.so"),
+    // PlayStation 1 / 2, PSP.
+    ("ps", "mednafen_psx_libretro.so"),
+    ("psx", "mednafen_psx_libretro.so"),
+    ("ps1", "mednafen_psx_libretro.so"),
+    ("playstation", "mednafen_psx_libretro.so"),
+    ("sony-playstation", "mednafen_psx_libretro.so"),
+    ("ps2", "play_libretro.so"),
+    ("playstation-2", "play_libretro.so"),
+    ("sony-playstation-2", "play_libretro.so"),
+    ("psp", "ppsspp_libretro.so"),
+    ("playstation-portable", "ppsspp_libretro.so"),
+    ("sony-playstation-portable", "ppsspp_libretro.so"),
+    // Nintendo DS.
     ("nds", "desmume_libretro.so"),
+    ("nintendo-ds", "desmume_libretro.so"),
+    ("ds", "desmume_libretro.so"),
+    // Sega Dreamcast / Saturn.
     ("dc", "flycast_libretro.so"),
     ("dreamcast", "flycast_libretro.so"),
+    ("sega-dreamcast", "flycast_libretro.so"),
+    ("saturn", "kronos_libretro.so"),
+    ("sega-saturn", "kronos_libretro.so"),
+    // NEC PC Engine / TurboGrafx-16 and SuperGrafx.
+    ("pce", "mednafen_pce_fast_libretro.so"),
+    ("pcengine", "mednafen_pce_fast_libretro.so"),
+    ("pc-engine", "mednafen_pce_fast_libretro.so"),
+    ("turbografx16", "mednafen_pce_fast_libretro.so"),
+    ("turbografx-16", "mednafen_pce_fast_libretro.so"),
+    ("nec-pc-engine", "mednafen_pce_fast_libretro.so"),
+    ("supergrafx", "mednafen_supergrafx_libretro.so"),
+    ("super-grafx", "mednafen_supergrafx_libretro.so"),
+    // Arcade / Neo Geo.
+    ("arcade", "mame_libretro.so"),
+    ("mame", "mame_libretro.so"),
+    ("neogeo", "mame_libretro.so"),
+    ("neo-geo", "mame_libretro.so"),
+    ("snk-neo-geo", "mame_libretro.so"),
+    // ScummVM point-and-click adventures.
+    ("scummvm", "scummvm_libretro.so"),
 ];
 
 #[derive(Debug)]
@@ -218,11 +308,20 @@ mod tests {
             "fceumm_libretro.so",
             "snes9x_libretro.so",
             "genesis_plus_gx_libretro.so",
+            "picodrive_libretro.so",
             "mgba_libretro.so",
             "mupen64plus_next_libretro.so",
-            "beetle_psx_libretro.so",
+            "mednafen_psx_libretro.so",
+            "play_libretro.so",
+            "ppsspp_libretro.so",
             "desmume_libretro.so",
+            "dolphin_libretro.so",
             "flycast_libretro.so",
+            "kronos_libretro.so",
+            "mednafen_pce_fast_libretro.so",
+            "mednafen_supergrafx_libretro.so",
+            "mame_libretro.so",
+            "scummvm_libretro.so",
         ] {
             assert!(
                 cores_with_mappings.contains(core),
