@@ -52,9 +52,11 @@ pub struct RommPlatform {
     pub artwork_paths: Vec<String>,
 }
 
-/// Candidate RomM artwork paths for a platform, in RomM's own `RPlatformIcon`
-/// order: filesystem slug first (RomM names its bundled console art by the
-/// platform folder), then the canonical slug, then the shared default.
+/// Candidate RomM artwork paths for a platform, mirroring RomM's bundled
+/// console-art naming. The filenames match RomM's canonical platform slug
+/// (e.g. Dreamcast is `dc`, so `/assets/platforms/dc.svg`), so the slug is
+/// tried first and the filesystem folder name is only a secondary fallback
+/// for installs whose slug does not line up. `default.ico` is last.
 ///
 /// The daemon only names the candidates; it deliberately does not probe RomM
 /// to learn which file exists. The client walks the list through the
@@ -71,19 +73,19 @@ fn platform_artwork_paths(platform: &RommPlatform) -> Vec<String> {
             .map(|slug| slug.trim().to_ascii_lowercase())
             .filter(|slug| !slug.is_empty())
     };
-    let fs_slug = normalized(platform.fs_slug.as_ref());
     let slug = normalized(platform.slug.as_ref());
+    let fs_slug = normalized(platform.fs_slug.as_ref());
 
     let mut paths = Vec::new();
-    if let Some(fs_slug) = fs_slug.as_deref() {
-        paths.push(candidate(fs_slug, "svg"));
-        paths.push(candidate(fs_slug, "ico"));
-    }
-    if let Some(slug) = slug.as_deref()
-        && Some(slug) != fs_slug.as_deref()
-    {
+    if let Some(slug) = slug.as_deref() {
         paths.push(candidate(slug, "svg"));
         paths.push(candidate(slug, "ico"));
+    }
+    if let Some(fs_slug) = fs_slug.as_deref()
+        && Some(fs_slug) != slug.as_deref()
+    {
+        paths.push(candidate(fs_slug, "svg"));
+        paths.push(candidate(fs_slug, "ico"));
     }
     paths.push(candidate("default", "ico"));
     paths
@@ -1032,7 +1034,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_artwork_prefers_the_filesystem_slug_then_the_slug_then_default() {
+    fn platform_artwork_prefers_the_slug_then_the_filesystem_slug_then_default() {
         let platform = super::RommPlatform {
             id: 7,
             name: "Super Nintendo".to_owned(),
@@ -1047,10 +1049,10 @@ mod tests {
         assert_eq!(
             super::platform_artwork_paths(&platform),
             vec![
-                "/assets/platforms/super-nintendo.svg",
-                "/assets/platforms/super-nintendo.ico",
                 "/assets/platforms/snes.svg",
                 "/assets/platforms/snes.ico",
+                "/assets/platforms/super-nintendo.svg",
+                "/assets/platforms/super-nintendo.ico",
                 "/assets/platforms/default.ico",
             ]
         );

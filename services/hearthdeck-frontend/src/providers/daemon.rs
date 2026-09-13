@@ -141,8 +141,8 @@ impl RetroPlatform {
     }
 }
 
-/// A RomM console ready for the frontend: its label and, when RomM exposed
-/// one, a locally cached logo path.
+/// A RomM console ready for the frontend: its label and, when one could be
+/// cached, the local path to its bundled console artwork.
 #[derive(Clone, Debug)]
 pub struct RetroConsole {
     pub id: i64,

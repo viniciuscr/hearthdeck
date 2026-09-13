@@ -393,6 +393,10 @@ struct HearthDeck {
     waiting_for_filtered: bool,
     scroll_offset: f32,
     viewport_height: f32,
+    /// Horizontal scroll offset and visible width of each dashboard rail,
+    /// reported by the rail's `on_scroll`. Lets focus navigation scroll only
+    /// when the selected card would leave the visible window.
+    dashboard_rail_scroll: HashMap<&'static str, (f32, f32)>,
     window_width: f32,
     core: Core,
     group_to_delete: Option<usize>,
@@ -424,8 +428,8 @@ struct HearthDeck {
     degraded_providers: Vec<String>,
     dashboard_health_generation: u64,
     romm_request_generation: u64,
-    /// Cached local logo path per RomM platform id, used by the dashboard's
-    /// console rail.
+    /// Cached local path to each RomM platform's console artwork, used by the
+    /// dashboard's console rail.
     romm_platform_icons: HashMap<i64, String>,
     /// Authoritative game count per RomM platform id, straight from the
     /// consoles endpoint. The Console Games grid lazy-loads pages, so the
@@ -474,6 +478,7 @@ impl Default for HearthDeck {
             waiting_for_filtered: Default::default(),
             scroll_offset: Default::default(),
             viewport_height: Default::default(),
+            dashboard_rail_scroll: Default::default(),
             window_width: WINDOW_WIDTH,
             core: Default::default(),
             group_to_delete: Default::default(),
@@ -740,6 +745,15 @@ enum Message {
     LeaveDndOffer(Option<usize>),
     ScrollYOffset(f32, f32),
     ViewportHeight(f32),
+    /// A dashboard rail's live scroll viewport, keyed by the rail's stable
+    /// key. `offset` is the horizontal scroll position and `viewport` the
+    /// visible width, both needed to keep the selected card in view without
+    /// pinning it to an edge.
+    DashboardRailScrolled {
+        key: &'static str,
+        offset: f32,
+        viewport: f32,
+    },
     /// Absolute horizontal scroll offset that keeps the selected tab visible
     /// inside the single-line tab strip.
     ScrollTabStrip(f32),
@@ -1493,23 +1507,44 @@ impl HearthDeck {
             .collect()
     }
 
-    /// Scrolls the rail holding `id` so the focused card is in view. Cards are
-    /// uniform, so the offset is index * (card + gap); iced clamps it at the
-    /// ends, which keeps the leading cards visible when moving back left.
+    /// Scrolls the rail holding `id` just enough to keep the focused card in
+    /// view. Cards are uniform, so a card occupies `index * (card + gap)`.
+    ///
+    /// The rail only moves when the focused card would leave the visible
+    /// window: moving right past the trailing edge pins the card there, and
+    /// moving left past the leading edge pins it at the start. Inside the
+    /// window the selection walks card by card and the strip stays put, so
+    /// controller navigation moves a cursor instead of dragging the shelf.
     fn reveal_dashboard_rail(&self, id: &widget::Id) -> Option<Task<Message>> {
         let spacing = theme::spacing();
         let card = dashboard_tile_size(self.window_width, spacing.space_l, spacing.space_l);
         let gap = f32::from(spacing.space_l);
         for (key, ids) in self.dashboard_rails() {
-            if let Some(index) = ids.iter().position(|candidate| candidate == id) {
-                return Some(iced::widget::scrollable::scroll_to(
-                    dashboard_rail_id(key),
-                    AbsoluteOffset {
-                        x: Some(index as f32 * (card + gap)),
-                        y: None,
-                    },
-                ));
-            }
+            let Some(index) = ids.iter().position(|candidate| candidate == id) else {
+                continue;
+            };
+            let (offset, viewport) = self
+                .dashboard_rail_scroll
+                .get(key)
+                .copied()
+                .unwrap_or((0.0, 0.0));
+            // The scrollable only reports its viewport after it handles an
+            // event, so before that (and on the first frame) fall back to the
+            // space the rail actually gets, so the first move right can
+            // scroll.
+            let viewport = if viewport > 0.0 {
+                viewport
+            } else {
+                (self.window_width - 2.0 * f32::from(spacing.space_l)).max(card)
+            };
+            let target = rail_scroll_target(index, ids.len(), offset, viewport, card, gap)?;
+            return Some(iced::widget::scrollable::scroll_to(
+                dashboard_rail_id(key),
+                AbsoluteOffset {
+                    x: Some(target),
+                    y: None,
+                },
+            ));
         }
         None
     }
@@ -2744,6 +2779,13 @@ impl cosmic::Application for HearthDeck {
             Message::ViewportHeight(height) => {
                 self.viewport_height = height;
             }
+            Message::DashboardRailScrolled {
+                key,
+                offset,
+                viewport,
+            } => {
+                self.dashboard_rail_scroll.insert(key, (offset, viewport));
+            }
             Message::ScrollTabStrip(offset) => {
                 return iced::widget::scrollable::scroll_to(
                     TAB_STRIP_SCROLLABLE_ID.clone(),
@@ -3664,6 +3706,11 @@ impl HearthDeck {
                 rail(dashboard_rail_id(shelf.key()), shelf.title(), tile_size)
                     .items(cards)
                     .empty(empty)
+                    .on_scroll(move |viewport| Message::DashboardRailScrolled {
+                        key: shelf.key(),
+                        offset: viewport.absolute_offset().x,
+                        viewport: viewport.bounds().width,
+                    })
                     .into()
             })
             .collect();
@@ -3676,9 +3723,9 @@ impl HearthDeck {
                 let cards: Vec<Element<'_, Message>> = consoles
                     .into_iter()
                     .map(|(index, group)| {
-                        // Logos are wordmarks, so contain them instead of
-                        // cropping; fall back to a generic glyph when a platform
-                        // is unidentified or its logo could not be cached.
+                        // Bundled console art is square-ish pixel art, so contain
+                        // it rather than crop; fall back to a generic glyph when
+                        // a platform has no artwork or it could not be cached.
                         let handle = group
                             .romm_platform_id()
                             .and_then(|id| self.romm_platform_icons.get(&id))
@@ -3706,6 +3753,11 @@ impl HearthDeck {
                     tile_size,
                 )
                 .items(cards)
+                .on_scroll(|viewport| Message::DashboardRailScrolled {
+                    key: CONSOLES_RAIL_KEY,
+                    offset: viewport.absolute_offset().x,
+                    viewport: viewport.bounds().width,
+                })
                 .into()
             })
         };
@@ -4261,6 +4313,37 @@ fn dashboard_rail_id(key: &str) -> widget::Id {
     widget::Id::from(format!("dashboard-rail-{key}"))
 }
 
+/// Absolute horizontal scroll target that keeps card `index` of a `count`-card
+/// rail inside the visible window, or `None` when it is already fully visible.
+/// `offset` is the current scroll position, `viewport` the visible width, and
+/// `card`/`gap` the card size and the space between cards.
+///
+/// A card leaving through the trailing edge is pinned to that edge; one
+/// leaving through the leading edge is pinned to the start. Anything already
+/// inside the window returns `None`, which is what lets the selection walk
+/// across the row before the strip starts moving.
+fn rail_scroll_target(
+    index: usize,
+    count: usize,
+    offset: f32,
+    viewport: f32,
+    card: f32,
+    gap: f32,
+) -> Option<f32> {
+    let step = card + gap;
+    let item_start = index as f32 * step;
+    let item_end = item_start + card;
+    let target = if item_start < offset {
+        item_start
+    } else if item_end > offset + viewport {
+        item_end - viewport
+    } else {
+        return None;
+    };
+    let content = count as f32 * step - gap;
+    Some(target.clamp(0.0, (content - viewport).max(0.0)))
+}
+
 /// Position of a tab within the strip: the "all apps" tab is 0, custom groups
 /// follow in order. Used to pick the slide direction.
 fn tab_position(group: Option<usize>) -> i32 {
@@ -4309,7 +4392,7 @@ mod tests {
     use super::{
         DashboardShelf, HearthDeck, Page, TAB_TRANSITION_DURATION, VirtualKeyboard,
         degraded_providers, focused_entry_index, is_primary_window, next_romm_offset,
-        romm_page_is_current, selected_romm_platform_id,
+        rail_scroll_target, romm_page_is_current, selected_romm_platform_id,
     };
     use crate::app_group::{AppGroup, AppLibraryConfig, FilterType, Section};
     use crate::providers::GameRecord;
@@ -4930,5 +5013,39 @@ mod tests {
         app.entry_path_input = vec![entry("one"), entry("two")];
 
         assert_eq!(app.console_total_count(), Some(240));
+    }
+
+    #[test]
+    fn rail_scroll_leaves_a_visible_selection_alone() {
+        // 10 cards of 100px with 10px gaps inside a 1000px window: cards 0..=8
+        // are fully visible, so moving among them must not move the rail.
+        assert_eq!(rail_scroll_target(0, 10, 0.0, 1000.0, 100.0, 10.0), None);
+        assert_eq!(rail_scroll_target(3, 10, 0.0, 1000.0, 100.0, 10.0), None);
+        assert_eq!(rail_scroll_target(8, 10, 0.0, 1000.0, 100.0, 10.0), None);
+    }
+
+    #[test]
+    fn rail_scroll_pins_only_once_the_selection_crosses_an_edge() {
+        // Card 9 is the first that leaves through the trailing edge.
+        assert_eq!(
+            rail_scroll_target(9, 10, 0.0, 1000.0, 100.0, 10.0),
+            Some(90.0)
+        );
+        // A card leaving through the leading edge pins to the start, not to
+        // the trailing edge, so moving left keeps it just inside the window.
+        assert_eq!(
+            rail_scroll_target(0, 10, 220.0, 1000.0, 100.0, 10.0),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn rail_scroll_clamps_to_the_content_end() {
+        // Narrow window: the last card cannot be pinned left of the maximum
+        // scroll, or the rail would overscroll past its content.
+        assert_eq!(
+            rail_scroll_target(9, 10, 0.0, 300.0, 100.0, 10.0),
+            Some(790.0)
+        );
     }
 }

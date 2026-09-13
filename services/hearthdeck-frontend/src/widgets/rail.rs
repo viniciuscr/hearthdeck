@@ -19,6 +19,7 @@
 use cosmic::Element;
 use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::alignment::{Horizontal, Vertical};
+use cosmic::iced::widget::scrollable::Viewport;
 use cosmic::iced::{Alignment, ContentFit, Length};
 use cosmic::theme;
 use cosmic::widget::{Id, button, column, container, icon, row, scrollable, space, text};
@@ -29,7 +30,7 @@ use crate::style::{
 
 /// One card in a [`Rail`]: square and exactly the same size as every other card
 /// in the rail. Only the artwork fit varies — game covers are cropped to fill,
-/// console logos are contained so wide wordmarks are not cut off.
+/// console art is contained so its pixel-art edges are not cut off.
 #[must_use]
 pub struct RailItem<Message> {
     id: Id,
@@ -119,6 +120,7 @@ pub struct Rail<'a, Message> {
     item_size: f32,
     items: Vec<Element<'a, Message>>,
     empty: Option<Element<'a, Message>>,
+    on_scroll: Option<Box<dyn Fn(Viewport) -> Message + 'a>>,
 }
 
 /// Creates an empty [`Rail`] with a fixed card size.
@@ -133,6 +135,7 @@ pub fn rail<'a, Message: 'static>(
         item_size,
         items: Vec::new(),
         empty: None,
+        on_scroll: None,
     }
 }
 
@@ -158,6 +161,16 @@ impl<'a, Message: Clone + 'static> Rail<'a, Message> {
         self
     }
 
+    /// Reports the rail's scroll [`Viewport`] whenever it changes. Callers use
+    /// this to learn the current horizontal offset and the visible width so
+    /// focus navigation can keep the selected card in view without pinning it
+    /// to an edge.
+    #[inline]
+    pub fn on_scroll(mut self, f: impl Fn(Viewport) -> Message + 'a) -> Self {
+        self.on_scroll = Some(Box::new(f));
+        self
+    }
+
     #[must_use]
     pub fn into_element(self) -> Element<'a, Message> {
         let Spacing {
@@ -171,13 +184,16 @@ impl<'a, Message: Clone + 'static> Rail<'a, Message> {
                     .into()
             })
         } else {
-            scrollable::horizontal(row(self.items).spacing(space_l))
+            let mut scrollable = scrollable::horizontal(row(self.items).spacing(space_l))
                 .id(self.id)
                 .width(Length::Fill)
                 .height(Length::Fixed(self.item_size))
                 .scrollbar_width(0)
-                .scroller_width(0)
-                .into()
+                .scroller_width(0);
+            if let Some(on_scroll) = self.on_scroll {
+                scrollable = scrollable.on_scroll(on_scroll);
+            }
+            scrollable.into()
         };
 
         column![
