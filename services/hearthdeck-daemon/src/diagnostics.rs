@@ -148,6 +148,12 @@ pub struct RommSiblingRom {
     pub id: i64,
     #[serde(default)]
     pub name: Option<String>,
+    /// File name with the extension stripped but tags kept, e.g.
+    /// `Shenmue (Disc 2)`. This is the field that tells versions apart: RomM
+    /// strips trailing `(...)`/`[...]` groups from `fs_name_no_tags`, so all
+    /// discs of a set collapse to the same string there.
+    #[serde(default)]
+    pub fs_name_no_ext: String,
     #[serde(default)]
     pub fs_name_no_tags: String,
     /// Whether this is the user's chosen main file for the group. False when

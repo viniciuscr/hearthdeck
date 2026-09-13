@@ -84,7 +84,7 @@ use crate::input_ownership::{
     Event as InputEvent, InputOwnership, LaunchTarget, managed_launch_target,
 };
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
-use crate::providers::daemon::retro_rom_versions;
+use crate::providers::daemon::{RetroRomVersion, retro_rom_versions, retro_version_label};
 use crate::style::{
     DASHBOARD_RAIL_TILES, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH, EDIT_NAME_INPUT_WIDTH,
     GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION,
@@ -2239,8 +2239,33 @@ impl cosmic::Application for HearthDeck {
                 let item_count = page.items.len() as u32;
                 self.romm_grouped_total = Some(page.total);
                 for record in page.items {
-                    let versions = retro_rom_versions(&record.metadata);
-                    if !versions.is_empty() {
+                    // Store the full version list, representative first, so the
+                    // context menu can label every disc (including the one
+                    // "Run" targets) instead of leaving it implicit.
+                    let siblings = retro_rom_versions(&record.metadata);
+                    if !siblings.is_empty() {
+                        let mut versions = Vec::with_capacity(siblings.len() + 1);
+                        if let Some(current_id) = record
+                            .id
+                            .strip_prefix("romm:")
+                            .and_then(|id| id.parse::<i64>().ok())
+                        {
+                            versions.push(RetroRomVersion {
+                                id: current_id,
+                                title: retro_version_label(&record.metadata)
+                                    .unwrap_or_else(|| record.name.clone()),
+                                is_main_sibling: true,
+                            });
+                        }
+                        versions.extend(siblings);
+                        // Two files can share a name; append the id so no two
+                        // menu entries read the same.
+                        let mut seen = std::collections::HashSet::new();
+                        for version in &mut versions {
+                            if !seen.insert(version.title.clone()) {
+                                version.title = format!("{} (#{})", version.title, version.id);
+                            }
+                        }
                         self.romm_versions.insert(record.id.clone(), versions);
                     }
                     let entry = Arc::new(record.into_desktop_entry());
@@ -2957,6 +2982,19 @@ impl cosmic::Application for HearthDeck {
                 return window::set_mode(SurfaceId::RESERVED, window::Mode::Fullscreen);
             }
             Message::WindowFocusChanged(focused) => {
+                // A frontend-owned transient surface (context menu, dialog)
+                // takes keyboard focus when it opens, which arrives here as the
+                // *main* window losing focus. That is not the frontend yielding
+                // input: the popup is part of it. Treating it as unfocused
+                // flipped ownership to `Unfocused`, and the gamepad gate then
+                // dropped every event, leaving the context menu unnavigable by
+                // controller even though it is still on screen.
+                let owned_surface_open = self.menu.is_some()
+                    || self.new_group.is_some()
+                    || self.group_to_delete.is_some();
+                if !focused && owned_surface_open {
+                    return Task::none();
+                }
                 self.input_ownership.update(if focused {
                     InputEvent::FrontendFocused
                 } else {
@@ -3273,15 +3311,20 @@ impl cosmic::Application for HearthDeck {
                 );
             }
 
-            // A collapsed multi-disc/multi-region game offers each of its
-            // other files here. "Run" above targets the group's
-            // representative, so these are the alternatives.
+            // A collapsed multi-disc/multi-region game offers every file here,
+            // the representative first. Each is labelled with its own file name,
+            // so discs and regions are distinguishable; the one "Run" targets
+            // is checked.
             let versions = self.menu_rom_versions();
             if !versions.is_empty() {
                 let fixed = 4 + usize::from(self.cur_group.is_some());
+                let current_id = menu
+                    .id
+                    .strip_prefix("romm:")
+                    .and_then(|id| id.parse::<i64>().ok());
                 list_column.push(divider::horizontal::light().into());
                 for (offset, version) in versions.into_iter().enumerate() {
-                    let version_icon = if version.is_main_sibling {
+                    let version_icon = if current_id == Some(version.id) {
                         "checkbox-checked-symbolic"
                     } else {
                         "media-optical-symbolic"
@@ -4322,7 +4365,7 @@ impl HearthDeck {
                     tile_height(self.window_width, self.cur_section != Section::Applications),
                     self.romm_versions
                         .get(&entry.id)
-                        .map_or(1, |versions| versions.len() + 1),
+                        .map_or(1, |versions| versions.len()),
                     move |rect| Message::OpenContextMenu(rect, i),
                     if self.menu.is_none() {
                         Some(Message::ActivateApp(i))

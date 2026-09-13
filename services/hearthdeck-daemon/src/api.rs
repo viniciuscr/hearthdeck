@@ -781,6 +781,11 @@ struct RetroGame {
     /// in `sibling_roms`. Empty when the game has a single file. The client
     /// converts this into a version picker and a "multiple versions" badge.
     sibling_roms: Vec<RetroRomVersion>,
+    /// File-derived label of this entry's *own* file, the version "Run"
+    /// launches. Present only when the game has siblings, so the picker can
+    /// list the current disc alongside the others instead of leaving it
+    /// implicit. `None` for single-file games.
+    version_label: Option<String>,
 }
 
 /// One selectable version of a retro game, as offered in the context menu.
@@ -807,6 +812,45 @@ impl From<&RommGame> for RetroGame {
             .first_release_date
             .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
             .map(|date| date.year());
+        // Label every version with its file name (tags kept), which is what
+        // distinguishes a disc or region. `name` is the shared game title, so
+        // it only serves as a fallback and would otherwise make every row read
+        // the same. When two rows still collide, append the RomM id so the
+        // picker never shows two identical entries.
+        let mut sibling_roms: Vec<RetroRomVersion> = game
+            .sibling_roms
+            .iter()
+            .map(|sibling| RetroRomVersion {
+                id: sibling.id,
+                title: [
+                    sibling.fs_name_no_ext.trim(),
+                    sibling.name.as_deref().unwrap_or_default().trim(),
+                    sibling.fs_name_no_tags.trim(),
+                ]
+                .into_iter()
+                .find(|candidate| !candidate.is_empty())
+                .unwrap_or("Untitled version")
+                .to_owned(),
+                is_main_sibling: sibling.is_main_sibling,
+            })
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        for version in &mut sibling_roms {
+            if !seen.insert(version.title.clone()) {
+                version.title = format!("{} (#{})", version.title, version.id);
+            }
+        }
+        // The representative's label comes from its own on-disk name (tags
+        // kept), so it reads the same way as its siblings in the picker.
+        let version_label = (!sibling_roms.is_empty()).then(|| {
+            game.fs_name
+                .as_deref()
+                .map(strip_extension)
+                .map(str::trim)
+                .filter(|label| !label.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| title.clone())
+        });
         Self {
             id: game.id,
             platform_id: game.platform_id,
@@ -829,21 +873,18 @@ impl From<&RommGame> for RetroGame {
             player_count,
             release_year,
             regions: game.regions.clone(),
-            sibling_roms: game
-                .sibling_roms
-                .iter()
-                .map(|sibling| RetroRomVersion {
-                    id: sibling.id,
-                    title: sibling
-                        .name
-                        .as_deref()
-                        .filter(|name| !name.trim().is_empty())
-                        .unwrap_or(&sibling.fs_name_no_tags)
-                        .to_owned(),
-                    is_main_sibling: sibling.is_main_sibling,
-                })
-                .collect(),
+            sibling_roms,
+            version_label,
         }
+    }
+}
+
+/// Strips only the final extension, keeping any `(Disc N)`/`(USA)` tags that
+/// follow the title: `Shenmue (Disc 1).chd` -> `Shenmue (Disc 1)`.
+fn strip_extension(file_name: &str) -> &str {
+    match file_name.rsplit_once('.') {
+        Some((stem, _)) if !stem.is_empty() => stem,
+        _ => file_name,
     }
 }
 
@@ -1472,5 +1513,100 @@ mod tests {
             None
         );
         assert_eq!(super::http_url(Some("not a url")), None);
+    }
+
+    fn romm_game_with_siblings(
+        siblings: Vec<crate::diagnostics::RommSiblingRom>,
+    ) -> super::RetroGame {
+        use crate::diagnostics::{RommGame, RommGameMetadata};
+
+        super::RetroGame::from(&RommGame {
+            id: 1,
+            platform_id: 7,
+            name: Some("Shenmue".to_owned()),
+            fs_name_no_tags: "Shenmue".to_owned(),
+            fs_name: Some("Shenmue (Disc 1).chd".to_owned()),
+            summary: None,
+            path_cover_small: None,
+            path_cover_large: None,
+            url_cover: None,
+            merged_screenshots: Vec::new(),
+            path_manual: None,
+            has_manual: false,
+            metadatum: RommGameMetadata::default(),
+            regions: Vec::new(),
+            sibling_roms: siblings,
+        })
+    }
+
+    #[test]
+    fn sibling_versions_are_labelled_by_file_name_not_the_shared_title() {
+        use crate::diagnostics::RommSiblingRom;
+
+        // RomM's `name` is the same game title on every rival, so labelling
+        // from it makes the discs indistinguishable; `fs_name_no_ext` keeps
+        // the `(Disc N)` tag.
+        let game = romm_game_with_siblings(vec![
+            RommSiblingRom {
+                id: 2,
+                name: Some("Shenmue".to_owned()),
+                fs_name_no_ext: "Shenmue (Disc 2)".to_owned(),
+                fs_name_no_tags: "Shenmue".to_owned(),
+                is_main_sibling: false,
+            },
+            RommSiblingRom {
+                id: 3,
+                name: Some("Shenmue".to_owned()),
+                fs_name_no_ext: "Shenmue (Disc 3)".to_owned(),
+                fs_name_no_tags: "Shenmue".to_owned(),
+                is_main_sibling: false,
+            },
+        ]);
+
+        let titles: Vec<&str> = game
+            .sibling_roms
+            .iter()
+            .map(|version| version.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["Shenmue (Disc 2)", "Shenmue (Disc 3)"]);
+        // The representative (what "Run" launches) is labelled from its own
+        // file name too, so disc 1 is not left implicit.
+        assert_eq!(game.version_label.as_deref(), Some("Shenmue (Disc 1)"));
+    }
+
+    #[test]
+    fn duplicate_sibling_labels_get_the_rom_id_appended() {
+        use crate::diagnostics::RommSiblingRom;
+
+        let game = romm_game_with_siblings(vec![
+            RommSiblingRom {
+                id: 2,
+                name: Some("Shenmue".to_owned()),
+                fs_name_no_ext: "Shenmue".to_owned(),
+                fs_name_no_tags: "Shenmue".to_owned(),
+                is_main_sibling: false,
+            },
+            RommSiblingRom {
+                id: 3,
+                name: Some("Shenmue".to_owned()),
+                fs_name_no_ext: "Shenmue".to_owned(),
+                fs_name_no_tags: "Shenmue".to_owned(),
+                is_main_sibling: false,
+            },
+        ]);
+
+        let titles: Vec<&str> = game
+            .sibling_roms
+            .iter()
+            .map(|version| version.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["Shenmue", "Shenmue (#3)"]);
+    }
+
+    #[test]
+    fn single_file_games_carry_no_version_label() {
+        let game = romm_game_with_siblings(Vec::new());
+        assert!(game.version_label.is_none());
+        assert!(game.sibling_roms.is_empty());
     }
 }

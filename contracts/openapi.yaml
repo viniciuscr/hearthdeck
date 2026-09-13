@@ -602,6 +602,10 @@ components:
         sibling_roms:
           type: array
           items: { $ref: '#/components/schemas/RetroRomVersion' }
+        # File-derived label of this entry's own file, present only when
+        # sibling_roms is non-empty, so the picker can name the version that
+        # "Run" launches.
+        version_label: { type: [string, 'null'] }
     RetroRomVersion:
       type: object
       required: [id, title, is_main_sibling]

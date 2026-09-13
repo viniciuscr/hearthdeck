@@ -124,6 +124,10 @@ pub struct RetroGame {
     /// single-file game.
     #[serde(default)]
     pub sibling_roms: Vec<RetroRomVersion>,
+    /// File-derived label of this entry's own file (the version "Run"
+    /// launches), present only when the game has siblings.
+    #[serde(default)]
+    pub version_label: Option<String>,
 }
 
 /// One selectable version of a retro game. Mirrors the daemon's
@@ -733,6 +737,12 @@ pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameR
             "sibling_roms".to_string(),
             serde_json::json!(game.sibling_roms),
         );
+        if let Some(label) = game.version_label {
+            metadata.insert(
+                "version_label".to_string(),
+                serde_json::Value::String(label),
+            );
+        }
     }
 
     GameRecord {
@@ -756,6 +766,15 @@ pub fn retro_rom_versions(metadata: &serde_json::Value) -> Vec<RetroRomVersion> 
         .get("sibling_roms")
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default()
+}
+
+/// The current version's file-derived label, stored alongside `sibling_roms`
+/// by [`retro_game_to_game_record`]. `None` for single-file games.
+pub fn retro_version_label(metadata: &serde_json::Value) -> Option<String> {
+    metadata
+        .get("version_label")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
 }
 
 fn recent_activity_to_game_record(item: RecentActivityItem, icon: Option<String>) -> GameRecord {
@@ -995,7 +1014,7 @@ mod tests {
     use super::{
         CatalogItem, DaemonError, RecentActivityItem, RetroGame, RetroRomVersion,
         catalog_item_to_game_record, daemon_error_from_body, recent_activity_to_game_record,
-        retro_game_to_game_record, retro_rom_versions,
+        retro_game_to_game_record, retro_rom_versions, retro_version_label,
     };
 
     #[test]
@@ -1105,6 +1124,7 @@ mod tests {
                 genres: vec!["RPG".to_string()],
                 release_year: Some(1994),
                 sibling_roms: Vec::new(),
+                version_label: None,
             },
             Some("/tmp/example.jpg".to_string()),
         );
@@ -1140,6 +1160,7 @@ mod tests {
                         is_main_sibling: false,
                     },
                 ],
+                version_label: Some("Shenmue (Disc 1)".to_string()),
             },
             None,
         );
@@ -1149,6 +1170,10 @@ mod tests {
         assert_eq!(versions[0].id, 43);
         assert!(versions[0].is_main_sibling);
         assert_eq!(versions[1].title, "Shenmue (Disc 3)");
+        assert_eq!(
+            retro_version_label(&record.metadata).as_deref(),
+            Some("Shenmue (Disc 1)")
+        );
     }
 
     #[test]
