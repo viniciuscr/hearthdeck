@@ -748,6 +748,8 @@ enum Message {
     ),
     OpenContextMenu(Rectangle, usize),
     CloseContextMenu,
+    /// Confirm the highlighted entry of an open context menu (keyboard Enter).
+    MenuConfirm,
     SelectAction(MenuAction),
     StartDrag(usize),
     FinishDrag(bool),
@@ -1422,7 +1424,11 @@ impl HearthDeck {
         app_id: String,
         title: String,
     ) -> Task<Message> {
-        if !self.input_ownership.frontend_has_control() {
+        // A frontend-owned surface (the context menu) still owns the launch
+        // even if it took keyboard focus and drove `input_ownership` off
+        // `Frontend`; the menu can only be open while the frontend is the
+        // active surface.
+        if !self.input_ownership.frontend_has_control() && !self.frontend_surface_open() {
             return Task::none();
         }
         self.edit_name = None;
@@ -1881,6 +1887,14 @@ impl HearthDeck {
         .map(move |rect| cosmic::Action::App(Message::OpenContextMenu(rect, i)))
     }
 
+    /// Whether a frontend-owned transient surface is open: the context menu
+    /// popup or one of the modal dialogs. These live in separate Wayland
+    /// surfaces, so the main window can look unfocused while they are up, and
+    /// app-state changes (the menu highlight) do not otherwise repaint them.
+    fn frontend_surface_open(&self) -> bool {
+        self.menu.is_some() || self.new_group.is_some() || self.group_to_delete.is_some()
+    }
+
     /// Number of entries the context menu shows for the current selection.
     /// Mirrors the order built in `view_window` for `MENU_ID`.
     fn menu_entry_count(&self) -> usize {
@@ -1918,19 +1932,19 @@ impl HearthDeck {
         };
         let fixed = 4 + usize::from(self.cur_group.is_some());
         if index >= fixed {
-            // The tail of the menu lists this game's other versions.
+            // The tail of the menu lists this game's versions.
             let version = self.menu_rom_versions().into_iter().nth(index - fixed);
             let Some(version) = version else {
                 return Task::none();
             };
+            // Launch before clearing `menu`: an open frontend surface is what
+            // authorizes the launch if a popup focus change moved ownership.
+            let launch = self.update(Message::ActivateRomVariant {
+                rom_id: version.id,
+                title: version.title,
+            });
             self.menu = None;
-            return Task::batch(vec![
-                commands::popup::destroy_popup(*MENU_ID),
-                self.update(Message::ActivateRomVariant {
-                    rom_id: version.id,
-                    title: version.title,
-                }),
-            ]);
+            return Task::batch(vec![commands::popup::destroy_popup(*MENU_ID), launch]);
         }
         let pinned = self
             .entry_path_input
@@ -1946,11 +1960,10 @@ impl HearthDeck {
             4 if self.cur_group.is_some() => self.update(Message::SelectAction(MenuAction::Remove)),
             // Run, and any out-of-range index, launches the app.
             _ => {
+                // As above: authorize the launch while the menu is still open.
+                let launch = self.update(Message::ActivateApp(i));
                 self.menu = None;
-                Task::batch(vec![
-                    commands::popup::destroy_popup(*MENU_ID),
-                    self.update(Message::ActivateApp(i)),
-                ])
+                Task::batch(vec![commands::popup::destroy_popup(*MENU_ID), launch])
             }
         }
     }
@@ -2341,6 +2354,11 @@ impl cosmic::Application for HearthDeck {
             },
 
             Message::PrevRow => {
+                if self.menu.is_some() {
+                    // Keyboard arrows drive the menu highlight too, so a
+                    // controller that presents as a keyboard can navigate it.
+                    return self.gamepad_move(Message::PrevRow);
+                }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_vertical_target(-1) else {
                         return Task::none();
@@ -2379,6 +2397,9 @@ impl cosmic::Application for HearthDeck {
                 return Task::batch(tasks);
             }
             Message::NextRow => {
+                if self.menu.is_some() {
+                    return self.gamepad_move(Message::NextRow);
+                }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_vertical_target(1) else {
                         return Task::none();
@@ -2418,6 +2439,9 @@ impl cosmic::Application for HearthDeck {
                 return Task::batch(tasks);
             }
             Message::PrevCol => {
+                if self.menu.is_some() {
+                    return self.gamepad_move(Message::PrevCol);
+                }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_horizontal_target(-1) else {
                         return Task::none();
@@ -2433,6 +2457,9 @@ impl cosmic::Application for HearthDeck {
                 return self.focus_grid_index(i - 1);
             }
             Message::NextCol => {
+                if self.menu.is_some() {
+                    return self.gamepad_move(Message::NextCol);
+                }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_horizontal_target(1) else {
                         return Task::none();
@@ -2449,7 +2476,10 @@ impl cosmic::Application for HearthDeck {
                 return self.focus_grid_index(i + 1);
             }
             Message::GamepadEvent(event) => {
-                if !self.input_ownership.frontend_has_control() {
+                // The frontend owns gamepad input while one of its own surfaces
+                // is open, even if that surface drove input ownership away from
+                // `Frontend` (e.g. a popup that took keyboard focus).
+                if !self.input_ownership.frontend_has_control() && !self.frontend_surface_open() {
                     return Task::none();
                 }
                 return match event {
@@ -2800,6 +2830,11 @@ impl cosmic::Application for HearthDeck {
                 self.menu = None;
                 return commands::popup::destroy_popup(*MENU_ID);
             }
+            Message::MenuConfirm => {
+                if self.menu.is_some() {
+                    return self.activate_menu_entry(self.menu_selection);
+                }
+            }
             Message::SelectAction(action) => {
                 let mut tasks = vec![commands::popup::destroy_popup(*MENU_ID)];
                 if let Some(info) = self.menu.take().and_then(|i| self.entry_path_input.get(i)) {
@@ -2989,10 +3024,7 @@ impl cosmic::Application for HearthDeck {
                 // flipped ownership to `Unfocused`, and the gamepad gate then
                 // dropped every event, leaving the context menu unnavigable by
                 // controller even though it is still on screen.
-                let owned_surface_open = self.menu.is_some()
-                    || self.new_group.is_some()
-                    || self.group_to_delete.is_some();
-                if !focused && owned_surface_open {
+                if !focused && self.frontend_surface_open() {
                     return Task::none();
                 }
                 self.input_ownership.update(if focused {
@@ -3514,6 +3546,9 @@ impl cosmic::Application for HearthDeck {
                     Key::Character(c) if modifiers.control() && (c == "x") => {
                         Some(Message::GamepadEvent(GamepadEvent::NextGroup))
                     }
+                    Key::Named(Named::Enter) if matches!(status, iced::event::Status::Ignored) => {
+                        Some(Message::MenuConfirm)
+                    }
                     Key::Named(Named::ArrowUp)
                         if matches!(status, iced::event::Status::Ignored) =>
                     {
@@ -3546,7 +3581,8 @@ impl cosmic::Application for HearthDeck {
                 .map(|config| Message::AppListConfig(config.config)),
         ];
 
-        if self.input_ownership.frontend_has_control() {
+        let frontend_surface_open = self.frontend_surface_open();
+        if self.input_ownership.frontend_has_control() || frontend_surface_open {
             subs.push(gamepad_events().map(Message::GamepadEvent));
         }
 
@@ -4580,6 +4616,117 @@ mod tests {
             prefers_dgpu: false,
             terminal: false,
         })
+    }
+
+    #[test]
+    fn gamepad_navigates_the_open_context_menu() {
+        use crate::input_ownership::Event as InputEvent;
+
+        let mut app = HearthDeck {
+            entry_path_input: vec![entry("one"), entry("two")],
+            ..Default::default()
+        };
+        app.input_ownership
+            .update(InputEvent::SessionObserved(false));
+        app.update_entry_metadata();
+        app.menu = Some(0);
+        app.menu_selection = 0;
+
+        // No group selected and no versions: Run, pin, favorite, controller.
+        assert_eq!(app.menu_entry_count(), 4);
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::MoveDown),
+        );
+        assert_eq!(app.menu_selection, 1);
+
+        // Wraps at the end.
+        for _ in 0..3 {
+            let _ = <HearthDeck as cosmic::Application>::update(
+                &mut app,
+                super::Message::GamepadEvent(super::GamepadEvent::MoveDown),
+            );
+        }
+        assert_eq!(app.menu_selection, 0);
+
+        // Keyboard arrows drive the same highlight.
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(app.menu_selection, 1);
+
+        // Back is a global contract and closes the menu.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::Back),
+        );
+        assert!(app.menu.is_none());
+    }
+
+    #[test]
+    fn gamepad_navigates_the_menu_even_when_a_popup_took_focus() {
+        use crate::input_ownership::Event as InputEvent;
+
+        let mut app = HearthDeck {
+            entry_path_input: vec![entry("one")],
+            ..Default::default()
+        };
+        app.input_ownership
+            .update(InputEvent::SessionObserved(false));
+        // A popup taking keyboard focus can leave ownership `Unfocused`; the
+        // open menu must still keep the gamepad subscription alive and accept
+        // events, or it is dead to the controller.
+        app.input_ownership.update(InputEvent::FrontendUnfocused);
+        assert!(!app.input_ownership.frontend_has_control());
+        app.update_entry_metadata();
+        app.menu = Some(0);
+        app.menu_selection = 0;
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::MoveDown),
+        );
+        assert_eq!(app.menu_selection, 1);
+    }
+
+    #[test]
+    fn gamepad_reaches_the_romm_version_entries() {
+        use crate::input_ownership::Event as InputEvent;
+        use crate::providers::daemon::RetroRomVersion;
+
+        let mut app = HearthDeck {
+            entry_path_input: vec![entry("romm:1")],
+            ..Default::default()
+        };
+        app.input_ownership
+            .update(InputEvent::SessionObserved(false));
+        app.update_entry_metadata();
+        app.romm_versions.insert(
+            "romm:1".to_string(),
+            vec![
+                RetroRomVersion {
+                    id: 1,
+                    title: "Disc 1".to_string(),
+                    is_main_sibling: true,
+                },
+                RetroRomVersion {
+                    id: 2,
+                    title: "Disc 2".to_string(),
+                    is_main_sibling: false,
+                },
+            ],
+        );
+        app.menu = Some(0);
+        app.menu_selection = 0;
+
+        // Run, pin, favorite, controller, then the two versions.
+        assert_eq!(app.menu_entry_count(), 6);
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::MoveDown),
+        );
+        assert_eq!(app.menu_selection, 1);
+        assert_eq!(app.menu_rom_versions().len(), 2);
     }
 
     #[test]
