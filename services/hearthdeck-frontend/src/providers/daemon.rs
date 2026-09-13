@@ -119,6 +119,22 @@ pub struct RetroGame {
     pub screenshot_paths: Vec<String>,
     pub genres: Vec<String>,
     pub release_year: Option<i32>,
+    /// Other versions of the same game (regions, revisions, or individual
+    /// discs) already collapsed into this entry by the daemon. Empty for a
+    /// single-file game.
+    #[serde(default)]
+    pub sibling_roms: Vec<RetroRomVersion>,
+}
+
+/// One selectable version of a retro game. Mirrors the daemon's
+/// `RetroRomVersion`; the client shows these as "play this version" choices
+/// in the context menu.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetroRomVersion {
+    pub id: i64,
+    pub title: String,
+    #[serde(default)]
+    pub is_main_sibling: bool,
 }
 
 /// Retro platform from the daemon's /v1/retro/consoles endpoint.
@@ -710,6 +726,14 @@ pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameR
     if let Some(release_year) = game.release_year {
         metadata.insert("release_year".to_string(), release_year.into());
     }
+    // Carried on the record so the context menu can offer each version without
+    // another daemon round-trip. Absent for single-file games.
+    if !game.sibling_roms.is_empty() {
+        metadata.insert(
+            "sibling_roms".to_string(),
+            serde_json::json!(game.sibling_roms),
+        );
+    }
 
     GameRecord {
         id: format!("romm:{}", game.id),
@@ -723,6 +747,15 @@ pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameR
         source: "RomM".to_string(),
         metadata: serde_json::Value::Object(metadata),
     }
+}
+
+/// Reads the sibling versions stored in a RomM [`GameRecord`]'s metadata by
+/// [`retro_game_to_game_record`]. Empty for records with no variants.
+pub fn retro_rom_versions(metadata: &serde_json::Value) -> Vec<RetroRomVersion> {
+    metadata
+        .get("sibling_roms")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default()
 }
 
 fn recent_activity_to_game_record(item: RecentActivityItem, icon: Option<String>) -> GameRecord {
@@ -960,8 +993,9 @@ pub struct RetroRecordPage {
 #[cfg(test)]
 mod tests {
     use super::{
-        CatalogItem, DaemonError, RecentActivityItem, RetroGame, catalog_item_to_game_record,
-        daemon_error_from_body, recent_activity_to_game_record, retro_game_to_game_record,
+        CatalogItem, DaemonError, RecentActivityItem, RetroGame, RetroRomVersion,
+        catalog_item_to_game_record, daemon_error_from_body, recent_activity_to_game_record,
+        retro_game_to_game_record, retro_rom_versions,
     };
 
     #[test]
@@ -1070,6 +1104,7 @@ mod tests {
                 screenshot_paths: Vec::new(),
                 genres: vec!["RPG".to_string()],
                 release_year: Some(1994),
+                sibling_roms: Vec::new(),
             },
             Some("/tmp/example.jpg".to_string()),
         );
@@ -1079,6 +1114,41 @@ mod tests {
         assert_eq!(record.categories, vec!["Game", "hearthdeck-console:7"]);
         assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
         assert_eq!(record.metadata["genres"], serde_json::json!(["RPG"]));
+    }
+
+    #[test]
+    fn romm_sibling_versions_round_trip_through_record_metadata() {
+        let record = retro_game_to_game_record(
+            RetroGame {
+                id: 42,
+                platform_id: 7,
+                title: "Shenmue".to_string(),
+                summary: None,
+                cover_path: None,
+                screenshot_paths: Vec::new(),
+                genres: Vec::new(),
+                release_year: None,
+                sibling_roms: vec![
+                    RetroRomVersion {
+                        id: 43,
+                        title: "Shenmue (Disc 2)".to_string(),
+                        is_main_sibling: true,
+                    },
+                    RetroRomVersion {
+                        id: 44,
+                        title: "Shenmue (Disc 3)".to_string(),
+                        is_main_sibling: false,
+                    },
+                ],
+            },
+            None,
+        );
+
+        let versions = retro_rom_versions(&record.metadata);
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].id, 43);
+        assert!(versions[0].is_main_sibling);
+        assert_eq!(versions[1].title, "Shenmue (Disc 3)");
     }
 
     #[test]

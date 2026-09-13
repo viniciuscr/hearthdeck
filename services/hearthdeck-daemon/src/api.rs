@@ -777,6 +777,19 @@ struct RetroGame {
     player_count: Option<String>,
     release_year: Option<i32>,
     regions: Vec<String>,
+    /// Other versions of this game (regions, revisions, discs) RomM reported
+    /// in `sibling_roms`. Empty when the game has a single file. The client
+    /// converts this into a version picker and a "multiple versions" badge.
+    sibling_roms: Vec<RetroRomVersion>,
+}
+
+/// One selectable version of a retro game, as offered in the context menu.
+#[derive(Serialize)]
+struct RetroRomVersion {
+    id: i64,
+    title: String,
+    /// The user's chosen main file for this game, per RomM; false when unset.
+    is_main_sibling: bool,
 }
 
 impl From<&RommGame> for RetroGame {
@@ -816,6 +829,20 @@ impl From<&RommGame> for RetroGame {
             player_count,
             release_year,
             regions: game.regions.clone(),
+            sibling_roms: game
+                .sibling_roms
+                .iter()
+                .map(|sibling| RetroRomVersion {
+                    id: sibling.id,
+                    title: sibling
+                        .name
+                        .as_deref()
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or(&sibling.fs_name_no_tags)
+                        .to_owned(),
+                    is_main_sibling: sibling.is_main_sibling,
+                })
+                .collect(),
         }
     }
 }

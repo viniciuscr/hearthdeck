@@ -130,6 +130,30 @@ pub struct RommGame {
     pub metadatum: RommGameMetadata,
     #[serde(default)]
     pub regions: Vec<String>,
+    /// Other files of the same game, as RomM reports them: another region or
+    /// revision, or an individual disc of a multi-disc title. Only populated
+    /// per page; `romm_games` asks RomM to collapse each sibling group into
+    /// one entry so the grid shows a single tile per game. The returned entry
+    /// is the group's representative (RomM prefers the user's main sibling),
+    /// and this list holds the *other* variants.
+    #[serde(default)]
+    pub sibling_roms: Vec<RommSiblingRom>,
+}
+
+/// One related ROM of the same game in RomM's `sibling_roms` list. RomM sends
+/// only the fields its own UI needs to label a version, so this is a narrow
+/// mirror of `RommGame` rather than a nested full ROM.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RommSiblingRom {
+    pub id: i64,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub fs_name_no_tags: String,
+    /// Whether this is the user's chosen main file for the group. False when
+    /// the user never picked one.
+    #[serde(default)]
+    pub is_main_sibling: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -241,6 +265,12 @@ pub async fn romm_games(
             ("with_char_index", "false".to_owned()),
             ("with_filter_values", "false".to_owned()),
             ("with_rom_id_index", "false".to_owned()),
+            // Collapse a game's variants (regions, revisions, discs) into one
+            // entry, with the rest carried in `sibling_roms`. Without this
+            // RomM pages each file separately, so a multi-disc title would
+            // occupy several grid tiles. RomM keeps `total` in terms of these
+            // collapsed groups, so pagination stays correct.
+            ("group_by_meta_id", "true".to_owned()),
             ("order_by", "name".to_owned()),
             ("order_dir", "asc".to_owned()),
         ]);
@@ -305,7 +335,10 @@ pub async fn romm_rom(
 }
 
 /// Downloads a ROM into a temporary cache file ahead of a RetroArch launch.
-/// Multi-file ROMs (discs, `.m3u` sets) are out of scope for now.
+/// A multi-disc set is handled one disc at a time: RomM exposes each disc as
+/// its own rom and the client launches the chosen sibling, so this only ever
+/// fetches a single content file. An `.m3u` playlist spanning several on-disk
+/// files is still out of scope.
 pub async fn download_rom_content(
     settings: &SettingsRepository,
     rom_id: i64,

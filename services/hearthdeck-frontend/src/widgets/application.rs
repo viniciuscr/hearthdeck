@@ -10,7 +10,7 @@ use cosmic::iced::core::widget::{Operation, Tree, tree};
 use cosmic::iced::core::{
     Alignment, Clipboard, Event, Length, Rectangle, Shell, Widget, layout, mouse, overlay, renderer,
 };
-use cosmic::iced::widget::{column, text};
+use cosmic::iced::widget::{column, row, stack, text};
 use cosmic::iced::{Size, Vector};
 use cosmic::widget::{
     button, container, dnd_source, icon, {self},
@@ -23,7 +23,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 
 use crate::style::{
-    ICON_SMALL, SOURCE_BADGE, TEXT_TILE_LABEL, TILE_DRAG_ICON, artwork, source_badge,
+    ICON_SMALL, SOURCE_BADGE, TEXT_CAPTION, TEXT_TILE_LABEL, TILE_DRAG_ICON, artwork, source_badge,
     tile_button_class, tile_label_overlay,
 };
 
@@ -50,6 +50,10 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
         path: &Option<PathBuf>,
         tile_width: f32,
         tile_height: f32,
+        // Number of selectable versions of this entry (1 for a single file).
+        // More than one overlays a disc badge on the artwork so a collapsed
+        // multi-disc game is still visibly distinct from a single-file one.
+        version_count: usize,
         on_right_release: impl Fn(Rectangle) -> Message + 'a,
         on_pressed: Option<Message>,
         source: Option<&(AppSource, Option<icon::Handle>)>,
@@ -92,11 +96,40 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
             name.to_string()
         };
         let path_ = path.clone();
+        let artwork_layer: Element<'a, Message> = if version_count > 1 {
+            stack![
+                artwork(&icon_handle, Length::Fill, Length::Fill),
+                container(
+                    container(
+                        row![
+                            icon::icon(
+                                icon::from_name("media-optical-symbolic")
+                                    .size(ICON_SMALL)
+                                    .into()
+                            ),
+                            text(version_count.to_string()).size(TEXT_CAPTION),
+                        ]
+                        .spacing(2)
+                        .align_y(Alignment::Center),
+                    )
+                    .class(cosmic::theme::Container::Custom(Box::new(source_badge)))
+                    .padding([2, 6]),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Horizontal::Right)
+                .align_y(Vertical::Top)
+                .padding([6, 6]),
+            ]
+            .into()
+        } else {
+            artwork(&icon_handle, Length::Fill, Length::Fill)
+        };
         let content = dnd_source(
             button::custom(
                 container(
                     column![
-                        artwork(&icon_handle, Length::Fill, Length::Fill),
+                        artwork_layer,
                         container(text(name).size(TEXT_TILE_LABEL).width(Length::Fill))
                             .padding([2, 6])
                             .width(Length::Fill)

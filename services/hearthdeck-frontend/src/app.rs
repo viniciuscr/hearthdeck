@@ -84,6 +84,7 @@ use crate::input_ownership::{
     Event as InputEvent, InputOwnership, LaunchTarget, managed_launch_target,
 };
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
+use crate::providers::daemon::retro_rom_versions;
 use crate::style::{
     DASHBOARD_RAIL_TILES, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH, EDIT_NAME_INPUT_WIDTH,
     GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION,
@@ -436,6 +437,15 @@ struct HearthDeck {
     /// number of loaded entries grows as the user scrolls; this is the stable
     /// total the header should show instead of `entry_path_input.len()`.
     romm_platform_counts: HashMap<i64, u64>,
+    /// Alternative versions (regions, revisions, discs) per RomM entry id,
+    /// captured while the record still carries its metadata. The grid stores
+    /// entries as `DesktopEntryData`, which has no metadata field, so the
+    /// version picker reads from here instead.
+    romm_versions: HashMap<String, Vec<crate::providers::daemon::RetroRomVersion>>,
+    /// Grouped game total RomM reported for the last loaded scope. Overrides
+    /// the per-platform `rom_count` in the Console Games header, which counts
+    /// files rather than collapsed games. Cleared on a fresh scope reload.
+    romm_grouped_total: Option<u64>,
     /// Next RomM page offset for the active console scope. `None` means the
     /// current scope has no further pages to fetch.
     romm_next_offset: Option<u32>,
@@ -502,6 +512,8 @@ impl Default for HearthDeck {
             romm_request_generation: 0,
             romm_platform_icons: HashMap::new(),
             romm_platform_counts: HashMap::new(),
+            romm_versions: HashMap::new(),
+            romm_grouped_total: None,
             romm_next_offset: None,
             romm_loading_page: false,
             virtual_keyboard: VirtualKeyboard::default(),
@@ -765,6 +777,12 @@ enum Message {
     WindowFocusChanged(bool),
     WindowResized(f32),
     DaemonLaunchResult(Result<(), String>),
+    /// Launch a specific RomM version (another disc/region/revision) chosen
+    /// from the context menu, by the daemon's RomM rom ID.
+    ActivateRomVariant {
+        rom_id: i64,
+        title: String,
+    },
     ActiveSessionResult(Result<bool, String>),
     RommPlatforms(Result<Vec<crate::providers::daemon::RetroConsole>, String>),
     RecentEntries(Result<Vec<crate::providers::GameRecord>, String>),
@@ -926,6 +944,8 @@ impl HearthDeck {
             self.romm_request_generation += 1;
             self.all_entries
                 .retain(|entry| !entry.id.starts_with("romm:"));
+            self.romm_versions.clear();
+            self.romm_grouped_total = None;
             self.romm_next_offset = None;
             self.load_apps();
         }
@@ -1081,7 +1101,14 @@ impl HearthDeck {
     /// consoles" tab sums every platform. Returns `None` when the console
     /// totals are not known yet (before the first consoles response), so the
     /// caller can fall back to the loaded count.
+    ///
+    /// The grouped total from the list endpoint wins when known: RomM's
+    /// per-platform `rom_count` counts every file, so it overstates a library
+    /// whose regions/revisions/discs are collapsed into single tiles.
     fn console_total_count(&self) -> Option<usize> {
+        if let Some(total) = self.romm_grouped_total {
+            return Some(total as usize);
+        }
         match self.cur_group {
             Some(index) => self
                 .config
@@ -1366,47 +1393,66 @@ impl HearthDeck {
         &mut self,
         entry: Option<Arc<DesktopEntryData>>,
     ) -> Task<<Self as cosmic::Application>::Message> {
+        let Some(de) = entry else {
+            if self.input_ownership.frontend_has_control() {
+                self.edit_name = None;
+            }
+            return Task::none();
+        };
+        let Some(target) = managed_launch_target(&de.id) else {
+            error!("refusing unmanaged application launch: {}", de.id);
+            return Task::none();
+        };
+        self.launch_managed(target, de.id.clone(), de.name.clone())
+    }
+
+    /// Launches a RomM version picked from the context menu. Behaves like
+    /// activating a tile, but targets the chosen sibling rom ID directly,
+    /// so a multi-disc game's other discs are reachable.
+    fn activate_rom_variant(&mut self, rom_id: i64, title: String) -> Task<Message> {
+        self.launch_managed(LaunchTarget::Romm(rom_id), format!("romm:{rom_id}"), title)
+    }
+
+    /// Shared launch tail for tile activation and RomM version picks: guards
+    /// input ownership, drives the launch overlay, and calls the matching
+    /// daemon launch route for the target kind.
+    fn launch_managed(
+        &mut self,
+        target: LaunchTarget,
+        app_id: String,
+        title: String,
+    ) -> Task<Message> {
         if !self.input_ownership.frontend_has_control() {
             return Task::none();
         }
         self.edit_name = None;
-        if let Some(de) = entry {
-            let app_id = de.id.clone();
-            let title = de.name.clone();
-            let input_profile = if self.config.desktop_input_enabled(&app_id) {
-                InputProfile::Desktop
-            } else {
-                InputProfile::Native
-            };
-
-            let Some(client) = self.daemon_client.clone() else {
-                return Task::none();
-            };
-            let Some(target) = managed_launch_target(&app_id) else {
-                error!("refusing unmanaged application launch: {app_id}");
-                return Task::none();
-            };
-            if self.launch_state.update(LaunchEvent::Start(title)) != LaunchEffect::Launch {
-                return Task::none();
-            }
-            self.input_ownership.update(InputEvent::LaunchStarted);
-            Task::perform(
-                async move {
-                    match target {
-                        LaunchTarget::Catalog(id) => client.launch_app(&id, input_profile).await,
-                        LaunchTarget::Romm(id) => client.launch_retro_rom(id, input_profile).await,
-                    }
-                },
-                move |result| match result {
-                    Ok(_) => cosmic::Action::App(Message::DaemonLaunchResult(Ok(()))),
-                    Err(error) => {
-                        cosmic::Action::App(Message::DaemonLaunchResult(Err(error.to_string())))
-                    }
-                },
-            )
+        let input_profile = if self.config.desktop_input_enabled(&app_id) {
+            InputProfile::Desktop
         } else {
-            Task::none()
+            InputProfile::Native
+        };
+
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        if self.launch_state.update(LaunchEvent::Start(title)) != LaunchEffect::Launch {
+            return Task::none();
         }
+        self.input_ownership.update(InputEvent::LaunchStarted);
+        Task::perform(
+            async move {
+                match target {
+                    LaunchTarget::Catalog(id) => client.launch_app(&id, input_profile).await,
+                    LaunchTarget::Romm(id) => client.launch_retro_rom(id, input_profile).await,
+                }
+            },
+            move |result| match result {
+                Ok(_) => cosmic::Action::App(Message::DaemonLaunchResult(Ok(()))),
+                Err(error) => {
+                    cosmic::Action::App(Message::DaemonLaunchResult(Err(error.to_string())))
+                }
+            },
+        )
     }
 
     /// Consoles offered on the dashboard, derived from the live RomM platform
@@ -1840,7 +1886,19 @@ impl HearthDeck {
     fn menu_entry_count(&self) -> usize {
         // Run, pin, favorite, controller compatibility, plus remove when the
         // app belongs to a group.
-        4 + usize::from(self.cur_group.is_some())
+        let fixed = 4 + usize::from(self.cur_group.is_some());
+        // A RomM game's other versions are appended after the fixed actions.
+        fixed + self.menu_rom_versions().len()
+    }
+
+    /// RomM versions offered for the entry the context menu is open on. Empty
+    /// for non-RomM entries and single-file games.
+    fn menu_rom_versions(&self) -> Vec<crate::providers::daemon::RetroRomVersion> {
+        self.menu
+            .and_then(|i| self.entry_path_input.get(i))
+            .and_then(|entry| self.romm_versions.get(&entry.id))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Move the context-menu highlight by `delta`, wrapping at both ends.
@@ -1858,6 +1916,22 @@ impl HearthDeck {
         let Some(i) = self.menu else {
             return Task::none();
         };
+        let fixed = 4 + usize::from(self.cur_group.is_some());
+        if index >= fixed {
+            // The tail of the menu lists this game's other versions.
+            let version = self.menu_rom_versions().into_iter().nth(index - fixed);
+            let Some(version) = version else {
+                return Task::none();
+            };
+            self.menu = None;
+            return Task::batch(vec![
+                commands::popup::destroy_popup(*MENU_ID),
+                self.update(Message::ActivateRomVariant {
+                    rom_id: version.id,
+                    title: version.title,
+                }),
+            ]);
+        }
         let pinned = self
             .entry_path_input
             .get(i)
@@ -2163,7 +2237,12 @@ impl cosmic::Application for HearthDeck {
                     }
                 };
                 let item_count = page.items.len() as u32;
+                self.romm_grouped_total = Some(page.total);
                 for record in page.items {
+                    let versions = retro_rom_versions(&record.metadata);
+                    if !versions.is_empty() {
+                        self.romm_versions.insert(record.id.clone(), versions);
+                    }
                     let entry = Arc::new(record.into_desktop_entry());
                     if !self
                         .all_entries
@@ -2423,6 +2502,9 @@ impl cosmic::Application for HearthDeck {
             }
             Message::ActivateDashboardApp(id) => {
                 return self.activate_dashboard_app(&id);
+            }
+            Message::ActivateRomVariant { rom_id, title } => {
+                return self.activate_rom_variant(rom_id, title);
             }
             Message::ActivateFirstApp => {
                 let keyboard = self.request_virtual_keyboard(false);
@@ -3189,6 +3271,39 @@ impl cosmic::Application for HearthDeck {
                         .selected(self.menu_selection == 4)
                         .into(),
                 );
+            }
+
+            // A collapsed multi-disc/multi-region game offers each of its
+            // other files here. "Run" above targets the group's
+            // representative, so these are the alternatives.
+            let versions = self.menu_rom_versions();
+            if !versions.is_empty() {
+                let fixed = 4 + usize::from(self.cur_group.is_some());
+                list_column.push(divider::horizontal::light().into());
+                for (offset, version) in versions.into_iter().enumerate() {
+                    let version_icon = if version.is_main_sibling {
+                        "checkbox-checked-symbolic"
+                    } else {
+                        "media-optical-symbolic"
+                    };
+                    let index = fixed + offset;
+                    list_column.push(
+                        menu_button(
+                            row![
+                                icon::icon(icon::from_name(version_icon).size(ICON_SMALL).into())
+                                    .class(cosmic::theme::Svg::Custom(svg_accent.clone())),
+                                text::body(version.title.clone()).size(TEXT_BODY),
+                            ]
+                            .spacing(space_xxs),
+                        )
+                        .on_press(Message::ActivateRomVariant {
+                            rom_id: version.id,
+                            title: version.title,
+                        })
+                        .selected(self.menu_selection == index)
+                        .into(),
+                    );
+                }
             }
 
             return autosize(
@@ -4205,6 +4320,9 @@ impl HearthDeck {
                     &entry.path,
                     tile_width(self.window_width),
                     tile_height(self.window_width, self.cur_section != Section::Applications),
+                    self.romm_versions
+                        .get(&entry.id)
+                        .map_or(1, |versions| versions.len() + 1),
                     move |rect| Message::OpenContextMenu(rect, i),
                     if self.menu.is_none() {
                         Some(Message::ActivateApp(i))
@@ -5013,6 +5131,25 @@ mod tests {
         app.entry_path_input = vec![entry("one"), entry("two")];
 
         assert_eq!(app.console_total_count(), Some(240));
+    }
+
+    #[test]
+    fn grouped_list_total_overrides_the_file_count_header() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string())]);
+        let mut app = HearthDeck {
+            config,
+            cur_section: Section::ConsoleGames,
+            cur_group: Some(0),
+            ..Default::default()
+        };
+        // RomM counts every file (240), but grouping collapses regions and
+        // discs into fewer tiles; the header must show the grouped total once
+        // the list endpoint has reported it.
+        app.romm_platform_counts.insert(7, 240);
+        app.romm_grouped_total = Some(198);
+
+        assert_eq!(app.console_total_count(), Some(198));
     }
 
     #[test]

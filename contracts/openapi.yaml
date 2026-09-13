@@ -576,7 +576,7 @@ components:
         offset: { type: integer, minimum: 0 }
     RetroGame:
       type: object
-      required: [id, platform_id, title, screenshot_paths, has_manual, genres, regions]
+      required: [id, platform_id, title, screenshot_paths, has_manual, genres, regions, sibling_roms]
       properties:
         id: { type: integer }
         platform_id: { type: integer }
@@ -596,6 +596,19 @@ components:
         regions:
           type: array
           items: { type: string }
+        # Other files of the same game (regions, revisions, discs) that RomM
+        # collapsed into this entry. Empty for a single-file game. The client
+        # badges the tile and offers these as "play this version" choices.
+        sibling_roms:
+          type: array
+          items: { $ref: '#/components/schemas/RetroRomVersion' }
+    RetroRomVersion:
+      type: object
+      required: [id, title, is_main_sibling]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        is_main_sibling: { type: boolean }
     RommSettings:
       type: object
       required: [base_url, configured, updated_at]

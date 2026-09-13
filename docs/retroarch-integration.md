@@ -46,7 +46,9 @@ Gamescope with the smallest possible memory/CPU footprint.
 
 - RomM: read-only settings plus live console/game browsing
   (`/v1/retro/consoles`, `/v1/retro/roms`) and dedicated managed launch
-  (`/v1/retro/roms/{id}/launch`). No catalog materialization or saves.
+  (`/v1/retro/roms/{id}/launch`). Listing asks RomM to group by metadata id,
+  so a game's regions/revisions/discs collapse into one tile whose alternatives
+  are offered in the context menu. No catalog materialization or saves.
 - RetroArch: `retroarch` plus a curated set of `libretro-*` cores ship as
   package dependencies/optional dependencies (`packaging/arch/PKGBUILD`);
   the daemon resolves platform→core and the bridge launches the core under
