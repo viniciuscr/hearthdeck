@@ -14,6 +14,11 @@ pub struct ActivityEntry {
     pub title: String,
     pub icon: Option<String>,
     pub categories: Vec<String>,
+    /// Catalog content kind (`game` / `application`), stored so the client can
+    /// split "Recently Played" into games and apps without provider knowledge.
+    /// `None` only for snapshots written before this field existed.
+    #[serde(default)]
+    pub kind: Option<String>,
     pub source: String,
     pub metadata: Value,
 }
@@ -100,6 +105,7 @@ mod tests {
             title: "Original title".into(),
             icon: None,
             categories: vec!["Game".into()],
+            kind: Some("game".into()),
             source: "romm".into(),
             metadata: json!({"platform_id": 7}),
         };

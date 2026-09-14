@@ -543,6 +543,7 @@ components:
           type: array
           items: { type: string }
         source: { type: string }
+        kind: { type: [string, 'null'] }
         metadata: { type: object }
         last_launched_at: { type: string, format: date-time }
         launch_count: { type: integer, minimum: 1 }

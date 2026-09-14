@@ -1,4 +1,10 @@
-Cosmic Desktop Development
+---
+name: cosmic-lib
+description: Guidelines and best practices for building Rust COSMIC (libcosmic/iced) applications, applets, and layer-shell overlays, including gamepad-driven kiosk/TV navigation.
+---
+
+# Cosmic Desktop Development
+
 This skill provides guidelines and best practices for developing applications and applets for the System76 COSMIC Desktop Environment (COSMIC DE).
 
 1. Overview & Technology Stack

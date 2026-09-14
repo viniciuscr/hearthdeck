@@ -1,6 +1,6 @@
 ---
 name: token-saver
-description: Strict low-token execution mode for coding tasks: no overthinking, no optional detours, Serena-first.
+description: "Strict low-token execution mode for coding tasks — no overthinking, no optional detours."
 ---
 
 # Token Saver
@@ -12,7 +12,7 @@ Use this skill when the user wants the shortest path to a correct solution with 
 1. Solve only the requested scope (YAGNI).
 2. Reuse existing repo helpers first, then stdlib/platform, then existing dependencies.
 3. Skip optional internet research and exploratory scans unless explicitly requested or required.
-4. Use Serena tools first for symbol discovery and edits; avoid whole-file reads unless necessary.
+4. Use Zed's grep and find_path for symbol discovery and edit_file/write_file for edits; avoid whole-file reads unless necessary.
 5. Keep responses short and actionable; do not add long explanations unless requested.
 6. Keep reasoning compact: do not turn hidden thinking into long prose; think enough to act, then act.
 7. Prefer the shortest correct answer. If one line is enough, use one line.

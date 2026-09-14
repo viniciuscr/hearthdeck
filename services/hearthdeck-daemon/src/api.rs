@@ -542,6 +542,7 @@ fn catalog_activity_entry(item: &crate::catalog::CatalogItem) -> ActivityEntry {
         title: item.title.clone(),
         icon: item.icon.clone(),
         categories,
+        kind: Some(item.kind.clone()),
         source: item.source_id.clone(),
         metadata: item.metadata.clone(),
     }
@@ -557,6 +558,7 @@ fn retro_activity_entry(game: &RommGame) -> ActivityEntry {
             "Game".to_owned(),
             format!("hearthdeck-console:{}", game.platform_id),
         ],
+        kind: Some("game".to_owned()),
         source: "romm".to_owned(),
         metadata: serde_json::json!({
             "summary": game.summary,

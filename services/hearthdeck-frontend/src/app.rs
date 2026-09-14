@@ -91,11 +91,11 @@ use crate::style::{
     MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION, SEARCH_WIDTH,
     SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER,
     TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, content_horizontal_padding,
-    dashboard_nav_button_class, dashboard_tile_size, filter_button_height, grid_gap,
-    grid_top_padding, launch_overlay, root_background, search_icon_padding, section_button_class,
-    sidebar_accent_bar_height, sidebar_divider, sidebar_header_height, sidebar_item_height,
-    sidebar_width, tab_button_class, tab_height, tab_underline_height, tab_width, tile_height,
-    tile_width, title_action_height,
+    dashboard_console_tile_size, dashboard_nav_button_class, dashboard_tile_size,
+    filter_button_height, grid_gap, grid_top_padding, launch_overlay, root_background,
+    search_icon_padding, section_button_class, sidebar_accent_bar_height, sidebar_divider,
+    sidebar_header_height, sidebar_item_height, sidebar_width, tab_button_class, tab_height,
+    tab_underline_height, tab_width, tile_height, tile_width, title_action_height,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
@@ -1366,9 +1366,18 @@ impl HearthDeck {
     }
 
     fn dashboard_shelves(&self) -> Vec<(DashboardShelf, Vec<&Arc<DesktopEntryData>>)> {
+        // "Recently Played" is a games shelf: launch activity for plain
+        // applications is filtered out here, matching how the catalog already
+        // splits games from apps everywhere else.
         let recent = self
             .recent_entries
             .iter()
+            .filter(|entry| {
+                entry
+                    .categories
+                    .iter()
+                    .any(|category| category.eq_ignore_ascii_case("game"))
+            })
             .take(DASHBOARD_RAIL_TILES)
             .collect::<Vec<_>>();
         let favorites = self
@@ -1516,6 +1525,54 @@ impl HearthDeck {
         iced::Task::batch(cmds)
     }
 
+    /// Dashboard console rail as an element, or `None` when there are no
+    /// consoles to show. Kept as a method so [`Self::view_dashboard`] can place
+    /// it between shelves without duplicating the card/rail wiring.
+    fn console_rail<'a>(&'a self, tile_size: f32) -> Option<Element<'a, Message>> {
+        let consoles = self.dashboard_consoles();
+        (!consoles.is_empty()).then(|| {
+            let cards: Vec<Element<'a, Message>> = consoles
+                .into_iter()
+                .map(|(index, group)| {
+                    // Bundled console art is square-ish pixel art, so contain
+                    // it rather than crop; fall back to a generic glyph when a
+                    // platform has no artwork or it could not be cached.
+                    let handle = group
+                        .romm_platform_id()
+                        .and_then(|id| self.romm_platform_icons.get(&id))
+                        .map(|path| {
+                            crate::icon_cache::entry_icon_handle(
+                                &IconSource::Path(PathBuf::from(path)),
+                                tile_size as u32,
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            crate::icon_cache::icon_cache_handle(
+                                "input-gaming-symbolic",
+                                ICON_LARGE,
+                            )
+                        });
+                    rail_item(dashboard_console_id(index), group.name(), handle, tile_size)
+                        .fit(ContentFit::Contain)
+                        .on_press(Message::OpenConsole(index))
+                        .into()
+                })
+                .collect();
+            rail(
+                dashboard_rail_id(CONSOLES_RAIL_KEY),
+                fl!("consoles"),
+                tile_size,
+            )
+            .items(cards)
+            .on_scroll(|viewport| Message::DashboardRailScrolled {
+                key: CONSOLES_RAIL_KEY,
+                offset: viewport.absolute_offset().x,
+                viewport: viewport.bounds().width,
+            })
+            .into()
+        })
+    }
+
     fn dashboard_entry_ids(&self) -> Vec<widget::Id> {
         self.dashboard_entry_rows().into_iter().flatten().collect()
     }
@@ -1526,29 +1583,29 @@ impl HearthDeck {
     /// rail and the shelves cannot drift apart.
     fn dashboard_rails(&self) -> Vec<(&'static str, Vec<widget::Id>)> {
         let mut rails: Vec<(&'static str, Vec<widget::Id>)> = Vec::new();
-        let consoles: Vec<widget::Id> = self
-            .dashboard_consoles()
-            .into_iter()
-            .map(|(index, _)| dashboard_console_id(index))
-            .collect();
-        if !consoles.is_empty() {
-            rails.push((CONSOLES_RAIL_KEY, consoles));
+        for (shelf, entries) in self.dashboard_shelves() {
+            if !entries.is_empty() {
+                rails.push((
+                    shelf.key(),
+                    entries
+                        .into_iter()
+                        .map(|entry| shelf.widget_id(&entry.id))
+                        .collect(),
+                ));
+            }
+            // The console rail sits immediately below Recently Played, so its
+            // focus order must match that visual position.
+            if shelf == DashboardShelf::Recent {
+                let consoles: Vec<widget::Id> = self
+                    .dashboard_consoles()
+                    .into_iter()
+                    .map(|(index, _)| dashboard_console_id(index))
+                    .collect();
+                if !consoles.is_empty() {
+                    rails.push((CONSOLES_RAIL_KEY, consoles));
+                }
+            }
         }
-        rails.extend(
-            self.dashboard_shelves()
-                .into_iter()
-                .filter_map(|(shelf, entries)| {
-                    (!entries.is_empty()).then(|| {
-                        (
-                            shelf.key(),
-                            entries
-                                .into_iter()
-                                .map(|entry| shelf.widget_id(&entry.id))
-                                .collect(),
-                        )
-                    })
-                }),
-        );
         rails
     }
 
@@ -1574,6 +1631,11 @@ impl HearthDeck {
         for (key, ids) in self.dashboard_rails() {
             let Some(index) = ids.iter().position(|candidate| candidate == id) else {
                 continue;
+            };
+            let card = if key == CONSOLES_RAIL_KEY {
+                dashboard_console_tile_size(self.window_width, spacing.space_l, spacing.space_l)
+            } else {
+                card
             };
             let (offset, viewport) = self
                 .dashboard_rail_scroll
@@ -3867,36 +3929,39 @@ impl HearthDeck {
         .align_y(Alignment::Center)
         .height(Length::Fixed(f32::from(space_xxl)));
 
-        let rails: Vec<Element<'_, Message>> = self
-            .dashboard_shelves()
-            .into_iter()
-            .map(|(shelf, entries)| {
-                let cards: Vec<Element<'_, Message>> = entries
-                    .into_iter()
-                    .map(|entry| {
-                        rail_item(
-                            shelf.widget_id(&entry.id),
-                            &entry.name,
-                            crate::icon_cache::entry_icon_handle(&entry.icon, tile_size as u32),
-                            tile_size,
-                        )
-                        .on_press(Message::ActivateDashboardApp(entry.id.clone()))
-                        .into()
-                    })
-                    .collect();
-                let empty: Element<'_, Message> = container(
-                    row![
-                        icon::icon(APP_ICON.clone()).size(ICON_BODY),
-                        text::body(shelf.empty_message()).size(TEXT_BODY),
-                    ]
-                    .spacing(space_s)
-                    .align_y(Alignment::Center),
-                )
-                .width(Length::Fill)
-                .height(Length::Fixed(tile_size))
-                .align_x(Horizontal::Left)
-                .align_y(Alignment::Center)
-                .into();
+        let console_tile_size = dashboard_console_tile_size(self.window_width, space_l, space_l);
+        let content = column![top_bar].spacing(space_m);
+        let mut lower = column![].spacing(space_l);
+        // Shelves render in order; the console rail is inserted right after
+        // Recently Played so games lead the dashboard and consoles sit below.
+        for (shelf, entries) in self.dashboard_shelves() {
+            let cards: Vec<Element<'_, Message>> = entries
+                .into_iter()
+                .map(|entry| {
+                    rail_item(
+                        shelf.widget_id(&entry.id),
+                        &entry.name,
+                        crate::icon_cache::entry_icon_handle(&entry.icon, tile_size as u32),
+                        tile_size,
+                    )
+                    .on_press(Message::ActivateDashboardApp(entry.id.clone()))
+                    .into()
+                })
+                .collect();
+            let empty: Element<'_, Message> = container(
+                row![
+                    icon::icon(APP_ICON.clone()).size(ICON_BODY),
+                    text::body(shelf.empty_message()).size(TEXT_BODY),
+                ]
+                .spacing(space_s)
+                .align_y(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fixed(tile_size))
+            .align_x(Horizontal::Left)
+            .align_y(Alignment::Center)
+            .into();
+            lower = lower.push(
                 rail(dashboard_rail_id(shelf.key()), shelf.title(), tile_size)
                     .items(cards)
                     .empty(empty)
@@ -3904,64 +3969,14 @@ impl HearthDeck {
                         key: shelf.key(),
                         offset: viewport.absolute_offset().x,
                         viewport: viewport.bounds().width,
-                    })
-                    .into()
-            })
-            .collect();
-
-        // Console rail: the same card and rail as every shelf, just fed from
-        // the live RomM platform list instead of the catalog.
-        let consoles_rail: Option<Element<'_, Message>> = {
-            let consoles = self.dashboard_consoles();
-            (!consoles.is_empty()).then(|| {
-                let cards: Vec<Element<'_, Message>> = consoles
-                    .into_iter()
-                    .map(|(index, group)| {
-                        // Bundled console art is square-ish pixel art, so contain
-                        // it rather than crop; fall back to a generic glyph when
-                        // a platform has no artwork or it could not be cached.
-                        let handle = group
-                            .romm_platform_id()
-                            .and_then(|id| self.romm_platform_icons.get(&id))
-                            .map(|path| {
-                                crate::icon_cache::entry_icon_handle(
-                                    &IconSource::Path(PathBuf::from(path)),
-                                    tile_size as u32,
-                                )
-                            })
-                            .unwrap_or_else(|| {
-                                crate::icon_cache::icon_cache_handle(
-                                    "input-gaming-symbolic",
-                                    ICON_LARGE,
-                                )
-                            });
-                        rail_item(dashboard_console_id(index), group.name(), handle, tile_size)
-                            .fit(ContentFit::Contain)
-                            .on_press(Message::OpenConsole(index))
-                            .into()
-                    })
-                    .collect();
-                rail(
-                    dashboard_rail_id(CONSOLES_RAIL_KEY),
-                    fl!("consoles"),
-                    tile_size,
-                )
-                .items(cards)
-                .on_scroll(|viewport| Message::DashboardRailScrolled {
-                    key: CONSOLES_RAIL_KEY,
-                    offset: viewport.absolute_offset().x,
-                    viewport: viewport.bounds().width,
-                })
-                .into()
-            })
-        };
-
-        let content = column![top_bar].spacing(space_m);
-        let mut lower = column![].spacing(space_l);
-        if let Some(consoles) = consoles_rail {
-            lower = lower.push(consoles);
+                    }),
+            );
+            if shelf == DashboardShelf::Recent
+                && let Some(consoles) = self.console_rail(console_tile_size)
+            {
+                lower = lower.push(consoles);
+            }
         }
-        lower = lower.push(column(rails).spacing(space_l));
         let content = content
             .push(space::vertical().height(Length::Fill))
             .push(lower)
@@ -4618,6 +4633,12 @@ mod tests {
         })
     }
 
+    fn game_entry(id: &str) -> Arc<DesktopEntryData> {
+        let mut data = entry(id).as_ref().clone();
+        data.categories = vec!["Game".into()];
+        Arc::new(data)
+    }
+
     #[test]
     fn gamepad_navigates_the_open_context_menu() {
         use crate::input_ownership::Event as InputEvent;
@@ -5001,7 +5022,7 @@ mod tests {
         };
         let mut app = HearthDeck {
             all_entries: vec![entry("favorite")],
-            recent_entries: vec![entry("recent-a"), entry("recent-b")],
+            recent_entries: vec![game_entry("recent-a"), game_entry("recent-b")],
             config,
             ..Default::default()
         };
@@ -5258,16 +5279,37 @@ mod tests {
         let app = HearthDeck {
             config,
             all_entries: vec![entry("game")],
+            recent_entries: vec![game_entry("recent")],
             ..Default::default()
         };
 
         let rails = app.dashboard_rails();
-        // The console rail leads, then the shelves, and focus navigation must
-        // be derived from exactly the same definition.
-        assert_eq!(rails[0].0, super::CONSOLES_RAIL_KEY);
+        // Recently Played leads, then the console rail, then the remaining
+        // shelves. Focus navigation is derived from the same definition.
+        assert_eq!(rails[0].0, DashboardShelf::Recent.key());
+        assert_eq!(rails[1].0, super::CONSOLES_RAIL_KEY);
         assert_eq!(
             app.dashboard_entry_rows(),
             rails.into_iter().map(|(_, ids)| ids).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn dashboard_recently_played_only_shows_games() {
+        let app = HearthDeck {
+            recent_entries: vec![entry("app"), game_entry("game")],
+            ..Default::default()
+        };
+
+        let shelves = app.dashboard_shelves();
+        assert_eq!(shelves[0].0, DashboardShelf::Recent);
+        assert_eq!(
+            shelves[0]
+                .1
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["game"]
         );
     }
 

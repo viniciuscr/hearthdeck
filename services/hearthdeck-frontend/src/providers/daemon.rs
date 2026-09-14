@@ -95,6 +95,8 @@ struct RecentActivityItem {
     icon: Option<String>,
     categories: Vec<String>,
     source: String,
+    #[serde(default)]
+    kind: Option<String>,
     metadata: serde_json::Value,
 }
 
@@ -783,13 +785,28 @@ fn recent_activity_to_game_record(item: RecentActivityItem, icon: Option<String>
         .get("prefers_dgpu")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    // The daemon classifies catalog items by `kind` rather than by their raw
+    // categories (a Heroic Epic game has genre categories but no `Game` entry).
+    // Re-apply that signal here so "Recently Played" can tell games from apps
+    // without special-casing providers.
+    let mut categories = item.categories;
+    if item
+        .kind
+        .as_deref()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("game"))
+        && !categories
+            .iter()
+            .any(|category| category.eq_ignore_ascii_case("game"))
+    {
+        categories.push("Game".to_string());
+    }
     GameRecord {
         id: item.id,
         name: item.title,
         exec: None,
         icon,
         path: None,
-        categories: item.categories,
+        categories,
         terminal: false,
         prefers_dgpu,
         source: item.source,
@@ -1185,6 +1202,7 @@ mod tests {
                 icon: Some("/assets/example.jpg".into()),
                 categories: vec!["Game".into(), "hearthdeck-console:7".into()],
                 source: "romm".into(),
+                kind: Some("game".into()),
                 metadata: serde_json::json!({"release_year": 1994}),
             },
             Some("/tmp/example.jpg".into()),
@@ -1193,5 +1211,28 @@ mod tests {
         assert_eq!(record.id, "romm:42");
         assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
         assert_eq!(record.categories[1], "hearthdeck-console:7");
+    }
+
+    #[test]
+    fn recent_activity_marks_kind_game_entries_as_games() {
+        let record = recent_activity_to_game_record(
+            RecentActivityItem {
+                id: "heroic:epic:example".into(),
+                title: "Epic game".into(),
+                icon: None,
+                categories: vec!["games/action".into()],
+                source: "heroic".into(),
+                kind: Some("game".into()),
+                metadata: serde_json::Value::Null,
+            },
+            None,
+        );
+
+        assert!(
+            record
+                .categories
+                .iter()
+                .any(|category| category.eq_ignore_ascii_case("game"))
+        );
     }
 }

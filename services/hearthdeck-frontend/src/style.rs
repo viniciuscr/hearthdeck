@@ -181,6 +181,17 @@ pub fn dashboard_tile_size(window_width: f32, horizontal_padding: u16, tile_gap:
     (available / DASHBOARD_VISIBLE_TILES as f32).clamp(140.0, 360.0)
 }
 
+/// Console logo tiles are half the size of a full dashboard tile, so the
+/// console rail reads as secondary navigation below Recently Played rather
+/// than another full-size shelf.
+pub fn dashboard_console_tile_size(
+    window_width: f32,
+    horizontal_padding: u16,
+    tile_gap: u16,
+) -> f32 {
+    dashboard_tile_size(window_width, horizontal_padding, tile_gap) / 2.0
+}
+
 /// Size of the drag-preview icon shown while dragging a tile.
 pub const TILE_DRAG_ICON: f32 = 88.0;
 /// Size of the source badge overlaid on the tile artwork corner.
