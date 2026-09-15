@@ -184,6 +184,24 @@ pub struct RetroGameDetails {
     /// Community score out of 100.
     pub average_rating: Option<f64>,
     pub file_size_bytes: Option<u64>,
+    /// Whether the game is in the user's RomM favorites.
+    #[serde(default)]
+    pub favorite: bool,
+    /// RomM's per-user "play later" flag.
+    #[serde(default)]
+    pub backlogged: bool,
+}
+
+/// Response of the daemon's retro favorite write.
+#[derive(Debug, Deserialize)]
+struct FavoriteState {
+    favorite: bool,
+}
+
+/// Response of the daemon's retro backlog write.
+#[derive(Debug, Deserialize)]
+struct BacklogState {
+    backlogged: bool,
 }
 
 /// A game's detail payload with its artwork already cached on disk: the hero
@@ -679,6 +697,61 @@ impl DaemonClient {
             hero,
             screenshots,
         })
+    }
+
+    /// Adds or removes one game from the user's RomM favorites, returning the
+    /// state that then holds. RomM owns the favorite list, so this only proxies
+    /// the change.
+    pub async fn set_retro_favorite(
+        &self,
+        rom_id: i64,
+        favorite: bool,
+    ) -> Result<bool, DaemonError> {
+        let response = self
+            .http
+            .post(self.api_url(&format!("/v1/retro/roms/{rom_id}/favorite")))
+            .json(&serde_json::json!({ "favorite": favorite }))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        let state: FavoriteState = response
+            .json()
+            .await
+            .map_err(DaemonError::Deserialization)?;
+        Ok(state.favorite)
+    }
+
+    /// Sets RomM's per-user "play later" flag for one game, returning the state
+    /// that then holds.
+    pub async fn set_retro_backlogged(
+        &self,
+        rom_id: i64,
+        backlogged: bool,
+    ) -> Result<bool, DaemonError> {
+        let response = self
+            .http
+            .post(self.api_url(&format!("/v1/retro/roms/{rom_id}/backlog")))
+            .json(&serde_json::json!({ "backlogged": backlogged }))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        let state: BacklogState = response
+            .json()
+            .await
+            .map_err(DaemonError::Deserialization)?;
+        Ok(state.backlogged)
     }
 
     /// Launches a retro ROM by its ID.

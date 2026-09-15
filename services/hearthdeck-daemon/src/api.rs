@@ -38,6 +38,8 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/retro/consoles", get(list_retro_consoles))
         .route("/v1/retro/roms", get(list_retro_roms))
         .route("/v1/retro/roms/{id}", get(retro_rom_details))
+        .route("/v1/retro/roms/{id}/favorite", post(set_retro_favorite))
+        .route("/v1/retro/roms/{id}/backlog", post(set_retro_backlogged))
         .route("/v1/retro/roms/{id}/launch", post(launch_retro_rom))
         .route("/v1/retro/service/restart", post(restart_romm_service))
         .route("/v1/retro/assets", get(retro_asset))
@@ -225,7 +227,71 @@ async fn retro_rom_details(
     let game = diagnostics::romm_rom(&state.settings, rom_id)
         .await
         .map_err(ApiError::romm_query)?;
-    Ok(Json(RetroGameDetails::from(&game)))
+    let mut details = RetroGameDetails::from(&game);
+    // Reading the true favorite state can need one more RomM call, because
+    // favorites are a collection rather than a field on the rom. A failure here
+    // only costs the button its initial label: the screen still opens, and
+    // toggling still writes.
+    match diagnostics::romm_favorite(&state.settings, &game).await {
+        Ok(favorite) => details.favorite = favorite,
+        Err(error) => warn!(?error, rom_id, "could not read RomM favorite state"),
+    }
+    Ok(Json(details))
+}
+
+#[derive(Deserialize)]
+struct FavoriteRequest {
+    favorite: bool,
+}
+
+#[derive(Serialize)]
+struct FavoriteResponse {
+    favorite: bool,
+}
+
+/// Adds or removes one game from the user's RomM favorites, answering with the
+/// state that now holds.
+///
+/// The daemon keeps no favorite list of its own: favorites are RomM's, so every
+/// RomM client shows the same thing and the choice survives a reinstall.
+async fn set_retro_favorite(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(rom_id): Path<i64>,
+    Json(request): Json<FavoriteRequest>,
+) -> Result<Json<FavoriteResponse>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let favorite = diagnostics::romm_set_favorite(&state.settings, rom_id, request.favorite)
+        .await
+        .map_err(ApiError::romm_query)?;
+    info!(rom_id, favorite, "RomM favorite updated");
+    Ok(Json(FavoriteResponse { favorite }))
+}
+
+#[derive(Deserialize)]
+struct BacklogRequest {
+    backlogged: bool,
+}
+
+#[derive(Serialize)]
+struct BacklogResponse {
+    backlogged: bool,
+}
+
+/// Sets RomM's per-user "play later" flag for one game. RomM's own backlog, not
+/// a local list, so the same flag shows up in RomM's UI and its filters.
+async fn set_retro_backlogged(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(rom_id): Path<i64>,
+    Json(request): Json<BacklogRequest>,
+) -> Result<Json<BacklogResponse>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let backlogged = diagnostics::romm_set_backlogged(&state.settings, rom_id, request.backlogged)
+        .await
+        .map_err(ApiError::romm_query)?;
+    info!(rom_id, backlogged, "RomM backlog flag updated");
+    Ok(Json(BacklogResponse { backlogged }))
 }
 
 /// Launches a RomM ROM through RetroArch. Deliberately not the generic
@@ -858,6 +924,10 @@ struct RetroGameDetails {
     file_size_bytes: Option<u64>,
     sibling_roms: Vec<RetroRomVersion>,
     version_label: Option<String>,
+    /// Whether the game is in the user's RomM favorites.
+    favorite: bool,
+    /// RomM's per-user "play later" flag.
+    backlogged: bool,
 }
 
 impl From<&RommGame> for RetroGameDetails {
@@ -893,6 +963,11 @@ impl From<&RommGame> for RetroGameDetails {
             file_size_bytes: game.fs_size_bytes,
             sibling_roms: base.sibling_roms,
             version_label: base.version_label,
+            // Favorites are a collection in RomM rather than a field on the
+            // rom, so this is only right when RomM inlines the flag; the
+            // handler corrects it with a lookup when it is not.
+            favorite: game.is_favorite.unwrap_or(false),
+            backlogged: game.rom_user.backlogged,
         }
     }
 }
@@ -1636,6 +1711,8 @@ mod tests {
             languages: Vec::new(),
             tags: Vec::new(),
             fs_size_bytes: None,
+            is_favorite: None,
+            rom_user: crate::diagnostics::RommRomUser::default(),
         })
     }
 
@@ -1673,6 +1750,8 @@ mod tests {
             languages: Vec::new(),
             tags: vec!["NA".to_owned()],
             fs_size_bytes: Some(524_288),
+            is_favorite: Some(true),
+            rom_user: crate::diagnostics::RommRomUser { backlogged: true },
         };
 
         let details = super::RetroGameDetails::from(&game);
@@ -1701,6 +1780,10 @@ mod tests {
         assert_eq!(details.average_rating, Some(62.47));
         assert_eq!(details.file_size_bytes, Some(524_288));
         assert_eq!(details.tags, vec!["NA"]);
+        // User state travels with the game, so the details screen can open with
+        // its favorite and play-later buttons already in the right state.
+        assert!(details.favorite);
+        assert!(details.backlogged);
     }
 
     #[test]

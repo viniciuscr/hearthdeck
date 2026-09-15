@@ -192,6 +192,83 @@ paths:
           description: No RetroArch core is configured for the rom's platform
         '503':
           description: RomM is not configured, or the mapped RetroArch core is not installed
+  /v1/retro/roms/{id}/favorite:
+    post:
+      operationId: setRetroFavorite
+      description: >-
+        Adds or removes one game from the user's RomM favorites and answers with
+        the state that holds. Favorites live in RomM (a collection RomM flags as
+        the favorite list), not in Hearthdeck, so every RomM client sees the same
+        list. Requires a RomM token with collections write scope.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: RomM rom ID
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [favorite]
+              properties:
+                favorite: { type: boolean }
+      responses:
+        '200':
+          description: The favorite state that now holds
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [favorite]
+                properties:
+                  favorite: { type: boolean }
+        '502':
+          description: RomM rejected the change, or its token lacks write scope
+        '503':
+          description: RomM is not configured
+  /v1/retro/roms/{id}/backlog:
+    post:
+      operationId: setRetroBacklogged
+      description: >-
+        Sets RomM's per-user "play later" flag for one game and answers with the
+        state that holds. RomM's own backlog, so the same flag drives RomM's UI
+        and its filters. Requires a RomM token with roms write scope.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: RomM rom ID
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [backlogged]
+              properties:
+                backlogged: { type: boolean }
+      responses:
+        '200':
+          description: The play-later state that now holds
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [backlogged]
+                properties:
+                  backlogged: { type: boolean }
+        '502':
+          description: RomM rejected the change, or its token lacks write scope
+        '503':
+          description: RomM is not configured
   /v1/retro/service/restart:
     post:
       operationId: restartRommService
@@ -654,6 +731,8 @@ components:
           game_modes,
           age_ratings,
           sibling_roms,
+          favorite,
+          backlogged,
         ]
       properties:
         id: { type: integer }
@@ -704,6 +783,8 @@ components:
           type: array
           items: { $ref: '#/components/schemas/RetroRomVersion' }
         version_label: { type: [string, 'null'] }
+        favorite: { type: boolean }
+        backlogged: { type: boolean }
     RommSettings:
       type: object
       required: [base_url, configured, updated_at]

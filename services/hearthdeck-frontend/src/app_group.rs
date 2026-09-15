@@ -172,6 +172,16 @@ impl Section {
         Section::Applications,
     ];
 
+    /// Icon shown beside the section's name in the sidebar. Named rather than
+    /// inlined at the view so the three sections cannot drift apart in style.
+    pub fn icon_name(self) -> &'static str {
+        match self {
+            Self::PcGames => "applications-games-symbolic",
+            Self::ConsoleGames => "input-gaming-symbolic",
+            Self::Applications => "view-app-grid-symbolic",
+        }
+    }
+
     pub fn name(&self) -> String {
         match self {
             Section::PcGames => fl!("pc-games"),

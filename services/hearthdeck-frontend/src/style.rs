@@ -11,8 +11,10 @@
 
 use cosmic::Element;
 use cosmic::Theme;
+use cosmic::iced::Radians;
 use cosmic::iced::core::{Background, Border, Color, Shadow};
-use cosmic::iced::{ContentFit, Length};
+use cosmic::iced::gradient::Linear;
+use cosmic::iced::{ContentFit, Length, Vector};
 use cosmic::theme::Button;
 use cosmic::widget::button::Catalog;
 use cosmic::widget::{button, container, icon};
@@ -226,6 +228,23 @@ pub const DETAILS_SHOT_ASPECT: f32 = 16.0 / 9.0;
 
 /// Width of the label column in the details screen's fact list.
 pub const DETAILS_FACT_LABEL_WIDTH: f32 = 132.0;
+
+/// Height of a secondary button on the details screen's action line; 72px at
+/// Standard. Larger than any control on the Library: the action line is the
+/// only interactive surface on the screen and is read from a couch, not a desk.
+pub fn details_action_height() -> f32 {
+    let s = spacing();
+    f32::from(s.space_xl + s.space_m)
+}
+
+/// Height of Play, which leads the action line; 88px at Standard.
+pub fn details_play_height() -> f32 {
+    let s = spacing();
+    f32::from(s.space_xxl + s.space_m)
+}
+
+/// Widest the details screen's disc picker panel may grow.
+pub const DETAILS_PICKER_WIDTH: f32 = 460.0;
 
 /// Size of the drag-preview icon shown while dragging a tile.
 pub const TILE_DRAG_ICON: f32 = 88.0;
@@ -492,6 +511,66 @@ pub fn root_background(theme: &Theme) -> container::Style {
     }
 }
 
+/// The hero card on a details screen: the shared card surface, lifted off the
+/// backdrop with a shadow so the artwork reads as a card over the page rather
+/// than a hole in it.
+pub fn hero_card(theme: &Theme) -> container::Style {
+    let mut style = card_surface(theme);
+    style.shadow = Shadow {
+        color: Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.45,
+        },
+        offset: Vector::new(0.0, 6.0),
+        blur_radius: 24.0,
+    };
+    style
+}
+
+/// Full-bleed wash over a details screen's backdrop art: opaque enough to keep
+/// body text readable over any cover, translucent enough to tint the page with
+/// the game's own palette.
+pub fn backdrop_wash(theme: &Theme) -> container::Style {
+    let mut color: Color = theme.cosmic().bg_color().into();
+    color.a = 0.86;
+    container::Style {
+        background: Some(Background::Color(color)),
+        ..container::Style::default()
+    }
+}
+
+/// Bottom-up scrim for a details screen: clear over the artwork, solid behind
+/// the action line so the buttons sit on a stable surface.
+pub fn backdrop_scrim(theme: &Theme) -> container::Style {
+    let mut solid: Color = theme.cosmic().bg_color().into();
+    solid.a = 0.98;
+    let mut clear = solid;
+    clear.a = 0.0;
+    // Radians(0) runs top-to-bottom, the direction this scrim needs.
+    let gradient = Linear::new(Radians(0.0))
+        .add_stop(0.0, clear)
+        .add_stop(0.55, clear)
+        .add_stop(1.0, solid);
+    container::Style {
+        background: Some(Background::from(gradient)),
+        ..container::Style::default()
+    }
+}
+
+/// Dimming layer behind a modal panel (the disc picker): dark enough that the
+/// panel clearly sits above the page, light enough to keep the game visible
+/// behind it.
+pub fn modal_scrim(theme: &Theme) -> container::Style {
+    let mut color: Color = theme.cosmic().bg_color().into();
+    color.a = 0.7;
+    container::Style {
+        background: Some(Background::Color(color)),
+        ..container::Style::default()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Button styles
 // ---------------------------------------------------------------------------
@@ -639,6 +718,68 @@ pub fn tile_button_class(selected: bool) -> Button {
                 theme,
             )
         }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Details screen actions
+// ---------------------------------------------------------------------------
+
+/// The primary action of a details screen: filled with the theme's accent, so
+/// the button that starts the game is unmistakable at TV distance. The focus
+/// ring uses the theme's on-accent color, because an accent ring on an accent
+/// fill would be invisible.
+pub fn primary_action_button_class() -> Button {
+    let styled = |focused: bool, theme: &Theme| {
+        let t = theme.cosmic();
+        let mut style = theme.active(focused, false, &Button::Suggested);
+        style.background = Some(Background::Color(t.accent.base.into()));
+        style.text_color = Some(t.accent.on.into());
+        style.icon_color = Some(t.accent.on.into());
+        style.border_radius = surface_radius(theme).into();
+        style.outline_width = FOCUS_RING_WIDTH;
+        style.outline_color = if focused {
+            t.accent.on.into()
+        } else {
+            Color::TRANSPARENT
+        };
+        style
+    };
+
+    Button::Custom {
+        active: Box::new(styled),
+        disabled: Box::new(|theme| theme.disabled(&Button::Suggested)),
+        hovered: Box::new(styled),
+        pressed: Box::new(styled),
+    }
+}
+
+/// A details action that holds a state (favorite, play later): the chip fill is
+/// always present so the secondary buttons read as one line of controls, and the
+/// accent colors appear only while the state is on.
+pub fn details_toggle_button_class(active: bool) -> Button {
+    let styled = move |focused: bool, theme: &Theme, hovered: bool| {
+        let mut style = theme.active(focused, false, &Button::IconVertical);
+        style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+        let fill = match (active, hovered) {
+            (true, _) => 0.22,
+            (false, true) => 0.10,
+            (false, false) => 0.06,
+        };
+        style.background = Some(chip_background(fill, theme));
+        if active {
+            let accent = theme.cosmic().accent_text_color().into();
+            style.text_color = Some(accent);
+            style.icon_color = Some(accent);
+        }
+        focus_ring(style, focused, theme)
+    };
+
+    Button::Custom {
+        active: Box::new(move |focused, theme| styled(focused, theme, false)),
+        disabled: Box::new(|theme| theme.disabled(&Button::IconVertical)),
+        hovered: Box::new(move |focused, theme| styled(focused, theme, true)),
+        pressed: Box::new(move |focused, theme| styled(focused, theme, true)),
     }
 }
 

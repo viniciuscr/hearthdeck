@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use tracing::debug;
 
 use crate::settings::{RommCredentials, SettingsRepository};
 
@@ -160,6 +161,25 @@ pub struct RommGame {
     /// Size of the ROM file as stored on RomM's disk.
     #[serde(default)]
     pub fs_size_bytes: Option<u64>,
+    /// Whether the game is in the user's RomM favorites. Some RomM versions
+    /// inline this on the rom; when they do not, the favorite is found through
+    /// the favorite collection instead (see [`romm_favorite`]).
+    #[serde(default)]
+    pub is_favorite: Option<bool>,
+    /// This user's own state for the game. RomM sends an all-default stub when
+    /// the user has never touched it.
+    #[serde(default)]
+    pub rom_user: RommRomUser,
+}
+
+/// The per-user slice of a RomM ROM that the frontend shows. RomM sends more
+/// (rating, difficulty, completion, notes); serde ignores the rest until a
+/// screen needs them.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct RommRomUser {
+    /// RomM's "play later" flag.
+    #[serde(default)]
+    pub backlogged: bool,
 }
 
 /// One related ROM of the same game in RomM's `sibling_roms` list. RomM sends
@@ -236,6 +256,22 @@ impl RommGameMetadata {
 pub struct RommAsset {
     pub content_type: String,
     pub bytes: Vec<u8>,
+}
+
+/// One of the user's RomM collections. RomM keeps favorites as a collection
+/// flagged `is_favorite` rather than a per-rom column, so this is also how
+/// favorite state is read and written.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RommCollection {
+    pub id: i64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub is_favorite: bool,
+    /// Roms in the collection, already filtered to the ones this token's user
+    /// may see.
+    #[serde(default)]
+    pub rom_ids: Vec<i64>,
 }
 
 #[derive(Serialize)]
@@ -399,6 +435,174 @@ pub async fn romm_rom(
         .json::<RommGame>()
         .await
         .map_err(|error| RommQueryError::Failed(error.into()))
+}
+
+/// Name RomM's own UI gives the collection it flags as favorites. Only used
+/// when creating one: an existing favorite collection is found by its flag, so
+/// a differently named one is still reused.
+const FAVORITE_COLLECTION_NAME: &str = "Favorites";
+
+/// RomM credentials, or the error explaining why they are missing.
+async fn romm_credentials(
+    settings: &SettingsRepository,
+) -> std::result::Result<RommCredentials, RommQueryError> {
+    settings
+        .romm_credentials()
+        .await
+        .map_err(RommQueryError::Failed)?
+        .ok_or(RommQueryError::NotConfigured)
+}
+
+/// A RomM API request, carrying the base URL, JSON accept header, bearer token
+/// and timeout every call shares.
+fn romm_request(
+    credentials: &RommCredentials,
+    method: reqwest::Method,
+    path: &str,
+) -> reqwest::RequestBuilder {
+    reqwest::Client::new()
+        .request(method, format!("{}{path}", credentials.base_url))
+        .header(reqwest::header::ACCEPT, "application/json")
+        .bearer_auth(&credentials.token)
+        .timeout(std::time::Duration::from_secs(10))
+}
+
+/// Names the failing status, so a token missing a write scope reads as a 403
+/// instead of a generic failure.
+fn romm_status_error(status: reqwest::StatusCode) -> RommQueryError {
+    RommQueryError::Failed(anyhow::anyhow!("RomM returned {status}"))
+}
+
+async fn fetch_collections(
+    credentials: &RommCredentials,
+) -> std::result::Result<Vec<RommCollection>, RommQueryError> {
+    let response = romm_request(credentials, reqwest::Method::GET, "/api/collections")
+        .send()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))?;
+    if !response.status().is_success() {
+        return Err(romm_status_error(response.status()));
+    }
+    response
+        .json::<Vec<RommCollection>>()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))
+}
+
+/// The user's favorite collection, if they have ever favorited anything.
+async fn romm_favorite_collection(
+    credentials: &RommCredentials,
+) -> std::result::Result<Option<RommCollection>, RommQueryError> {
+    Ok(fetch_collections(credentials)
+        .await?
+        .into_iter()
+        .find(|collection| collection.is_favorite))
+}
+
+/// Whether `game` is in the user's favorites.
+///
+/// Uses the flag RomM puts on the rom when it sends one, and otherwise asks the
+/// favorite collection, which is where favorites actually live.
+pub async fn romm_favorite(
+    settings: &SettingsRepository,
+    game: &RommGame,
+) -> std::result::Result<bool, RommQueryError> {
+    if let Some(favorite) = game.is_favorite {
+        return Ok(favorite);
+    }
+    let credentials = romm_credentials(settings).await?;
+    let Some(collection) = romm_favorite_collection(&credentials).await? else {
+        return Ok(false);
+    };
+    Ok(collection.rom_ids.contains(&game.id))
+}
+
+/// Adds or removes `rom_id` from the user's favorites, returning the new state.
+///
+/// Creating the favorite collection on first use is what RomM's own UI does:
+/// there is no per-rom favorite column to write, only a collection flagged as
+/// the favorite list.
+pub async fn romm_set_favorite(
+    settings: &SettingsRepository,
+    rom_id: i64,
+    favorite: bool,
+) -> std::result::Result<bool, RommQueryError> {
+    let credentials = romm_credentials(settings).await?;
+    let collection = match romm_favorite_collection(&credentials).await? {
+        Some(collection) => collection,
+        None if favorite => romm_create_favorite_collection(&credentials).await?,
+        // Removing from a favorite list that was never created leaves the user
+        // in the state they asked for.
+        None => return Ok(false),
+    };
+    // Which collection RomM treats as the favorite list is not something the
+    // user can see anywhere, so name it in the log.
+    debug!(id = collection.id, name = %collection.name, "resolved the RomM favorite collection");
+    let method = if favorite {
+        reqwest::Method::POST
+    } else {
+        reqwest::Method::DELETE
+    };
+    let response = romm_request(
+        &credentials,
+        method,
+        &format!("/api/collections/{}/roms", collection.id),
+    )
+    .json(&serde_json::json!({ "rom_ids": [rom_id] }))
+    .send()
+    .await
+    .map_err(|error| RommQueryError::Failed(error.into()))?;
+    if !response.status().is_success() {
+        return Err(romm_status_error(response.status()));
+    }
+    Ok(favorite)
+}
+
+/// Creates the collection RomM treats as this user's favorites.
+async fn romm_create_favorite_collection(
+    credentials: &RommCredentials,
+) -> std::result::Result<RommCollection, RommQueryError> {
+    // FastAPI reads `is_favorite` from the query string and the collection's
+    // fields from the form body, so the flag stays out of the form.
+    let response = romm_request(
+        credentials,
+        reqwest::Method::POST,
+        "/api/collections?is_favorite=true",
+    )
+    .form(&[("name", FAVORITE_COLLECTION_NAME), ("description", "")])
+    .send()
+    .await
+    .map_err(|error| RommQueryError::Failed(error.into()))?;
+    if !response.status().is_success() {
+        return Err(romm_status_error(response.status()));
+    }
+    response
+        .json::<RommCollection>()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))
+}
+
+/// Sets RomM's per-user "play later" flag for one game, returning the new
+/// state. One call: RomM stores it as a field of the user's row for the game.
+pub async fn romm_set_backlogged(
+    settings: &SettingsRepository,
+    rom_id: i64,
+    backlogged: bool,
+) -> std::result::Result<bool, RommQueryError> {
+    let credentials = romm_credentials(settings).await?;
+    let response = romm_request(
+        &credentials,
+        reqwest::Method::PUT,
+        &format!("/api/roms/{rom_id}/props"),
+    )
+    .json(&serde_json::json!({ "backlogged": backlogged }))
+    .send()
+    .await
+    .map_err(|error| RommQueryError::Failed(error.into()))?;
+    if !response.status().is_success() {
+        return Err(romm_status_error(response.status()));
+    }
+    Ok(backlogged)
 }
 
 /// Downloads a ROM into a temporary cache file ahead of a RetroArch launch.
@@ -984,6 +1188,37 @@ fn truncate_and_redact(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn romm_user_state_and_collections_parse_from_romm_shapes() {
+        // Field names and nesting only; the values come from a real RomM
+        // response, so a rename upstream fails here rather than silently
+        // reading every game as unfavorited and un-backlogged.
+        let user: super::RommRomUser = serde_json::from_str(
+            r#"{"id": -1, "backlogged": true, "now_playing": false, "hidden": false, "is_main_sibling": false, "last_played": null}"#,
+        )
+        .expect("rom_user parses");
+        assert!(user.backlogged);
+
+        // A user with no row on the game gets RomM's all-default stub, which
+        // must still parse rather than failing the whole detail read.
+        let stub: super::RommRomUser = serde_json::from_str(r#"{"id": -1}"#).expect("stub parses");
+        assert!(!stub.backlogged);
+
+        let collections: Vec<super::RommCollection> = serde_json::from_str(
+            r#"[
+                {"id": 1, "name": "Favorites", "is_favorite": true, "rom_ids": [4014, 4015], "rom_count": 2},
+                {"id": 2, "name": "RPGs", "is_favorite": false, "rom_ids": []}
+            ]"#,
+        )
+        .expect("collections parse");
+        let favorite = collections
+            .iter()
+            .find(|collection| collection.is_favorite)
+            .expect("a favorite collection");
+        assert_eq!(favorite.id, 1);
+        assert_eq!(favorite.rom_ids, vec![4014, 4015]);
+    }
+
     #[test]
     fn romm_release_dates_normalise_milliseconds_and_seconds() {
         use crate::diagnostics::RommGameMetadata;

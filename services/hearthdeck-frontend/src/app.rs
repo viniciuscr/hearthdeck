@@ -67,7 +67,9 @@ use cosmic::{
         button::{self},
         divider,
         dnd_destination::dnd_destination_for_data,
-        icon, scrollable, space, svg, text, text_input,
+        icon, list,
+        list::list_column,
+        scrollable, space, svg, text, text_input,
         toaster::{self, Toast, ToastId, Toasts},
         tooltip,
     },
@@ -88,15 +90,17 @@ use crate::providers::daemon::{
     RetroDetails, RetroGameDetails, RetroRomVersion, retro_rom_versions, retro_version_label,
 };
 use crate::style::{
-    DASHBOARD_RAIL_TILES, DETAILS_FACT_LABEL_WIDTH, DETAILS_HERO_RASTER, DETAILS_SHOT_ASPECT,
-    DETAILS_SHOT_RASTER, DETAILS_SHOT_SIZE, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
-    EDIT_NAME_INPUT_WIDTH, GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL,
-    ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION, SEARCH_WIDTH,
-    SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER,
-    TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, artwork_fit, card_surface,
-    content_horizontal_padding, dashboard_console_tile_size, dashboard_nav_button_class,
-    dashboard_tile_size, details_hero_width, filter_button_height, grid_gap, grid_top_padding,
-    launch_overlay, root_background, search_icon_padding, section_button_class,
+    DASHBOARD_RAIL_TILES, DETAILS_FACT_LABEL_WIDTH, DETAILS_HERO_RASTER, DETAILS_PICKER_WIDTH,
+    DETAILS_SHOT_ASPECT, DETAILS_SHOT_RASTER, DETAILS_SHOT_SIZE, DIALOG_ACTION_WIDTH, DIALOG_WIDTH,
+    DIVIDER_WIDTH, EDIT_NAME_INPUT_WIDTH, GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH,
+    ICON_SMALL, ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION,
+    SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY, TEXT_CAPTION,
+    TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, artwork_fit,
+    backdrop_scrim, backdrop_wash, card_surface, content_horizontal_padding,
+    dashboard_console_tile_size, dashboard_nav_button_class, dashboard_tile_size,
+    details_action_height, details_hero_width, details_play_height, details_toggle_button_class,
+    filter_button_height, grid_gap, grid_top_padding, hero_card, launch_overlay, modal_scrim,
+    primary_action_button_class, root_background, search_icon_padding, section_button_class,
     sidebar_accent_bar_height, sidebar_divider, sidebar_header_height, sidebar_item_height,
     sidebar_width, tab_button_class, tab_height, tab_underline_height, tab_width, tile_height,
     tile_width, title_action_height,
@@ -710,17 +714,47 @@ impl DashboardShelf {
 
 /// Which control the details screen's controller cursor is on.
 ///
-/// The screen is a small, fixed set of rows rather than a free grid: the header
-/// actions, then one entry per version, then one per screenshot. Movement is
-/// derived from this value, not from iced's focus state, so Confirm always acts
-/// on the highlighted row even if the renderer has not reported focus yet.
+/// The screen is a small, fixed set of rows rather than a free grid: the action
+/// line along the bottom, and the screenshot strip above it. Movement is derived
+/// from this value, not from iced's focus state, so Confirm always acts on the
+/// highlighted control even if the renderer has not reported focus yet.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum DetailsFocus {
     #[default]
     Play,
+    Favorite,
+    /// Opens the disc picker. Only present for a game RomM collapsed out of
+    /// several files.
+    Disc,
+    PlayLater,
+    /// Leaves the screen. Sits in the action line so that line holds every
+    /// control the screen has, instead of a lone back button elsewhere.
     Back,
-    Version(usize),
+    /// One of the game's screenshots, which becomes the backdrop image when
+    /// picked.
     Screenshot(usize),
+    /// One row of the disc picker, whose rows replace the page's while it is
+    /// open.
+    DiscChoice(usize),
+}
+
+/// The details screen's action line, left to right. Disc selection only exists
+/// for a game with more than one file.
+fn details_actions(has_discs: bool) -> &'static [DetailsFocus] {
+    const MULTI_FILE: &[DetailsFocus] = &[
+        DetailsFocus::Back,
+        DetailsFocus::Play,
+        DetailsFocus::Favorite,
+        DetailsFocus::Disc,
+        DetailsFocus::PlayLater,
+    ];
+    const SINGLE_FILE: &[DetailsFocus] = &[
+        DetailsFocus::Back,
+        DetailsFocus::Play,
+        DetailsFocus::Favorite,
+        DetailsFocus::PlayLater,
+    ];
+    if has_discs { MULTI_FILE } else { SINGLE_FILE }
 }
 
 /// Widget id for a details-screen focus target. Stable for the page's lifetime,
@@ -729,10 +763,20 @@ enum DetailsFocus {
 fn details_focus_id(focus: DetailsFocus) -> Id {
     match focus {
         DetailsFocus::Play => Id::new("details-play"),
+        DetailsFocus::Favorite => Id::new("details-favorite"),
+        DetailsFocus::Disc => Id::new("details-disc"),
+        DetailsFocus::PlayLater => Id::new("details-play-later"),
         DetailsFocus::Back => Id::new("details-back"),
-        DetailsFocus::Version(index) => Id::new(format!("details-version-{index}")),
         DetailsFocus::Screenshot(index) => Id::new(format!("details-screenshot-{index}")),
+        DetailsFocus::DiscChoice(index) => Id::new(format!("details-disc-{index}")),
     }
+}
+
+/// Which RomM per-user flag a write answer settles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DetailsStateKind {
+    Favorite,
+    Backlog,
 }
 
 /// State of the console-game details screen.
@@ -742,7 +786,9 @@ fn details_focus_id(focus: DetailsFocus) -> Id {
 /// the daemon's per-game read. `info` staying `None` is a normal, temporary
 /// state: the seed alone is a complete screen for the fields it carries.
 struct Details {
-    /// RomM id of the game being shown, and of the version Play launches.
+    /// RomM id of the file being shown: the game's representative, or the disc
+    /// the user picked from the picker. Everything the buttons act on — launch,
+    /// favorite, play later — is scoped to this id.
     rom_id: i64,
     title: String,
     /// Cover handle recycled from the grid tile, shown until (or instead of) a
@@ -757,6 +803,17 @@ struct Details {
     /// Every version of the game, the one Play targets first. Only populated
     /// for games RomM collapsed from several files; empty means single-file.
     versions: Vec<RetroRomVersion>,
+    /// Whether the game is in the user's RomM favorites. `None` means the screen
+    /// does not know yet (nothing has been read or written for this file), which
+    /// the buttons treat as "off" and a press turns into "add".
+    favorite: Option<bool>,
+    /// RomM's per-user "play later" flag, same unknown-state handling.
+    backlogged: Option<bool>,
+    /// A favorite or play-later write is in flight: stops a second press from
+    /// racing the first.
+    state_pending: bool,
+    /// The disc picker overlay is open.
+    disc_picker: bool,
     /// The daemon's detail read. `None` while it is still in flight.
     info: Option<RetroGameDetails>,
     /// Failure text from that read, shown in place of the detail rows.
@@ -769,8 +826,9 @@ struct Details {
 }
 
 impl Details {
-    /// Artwork for the hero box: the screenshot the user picked, otherwise the
-    /// large cover, otherwise the grid tile's own cover.
+    /// Artwork the screen leads with: the screenshot the user picked, otherwise
+    /// the large cover, otherwise the grid tile's own cover. Used for both the
+    /// full-bleed backdrop and the card over it.
     fn hero(&self) -> Option<&icon::Handle> {
         if let Some(index) = self.hero_shot
             && let Some(shot) = self.screenshots.get(index)
@@ -814,6 +872,12 @@ impl Details {
             chips.push(fl!("players-value", count = players));
         }
         chips.extend(info.age_ratings.iter().cloned());
+        // Which file Play launches, when the game has more than one: the disc
+        // picker sets it, and without it named here the choice would be
+        // invisible on the screen itself.
+        if let Some(label) = self.current_version_label() {
+            chips.push(label.to_owned());
+        }
         chips
     }
 
@@ -891,6 +955,27 @@ enum Message {
     CloseDetails,
     /// Show one of the game's screenshots as the details screen's hero image.
     DetailsSelectScreenshot(usize),
+    /// Add or remove the current game from the user's RomM favorites.
+    DetailsToggleFavorite,
+    /// Set or clear RomM's "play later" flag for the current game.
+    DetailsToggleBacklog,
+    /// Open or close the disc picker.
+    DetailsToggleDiscPicker,
+    /// Point the details screen at another file of the same game, by RomM id.
+    DetailsSelectDisc(i64),
+    /// Answer to a favorite write. Carries the state to fall back to, so a
+    /// failed write does not leave the button claiming it worked.
+    DetailsFavorite {
+        rom_id: i64,
+        previous: Option<bool>,
+        result: Result<bool, String>,
+    },
+    /// Answer to a play-later write, as above.
+    DetailsBacklog {
+        rom_id: i64,
+        previous: Option<bool>,
+        result: Result<bool, String>,
+    },
     Close,
     ActivateApp(usize),
     ActivateDashboardApp(String),
@@ -1745,6 +1830,10 @@ impl HearthDeck {
             screenshots: Vec::new(),
             hero_shot: None,
             versions,
+            favorite: None,
+            backlogged: None,
+            state_pending: false,
+            disc_picker: false,
             info: None,
             error: None,
             focus: DetailsFocus::Play,
@@ -1786,6 +1875,161 @@ impl HearthDeck {
         iced::Task::batch(tasks)
     }
 
+    /// Adds or removes the current game from RomM's favorites.
+    ///
+    /// Applied locally first so the button answers the press, then settled by
+    /// the write's answer; a failure puts the previous state back and says so,
+    /// rather than leaving the button claiming something RomM never stored.
+    fn toggle_details_favorite(&mut self) -> Task<Message> {
+        let Some(details) = self.details.as_mut() else {
+            return Task::none();
+        };
+        if details.state_pending {
+            return Task::none();
+        }
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        let rom_id = details.rom_id;
+        let previous = details.favorite;
+        let favorite = !previous.unwrap_or(false);
+        details.favorite = Some(favorite);
+        details.state_pending = true;
+        Task::perform(
+            async move {
+                client
+                    .set_retro_favorite(rom_id, favorite)
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            move |result| {
+                cosmic::Action::App(Message::DetailsFavorite {
+                    rom_id,
+                    previous,
+                    result,
+                })
+            },
+        )
+    }
+
+    /// Sets or clears RomM's "play later" flag for the current game, with the
+    /// same optimistic-then-settle handling as favorites.
+    fn toggle_details_backlog(&mut self) -> Task<Message> {
+        let Some(details) = self.details.as_mut() else {
+            return Task::none();
+        };
+        if details.state_pending {
+            return Task::none();
+        }
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        let rom_id = details.rom_id;
+        let previous = details.backlogged;
+        let backlogged = !previous.unwrap_or(false);
+        details.backlogged = Some(backlogged);
+        details.state_pending = true;
+        Task::perform(
+            async move {
+                client
+                    .set_retro_backlogged(rom_id, backlogged)
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            move |result| {
+                cosmic::Action::App(Message::DetailsBacklog {
+                    rom_id,
+                    previous,
+                    result,
+                })
+            },
+        )
+    }
+
+    /// Settles an optimistic favorite or play-later write: the daemon's answer
+    /// becomes the shown state, or the state it replaced when the write failed,
+    /// plus an alert saying why.
+    fn settle_details_state(
+        &mut self,
+        rom_id: i64,
+        previous: Option<bool>,
+        result: Result<bool, String>,
+        kind: DetailsStateKind,
+    ) -> Task<Message> {
+        // An answer for a game the user has moved past is dropped: it no longer
+        // describes what is on screen.
+        let Some(details) = self
+            .details
+            .as_mut()
+            .filter(|details| details.rom_id == rom_id)
+        else {
+            return Task::none();
+        };
+        details.state_pending = false;
+        let slot = match kind {
+            DetailsStateKind::Favorite => &mut details.favorite,
+            DetailsStateKind::Backlog => &mut details.backlogged,
+        };
+        match result {
+            Ok(state) => {
+                *slot = Some(state);
+                Task::none()
+            }
+            Err(error) => {
+                *slot = previous;
+                let message = fl!("retro-state-failed", reason = error);
+                self.push_alert(message, false)
+            }
+        }
+    }
+
+    /// Opens the disc picker, or closes it when it is already open.
+    fn toggle_details_disc_picker(&mut self) -> Task<Message> {
+        let Some(details) = self.details.as_ref() else {
+            return Task::none();
+        };
+        if details.versions.len() < 2 {
+            return Task::none();
+        }
+        let opening = !details.disc_picker;
+        let cursor = if opening {
+            // Start on the disc Play already launches.
+            details
+                .versions
+                .iter()
+                .position(|version| version.id == details.rom_id)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        if let Some(details) = self.details.as_mut() {
+            details.disc_picker = opening;
+        }
+        if opening {
+            return self.focus_details(DetailsFocus::DiscChoice(cursor));
+        }
+        self.focus_details(DetailsFocus::Disc)
+    }
+
+    /// Points the screen at another file of the same game. Play, favorite and
+    /// play later then apply to that file, which is how RomM models them: one
+    /// `rom_user` row and one collection membership per file.
+    ///
+    /// The file's own user state is unknown until it is read, so it is cleared
+    /// rather than inherited from the file the user came from.
+    fn select_details_disc(&mut self, rom_id: i64) -> Task<Message> {
+        let Some(details) = self.details.as_mut() else {
+            return Task::none();
+        };
+        details.disc_picker = false;
+        if details.rom_id != rom_id {
+            details.rom_id = rom_id;
+            details.favorite = None;
+            details.backlogged = None;
+        }
+        self.focus_details(DetailsFocus::Play)
+    }
+
     /// Moves the details screen's cursor and gives the matching widget the real
     /// keyboard focus, which is what draws the shared accent ring. The cursor
     /// itself is [`Details`]'s `focus`, so Confirm never depends on iced having
@@ -1800,21 +2044,24 @@ impl HearthDeck {
             .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id))))
     }
 
-    /// The details screen's focus rows, top to bottom: the header actions, then
-    /// one entry per version, then one per screenshot. A row that would be
-    /// empty is left out, so D-pad movement never lands on nothing.
+    /// The details screen's focus rows, top to bottom: the screenshot strip,
+    /// then the action line. A row that would be empty is left out, so D-pad
+    /// movement never lands on nothing.
+    ///
+    /// The open disc picker replaces the rows entirely: it covers the page, so
+    /// an open picker must not leave the cursor on a control behind it.
     fn details_rows(&self) -> Vec<Vec<DetailsFocus>> {
         let Some(details) = self.details.as_ref() else {
             return Vec::new();
         };
-        let mut rows = vec![vec![DetailsFocus::Back, DetailsFocus::Play]];
-        if !details.versions.is_empty() {
-            rows.push(
+        if details.disc_picker {
+            return vec![
                 (0..details.versions.len())
-                    .map(DetailsFocus::Version)
+                    .map(DetailsFocus::DiscChoice)
                     .collect(),
-            );
+            ];
         }
+        let mut rows = Vec::new();
         if !details.screenshots.is_empty() {
             rows.push(
                 (0..details.screenshots.len())
@@ -1822,20 +2069,23 @@ impl HearthDeck {
                     .collect(),
             );
         }
+        rows.push(details_actions(details.versions.len() > 1).to_vec());
         rows
     }
 
-    /// The details cursor, corrected to Play when the row it pointed at is gone
-    /// (screenshots that failed to download, or a page rebuilt without
-    /// versions). Without this the D-pad would have nothing left to move.
+    /// The details cursor, corrected when the row it pointed at is gone: Play
+    /// if it is still there, otherwise the first control that exists. Without
+    /// this the D-pad would have nothing left to move onto.
     fn details_cursor(&self) -> Option<DetailsFocus> {
         let details = self.details.as_ref()?;
         let rows = self.details_rows();
-        Some(if rows.iter().any(|row| row.contains(&details.focus)) {
-            details.focus
-        } else {
-            DetailsFocus::Play
-        })
+        if rows.iter().any(|row| row.contains(&details.focus)) {
+            return Some(details.focus);
+        }
+        if rows.iter().any(|row| row.contains(&DetailsFocus::Play)) {
+            return Some(DetailsFocus::Play);
+        }
+        rows.first()?.first().copied()
     }
 
     fn details_horizontal_target(&self, delta: i32) -> Option<DetailsFocus> {
@@ -1869,6 +2119,9 @@ impl HearthDeck {
         };
         match focus {
             DetailsFocus::Back => self.update(Message::CloseDetails),
+            DetailsFocus::Favorite => self.update(Message::DetailsToggleFavorite),
+            DetailsFocus::PlayLater => self.update(Message::DetailsToggleBacklog),
+            DetailsFocus::Disc => self.update(Message::DetailsToggleDiscPicker),
             DetailsFocus::Play => {
                 let Some((rom_id, title)) = self
                     .details
@@ -1879,24 +2132,22 @@ impl HearthDeck {
                 };
                 self.update(Message::ActivateRomVariant { rom_id, title })
             }
-            DetailsFocus::Version(index) => {
-                let Some(version) = self
-                    .details
-                    .as_ref()
-                    .and_then(|details| details.versions.get(index).cloned())
-                else {
-                    return Task::none();
-                };
-                self.update(Message::ActivateRomVariant {
-                    rom_id: version.id,
-                    title: version.title,
-                })
-            }
             DetailsFocus::Screenshot(index) => {
                 if let Some(details) = self.details.as_mut() {
                     details.hero_shot = Some(index);
                 }
                 Task::none()
+            }
+            DetailsFocus::DiscChoice(index) => {
+                let Some(rom_id) = self
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.versions.get(index))
+                    .map(|version| version.id)
+                else {
+                    return Task::none();
+                };
+                self.update(Message::DetailsSelectDisc(rom_id))
             }
         }
     }
@@ -2294,9 +2545,16 @@ impl HearthDeck {
         if self.launch_state.is_visible() {
             return Task::none();
         }
-        // Back is the global "leave this surface" contract: on the details
-        // screen it returns to the grid, matching Escape and `Message::Close`.
+        // Back is the global "leave this surface" contract. The disc picker is
+        // a surface of its own: it closes first, then the screen itself.
         if self.page == Page::Details {
+            if self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.disc_picker)
+            {
+                return self.update(Message::DetailsToggleDiscPicker);
+            }
             return self.update(Message::CloseDetails);
         }
         if self.menu.is_some() {
@@ -3013,6 +3271,42 @@ impl cosmic::Application for HearthDeck {
             Message::CloseDetails => {
                 return self.close_details();
             }
+            Message::DetailsToggleFavorite => {
+                return self.toggle_details_favorite();
+            }
+            Message::DetailsToggleBacklog => {
+                return self.toggle_details_backlog();
+            }
+            Message::DetailsToggleDiscPicker => {
+                return self.toggle_details_disc_picker();
+            }
+            Message::DetailsSelectDisc(rom_id) => {
+                return self.select_details_disc(rom_id);
+            }
+            Message::DetailsFavorite {
+                rom_id,
+                previous,
+                result,
+            } => {
+                return self.settle_details_state(
+                    rom_id,
+                    previous,
+                    result,
+                    DetailsStateKind::Favorite,
+                );
+            }
+            Message::DetailsBacklog {
+                rom_id,
+                previous,
+                result,
+            } => {
+                return self.settle_details_state(
+                    rom_id,
+                    previous,
+                    result,
+                    DetailsStateKind::Backlog,
+                );
+            }
             Message::DetailsSelectScreenshot(index) => {
                 if let Some(details) = self.details.as_mut() {
                     details.hero_shot = Some(index);
@@ -3042,6 +3336,9 @@ impl cosmic::Application for HearthDeck {
                             .iter()
                             .map(|path| details_handle(path, DETAILS_SHOT_RASTER))
                             .collect();
+                        // RomM's per-user state for this file, now known.
+                        details.favorite = Some(loaded.info.favorite);
+                        details.backlogged = Some(loaded.info.backlogged);
                         details.info = Some(loaded.info);
                     }
                     Err(error) => {
@@ -3077,6 +3374,15 @@ impl cosmic::Application for HearthDeck {
                     return Task::none();
                 }
                 if self.page == Page::Details {
+                    // Escape closes the disc picker before it leaves the screen,
+                    // matching the gamepad's Back.
+                    if self
+                        .details
+                        .as_ref()
+                        .is_some_and(|details| details.disc_picker)
+                    {
+                        return self.update(Message::DetailsToggleDiscPicker);
+                    }
                     return self.update(Message::CloseDetails);
                 }
                 if self.page == Page::Library {
@@ -4477,6 +4783,7 @@ impl HearthDeck {
             space_s,
             space_m,
             space_l,
+            space_xl,
             ..
         } = theme::spacing();
         let Some(details) = self.details.as_ref() else {
@@ -4487,7 +4794,29 @@ impl HearthDeck {
         // the highlight back to Play instead of highlighting nothing.
         let cursor = self.details_cursor().unwrap_or_default();
 
-        let hero: Element<'_, Message> = match details.hero() {
+        // ---- Backdrop: the art the screen is currently showing, washed so text
+        // over it stays readable and scrimmed so the action line sits on a solid
+        // surface. One image, reused by the hero card below. ----
+        let art = details.hero();
+        let backdrop: Element<'_, Message> = match art {
+            Some(handle) => artwork_fit(handle, ContentFit::Cover, Length::Fill, Length::Fill),
+            None => container(space::horizontal())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+        };
+        let wash: Element<'_, Message> = container(space::horizontal())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .class(theme::Container::Custom(Box::new(backdrop_wash)))
+            .into();
+        let scrim: Element<'_, Message> = container(space::horizontal())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .class(theme::Container::Custom(Box::new(backdrop_scrim)))
+            .into();
+
+        let hero: Element<'_, Message> = match art {
             Some(handle) => artwork_fit(handle, ContentFit::Contain, Length::Fill, Length::Fill),
             None => container(
                 icon::icon(icon::from_name("applications-games-symbolic").into()).size(ICON_LARGE),
@@ -4498,52 +4827,100 @@ impl HearthDeck {
             .align_y(Vertical::Center)
             .into(),
         };
-        let hero_box = container(hero)
+        let art_card = container(hero)
             .width(Length::Fixed(details_hero_width(self.window_width)))
             .height(Length::Fill)
             .padding(space_s)
-            .class(theme::Container::Custom(Box::new(card_surface)));
+            .class(theme::Container::Custom(Box::new(hero_card)));
 
-        let back = button::custom(
-            row![
-                icon::icon(icon::from_name("go-previous-symbolic").into()).size(ICON_BODY),
-                text::body(fl!("back")).size(TEXT_BODY),
-            ]
-            .spacing(space_s)
-            .align_y(Alignment::Center),
-        )
-        .id(details_focus_id(DetailsFocus::Back))
-        .height(Length::Fixed(title_action_height()))
-        .padding([space_xxs, space_m])
-        .class(section_button_class(cursor == DetailsFocus::Back))
-        .on_press(Message::CloseDetails);
-
-        let mut play_row = row![
+        // ---- Action line: every interaction the screen has, in one place ----
+        // One builder for the secondary buttons so they cannot drift apart; Play
+        // is built separately because it leads the line.
+        let action_button = |focus: DetailsFocus,
+                             icon_name: &'static str,
+                             label: String,
+                             active: bool,
+                             message: Message|
+         -> Element<'_, Message> {
             button::custom(
                 row![
-                    icon::icon(icon::from_name("media-playback-start-symbolic").into())
-                        .size(ICON_BODY),
-                    text::body(fl!("play")).size(TEXT_LARGE),
+                    icon::icon(icon::from_name(icon_name).size(ICON_BODY).into()),
+                    text::body(label).size(TEXT_LARGE),
                 ]
                 .spacing(space_s)
                 .align_y(Alignment::Center),
             )
-            .id(details_focus_id(DetailsFocus::Play))
-            .height(Length::Fixed(title_action_height()))
-            .padding([space_xxs, space_l])
-            // `selected` here is the permanent emphasis rather than a cursor:
-            // Play is the screen's primary action whether or not it is focused.
-            .class(section_button_class(true))
-            .on_press(Message::ActivateRomVariant {
-                rom_id: details.rom_id,
-                title: details.title.clone(),
-            }),
+            .id(details_focus_id(focus))
+            .height(Length::Fixed(details_action_height()))
+            .padding([space_xs, space_l])
+            .class(details_toggle_button_class(active))
+            .on_press(message)
+            .into()
+        };
+        let favorite_icon = if details.favorite.unwrap_or(false) {
+            "starred-symbolic"
+        } else {
+            "non-starred-symbolic"
+        };
+
+        let play: Element<'_, Message> = button::custom(
+            row![
+                icon::icon(
+                    icon::from_name("media-playback-start-symbolic")
+                        .size(ICON_LARGE)
+                        .into()
+                ),
+                text::body(fl!("play")).size(TEXT_HEADER),
+            ]
+            .spacing(space_s)
+            .align_y(Alignment::Center),
+        )
+        .id(details_focus_id(DetailsFocus::Play))
+        .height(Length::Fixed(details_play_height()))
+        .padding([space_xs, space_xl])
+        .class(primary_action_button_class())
+        .on_press(Message::ActivateRomVariant {
+            rom_id: details.rom_id,
+            title: details.title.clone(),
+        })
+        .into();
+
+        let show_disc = details.versions.len() > 1;
+        let mut action_line = row![
+            action_button(
+                DetailsFocus::Back,
+                "go-previous-symbolic",
+                fl!("back"),
+                false,
+                Message::CloseDetails,
+            ),
+            play,
+            action_button(
+                DetailsFocus::Favorite,
+                favorite_icon,
+                fl!("favorite"),
+                details.favorite.unwrap_or(false),
+                Message::DetailsToggleFavorite,
+            ),
         ]
         .spacing(space_m)
         .align_y(Alignment::Center);
-        if let Some(label) = details.current_version_label() {
-            play_row = play_row.push(text::caption(label).size(TEXT_CAPTION));
+        if show_disc {
+            action_line = action_line.push(action_button(
+                DetailsFocus::Disc,
+                "media-optical-symbolic",
+                fl!("disc"),
+                details.disc_picker,
+                Message::DetailsToggleDiscPicker,
+            ));
         }
+        action_line = action_line.push(action_button(
+            DetailsFocus::PlayLater,
+            "alarm-symbolic",
+            fl!("play-later"),
+            details.backlogged.unwrap_or(false),
+            Message::DetailsToggleBacklog,
+        ));
 
         let chips: Element<'_, Message> = row(details
             .chips()
@@ -4559,46 +4936,54 @@ impl HearthDeck {
         .align_y(Alignment::Center)
         .into();
 
-        // Only worth showing when RomM collapsed several files into this game;
-        // the checked entry is the one Play launches.
-        let versions: Option<Element<'_, Message>> = (details.versions.len() > 1).then(|| {
-            let buttons: Vec<Element<'_, Message>> = details
-                .versions
-                .iter()
-                .enumerate()
-                .map(|(index, version)| {
-                    let is_current = version.id == details.rom_id;
-                    let icon_name = if is_current {
-                        "checkbox-checked-symbolic"
-                    } else {
-                        "media-optical-symbolic"
-                    };
-                    button::custom(
+        // The disc picker: a panel over the page, using the native list look so
+        // the highlighted disc reads the same way as any other COSMIC list.
+        let disc_picker: Element<'_, Message> = {
+            let mut rows = list_column::<Message>();
+            for (index, version) in details.versions.iter().enumerate() {
+                let is_current = version.id == details.rom_id;
+                let icon_name = if is_current {
+                    "checkbox-checked-symbolic"
+                } else {
+                    "media-optical-symbolic"
+                };
+                rows = rows.add(
+                    list::button(
                         row![
                             icon::icon(icon::from_name(icon_name).size(ICON_SMALL).into()),
                             text::body(version.title.clone()).size(TEXT_BODY),
                         ]
-                        .spacing(space_xxs)
+                        .spacing(space_s)
                         .align_y(Alignment::Center),
                     )
-                    .id(details_focus_id(DetailsFocus::Version(index)))
-                    .height(Length::Fixed(title_action_height()))
-                    .padding([space_xxs, space_m])
-                    .class(section_button_class(is_current))
-                    .on_press(Message::ActivateRomVariant {
-                        rom_id: version.id,
-                        title: version.title.clone(),
-                    })
-                    .into()
-                })
-                .collect();
-            column![
-                text::caption(fl!("versions")).size(TEXT_CAPTION),
-                row(buttons).spacing(space_xs).align_y(Alignment::Center),
-            ]
-            .spacing(space_xxs)
+                    .on_press(Message::DetailsSelectDisc(version.id))
+                    .selected(cursor == DetailsFocus::DiscChoice(index)),
+                );
+            }
+
+            container(
+                container(
+                    column![
+                        text::title3(fl!("disc-selection")).size(TEXT_HEADER),
+                        autosize(
+                            container(scrollable(rows.into_element())).padding(1),
+                            Id::new("details-disc-autosize"),
+                        )
+                        .max_height(MENU_MAX_HEIGHT),
+                    ]
+                    .spacing(space_m),
+                )
+                .width(Length::Fixed(DETAILS_PICKER_WIDTH))
+                .padding(space_m)
+                .class(theme::Container::Custom(Box::new(card_surface))),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .class(theme::Container::Custom(Box::new(modal_scrim)))
             .into()
-        });
+        };
 
         let fact_rows: Vec<Element<'_, Message>> = details
             .facts()
@@ -4650,10 +5035,6 @@ impl HearthDeck {
                 .align_y(Alignment::Center),
             );
         }
-        right = right.push(play_row);
-        if let Some(versions) = versions {
-            right = right.push(versions);
-        }
         right = right.push(column(fact_rows).spacing(space_xs));
         right = right.push(summary);
 
@@ -4688,24 +5069,36 @@ impl HearthDeck {
             .into()
         };
 
-        let body = row![hero_box, right]
-            .spacing(space_l)
+        // Scrolls on its own: a long summary or a long fact list must never
+        // push the action line off the bottom of the screen.
+        let info = scrollable(right)
+            .height(Length::Fill)
+            .scrollbar_width(0)
+            .scroller_width(0);
+        let body = row![art_card, info]
+            .spacing(space_xl)
             .height(Length::Fill)
             .width(Length::Fill);
-        let content = column![
-            row![back, space::horizontal().width(Length::Fill)].align_y(Alignment::Center),
+        let page = column![
             body,
             shots,
+            container(action_line)
+                .width(Length::Fill)
+                .align_x(Horizontal::Center),
         ]
         .spacing(space_m)
         .padding(space_l)
         .height(Length::Fill)
         .width(Length::Fill);
 
-        container(content)
+        let mut layers: Vec<Element<'_, Message>> = vec![backdrop, wash, scrim, page.into()];
+        if details.disc_picker {
+            layers.push(disc_picker);
+        }
+
+        container(cosmic::iced::widget::stack(layers))
             .width(Length::Fill)
             .height(Length::Fill)
-            .class(theme::Container::Custom(Box::new(root_background)))
             .into()
     }
 
@@ -4778,10 +5171,17 @@ impl HearthDeck {
         // ===== Sidebar: fixed section navigation =====
         let build_section_button = |section: crate::app_group::Section| {
             let is_active = self.cur_section == section;
-            let inner = container(text(section.name()).size(TEXT_LARGE))
-                .align_y(Vertical::Center)
-                .width(Length::Fill)
-                .padding([space_none, space_l]);
+            let inner = container(
+                row![
+                    icon::icon(icon::from_name(section.icon_name()).into()).size(ICON_BODY),
+                    text(section.name()).size(TEXT_LARGE),
+                ]
+                .spacing(space_m)
+                .align_y(Alignment::Center),
+            )
+            .align_y(Vertical::Center)
+            .width(Length::Fill)
+            .padding([space_none, space_l]);
 
             let content = if is_active {
                 row![
@@ -4871,16 +5271,33 @@ impl HearthDeck {
             .align_y(Vertical::Center)
             .into()
         } else {
-            container(
-                text(if self.cur_group.is_some() {
-                    cur_group.name()
-                } else {
-                    cur_section.name()
-                })
-                .size(TEXT_TITLE),
-            )
-            .align_y(Vertical::Center)
-            .into()
+            let label = if self.cur_group.is_some() {
+                cur_group.name()
+            } else {
+                cur_section.name()
+            };
+            // A console tab shows its own logo beside the name, so the header
+            // says which platform the grid belongs to without reading the tab.
+            let logo = cur_group
+                .romm_platform_id()
+                .and_then(|platform_id| self.romm_platform_icons.get(&platform_id))
+                .map(|path| {
+                    crate::icon_cache::entry_icon_handle(
+                        &IconSource::Path(PathBuf::from(path)),
+                        u32::from(ICON_LARGE),
+                    )
+                });
+            let heading: Element<'_, Message> = match logo {
+                Some(handle) => row![
+                    icon::icon(handle).size(ICON_LARGE),
+                    text(label).size(TEXT_TITLE),
+                ]
+                .spacing(space_s)
+                .align_y(Alignment::Center)
+                .into(),
+                None => row![text(label).size(TEXT_TITLE)].into(),
+            };
+            container(heading).align_y(Vertical::Center).into()
         };
 
         let title_actions: Element<'_, Message> = if self.cur_group.is_some() {
@@ -6182,6 +6599,10 @@ mod tests {
                     .collect(),
                 info: None,
                 error: None,
+                favorite: None,
+                backlogged: None,
+                state_pending: false,
+                disc_picker: false,
                 focus: super::DetailsFocus::Play,
                 origin_index: 0,
             }),
@@ -6280,32 +6701,49 @@ mod tests {
             let _ = <HearthDeck as cosmic::Application>::update(app, message);
         };
 
+        // Rows are the screenshot strip, then the action line
+        // [Back, Play, Favorite, Disc, Play later].
         assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Play));
-        // Rows are [Back, Play], [Disc 1, Disc 2], [shot 1, shot 2].
         move_once(&mut app, super::Message::NextCol);
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Favorite));
+        move_once(&mut app, super::Message::PrevCol);
         assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Play));
         move_once(&mut app, super::Message::PrevCol);
         assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Back));
-        // Clamped at the row's start: no wrapping onto Play.
+        // Clamped at the row's start: no wrapping onto Play later.
         move_once(&mut app, super::Message::PrevCol);
         assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Back));
+        // The action line is the last row: nothing below it.
         move_once(&mut app, super::Message::NextRow);
-        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Version(0)));
-        move_once(&mut app, super::Message::NextCol);
-        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Version(1)));
-        move_once(&mut app, super::Message::NextRow);
-        assert_eq!(
-            app.details_cursor(),
-            Some(super::DetailsFocus::Screenshot(1))
-        );
-        // No row below the strip.
-        move_once(&mut app, super::Message::NextRow);
-        assert_eq!(
-            app.details_cursor(),
-            Some(super::DetailsFocus::Screenshot(1))
-        );
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Back));
         move_once(&mut app, super::Message::PrevRow);
-        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Version(1)));
+        assert_eq!(
+            app.details_cursor(),
+            Some(super::DetailsFocus::Screenshot(0))
+        );
+        move_once(&mut app, super::Message::NextCol);
+        assert_eq!(
+            app.details_cursor(),
+            Some(super::DetailsFocus::Screenshot(1))
+        );
+        // Down from the strip lands on the action line, keeping its column.
+        move_once(&mut app, super::Message::NextRow);
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Play));
+    }
+
+    #[test]
+    fn details_action_line_drops_disc_selection_for_single_file_games() {
+        let app = details_app(0, 0);
+
+        assert_eq!(
+            app.details_rows(),
+            vec![vec![
+                super::DetailsFocus::Back,
+                super::DetailsFocus::Play,
+                super::DetailsFocus::Favorite,
+                super::DetailsFocus::PlayLater,
+            ]]
+        );
     }
 
     #[test]
@@ -6317,8 +6755,147 @@ mod tests {
         app.details.as_mut().unwrap().screenshots.clear();
 
         assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Play));
-        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextCol);
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Favorite));
+    }
+
+    #[test]
+    fn an_open_disc_picker_replaces_the_pages_rows() {
+        let mut app = details_app(2, 1);
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::DetailsToggleDiscPicker,
+        );
+
+        // The picker covers the page, so it owns the rows: the cursor starts on
+        // the disc Play already launches.
+        let details = app.details.as_ref().unwrap();
+        assert!(details.disc_picker);
+        assert_eq!(app.details_rows().len(), 1);
+        assert_eq!(
+            app.details_cursor(),
+            Some(super::DetailsFocus::DiscChoice(0))
+        );
+
+        // Back closes the picker before it leaves the screen.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::Back),
+        );
+        assert!(!app.details.as_ref().unwrap().disc_picker);
+        assert_eq!(app.page, super::Page::Details);
+    }
+
+    #[test]
+    fn choosing_a_disc_points_the_screen_at_it_and_drops_stale_state() {
+        let mut app = details_app(2, 0);
+        app.details.as_mut().unwrap().favorite = Some(true);
+        app.details.as_mut().unwrap().disc_picker = true;
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::DetailsSelectDisc(4015),
+        );
+
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(details.rom_id, 4015);
+        assert!(!details.disc_picker);
+        // The other file's RomM state has not been read, so the buttons must not
+        // inherit the previous file's.
+        assert_eq!(details.favorite, None);
+        assert_eq!(details.backlogged, None);
         assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Play));
+    }
+
+    #[test]
+    fn confirming_a_details_action_runs_that_action_only() {
+        use crate::providers::daemon::{DaemonClient, DaemonConfig};
+
+        let mut app = details_app(0, 1);
+        app.daemon_client = Some(DaemonClient::new(DaemonConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            token: "test".into(),
+        }));
+
+        // A screenshot only swaps the backdrop art; it is not a launch target.
+        app.details.as_mut().unwrap().focus = super::DetailsFocus::Screenshot(0);
+        let _ = app.activate_details();
+        assert_eq!(app.details.as_ref().unwrap().hero_shot, Some(0));
+        assert!(!app.launch_state.is_visible());
+
+        // Play launches the file the screen is pointing at.
+        app.details.as_mut().unwrap().focus = super::DetailsFocus::Play;
+        let _ = app.activate_details();
+        assert_eq!(app.launch_state.title(), Some("Zoop"));
+    }
+
+    #[test]
+    fn a_favorite_press_shows_first_and_settles_on_the_answer() {
+        use crate::providers::daemon::{DaemonClient, DaemonConfig};
+
+        let mut app = details_app(0, 0);
+        app.daemon_client = Some(DaemonClient::new(DaemonConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            token: "test".into(),
+        }));
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::DetailsToggleFavorite,
+        );
+        // Applied immediately, and a second press cannot race the first.
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(details.favorite, Some(true));
+        assert!(details.state_pending);
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::DetailsToggleFavorite,
+        );
+        assert_eq!(app.details.as_ref().unwrap().favorite, Some(true));
+
+        // RomM refusing the write puts the button back where it was.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::DetailsFavorite {
+                rom_id: 4014,
+                previous: None,
+                result: Err("forbidden".into()),
+            },
+        );
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(details.favorite, None);
+        assert!(!details.state_pending);
+    }
+
+    #[test]
+    fn a_play_later_press_toggles_and_ignores_an_answer_for_another_game() {
+        use crate::providers::daemon::{DaemonClient, DaemonConfig};
+
+        let mut app = details_app(0, 0);
+        app.daemon_client = Some(DaemonClient::new(DaemonConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            token: "test".into(),
+        }));
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::DetailsToggleBacklog,
+        );
+        assert_eq!(app.details.as_ref().unwrap().backlogged, Some(true));
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::DetailsBacklog {
+                rom_id: 999,
+                previous: Some(false),
+                result: Ok(true),
+            },
+        );
+        let details = app.details.as_ref().unwrap();
+        // The screen still points at 4014, so a write about 999 settles nothing.
+        assert_eq!(details.backlogged, Some(true));
+        assert!(details.state_pending);
     }
 
     /// A detail payload with every field populated, so a view test exercises
@@ -6342,6 +6919,8 @@ mod tests {
             age_ratings: vec!["E".into()],
             average_rating: Some(62.47),
             file_size_bytes: Some(524_288),
+            favorite: true,
+            backlogged: false,
         }
     }
 
@@ -6352,12 +6931,16 @@ mod tests {
 
         // Building the view evaluates every localised label the screen uses, so
         // a key missing from the fluent catalogue fails here instead of at
-        // runtime.
+        // runtime. The disc picker is a second layer with labels of its own.
         let _ = app.view_details();
+        app.details.as_mut().unwrap().disc_picker = true;
+        let _ = app.view_details();
+        app.details.as_mut().unwrap().disc_picker = false;
 
         let details = app.details.as_ref().unwrap();
-        // Year, platform, rating, genre, player count and age rating.
-        assert_eq!(details.chips().len(), 6);
+        // Year, platform, rating, genre, player count, age rating, and the disc
+        // the screen is pointing at.
+        assert_eq!(details.chips().len(), 7);
         // Companies, play modes, players, released, regions (from the file tags
         // RomM sent, since `regions` is empty), languages and file size.
         assert_eq!(details.facts().len(), 7);
@@ -6385,6 +6968,8 @@ mod tests {
             age_ratings: Vec::new(),
             average_rating: None,
             file_size_bytes: None,
+            favorite: false,
+            backlogged: false,
         });
 
         let _ = app.view_details();
@@ -6394,27 +6979,6 @@ mod tests {
         assert!(details.facts().is_empty());
         // A single-file game does not repeat its title next to Play.
         assert_eq!(details.current_version_label(), None);
-    }
-
-    #[test]
-    fn confirming_a_version_launches_it_and_confirming_a_screenshot_does_not() {
-        use crate::providers::daemon::{DaemonClient, DaemonConfig};
-
-        let mut app = details_app(2, 1);
-        app.daemon_client = Some(DaemonClient::new(DaemonConfig {
-            base_url: "http://127.0.0.1:1".into(),
-            token: "test".into(),
-        }));
-        app.details.as_mut().unwrap().focus = super::DetailsFocus::Version(1);
-        let _ = app.activate_details();
-        assert_eq!(app.launch_state.title(), Some("Disc 2"));
-
-        // A screenshot only swaps the hero; it is not a launch target.
-        let mut app = details_app(0, 1);
-        app.details.as_mut().unwrap().focus = super::DetailsFocus::Screenshot(0);
-        let _ = app.activate_details();
-        assert_eq!(app.details.as_ref().unwrap().hero_shot, Some(0));
-        assert!(!app.launch_state.is_visible());
     }
 
     #[test]
