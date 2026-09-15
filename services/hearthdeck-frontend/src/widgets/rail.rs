@@ -28,15 +28,17 @@ use crate::style::{
     TEXT_HEADER, TEXT_TILE_LABEL, artwork_fit, tile_button_class, tile_label_overlay,
 };
 
-/// One card in a [`Rail`]: square and exactly the same size as every other card
-/// in the rail. Only the artwork fit varies — game covers are cropped to fill,
-/// console art is contained so its pixel-art edges are not cut off.
+/// One card in a [`Rail`]: the same height as every other card in the rail and,
+/// by default, square. Only the artwork fit and the aspect ratio vary — game
+/// covers are cropped to fill, console art is contained so its pixel-art edges
+/// are not cut off, and screenshots keep their own 16:9 shape.
 #[must_use]
 pub struct RailItem<Message> {
     id: Id,
     label: String,
     handle: icon::Handle,
     size: f32,
+    aspect: f32,
     fit: ContentFit,
     on_press: Option<Message>,
 }
@@ -53,6 +55,7 @@ pub fn rail_item<Message: 'static>(
         label: label.into(),
         handle,
         size,
+        aspect: 1.0,
         fit: ContentFit::Cover,
         on_press: None,
     }
@@ -63,6 +66,15 @@ impl<Message: Clone + 'static> RailItem<Message> {
     #[inline]
     pub fn fit(mut self, fit: ContentFit) -> Self {
         self.fit = fit;
+        self
+    }
+
+    /// Sets the card's width as a multiple of `size`, which stays the card's
+    /// height. Defaults to `1.0`, a square card; landscape art such as
+    /// screenshots passes its own ratio so it is not cropped to a square.
+    #[inline]
+    pub fn aspect(mut self, aspect: f32) -> Self {
+        self.aspect = aspect;
         self
     }
 
@@ -96,7 +108,7 @@ impl<Message: Clone + 'static> RailItem<Message> {
             .align_y(Vertical::Bottom),
         )
         .id(self.id)
-        .width(Length::Fixed(self.size))
+        .width(Length::Fixed(self.size * self.aspect))
         .height(Length::Fixed(self.size))
         .class(tile_button_class(false))
         .padding(0)

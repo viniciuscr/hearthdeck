@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Utc};
 use hearthdeck_protocol::{
     ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner, InputProfile,
 };
@@ -37,6 +37,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/activity/recent", get(list_recent_activity))
         .route("/v1/retro/consoles", get(list_retro_consoles))
         .route("/v1/retro/roms", get(list_retro_roms))
+        .route("/v1/retro/roms/{id}", get(retro_rom_details))
         .route("/v1/retro/roms/{id}/launch", post(launch_retro_rom))
         .route("/v1/retro/service/restart", post(restart_romm_service))
         .route("/v1/retro/assets", get(retro_asset))
@@ -208,6 +209,23 @@ async fn list_retro_roms(
         limit: games.limit,
         offset: games.offset,
     }))
+}
+
+/// Full detail for one ROM, backing the frontend's console-game details
+/// screen. A separate route rather than more fields on `list_retro_roms`
+/// because the list is paged, while this metadata is only worth fetching for
+/// the single game the user opened. Reuses `romm_rom`, the same single-ROM
+/// read the RetroArch launch path makes.
+async fn retro_rom_details(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(rom_id): Path<i64>,
+) -> Result<Json<RetroGameDetails>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let game = diagnostics::romm_rom(&state.settings, rom_id)
+        .await
+        .map_err(ApiError::romm_query)?;
+    Ok(Json(RetroGameDetails::from(&game)))
 }
 
 /// Launches a RomM ROM through RetroArch. Deliberately not the generic
@@ -799,6 +817,86 @@ struct RetroRomVersion {
     is_main_sibling: bool,
 }
 
+/// Everything the console-game details screen shows for one ROM.
+///
+/// Deliberately separate from [`RetroGame`]: that struct is returned 48 games
+/// at a time by the list route, so every field added there is paid for on
+/// every tile in the grid, whether or not the game is ever opened. These
+/// fields are read one game at a time.
+#[derive(Serialize)]
+struct RetroGameDetails {
+    id: i64,
+    platform_id: i64,
+    title: String,
+    /// Platform name RomM resolved ("Super Nintendo Entertainment System"),
+    /// so the screen does not need a second lookup against the console list.
+    platform_name: Option<String>,
+    summary: Option<String>,
+    /// The same cover the grid tile shows, kept as a fallback for the hero.
+    cover_path: Option<String>,
+    /// Full-size cover, for the details screen's hero image.
+    cover_large_path: Option<String>,
+    screenshot_paths: Vec<String>,
+    genres: Vec<String>,
+    player_count: Option<String>,
+    release_year: Option<i32>,
+    /// `YYYY-MM-DD` first release, when RomM has one.
+    release_date: Option<String>,
+    regions: Vec<String>,
+    languages: Vec<String>,
+    /// Region/file tags RomM matched, e.g. `NA`. Distinct from `regions`,
+    /// which is RomM's own region metadata and is often empty where this is
+    /// not.
+    tags: Vec<String>,
+    /// Companies, play modes and age ratings as flat labels: the screen shows
+    /// them as chips and does not need RomM's per-source breakdown.
+    companies: Vec<String>,
+    game_modes: Vec<String>,
+    age_ratings: Vec<String>,
+    /// Community score out of 100, merged across sources.
+    average_rating: Option<f64>,
+    file_size_bytes: Option<u64>,
+    sibling_roms: Vec<RetroRomVersion>,
+    version_label: Option<String>,
+}
+
+impl From<&RommGame> for RetroGameDetails {
+    fn from(game: &RommGame) -> Self {
+        // Reuse the list projection for the fields both responses share, so
+        // the title fallback and version labelling rules cannot drift apart.
+        let base = RetroGame::from(game);
+        Self {
+            id: base.id,
+            platform_id: base.platform_id,
+            title: base.title,
+            platform_name: game
+                .platform_display_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned),
+            summary: base.summary,
+            cover_path: base.cover_path,
+            cover_large_path: non_empty_romm_path(game.path_cover_large.as_ref()),
+            screenshot_paths: base.screenshot_paths,
+            genres: base.genres,
+            player_count: base.player_count,
+            release_year: base.release_year,
+            release_date: game.metadatum.release_date(),
+            regions: base.regions,
+            languages: game.languages.clone(),
+            tags: game.tags.clone(),
+            companies: game.metadatum.companies.clone(),
+            game_modes: game.metadatum.game_modes.clone(),
+            age_ratings: game.metadatum.age_ratings.clone(),
+            average_rating: game.metadatum.average_rating,
+            file_size_bytes: game.fs_size_bytes,
+            sibling_roms: base.sibling_roms,
+            version_label: base.version_label,
+        }
+    }
+}
+
 impl From<&RommGame> for RetroGame {
     fn from(game: &RommGame) -> Self {
         let title = game
@@ -809,11 +907,7 @@ impl From<&RommGame> for RetroGame {
             .to_owned();
         let player_count = (!game.metadatum.player_count.trim().is_empty())
             .then(|| game.metadatum.player_count.clone());
-        let release_year = game
-            .metadatum
-            .first_release_date
-            .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
-            .map(|date| date.year());
+        let release_year = game.metadatum.release_year();
         // Label every version with its file name (tags kept), which is what
         // distinguishes a disc or region. `name` is the shared game title, so
         // it only serves as a fallback and would otherwise make every row read
@@ -1538,7 +1632,75 @@ mod tests {
             metadatum: RommGameMetadata::default(),
             regions: Vec::new(),
             sibling_roms: siblings,
+            platform_display_name: None,
+            languages: Vec::new(),
+            tags: Vec::new(),
+            fs_size_bytes: None,
         })
+    }
+
+    #[test]
+    fn details_projection_carries_the_fields_the_grid_omits() {
+        use crate::diagnostics::{RommGame, RommGameMetadata};
+
+        let game = RommGame {
+            id: 4014,
+            platform_id: 9,
+            name: Some("Zoop".to_owned()),
+            fs_name_no_tags: "Zoop".to_owned(),
+            fs_name: Some("Zoop (NA).sfc".to_owned()),
+            summary: Some("A puzzle game".to_owned()),
+            path_cover_small: Some("/assets/romm/resources/roms/9/4014/cover/small.png".to_owned()),
+            path_cover_large: Some("/assets/romm/resources/roms/9/4014/cover/big.png".to_owned()),
+            url_cover: None,
+            merged_screenshots: vec![
+                "/assets/romm/resources/roms/9/4014/screenshots/0.jpg".to_owned(),
+            ],
+            path_manual: None,
+            has_manual: true,
+            metadatum: RommGameMetadata {
+                genres: vec!["Puzzle".to_owned()],
+                player_count: "1".to_owned(),
+                first_release_date: Some(791_596_800_000),
+                companies: vec!["PanelComp".to_owned()],
+                game_modes: vec!["Single player".to_owned()],
+                age_ratings: vec!["E".to_owned()],
+                average_rating: Some(62.47),
+            },
+            regions: Vec::new(),
+            sibling_roms: Vec::new(),
+            platform_display_name: Some("Super Nintendo Entertainment System".to_owned()),
+            languages: Vec::new(),
+            tags: vec!["NA".to_owned()],
+            fs_size_bytes: Some(524_288),
+        };
+
+        let details = super::RetroGameDetails::from(&game);
+
+        // The hero uses the large cover; the grid's small cover stays as the
+        // fallback so a missing large cover still draws something.
+        assert_eq!(
+            details.cover_large_path.as_deref(),
+            Some("/assets/romm/resources/roms/9/4014/cover/big.png")
+        );
+        assert_eq!(
+            details.cover_path.as_deref(),
+            Some("/assets/romm/resources/roms/9/4014/cover/small.png")
+        );
+        assert_eq!(
+            details.platform_name.as_deref(),
+            Some("Super Nintendo Entertainment System")
+        );
+        // The release date must be readable, not year 27057: RomM sent the
+        // merged timestamp in milliseconds.
+        assert_eq!(details.release_year, Some(1995));
+        assert_eq!(details.release_date.as_deref(), Some("1995-02-01"));
+        assert_eq!(details.companies, vec!["PanelComp"]);
+        assert_eq!(details.game_modes, vec!["Single player"]);
+        assert_eq!(details.age_ratings, vec!["E"]);
+        assert_eq!(details.average_rating, Some(62.47));
+        assert_eq!(details.file_size_bytes, Some(524_288));
+        assert_eq!(details.tags, vec!["NA"]);
     }
 
     #[test]

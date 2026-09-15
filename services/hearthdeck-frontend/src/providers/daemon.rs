@@ -134,13 +134,70 @@ pub struct RetroGame {
 
 /// One selectable version of a retro game. Mirrors the daemon's
 /// `RetroRomVersion`; the client shows these as "play this version" choices
-/// in the context menu.
+/// in the context menu and on the details screen.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RetroRomVersion {
     pub id: i64,
     pub title: String,
     #[serde(default)]
     pub is_main_sibling: bool,
+}
+
+/// Full detail for one RomM game, from the daemon's /v1/retro/roms/{id}.
+///
+/// A wider view of the same game the grid already shows: the tile only needs a
+/// cover and a title, while the details screen shows the rest of what RomM
+/// knows. Mirrors only the fields the screen renders — the daemon's response
+/// also carries the resource's own id, title and version list, which the client
+/// already holds in the record that opened the screen, and serde ignores the
+/// difference (as it does for [`RetroGame`]).
+#[derive(Clone, Debug, Deserialize)]
+pub struct RetroGameDetails {
+    /// Platform name RomM resolved, e.g. "Super Nintendo Entertainment
+    /// System".
+    pub platform_name: Option<String>,
+    pub summary: Option<String>,
+    pub cover_path: Option<String>,
+    /// Full-size cover, used as the details screen's hero image.
+    pub cover_large_path: Option<String>,
+    #[serde(default)]
+    pub screenshot_paths: Vec<String>,
+    #[serde(default)]
+    pub genres: Vec<String>,
+    pub player_count: Option<String>,
+    pub release_year: Option<i32>,
+    /// `YYYY-MM-DD` first release, already normalised by the daemon.
+    pub release_date: Option<String>,
+    #[serde(default)]
+    pub regions: Vec<String>,
+    #[serde(default)]
+    pub languages: Vec<String>,
+    /// Region/file tags such as `NA`, often populated where `regions` is not.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub companies: Vec<String>,
+    #[serde(default)]
+    pub game_modes: Vec<String>,
+    #[serde(default)]
+    pub age_ratings: Vec<String>,
+    /// Community score out of 100.
+    pub average_rating: Option<f64>,
+    pub file_size_bytes: Option<u64>,
+}
+
+/// A game's detail payload with its artwork already cached on disk: the hero
+/// cover plus every screenshot the details screen can show.
+#[derive(Clone, Debug)]
+pub struct RetroDetails {
+    pub info: RetroGameDetails,
+    /// Local path of the large cover, when one could be downloaded. `None`
+    /// leaves the screen with no hero image.
+    pub hero: Option<String>,
+    /// Local paths of the game's screenshots, in RomM's order. A screenshot
+    /// that fails to download is skipped rather than leaving a hole, so this
+    /// is a filtered view of `info.screenshot_paths`.
+    pub screenshots: Vec<String>,
 }
 
 /// Retro platform from the daemon's /v1/retro/consoles endpoint.
@@ -328,7 +385,7 @@ impl DaemonClient {
             let client = self.clone();
             async move {
                 let icon = if item.source == "romm" {
-                    client.cache_retro_cover_path(item.icon.as_deref()).await
+                    client.cache_retro_asset_path(item.icon.as_deref()).await
                 } else {
                     item.icon.clone()
                 };
@@ -445,7 +502,7 @@ impl DaemonClient {
                 // do.
                 let mut icon = None;
                 for path in &platform.artwork_paths {
-                    if let Some(cached) = client.cache_retro_cover_path(Some(path)).await {
+                    if let Some(cached) = client.cache_retro_asset_path(Some(path)).await {
                         icon = Some(cached);
                         break;
                     }
@@ -532,11 +589,14 @@ impl DaemonClient {
     }
 
     async fn cache_retro_cover(&self, game: &RetroGame) -> Option<String> {
-        self.cache_retro_cover_path(game.cover_path.as_deref())
+        self.cache_retro_asset_path(game.cover_path.as_deref())
             .await
     }
 
-    async fn cache_retro_cover_path(&self, path: Option<&str>) -> Option<String> {
+    /// Downloads one RomM asset (cover, screenshot, console artwork) through
+    /// the daemon's proxy and returns its local cached path, reusing an
+    /// already-cached copy when there is one.
+    async fn cache_retro_asset_path(&self, path: Option<&str>) -> Option<String> {
         if let Some(path) = path {
             let key = format!("romm:{path}");
             if let Some(cached) = cached_icon(&key) {
@@ -569,6 +629,56 @@ impl DaemonClient {
         }
 
         None
+    }
+
+    /// Fetches one game's full detail plus its artwork, both already cached
+    /// locally, so the details screen paints without a second round trip.
+    pub async fn retro_rom_details(&self, rom_id: i64) -> Result<RetroDetails, DaemonError> {
+        let response = self
+            .http
+            .get(self.api_url(&format!("/v1/retro/roms/{rom_id}")))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        let info: RetroGameDetails = response
+            .json()
+            .await
+            .map_err(DaemonError::Deserialization)?;
+
+        // The screen's hero falls back to the tile cover, which may be the only
+        // artwork the game has.
+        let hero = self
+            .cache_retro_asset_path(
+                info.cover_large_path
+                    .as_deref()
+                    .or(info.cover_path.as_deref()),
+            )
+            .await;
+        let screenshot_paths = info.screenshot_paths.clone();
+        // Bounded concurrency, as in `list_retro_records`: the daemon asset
+        // endpoint is loopback (or the user's own RomM), so a handful of
+        // parallel image fetches is cheaper than a serial wait.
+        let screenshots: Vec<String> = stream::iter(screenshot_paths)
+            .map(|path| {
+                let client = self.clone();
+                async move { client.cache_retro_asset_path(Some(&path)).await }
+            })
+            .buffered(8)
+            .filter_map(|cached| async move { cached })
+            .collect()
+            .await;
+
+        Ok(RetroDetails {
+            info,
+            hero,
+            screenshots,
+        })
     }
 
     /// Launches a retro ROM by its ID.

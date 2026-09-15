@@ -4,7 +4,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,6 +17,12 @@ const LOG_LINE_LIMIT: usize = 200;
 const LOG_MESSAGE_LIMIT: usize = 600;
 const ROMM_LOG_LIMIT: usize = 40;
 const MAX_ROM_DOWNLOAD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+/// Anything above this is a `first_release_date` in milliseconds, not seconds.
+/// RomM's merged `metadatum` reports timestamps in milliseconds while its raw
+/// IGDB payload uses seconds, and any plausible release date in seconds is far
+/// below this bound (year 5138).
+const RELEASE_MILLIS_THRESHOLD: i64 = 100_000_000_000;
 
 #[derive(Debug)]
 pub enum RommQueryError {
@@ -138,6 +144,22 @@ pub struct RommGame {
     /// and this list holds the *other* variants.
     #[serde(default)]
     pub sibling_roms: Vec<RommSiblingRom>,
+    /// Name RomM resolved for the game's platform ("Super Nintendo
+    /// Entertainment System"), shown on the details screen. Distinct from the
+    /// local console tab label, which comes from the platform list.
+    #[serde(default)]
+    pub platform_display_name: Option<String>,
+    /// Languages RomM matched from the game's metadata and file name.
+    #[serde(default)]
+    pub languages: Vec<String>,
+    /// Region tags RomM matched, such as `NA` or `EU`. Often populated when
+    /// `regions` is not: `regions` holds RomM's own region metadata while
+    /// `tags` carries what the file-name parser recognised.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Size of the ROM file as stored on RomM's disk.
+    #[serde(default)]
+    pub fs_size_bytes: Option<u64>,
 }
 
 /// One related ROM of the same game in RomM's `sibling_roms` list. RomM sends
@@ -170,6 +192,45 @@ pub struct RommGameMetadata {
     pub player_count: String,
     #[serde(default)]
     pub first_release_date: Option<i64>,
+    /// Studios and publishers merged from every metadata source. RomM does not
+    /// separate the two roles, so callers label them generically.
+    #[serde(default)]
+    pub companies: Vec<String>,
+    /// Play modes ("Single player", "Co-op"), from the merged metadata.
+    #[serde(default)]
+    pub game_modes: Vec<String>,
+    /// Age rating codes ("E", "12") from whichever board rated the game.
+    #[serde(default)]
+    pub age_ratings: Vec<String>,
+    /// Community score out of 100, merged across sources.
+    #[serde(default)]
+    pub average_rating: Option<f64>,
+}
+
+impl RommGameMetadata {
+    /// The release date in Unix **seconds**, normalised from whichever unit
+    /// RomM sent. Reading the merged millisecond value as seconds put every
+    /// release year roughly 25,000 years into the future.
+    fn release_seconds(&self) -> Option<i64> {
+        self.first_release_date.map(|timestamp| {
+            if timestamp.abs() > RELEASE_MILLIS_THRESHOLD {
+                timestamp / 1000
+            } else {
+                timestamp
+            }
+        })
+    }
+
+    /// Calendar year of the first release, for the grid's tile metadata.
+    pub fn release_year(&self) -> Option<i32> {
+        DateTime::from_timestamp(self.release_seconds()?, 0).map(|date| date.year())
+    }
+
+    /// Full `YYYY-MM-DD` release date, for the details screen.
+    pub fn release_date(&self) -> Option<String> {
+        DateTime::from_timestamp(self.release_seconds()?, 0)
+            .map(|date| date.format("%Y-%m-%d").to_string())
+    }
 }
 
 pub struct RommAsset {
@@ -923,6 +984,30 @@ fn truncate_and_redact(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn romm_release_dates_normalise_milliseconds_and_seconds() {
+        use crate::diagnostics::RommGameMetadata;
+
+        // RomM's merged `metadatum` reports milliseconds (791_596_800_000 is the
+        // value an actual RomM install returns for Zoop) while its raw IGDB
+        // payload reports the same instant in seconds. Both must land on 1995.
+        let milliseconds = RommGameMetadata {
+            first_release_date: Some(791_596_800_000),
+            ..Default::default()
+        };
+        assert_eq!(milliseconds.release_year(), Some(1995));
+        assert_eq!(milliseconds.release_date().as_deref(), Some("1995-02-01"));
+
+        let seconds = RommGameMetadata {
+            first_release_date: Some(791_596_800),
+            ..Default::default()
+        };
+        assert_eq!(seconds.release_year(), Some(1995));
+
+        assert_eq!(RommGameMetadata::default().release_year(), None);
+        assert_eq!(RommGameMetadata::default().release_date(), None);
+    }
+
     #[test]
     fn romm_compose_service_is_optional_and_session_managed() {
         let service = include_str!("../../../deploy/systemd/romm.service");

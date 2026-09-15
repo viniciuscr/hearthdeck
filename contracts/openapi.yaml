@@ -137,6 +137,31 @@ paths:
                 $ref: '#/components/schemas/RetroGamePage'
         '503':
           description: RomM is not configured
+  /v1/retro/roms/{id}:
+    get:
+      operationId: getRetroRomDetails
+      description: >-
+        Full metadata for one RomM game, for the console-game details screen.
+        Deliberately not folded into listRetroRoms: that route returns 48 games
+        at a time, so detail-only fields would be paid for on every tile in the
+        grid rather than only for the game the user opened.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: RomM rom ID
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The game's detail fields, as RomM reports them
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetroGameDetails'
+        '503':
+          description: RomM is not configured
   /v1/retro/roms/{id}/launch:
     post:
       operationId: launchRetroRom
@@ -614,6 +639,71 @@ components:
         id: { type: integer }
         title: { type: string }
         is_main_sibling: { type: boolean }
+    RetroGameDetails:
+      type: object
+      required: [
+          id,
+          platform_id,
+          title,
+          screenshot_paths,
+          genres,
+          regions,
+          languages,
+          tags,
+          companies,
+          game_modes,
+          age_ratings,
+          sibling_roms,
+        ]
+      properties:
+        id: { type: integer }
+        platform_id: { type: integer }
+        title: { type: string }
+        # Platform name RomM resolved, so the screen does not have to look one
+        # up in the console list it may not have loaded.
+        platform_name: { type: [string, 'null'] }
+        summary: { type: [string, 'null'] }
+        # The grid tile's cover, kept as the hero's fallback when no large one
+        # was downloaded.
+        cover_path: { type: [string, 'null'] }
+        cover_large_path: { type: [string, 'null'] }
+        screenshot_paths:
+          type: array
+          items: { type: string }
+        genres:
+          type: array
+          items: { type: string }
+        player_count: { type: [string, 'null'] }
+        release_year: { type: [integer, 'null'] }
+        # `YYYY-MM-DD`. RomM's merged metadata reports the first release in
+        # milliseconds while its raw IGDB payload uses seconds; the daemon
+        # normalises both before formatting.
+        release_date: { type: [string, 'null'], format: date }
+        regions:
+          type: array
+          items: { type: string }
+        languages:
+          type: array
+          items: { type: string }
+        # Region/file tags such as `NA`, often populated where `regions` is not.
+        tags:
+          type: array
+          items: { type: string }
+        companies:
+          type: array
+          items: { type: string }
+        game_modes:
+          type: array
+          items: { type: string }
+        age_ratings:
+          type: array
+          items: { type: string }
+        average_rating: { type: [number, 'null'] }
+        file_size_bytes: { type: [integer, 'null'], minimum: 0 }
+        sibling_roms:
+          type: array
+          items: { $ref: '#/components/schemas/RetroRomVersion' }
+        version_label: { type: [string, 'null'] }
     RommSettings:
       type: object
       required: [base_url, configured, updated_at]

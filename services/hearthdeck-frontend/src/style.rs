@@ -192,6 +192,41 @@ pub fn dashboard_console_tile_size(
     dashboard_tile_size(window_width, horizontal_padding, tile_gap) / 2.0
 }
 
+// ---------------------------------------------------------------------------
+// Details screen
+// ---------------------------------------------------------------------------
+
+/// Share of the content width the details screen's hero image column takes.
+/// The rest carries the text column, which needs the room more than the art
+/// does once the title and fact rows are in.
+const DETAILS_HERO_RATIO: f32 = 0.42;
+
+/// Floor for the hero column, so the art stays legible on a narrow window.
+const DETAILS_HERO_MIN_WIDTH: f32 = 240.0;
+
+/// Width of the details screen's hero column.
+pub fn details_hero_width(window_width: f32) -> f32 {
+    (content_width(window_width) * DETAILS_HERO_RATIO).max(DETAILS_HERO_MIN_WIDTH)
+}
+
+/// Raster size for the hero artwork. Handles are cached per (image, size), so a
+/// fixed size keeps one decoded copy per game instead of one per window width.
+pub const DETAILS_HERO_RASTER: u32 = 640;
+
+/// Raster size for the screenshot strip's thumbnails.
+pub const DETAILS_SHOT_RASTER: u32 = 320;
+
+/// Height of one card in the screenshot strip. The width follows from
+/// [`DETAILS_SHOT_ASPECT`], so a 16:9 screenshot is shown in its own shape
+/// rather than cropped to the dashboard's square cards.
+pub const DETAILS_SHOT_SIZE: f32 = 132.0;
+
+/// Screenshot aspect ratio (16:9).
+pub const DETAILS_SHOT_ASPECT: f32 = 16.0 / 9.0;
+
+/// Width of the label column in the details screen's fact list.
+pub const DETAILS_FACT_LABEL_WIDTH: f32 = 132.0;
+
 /// Size of the drag-preview icon shown while dragging a tile.
 pub const TILE_DRAG_ICON: f32 = 88.0;
 /// Size of the source badge overlaid on the tile artwork corner.
@@ -360,10 +395,11 @@ pub fn tile_label_overlay(theme: &Theme) -> container::Style {
     }
 }
 
-/// Background for the source badge overlaid on tile artwork. A card-like
-/// surface, so it shares the same radius and colors as the tile instead of
-/// borrowing a different preset.
-pub fn source_badge(theme: &Theme) -> container::Style {
+/// Neutral card surface for content laid over the page background: the
+/// details screen's hero box and its metadata chips, and the source badge on a
+/// tile. Uses the theme's card background so it reads as a raised surface under
+/// both light and dark themes.
+pub fn card_surface(theme: &Theme) -> container::Style {
     let t = theme.cosmic();
     let on = t.background(theme.transparent).component.on;
     container::Style {
@@ -380,6 +416,13 @@ pub fn source_badge(theme: &Theme) -> container::Style {
         shadow: Shadow::default(),
         snap: false,
     }
+}
+
+/// Background for the source badge overlaid on tile artwork. A card-like
+/// surface, so it shares the same radius and colors as the tile instead of
+/// borrowing a different preset.
+pub fn source_badge(theme: &Theme) -> container::Style {
+    card_surface(theme)
 }
 
 /// Opaque launch layer shown while a selected game is starting.

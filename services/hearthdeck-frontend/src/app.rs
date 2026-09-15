@@ -84,18 +84,22 @@ use crate::input_ownership::{
     Event as InputEvent, InputOwnership, LaunchTarget, managed_launch_target,
 };
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
-use crate::providers::daemon::{RetroRomVersion, retro_rom_versions, retro_version_label};
+use crate::providers::daemon::{
+    RetroDetails, RetroGameDetails, RetroRomVersion, retro_rom_versions, retro_version_label,
+};
 use crate::style::{
-    DASHBOARD_RAIL_TILES, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH, EDIT_NAME_INPUT_WIDTH,
-    GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION,
-    MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION, SEARCH_WIDTH,
+    DASHBOARD_RAIL_TILES, DETAILS_FACT_LABEL_WIDTH, DETAILS_HERO_RASTER, DETAILS_SHOT_ASPECT,
+    DETAILS_SHOT_RASTER, DETAILS_SHOT_SIZE, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
+    EDIT_NAME_INPUT_WIDTH, GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL,
+    ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION, SEARCH_WIDTH,
     SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER,
-    TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, content_horizontal_padding,
-    dashboard_console_tile_size, dashboard_nav_button_class, dashboard_tile_size,
-    filter_button_height, grid_gap, grid_top_padding, launch_overlay, root_background,
-    search_icon_padding, section_button_class, sidebar_accent_bar_height, sidebar_divider,
-    sidebar_header_height, sidebar_item_height, sidebar_width, tab_button_class, tab_height,
-    tab_underline_height, tab_width, tile_height, tile_width, title_action_height,
+    TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, artwork_fit, card_surface,
+    content_horizontal_padding, dashboard_console_tile_size, dashboard_nav_button_class,
+    dashboard_tile_size, details_hero_width, filter_button_height, grid_gap, grid_top_padding,
+    launch_overlay, root_background, search_icon_padding, section_button_class,
+    sidebar_accent_bar_height, sidebar_divider, sidebar_header_height, sidebar_item_height,
+    sidebar_width, tab_button_class, tab_height, tab_underline_height, tab_width, tile_height,
+    tile_width, title_action_height,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
@@ -452,6 +456,9 @@ struct HearthDeck {
     /// Whether a RomM page request is in flight, so scrolling and the periodic
     /// platform refresh cannot queue duplicate pages.
     romm_loading_page: bool,
+    /// The console-game details screen, when one is open. `None` on every other
+    /// page; which page is showing lives in [`HearthDeck::page`].
+    details: Option<Details>,
     virtual_keyboard: VirtualKeyboard,
     /// In-flight Dashboard<->Library fade-through transition, if any. Bounded
     /// by [`PAGE_TRANSITION_DURATION`] and cleared by
@@ -516,6 +523,7 @@ impl Default for HearthDeck {
             romm_grouped_total: None,
             romm_next_offset: None,
             romm_loading_page: false,
+            details: None,
             virtual_keyboard: VirtualKeyboard::default(),
             page_animation: None,
             tab_animation: None,
@@ -598,6 +606,9 @@ enum Page {
     #[default]
     Dashboard,
     Library,
+    /// One console game's details. Not part of the primary navigation: it is
+    /// pushed on top of the Library by opening a game, and Back returns there.
+    Details,
 }
 
 /// State for the Dashboard<->Library fade-through transition. The pages
@@ -697,6 +708,157 @@ impl DashboardShelf {
     }
 }
 
+/// Which control the details screen's controller cursor is on.
+///
+/// The screen is a small, fixed set of rows rather than a free grid: the header
+/// actions, then one entry per version, then one per screenshot. Movement is
+/// derived from this value, not from iced's focus state, so Confirm always acts
+/// on the highlighted row even if the renderer has not reported focus yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DetailsFocus {
+    #[default]
+    Play,
+    Back,
+    Version(usize),
+    Screenshot(usize),
+}
+
+/// Widget id for a details-screen focus target. Stable for the page's lifetime,
+/// which is what lets both `focus()` (the accent ring) and [`DetailsFocus`]
+/// (the action Confirm takes) name the same control.
+fn details_focus_id(focus: DetailsFocus) -> Id {
+    match focus {
+        DetailsFocus::Play => Id::new("details-play"),
+        DetailsFocus::Back => Id::new("details-back"),
+        DetailsFocus::Version(index) => Id::new(format!("details-version-{index}")),
+        DetailsFocus::Screenshot(index) => Id::new(format!("details-screenshot-{index}")),
+    }
+}
+
+/// State of the console-game details screen.
+///
+/// Seeded from the grid tile that opened it — the title, cover and version list
+/// are already in memory — so the screen never opens blank, then filled in by
+/// the daemon's per-game read. `info` staying `None` is a normal, temporary
+/// state: the seed alone is a complete screen for the fields it carries.
+struct Details {
+    /// RomM id of the game being shown, and of the version Play launches.
+    rom_id: i64,
+    title: String,
+    /// Cover handle recycled from the grid tile, shown until (or instead of) a
+    /// large cover arriving from the daemon.
+    cover: Option<icon::Handle>,
+    /// Large cover for the hero, once it has been downloaded.
+    hero: Option<icon::Handle>,
+    /// Screenshot thumbnails, in RomM's order.
+    screenshots: Vec<icon::Handle>,
+    /// Screenshot the user picked to show as the hero, if any.
+    hero_shot: Option<usize>,
+    /// Every version of the game, the one Play targets first. Only populated
+    /// for games RomM collapsed from several files; empty means single-file.
+    versions: Vec<RetroRomVersion>,
+    /// The daemon's detail read. `None` while it is still in flight.
+    info: Option<RetroGameDetails>,
+    /// Failure text from that read, shown in place of the detail rows.
+    error: Option<String>,
+    /// The cursor.
+    focus: DetailsFocus,
+    /// Grid index the screen was opened from, so Back can put the cursor back
+    /// on the tile the user came from.
+    origin_index: usize,
+}
+
+impl Details {
+    /// Artwork for the hero box: the screenshot the user picked, otherwise the
+    /// large cover, otherwise the grid tile's own cover.
+    fn hero(&self) -> Option<&icon::Handle> {
+        if let Some(index) = self.hero_shot
+            && let Some(shot) = self.screenshots.get(index)
+        {
+            return Some(shot);
+        }
+        self.hero.as_ref().or(self.cover.as_ref())
+    }
+
+    /// The version Play launches, when the game has more than one file. `None`
+    /// for single-file games, where the label would only repeat the title.
+    fn current_version_label(&self) -> Option<&str> {
+        if self.versions.len() < 2 {
+            return None;
+        }
+        self.versions
+            .iter()
+            .find(|version| version.id == self.rom_id)
+            .map(|version| version.title.as_str())
+    }
+
+    /// Short labels shown under the title: release year, platform, community
+    /// score, genres, player count and age rating. Empty fields are skipped so
+    /// a sparse game does not leave blank chips.
+    fn chips(&self) -> Vec<String> {
+        let Some(info) = self.info.as_ref() else {
+            return Vec::new();
+        };
+        let mut chips = Vec::new();
+        if let Some(year) = info.release_year {
+            chips.push(year.to_string());
+        }
+        if let Some(platform) = info.platform_name.as_deref() {
+            chips.push(platform.to_owned());
+        }
+        if let Some(rating) = info.average_rating {
+            chips.push(fl!("community-rating", value = format!("{rating:.0}")));
+        }
+        chips.extend(info.genres.iter().cloned());
+        if let Some(players) = info.player_count.as_deref() {
+            chips.push(fl!("players-value", count = players));
+        }
+        chips.extend(info.age_ratings.iter().cloned());
+        chips
+    }
+
+    /// The labelled fact rows below the actions: who made it, how it plays,
+    /// when it shipped, and the file itself. Anything RomM did not send is
+    /// omitted rather than shown empty.
+    fn facts(&self) -> Vec<(String, String)> {
+        let Some(info) = self.info.as_ref() else {
+            return Vec::new();
+        };
+        let mut facts: Vec<(String, String)> = Vec::new();
+        let mut push = |label: String, value: String| {
+            if !value.is_empty() {
+                facts.push((label, value));
+            }
+        };
+        // RomM merges studios and publishers into one list, so the label does
+        // not claim to be the developer specifically.
+        push(fl!("companies"), info.companies.join(", "));
+        push(fl!("play-modes"), info.game_modes.join(", "));
+        push(
+            fl!("players"),
+            info.player_count.clone().unwrap_or_default(),
+        );
+        push(
+            fl!("released"),
+            info.release_date.clone().unwrap_or_default(),
+        );
+        // RomM's own region metadata is often empty where the region tag parsed
+        // from the file name is not, so fall back to the tags.
+        let regions = if info.regions.is_empty() {
+            &info.tags
+        } else {
+            &info.regions
+        };
+        push(fl!("regions"), regions.join(", "));
+        push(fl!("languages"), info.languages.join(", "));
+        push(
+            fl!("file-size"),
+            info.file_size_bytes.map(human_size).unwrap_or_default(),
+        );
+        facts
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum GroupRowKey {
     AllApps,
@@ -722,6 +884,13 @@ enum Message {
     /// index within the Console Games tab strip.
     OpenConsole(usize),
     OpenSearch,
+    /// Open the details screen for one entry of the current grid. Only RomM
+    /// console games have one, so the caller checks the entry kind first.
+    OpenDetails(usize),
+    /// Leave the details screen and return to the grid it was opened from.
+    CloseDetails,
+    /// Show one of the game's screenshots as the details screen's hero image.
+    DetailsSelectScreenshot(usize),
     Close,
     ActivateApp(usize),
     ActivateDashboardApp(String),
@@ -803,6 +972,12 @@ enum Message {
         generation: u64,
         platform_id: Option<i64>,
         result: Result<crate::providers::daemon::RetroRecordPage, String>,
+    },
+    /// One game's detail read, answering the details screen that asked for it.
+    /// Boxed because the payload dwarfs every other message variant.
+    DetailsLoaded {
+        rom_id: i64,
+        result: Result<Box<RetroDetails>, String>,
     },
     DismissLaunch,
     /// Redraw tick for an in-flight page transition, carrying the frame time.
@@ -1231,12 +1406,22 @@ impl HearthDeck {
     /// Drops a transition that has run its course. Called on every message so a
     /// transition can never outlive [`PAGE_TRANSITION_DURATION`], even if a redraw
     /// tick is missed.
+    ///
+    /// This is also what retires the details screen. Leaving it keeps `details`
+    /// alive for the length of the fade, because the outgoing page is still
+    /// drawn under the transition: clearing it when Back is pressed would blank
+    /// the screen instead of fading it out.
     fn expire_page_animation(&mut self) {
-        if self.page_animation.is_some_and(|animation| {
-            Instant::now().saturating_duration_since(animation.started_at)
-                >= PAGE_TRANSITION_DURATION
-        }) {
-            self.page_animation = None;
+        let Some(animation) = self.page_animation else {
+            return;
+        };
+        if Instant::now().saturating_duration_since(animation.started_at) < PAGE_TRANSITION_DURATION
+        {
+            return;
+        }
+        self.page_animation = None;
+        if self.page != Page::Details {
+            self.details = None;
         }
     }
 
@@ -1337,6 +1522,7 @@ impl HearthDeck {
         self.edit_name = None;
         self.cur_group = None;
         self.menu = None;
+        self.details = None;
         self.group_to_delete = None;
         self.scroll_offset = 0.0;
         let keyboard = self.request_virtual_keyboard(false);
@@ -1523,6 +1709,196 @@ impl HearthDeck {
         }
         cmds.push(self.focus_grid_index(0));
         iced::Task::batch(cmds)
+    }
+
+    /// Opens the details screen for grid entry `index`, seeded from the entry
+    /// that already exists in memory so the header paints immediately, and
+    /// starts the daemon's detail read for everything else.
+    fn open_details(&mut self, index: usize) -> Task<Message> {
+        let Some(entry) = self.entry_path_input.get(index) else {
+            return Task::none();
+        };
+        let Some(rom_id) = entry
+            .id
+            .strip_prefix("romm:")
+            .and_then(|id| id.parse::<i64>().ok())
+        else {
+            return Task::none();
+        };
+        let title = entry.name.clone();
+        // The tile's cover is decoded at tile size already, so the screen has
+        // artwork before any download finishes.
+        let cover = self.entry_icon_handles.get(index).cloned();
+        // The version list is built when the RomM page loads, so the details
+        // screen reads it rather than re-deriving it from the detail payload.
+        let versions = self
+            .romm_versions
+            .get(&entry.id)
+            .cloned()
+            .unwrap_or_default();
+
+        self.details = Some(Details {
+            rom_id,
+            title,
+            cover,
+            hero: None,
+            screenshots: Vec::new(),
+            hero_shot: None,
+            versions,
+            info: None,
+            error: None,
+            focus: DetailsFocus::Play,
+            origin_index: index,
+        });
+        self.edit_name = None;
+        self.switch_page(Page::Details);
+        self.focused_id = None;
+
+        let mut tasks = vec![self.focus_details(DetailsFocus::Play)];
+        if let Some(client) = self.daemon_client.clone() {
+            tasks.push(Task::perform(
+                async move {
+                    client
+                        .retro_rom_details(rom_id)
+                        .await
+                        .map(Box::new)
+                        .map_err(|error| error.to_string())
+                },
+                move |result| cosmic::Action::App(Message::DetailsLoaded { rom_id, result }),
+            ));
+        }
+        iced::Task::batch(tasks)
+    }
+
+    /// Leaves the details screen for the grid it was opened from, putting the
+    /// cursor back on the tile the user came from. The screen's state is kept
+    /// until its page transition finishes (see [`Self::expire_page_animation`]).
+    fn close_details(&mut self) -> Task<Message> {
+        let Some(origin) = self.details.as_ref().map(|details| details.origin_index) else {
+            return Task::none();
+        };
+        self.switch_page(Page::Library);
+        self.focused_id = None;
+        let mut tasks = vec![self.focus_grid_index(origin)];
+        if let Some(task) = self.reveal_tab_strip() {
+            tasks.push(task);
+        }
+        iced::Task::batch(tasks)
+    }
+
+    /// Moves the details screen's cursor and gives the matching widget the real
+    /// keyboard focus, which is what draws the shared accent ring. The cursor
+    /// itself is [`Details`]'s `focus`, so Confirm never depends on iced having
+    /// reported that focus back.
+    fn focus_details(&mut self, target: DetailsFocus) -> Task<Message> {
+        let Some(details) = self.details.as_mut() else {
+            return Task::none();
+        };
+        details.focus = target;
+        let id = details_focus_id(target);
+        iced_runtime::task::widget(focus(id.clone()))
+            .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id))))
+    }
+
+    /// The details screen's focus rows, top to bottom: the header actions, then
+    /// one entry per version, then one per screenshot. A row that would be
+    /// empty is left out, so D-pad movement never lands on nothing.
+    fn details_rows(&self) -> Vec<Vec<DetailsFocus>> {
+        let Some(details) = self.details.as_ref() else {
+            return Vec::new();
+        };
+        let mut rows = vec![vec![DetailsFocus::Back, DetailsFocus::Play]];
+        if !details.versions.is_empty() {
+            rows.push(
+                (0..details.versions.len())
+                    .map(DetailsFocus::Version)
+                    .collect(),
+            );
+        }
+        if !details.screenshots.is_empty() {
+            rows.push(
+                (0..details.screenshots.len())
+                    .map(DetailsFocus::Screenshot)
+                    .collect(),
+            );
+        }
+        rows
+    }
+
+    /// The details cursor, corrected to Play when the row it pointed at is gone
+    /// (screenshots that failed to download, or a page rebuilt without
+    /// versions). Without this the D-pad would have nothing left to move.
+    fn details_cursor(&self) -> Option<DetailsFocus> {
+        let details = self.details.as_ref()?;
+        let rows = self.details_rows();
+        Some(if rows.iter().any(|row| row.contains(&details.focus)) {
+            details.focus
+        } else {
+            DetailsFocus::Play
+        })
+    }
+
+    fn details_horizontal_target(&self, delta: i32) -> Option<DetailsFocus> {
+        let focus = self.details_cursor()?;
+        let rows = self.details_rows();
+        let row = rows.iter().find(|row| row.contains(&focus))?;
+        let current = row.iter().position(|candidate| candidate == &focus)? as i32;
+        let next = (current + delta).clamp(0, row.len() as i32 - 1) as usize;
+        row.get(next).copied()
+    }
+
+    fn details_vertical_target(&self, delta: i32) -> Option<DetailsFocus> {
+        let focus = self.details_cursor()?;
+        let rows = self.details_rows();
+        let row_index = rows.iter().position(|row| row.contains(&focus))?;
+        let column = rows[row_index]
+            .iter()
+            .position(|candidate| candidate == &focus)?;
+        let target = row_index as i32 + delta;
+        if target < 0 || target >= rows.len() as i32 {
+            return None;
+        }
+        let row = &rows[target as usize];
+        row.get(column.min(row.len() - 1)).copied()
+    }
+
+    /// Confirm on the details screen: act on whatever the cursor is on.
+    fn activate_details(&mut self) -> Task<Message> {
+        let Some(focus) = self.details_cursor() else {
+            return Task::none();
+        };
+        match focus {
+            DetailsFocus::Back => self.update(Message::CloseDetails),
+            DetailsFocus::Play => {
+                let Some((rom_id, title)) = self
+                    .details
+                    .as_ref()
+                    .map(|details| (details.rom_id, details.title.clone()))
+                else {
+                    return Task::none();
+                };
+                self.update(Message::ActivateRomVariant { rom_id, title })
+            }
+            DetailsFocus::Version(index) => {
+                let Some(version) = self
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.versions.get(index).cloned())
+                else {
+                    return Task::none();
+                };
+                self.update(Message::ActivateRomVariant {
+                    rom_id: version.id,
+                    title: version.title,
+                })
+            }
+            DetailsFocus::Screenshot(index) => {
+                if let Some(details) = self.details.as_mut() {
+                    details.hero_shot = Some(index);
+                }
+                Task::none()
+            }
+        }
     }
 
     /// Dashboard console rail as an element, or `None` when there are no
@@ -1897,6 +2273,11 @@ impl HearthDeck {
         if self.launch_state.is_visible() {
             return Task::none();
         }
+        if self.page == Page::Details {
+            // The details screen acts on its own cursor rather than on iced's
+            // focus, so Confirm still works on the first frame after opening.
+            return self.activate_details();
+        }
         if self.menu.is_some() {
             // A context menu is open: confirm its highlighted entry.
             return self.activate_menu_entry(self.menu_selection);
@@ -1913,6 +2294,11 @@ impl HearthDeck {
         if self.launch_state.is_visible() {
             return Task::none();
         }
+        // Back is the global "leave this surface" contract: on the details
+        // screen it returns to the grid, matching Escape and `Message::Close`.
+        if self.page == Page::Details {
+            return self.update(Message::CloseDetails);
+        }
         if self.menu.is_some() {
             return self.update(Message::CloseContextMenu);
         }
@@ -1928,7 +2314,13 @@ impl HearthDeck {
         self.update(Message::Close)
     }
 
-    /// Handle the gamepad context menu (X) button for the focused app.
+    /// Handle the gamepad context menu (X) button for the focused entry.
+    ///
+    /// On a RomM console game this opens the details screen instead of the
+    /// context menu: the menu's actions for a game (Run, and the other
+    /// versions) all live on that screen, so X stays a single "what can I do
+    /// with this" button. Every other entry keeps the menu, whose actions
+    /// (pin, favorite, controller compatibility) have no details screen yet.
     fn gamepad_context_menu(&mut self) -> Task<Message> {
         if self.page == Page::Dashboard {
             return Task::none();
@@ -1939,6 +2331,13 @@ impl HearthDeck {
         let Some(i) = self.focused_grid_index() else {
             return Task::none();
         };
+        if self
+            .entry_path_input
+            .get(i)
+            .is_some_and(|entry| entry.id.starts_with("romm:"))
+        {
+            return self.update(Message::OpenDetails(i));
+        }
         let Some(target) = self.entry_ids.get(i).cloned() else {
             return Task::none();
         };
@@ -2035,7 +2434,7 @@ impl HearthDeck {
     /// The cycle consists of the three fixed sidebar tabs in order, so
     /// circling wraps around both ends and never skips a section.
     fn gamepad_switch_section(&mut self, delta: i32) -> Task<Message> {
-        if self.page == Page::Dashboard {
+        if self.page != Page::Library {
             return Task::none();
         }
         let total = Section::ALL.len() as i32;
@@ -2052,7 +2451,7 @@ impl HearthDeck {
     /// The "all apps" state (no tab selected) is treated as preceding the
     /// first tab, so the next tab after it is the first one.
     fn gamepad_switch_tab(&mut self, delta: i32) -> Task<Message> {
-        if self.page == Page::Dashboard {
+        if self.page != Page::Library {
             return Task::none();
         }
         let groups = self.config.sections.get(self.cur_section);
@@ -2427,6 +2826,12 @@ impl cosmic::Application for HearthDeck {
                     };
                     return self.focus_dashboard_id(id);
                 }
+                if self.page == Page::Details {
+                    let Some(focus) = self.details_vertical_target(-1) else {
+                        return Task::none();
+                    };
+                    return self.focus_details(focus);
+                }
                 let mut i = self
                     .focused_id
                     .as_ref()
@@ -2467,6 +2872,12 @@ impl cosmic::Application for HearthDeck {
                         return Task::none();
                     };
                     return self.focus_dashboard_id(id);
+                }
+                if self.page == Page::Details {
+                    let Some(focus) = self.details_vertical_target(1) else {
+                        return Task::none();
+                    };
+                    return self.focus_details(focus);
                 }
                 let mut i: i32 = self
                     .focused_id
@@ -2510,6 +2921,12 @@ impl cosmic::Application for HearthDeck {
                     };
                     return self.focus_dashboard_id(id);
                 }
+                if self.page == Page::Details {
+                    let Some(focus) = self.details_horizontal_target(-1) else {
+                        return Task::none();
+                    };
+                    return self.focus_details(focus);
+                }
                 let Some(i) = self.focused_grid_index() else {
                     return self.focus_grid_index(0);
                 };
@@ -2527,6 +2944,12 @@ impl cosmic::Application for HearthDeck {
                         return Task::none();
                     };
                     return self.focus_dashboard_id(id);
+                }
+                if self.page == Page::Details {
+                    let Some(focus) = self.details_horizontal_target(1) else {
+                        return Task::none();
+                    };
+                    return self.focus_details(focus);
                 }
                 let i = self.focused_grid_index().unwrap_or(0);
                 let Some(last) = self.entry_ids.len().checked_sub(1) else {
@@ -2584,6 +3007,50 @@ impl cosmic::Application for HearthDeck {
             Message::OpenConsole(index) => {
                 return self.open_console(index);
             }
+            Message::OpenDetails(index) => {
+                return self.open_details(index);
+            }
+            Message::CloseDetails => {
+                return self.close_details();
+            }
+            Message::DetailsSelectScreenshot(index) => {
+                if let Some(details) = self.details.as_mut() {
+                    details.hero_shot = Some(index);
+                }
+                return Task::none();
+            }
+            Message::DetailsLoaded { rom_id, result } => {
+                // A slow answer for a game the user has already left must not
+                // paint onto whatever screen is showing now.
+                let Some(details) = self
+                    .details
+                    .as_mut()
+                    .filter(|details| details.rom_id == rom_id)
+                else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(loaded) => {
+                        // Screenshot art is decoded here, once, rather than on
+                        // every frame of the strip.
+                        details.hero = loaded
+                            .hero
+                            .as_deref()
+                            .map(|path| details_handle(path, DETAILS_HERO_RASTER));
+                        details.screenshots = loaded
+                            .screenshots
+                            .iter()
+                            .map(|path| details_handle(path, DETAILS_SHOT_RASTER))
+                            .collect();
+                        details.info = Some(loaded.info);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, rom_id, "failed to load RomM game details");
+                        details.error = Some(error);
+                    }
+                }
+                return Task::none();
+            }
             Message::OpenSearch => {
                 self.switch_page(Page::Library);
                 return self.focus_text_input(SEARCH_ID.clone());
@@ -2608,6 +3075,9 @@ impl cosmic::Application for HearthDeck {
                         self.launch_state.update(LaunchEvent::Dismiss);
                     }
                     return Task::none();
+                }
+                if self.page == Page::Details {
+                    return self.update(Message::CloseDetails);
                 }
                 if self.page == Page::Library {
                     return self.update(Message::OpenDashboard);
@@ -3816,6 +4286,7 @@ impl HearthDeck {
         match page {
             Page::Dashboard => self.view_dashboard(),
             Page::Library => self.view_main_content(),
+            Page::Details => self.view_details(),
         }
     }
 
@@ -3984,6 +4455,252 @@ impl HearthDeck {
             .width(Length::Fill)
             .height(Length::Fill)
             .padding(space_l);
+
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .class(theme::Container::Custom(Box::new(root_background)))
+            .into()
+    }
+
+    /// A console game's details screen: its art, what it is, and the actions
+    /// that used to live only in the context menu (Play, and every version).
+    ///
+    /// A fixed hero column beside a text column, with the screenshot strip
+    /// along the bottom. The page itself does not scroll — every focus row is
+    /// inside the window, and only the summary scrolls locally — so the
+    /// controller cursor can never move to something unseen.
+    fn view_details<'a>(&'a self) -> Element<'a, Message> {
+        let Spacing {
+            space_xxs,
+            space_xs,
+            space_s,
+            space_m,
+            space_l,
+            ..
+        } = theme::spacing();
+        let Some(details) = self.details.as_ref() else {
+            return container(space::horizontal()).into();
+        };
+        // The cursor is read through `details_cursor`, not off `details.focus`,
+        // so a row that disappeared (screenshots that failed to download) moves
+        // the highlight back to Play instead of highlighting nothing.
+        let cursor = self.details_cursor().unwrap_or_default();
+
+        let hero: Element<'_, Message> = match details.hero() {
+            Some(handle) => artwork_fit(handle, ContentFit::Contain, Length::Fill, Length::Fill),
+            None => container(
+                icon::icon(icon::from_name("applications-games-symbolic").into()).size(ICON_LARGE),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .into(),
+        };
+        let hero_box = container(hero)
+            .width(Length::Fixed(details_hero_width(self.window_width)))
+            .height(Length::Fill)
+            .padding(space_s)
+            .class(theme::Container::Custom(Box::new(card_surface)));
+
+        let back = button::custom(
+            row![
+                icon::icon(icon::from_name("go-previous-symbolic").into()).size(ICON_BODY),
+                text::body(fl!("back")).size(TEXT_BODY),
+            ]
+            .spacing(space_s)
+            .align_y(Alignment::Center),
+        )
+        .id(details_focus_id(DetailsFocus::Back))
+        .height(Length::Fixed(title_action_height()))
+        .padding([space_xxs, space_m])
+        .class(section_button_class(cursor == DetailsFocus::Back))
+        .on_press(Message::CloseDetails);
+
+        let mut play_row = row![
+            button::custom(
+                row![
+                    icon::icon(icon::from_name("media-playback-start-symbolic").into())
+                        .size(ICON_BODY),
+                    text::body(fl!("play")).size(TEXT_LARGE),
+                ]
+                .spacing(space_s)
+                .align_y(Alignment::Center),
+            )
+            .id(details_focus_id(DetailsFocus::Play))
+            .height(Length::Fixed(title_action_height()))
+            .padding([space_xxs, space_l])
+            // `selected` here is the permanent emphasis rather than a cursor:
+            // Play is the screen's primary action whether or not it is focused.
+            .class(section_button_class(true))
+            .on_press(Message::ActivateRomVariant {
+                rom_id: details.rom_id,
+                title: details.title.clone(),
+            }),
+        ]
+        .spacing(space_m)
+        .align_y(Alignment::Center);
+        if let Some(label) = details.current_version_label() {
+            play_row = play_row.push(text::caption(label).size(TEXT_CAPTION));
+        }
+
+        let chips: Element<'_, Message> = row(details
+            .chips()
+            .into_iter()
+            .map(|label| {
+                container(text(label).size(TEXT_CAPTION))
+                    .padding([space_xxs, space_s])
+                    .class(theme::Container::Custom(Box::new(card_surface)))
+                    .into()
+            })
+            .collect::<Vec<Element<'_, Message>>>())
+        .spacing(space_xs)
+        .align_y(Alignment::Center)
+        .into();
+
+        // Only worth showing when RomM collapsed several files into this game;
+        // the checked entry is the one Play launches.
+        let versions: Option<Element<'_, Message>> = (details.versions.len() > 1).then(|| {
+            let buttons: Vec<Element<'_, Message>> = details
+                .versions
+                .iter()
+                .enumerate()
+                .map(|(index, version)| {
+                    let is_current = version.id == details.rom_id;
+                    let icon_name = if is_current {
+                        "checkbox-checked-symbolic"
+                    } else {
+                        "media-optical-symbolic"
+                    };
+                    button::custom(
+                        row![
+                            icon::icon(icon::from_name(icon_name).size(ICON_SMALL).into()),
+                            text::body(version.title.clone()).size(TEXT_BODY),
+                        ]
+                        .spacing(space_xxs)
+                        .align_y(Alignment::Center),
+                    )
+                    .id(details_focus_id(DetailsFocus::Version(index)))
+                    .height(Length::Fixed(title_action_height()))
+                    .padding([space_xxs, space_m])
+                    .class(section_button_class(is_current))
+                    .on_press(Message::ActivateRomVariant {
+                        rom_id: version.id,
+                        title: version.title.clone(),
+                    })
+                    .into()
+                })
+                .collect();
+            column![
+                text::caption(fl!("versions")).size(TEXT_CAPTION),
+                row(buttons).spacing(space_xs).align_y(Alignment::Center),
+            ]
+            .spacing(space_xxs)
+            .into()
+        });
+
+        let fact_rows: Vec<Element<'_, Message>> = details
+            .facts()
+            .into_iter()
+            .map(|(label, value)| {
+                row![
+                    container(text::caption(label).size(TEXT_CAPTION))
+                        .width(Length::Fixed(DETAILS_FACT_LABEL_WIDTH)),
+                    text::body(value).size(TEXT_BODY).width(Length::Fill),
+                ]
+                .spacing(space_m)
+                .align_y(Alignment::Start)
+                .into()
+            })
+            .collect();
+
+        let summary: Element<'_, Message> =
+            match details.info.as_ref().and_then(|info| info.summary.clone()) {
+                Some(summary) => column![
+                    text::caption(fl!("about")).size(TEXT_CAPTION),
+                    scrollable(text::body(summary).size(TEXT_BODY).width(Length::Fill))
+                        .height(Length::Fill)
+                        .scrollbar_width(0)
+                        .scroller_width(0),
+                ]
+                .spacing(space_xxs)
+                .height(Length::Fill)
+                .into(),
+                None => space::vertical().height(Length::Fill).into(),
+            };
+
+        let mut right = column![
+            text(details.title.clone())
+                .size(TEXT_TITLE)
+                .width(Length::Fill)
+        ]
+        .spacing(space_s)
+        .width(Length::Fill)
+        .height(Length::Fill);
+        right = right.push(chips);
+        if let Some(error) = details.error.as_deref() {
+            right = right.push(
+                row![
+                    icon::icon(icon::from_name("dialog-warning-symbolic").into()).size(ICON_SMALL),
+                    text::caption(fl!("details-unavailable", reason = error.to_owned()))
+                        .size(TEXT_CAPTION),
+                ]
+                .spacing(space_xs)
+                .align_y(Alignment::Center),
+            );
+        }
+        right = right.push(play_row);
+        if let Some(versions) = versions {
+            right = right.push(versions);
+        }
+        right = right.push(column(fact_rows).spacing(space_xs));
+        right = right.push(summary);
+
+        let shots: Element<'_, Message> = if details.screenshots.is_empty() {
+            space::vertical().height(Length::Fixed(0.0)).into()
+        } else {
+            let cards: Vec<Element<'_, Message>> = details
+                .screenshots
+                .iter()
+                .enumerate()
+                .map(|(index, handle)| {
+                    // Bound to a local first: the `fl!` macro cannot infer the
+                    // type of a bare `index + 1` expression argument.
+                    let number = index + 1;
+                    rail_item(
+                        details_focus_id(DetailsFocus::Screenshot(index)),
+                        fl!("screenshot", index = number),
+                        handle.clone(),
+                        DETAILS_SHOT_SIZE,
+                    )
+                    .aspect(DETAILS_SHOT_ASPECT)
+                    .on_press(Message::DetailsSelectScreenshot(index))
+                    .into()
+                })
+                .collect();
+            rail(
+                Id::new("details-screenshots"),
+                fl!("screenshots"),
+                DETAILS_SHOT_SIZE,
+            )
+            .items(cards)
+            .into()
+        };
+
+        let body = row![hero_box, right]
+            .spacing(space_l)
+            .height(Length::Fill)
+            .width(Length::Fill);
+        let content = column![
+            row![back, space::horizontal().width(Length::Fill)].align_y(Alignment::Center),
+            body,
+            shots,
+        ]
+        .spacing(space_m)
+        .padding(space_l)
+        .height(Length::Fill)
+        .width(Length::Fill);
 
         container(content)
             .width(Length::Fill)
@@ -4514,6 +5231,13 @@ fn focused_entry_index(focused: &widget::Id, entry_ids: &[widget::Id]) -> Option
     entry_ids.iter().position(|id| id == focused)
 }
 
+/// Resolves a RomM artwork path the daemon has already cached on disk into a
+/// rasterized icon handle. Artwork reaches the details screen through that
+/// cache, so building a handle is a local read rather than a download.
+fn details_handle(path: &str, size: u32) -> icon::Handle {
+    crate::icon_cache::entry_icon_handle(&IconSource::Path(PathBuf::from(path)), size)
+}
+
 /// Widget id of the dashboard tile for the console at `index` within the
 /// Console Games tab strip.
 fn dashboard_console_id(index: usize) -> widget::Id {
@@ -4609,11 +5333,13 @@ mod tests {
     use crate::app_group::{AppGroup, AppLibraryConfig, FilterType, Section};
     use crate::providers::GameRecord;
     use crate::providers::daemon::{
-        HealthResponse, HostCapabilities, ProviderHealthInfo, RetroConsole, RetroRecordPage,
+        HealthResponse, HostCapabilities, ProviderHealthInfo, RetroConsole, RetroGameDetails,
+        RetroRecordPage, RetroRomVersion,
     };
     use cosmic::{
         desktop::{DesktopEntryData, fde::IconSource},
         iced::widget,
+        widget::icon,
     };
     use std::sync::Arc;
 
@@ -4868,8 +5594,7 @@ mod tests {
         assert!(app.page_animation.is_some());
 
         // Age the transition past its duration, then deliver a redraw tick.
-        let animation = app.page_animation.as_mut().expect("transition in flight");
-        animation.started_at = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        age_page_transition(&mut app);
         let _ = <HearthDeck as cosmic::Application>::update(
             &mut app,
             super::Message::Animate(std::time::Instant::now()),
@@ -4877,6 +5602,16 @@ mod tests {
 
         assert!(app.page_animation.is_none());
         assert_eq!(app.page, Page::Library);
+    }
+
+    /// Ages the in-flight page transition past its duration, so the next
+    /// message expires it instead of advancing it.
+    fn age_page_transition(app: &mut HearthDeck) {
+        let animation = app
+            .page_animation
+            .as_mut()
+            .expect("page transition in flight");
+        animation.started_at = std::time::Instant::now() - std::time::Duration::from_secs(1);
     }
 
     /// Ages the in-flight tab slide by `elapsed` so a tick lands at a known
@@ -5416,5 +6151,312 @@ mod tests {
             rail_scroll_target(9, 10, 0.0, 300.0, 100.0, 10.0),
             Some(790.0)
         );
+    }
+
+    /// A 1x1 transparent handle, enough for a row to exist without decoding a
+    /// real image.
+    fn stub_handle() -> icon::Handle {
+        icon::from_raster_pixels(1, 1, vec![0, 0, 0, 0])
+    }
+
+    /// An app showing the details screen for `rom_id`, seeded the way
+    /// `open_details` seeds it, with `versions` versions and `screenshots`
+    /// screenshot thumbnails.
+    fn details_app(versions: usize, screenshots: usize) -> HearthDeck {
+        use crate::input_ownership::Event as InputEvent;
+
+        let mut app = HearthDeck {
+            details: Some(super::Details {
+                rom_id: 4014,
+                title: "Zoop".into(),
+                cover: None,
+                hero: None,
+                screenshots: vec![stub_handle(); screenshots],
+                hero_shot: None,
+                versions: (0..versions)
+                    .map(|index| RetroRomVersion {
+                        id: 4014 + index as i64,
+                        title: format!("Disc {}", index + 1),
+                        is_main_sibling: index == 0,
+                    })
+                    .collect(),
+                info: None,
+                error: None,
+                focus: super::DetailsFocus::Play,
+                origin_index: 0,
+            }),
+            ..Default::default()
+        };
+        app.switch_page(super::Page::Details);
+        // The frontend owns input while no session is running, which is what
+        // authorizes a launch from the details screen.
+        app.input_ownership
+            .update(InputEvent::SessionObserved(false));
+        app
+    }
+
+    #[test]
+    fn the_context_menu_button_opens_details_only_for_console_games() {
+        use crate::input_ownership::Event as InputEvent;
+
+        let mut app = HearthDeck {
+            entry_path_input: vec![entry("org.example.App"), entry("romm:42")],
+            ..Default::default()
+        };
+        app.update_entry_metadata();
+        app.switch_page(super::Page::Library);
+        // The frontend owns gamepad input while no session is running.
+        app.input_ownership
+            .update(InputEvent::SessionObserved(false));
+
+        // An application has no details screen yet, so X keeps opening the
+        // context menu (its only route to Run/pin/favorite).
+        app.focused_id = app.entry_ids.first().cloned();
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::ContextMenu),
+        );
+        assert!(app.details.is_none());
+        assert_eq!(app.page, super::Page::Library);
+
+        // A RomM game gets the details screen instead, seeded from the tile.
+        app.focused_id = app.entry_ids.get(1).cloned();
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::ContextMenu),
+        );
+        let details = app.details.as_ref().expect("details screen");
+        assert_eq!(app.page, super::Page::Details);
+        assert_eq!(details.rom_id, 42);
+        assert_eq!(details.title, "romm:42");
+        assert_eq!(details.origin_index, 1);
+        // The details screen replaces the menu for games, it does not stack
+        // on top of it.
+        assert!(app.menu.is_none());
+    }
+
+    #[test]
+    fn details_back_returns_to_the_tile_that_opened_it() {
+        use crate::input_ownership::Event as InputEvent;
+
+        let mut app = HearthDeck {
+            entry_path_input: vec![entry("romm:7"), entry("romm:8")],
+            ..Default::default()
+        };
+        app.update_entry_metadata();
+        app.switch_page(super::Page::Library);
+        app.input_ownership
+            .update(InputEvent::SessionObserved(false));
+        app.focused_id = app.entry_ids.get(1).cloned();
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::ContextMenu),
+        );
+        assert_eq!(app.page, super::Page::Details);
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::Back),
+        );
+        assert_eq!(app.page, super::Page::Library);
+        assert_eq!(app.focused_id, app.entry_ids.get(1).cloned());
+        // The screen stays alive under the fade, so the outgoing page can still
+        // be drawn while the transition runs...
+        assert!(app.details.is_some());
+        // ...and is dropped once it finishes.
+        age_page_transition(&mut app);
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::Animate(std::time::Instant::now()),
+        );
+        assert!(app.details.is_none());
+    }
+
+    #[test]
+    fn details_navigation_walks_rows_without_leaving_them() {
+        let mut app = details_app(2, 2);
+
+        let move_once = |app: &mut HearthDeck, message: super::Message| {
+            let _ = <HearthDeck as cosmic::Application>::update(app, message);
+        };
+
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Play));
+        // Rows are [Back, Play], [Disc 1, Disc 2], [shot 1, shot 2].
+        move_once(&mut app, super::Message::NextCol);
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Play));
+        move_once(&mut app, super::Message::PrevCol);
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Back));
+        // Clamped at the row's start: no wrapping onto Play.
+        move_once(&mut app, super::Message::PrevCol);
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Back));
+        move_once(&mut app, super::Message::NextRow);
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Version(0)));
+        move_once(&mut app, super::Message::NextCol);
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Version(1)));
+        move_once(&mut app, super::Message::NextRow);
+        assert_eq!(
+            app.details_cursor(),
+            Some(super::DetailsFocus::Screenshot(1))
+        );
+        // No row below the strip.
+        move_once(&mut app, super::Message::NextRow);
+        assert_eq!(
+            app.details_cursor(),
+            Some(super::DetailsFocus::Screenshot(1))
+        );
+        move_once(&mut app, super::Message::PrevRow);
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Version(1)));
+    }
+
+    #[test]
+    fn details_cursor_recovers_when_its_row_disappears() {
+        let mut app = details_app(0, 1);
+        app.details.as_mut().unwrap().focus = super::DetailsFocus::Screenshot(0);
+        // A later load that found no screenshots leaves the cursor on a row
+        // that no longer exists: the next move must recover, not do nothing.
+        app.details.as_mut().unwrap().screenshots.clear();
+
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Play));
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(app.details_cursor(), Some(super::DetailsFocus::Play));
+    }
+
+    /// A detail payload with every field populated, so a view test exercises
+    /// every row and label rather than the early returns for a sparse game.
+    fn stub_details() -> RetroGameDetails {
+        RetroGameDetails {
+            platform_name: Some("Super Nintendo Entertainment System".into()),
+            summary: Some("A puzzle game".into()),
+            cover_path: Some("/assets/romm/resources/cover.png".into()),
+            cover_large_path: None,
+            screenshot_paths: vec!["/assets/romm/resources/shot.jpg".into()],
+            genres: vec!["Puzzle".into()],
+            player_count: Some("1".into()),
+            release_year: Some(1995),
+            release_date: Some("1995-02-01".into()),
+            regions: Vec::new(),
+            languages: vec!["English".into()],
+            tags: vec!["NA".into()],
+            companies: vec!["PanelComp".into()],
+            game_modes: vec!["Single player".into()],
+            age_ratings: vec!["E".into()],
+            average_rating: Some(62.47),
+            file_size_bytes: Some(524_288),
+        }
+    }
+
+    #[test]
+    fn the_details_view_builds_with_a_fully_populated_game() {
+        let mut app = details_app(2, 2);
+        app.details.as_mut().unwrap().info = Some(stub_details());
+
+        // Building the view evaluates every localised label the screen uses, so
+        // a key missing from the fluent catalogue fails here instead of at
+        // runtime.
+        let _ = app.view_details();
+
+        let details = app.details.as_ref().unwrap();
+        // Year, platform, rating, genre, player count and age rating.
+        assert_eq!(details.chips().len(), 6);
+        // Companies, play modes, players, released, regions (from the file tags
+        // RomM sent, since `regions` is empty), languages and file size.
+        assert_eq!(details.facts().len(), 7);
+        assert_eq!(details.current_version_label(), Some("Disc 1"));
+    }
+
+    #[test]
+    fn a_sparse_game_shows_no_empty_chips_or_facts() {
+        let mut app = details_app(0, 0);
+        app.details.as_mut().unwrap().info = Some(RetroGameDetails {
+            platform_name: None,
+            summary: None,
+            cover_path: None,
+            cover_large_path: None,
+            screenshot_paths: Vec::new(),
+            genres: Vec::new(),
+            player_count: None,
+            release_year: None,
+            release_date: None,
+            regions: Vec::new(),
+            languages: Vec::new(),
+            tags: Vec::new(),
+            companies: Vec::new(),
+            game_modes: Vec::new(),
+            age_ratings: Vec::new(),
+            average_rating: None,
+            file_size_bytes: None,
+        });
+
+        let _ = app.view_details();
+
+        let details = app.details.as_ref().unwrap();
+        assert!(details.chips().is_empty());
+        assert!(details.facts().is_empty());
+        // A single-file game does not repeat its title next to Play.
+        assert_eq!(details.current_version_label(), None);
+    }
+
+    #[test]
+    fn confirming_a_version_launches_it_and_confirming_a_screenshot_does_not() {
+        use crate::providers::daemon::{DaemonClient, DaemonConfig};
+
+        let mut app = details_app(2, 1);
+        app.daemon_client = Some(DaemonClient::new(DaemonConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            token: "test".into(),
+        }));
+        app.details.as_mut().unwrap().focus = super::DetailsFocus::Version(1);
+        let _ = app.activate_details();
+        assert_eq!(app.launch_state.title(), Some("Disc 2"));
+
+        // A screenshot only swaps the hero; it is not a launch target.
+        let mut app = details_app(0, 1);
+        app.details.as_mut().unwrap().focus = super::DetailsFocus::Screenshot(0);
+        let _ = app.activate_details();
+        assert_eq!(app.details.as_ref().unwrap().hero_shot, Some(0));
+        assert!(!app.launch_state.is_visible());
+    }
+
+    #[test]
+    fn stale_details_results_do_not_paint_onto_the_next_screen() {
+        let mut app = details_app(0, 0);
+        app.details.as_mut().unwrap().rom_id = 99;
+
+        // An answer for the game the user already left is dropped...
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::DetailsLoaded {
+                rom_id: 4014,
+                result: Err("too slow".to_owned()),
+            },
+        );
+        assert!(app.details.as_ref().unwrap().error.is_none());
+
+        // ...while one for the game being shown is kept.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::DetailsLoaded {
+                rom_id: 99,
+                result: Err("too slow".to_owned()),
+            },
+        );
+        assert_eq!(
+            app.details.as_ref().unwrap().error.as_deref(),
+            Some("too slow")
+        );
+    }
+
+    #[test]
+    fn shoulder_buttons_do_not_change_section_from_the_details_screen() {
+        let mut app = details_app(0, 0);
+        let section = app.cur_section;
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::NextGroup),
+        );
+
+        assert_eq!(app.cur_section, section);
+        assert_eq!(app.page, super::Page::Details);
     }
 }

@@ -53,3 +53,21 @@ system = System
 local = Local
 nix = Nix
 storage-available = Available space
+
+# Console game details screen
+play = Play
+back = Back
+about = About
+versions = Versions
+screenshots = Screenshots
+screenshot = Screenshot { $index }
+companies = Companies
+play-modes = Play modes
+players = Players
+players-value = { $count } players
+released = Released
+regions = Regions
+languages = Languages
+file-size = File size
+community-rating = { $value }% rating
+details-unavailable = Some details could not be loaded: { $reason }
