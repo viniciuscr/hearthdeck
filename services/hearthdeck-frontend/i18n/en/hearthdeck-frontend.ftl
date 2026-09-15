@@ -12,6 +12,13 @@ new-group = Create Folder
 all-apps = All Apps
 all-games = All Games
 filter = Filter
+filter-count = Filter ({ $count })
+filter-genre = Genre
+filter-decade = Decade
+filter-region = Region
+filter-all = All
+filter-facet-chip = { $facet }: { $value }
+filter-clear = Clear filters
 count-items = { $count ->
     [one] { $count } item
     *[other] { $count } items

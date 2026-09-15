@@ -12,7 +12,9 @@ use std::{
 use tokio::sync::{OnceCell, mpsc};
 
 use super::{GameProvider, GameRecord};
-use crate::app_group::romm_console_category;
+use crate::app_group::{
+    romm_console_category, romm_decade_category, romm_genre_category, romm_region_category,
+};
 
 /// Configuration for connecting to the HearthDeck daemon.
 #[derive(Clone, Debug)]
@@ -121,6 +123,10 @@ pub struct RetroGame {
     pub screenshot_paths: Vec<String>,
     pub genres: Vec<String>,
     pub release_year: Option<i32>,
+    /// Regions RomM matched for this game (`USA`, `Japan`), used by the console
+    /// grid's filter facets.
+    #[serde(default)]
+    pub regions: Vec<String>,
     /// Other versions of the same game (regions, revisions, or individual
     /// discs) already collapsed into this entry by the daemon. Empty for a
     /// single-file game.
@@ -903,6 +909,21 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
 }
 
 pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameRecord {
+    // The filterable metadata a record carries has to travel as categories:
+    // `DesktopEntryData` has no metadata field, and the grid filters on the
+    // converted entry. Built before the metadata map below, which moves the
+    // fields it copies.
+    let mut categories = vec!["Game".to_string(), romm_console_category(game.platform_id)];
+    categories.extend(game.genres.iter().map(|genre| romm_genre_category(genre)));
+    categories.extend(
+        game.regions
+            .iter()
+            .map(|region| romm_region_category(region)),
+    );
+    if let Some(release_year) = game.release_year {
+        categories.push(romm_decade_category(release_year));
+    }
+
     let mut metadata = serde_json::Map::new();
     if let Some(summary) = game.summary {
         metadata.insert("comment".to_string(), serde_json::Value::String(summary));
@@ -936,7 +957,7 @@ pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameR
         exec: Some(game.id.to_string()),
         icon,
         path: None,
-        categories: vec!["Game".to_string(), romm_console_category(game.platform_id)],
+        categories,
         terminal: false,
         prefers_dgpu: false,
         source: "RomM".to_string(),
@@ -1323,6 +1344,7 @@ mod tests {
                 screenshot_paths: Vec::new(),
                 genres: vec!["RPG".to_string()],
                 release_year: Some(1994),
+                regions: vec!["Japan".to_string()],
                 sibling_roms: Vec::new(),
                 version_label: None,
             },
@@ -1331,9 +1353,20 @@ mod tests {
 
         assert_eq!(record.id, "romm:42");
         assert_eq!(record.exec.as_deref(), Some("42"));
-        assert_eq!(record.categories, vec!["Game", "hearthdeck-console:7"]);
         assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
         assert_eq!(record.metadata["genres"], serde_json::json!(["RPG"]));
+        // The console filters read a record's RomM metadata off its categories,
+        // which is the only field `DesktopEntryData` keeps.
+        assert_eq!(
+            record.categories,
+            vec![
+                "Game",
+                "hearthdeck-console:7",
+                "hearthdeck-genre:RPG",
+                "hearthdeck-region:Japan",
+                "hearthdeck-decade:1990",
+            ]
+        );
     }
 
     #[test]
@@ -1348,6 +1381,7 @@ mod tests {
                 screenshot_paths: Vec::new(),
                 genres: Vec::new(),
                 release_year: None,
+                regions: Vec::new(),
                 sibling_roms: vec![
                     RetroRomVersion {
                         id: 43,

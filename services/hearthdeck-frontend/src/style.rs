@@ -704,6 +704,35 @@ pub fn tab_button_class(selected: bool) -> Button {
     }
 }
 
+/// Console filter chips, used by both the facet chips in the library's filter bar
+/// and the value chips in its panel: a pill whose fill marks a selected value.
+///
+/// A chip rings when it holds iced's focus (so the D-pad can walk the bar) or
+/// when it sits under the panel's own cursor (the panel is navigated by that
+/// cursor rather than by focus, like the details screen).
+pub fn filter_chip_class(selected: bool, cursor: bool) -> Button {
+    let styled = move |focused: bool, theme: &Theme| {
+        let mut style = theme.active(focused, false, &Button::IconVertical);
+        style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+        style.background = Some(chip_background(if selected { 0.18 } else { 0.06 }, theme));
+        style.text_color = Some(theme.cosmic().on_bg_color().into());
+        focus_ring(style, focused || cursor, theme)
+    };
+
+    Button::Custom {
+        active: Box::new(styled),
+        disabled: Box::new(|theme| theme.disabled(&Button::IconVertical)),
+        hovered: Box::new(move |focused, theme| {
+            let mut style = theme.hovered(focused, false, &Button::IconVertical);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            style.background = Some(chip_background(if selected { 0.18 } else { 0.10 }, theme));
+            style.text_color = Some(theme.cosmic().on_bg_color().into());
+            focus_ring(style, focused || cursor, theme)
+        }),
+        pressed: Box::new(styled),
+    }
+}
+
 /// Grid tile appearance: the shared surface radius, plus the focus ring when
 /// the tile is focused. Exactly one border is ever drawn.
 fn tile_style(mut style: button::Style, focused: bool, theme: &Theme) -> button::Style {

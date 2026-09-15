@@ -80,7 +80,7 @@ use itertools::Itertools;
 use log::{error, warn};
 use serde::{Deserialize, Serialize};
 
-use crate::app_group::{AppGroup, AppLibraryConfig, Section};
+use crate::app_group::{AppGroup, AppLibraryConfig, RommFacet, RommFilters, Section};
 use crate::fl;
 use crate::input_ownership::{
     Event as InputEvent, InputOwnership, LaunchTarget, managed_launch_target,
@@ -100,11 +100,11 @@ use crate::style::{
     backdrop_scrim, backdrop_wash, card_surface, content_horizontal_padding,
     dashboard_console_tile_size, dashboard_nav_button_class, dashboard_tile_size,
     details_action_bar_padding, details_action_height, details_hero_width,
-    details_toggle_button_class, filter_button_height, grid_gap, grid_top_padding, hero_card,
-    launch_overlay, modal_scrim, primary_action_button_class, root_background, search_icon_padding,
-    section_button_class, sidebar_accent_bar_height, sidebar_divider, sidebar_header_height,
-    sidebar_item_height, sidebar_width, tab_button_class, tab_height, tab_underline_height,
-    tab_width, tile_height, tile_width, title_action_height,
+    details_toggle_button_class, filter_button_height, filter_chip_class, grid_gap,
+    grid_top_padding, hero_card, launch_overlay, modal_scrim, primary_action_button_class,
+    root_background, search_icon_padding, section_button_class, sidebar_accent_bar_height,
+    sidebar_divider, sidebar_header_height, sidebar_item_height, sidebar_width, tab_button_class,
+    tab_height, tab_underline_height, tab_width, tile_height, tile_width, title_action_height,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
@@ -119,6 +119,9 @@ use crate::widgets::transition::{PageTransition, TabTransition};
 
 static SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("search"));
 static FILTER_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter"));
+/// Single-line strip of value chips inside the open console filter panel. Its
+/// own id because, like the tab strip, it scrolls to keep the cursor visible.
+static FILTER_VALUES_SCROLLABLE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter-values"));
 static DASHBOARD_HOME_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-home"));
 static DASHBOARD_LIBRARY_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-library"));
 static DASHBOARD_SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-search"));
@@ -144,7 +147,20 @@ fn group_tab_id(key: u64) -> Id {
     Id::new(format!("group-tab-{key}"))
 }
 
+/// Widget id of one value chip in the open filter panel. The id is how the
+/// scroll-to-cursor operation finds the chip's bounds.
+fn filter_value_id(facet: usize, value: usize) -> Id {
+    Id::new(format!("filter-value-{facet}-{value}"))
+}
+
+/// Widget id of the facet chip at `index` in the filter bar, so a chip reached
+/// with the D-pad can be confirmed like a click.
+fn filter_facet_id(index: usize) -> Id {
+    Id::new(format!("filter-facet-{index}"))
+}
+
 static EDIT_GROUP_ID: LazyLock<Id> = LazyLock::new(|| Id::new("edit_group"));
+static CLEAR_FILTERS_ID: LazyLock<Id> = LazyLock::new(|| Id::new("clear_filters"));
 static NEW_GROUP_ID: LazyLock<Id> = LazyLock::new(|| Id::new("new_group"));
 static SUBMIT_DELETE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("cancel_delete"));
 
@@ -419,6 +435,14 @@ struct HearthDeck {
     group_keys: Vec<u64>,
     next_group_key: u64,
     gamepad_focus_first: bool,
+    /// Console Games filter selection. Console games are the one section with
+    /// RomM metadata to filter on today; the grid projection applies this to
+    /// them and ignores it everywhere else.
+    filters: RommFilters,
+    /// Cursor of the open console filter panel, or `None` while it is closed.
+    /// Navigated by the application's own cursor rather than iced focus, like
+    /// the context menu and the details screen.
+    filter_cursor: Option<FilterCursor>,
     /// Kept alive to hold the background provider discovery tasks.
     #[allow(dead_code)]
     provider_service: Option<crate::providers::service::ProviderService>,
@@ -513,6 +537,8 @@ impl Default for HearthDeck {
             group_keys: Default::default(),
             next_group_key: Default::default(),
             gamepad_focus_first: Default::default(),
+            filters: RommFilters::default(),
+            filter_cursor: None,
             provider_service: None,
             daemon_client: None,
             launch_state: LaunchState::default(),
@@ -592,7 +618,7 @@ impl HearthDeck {
             Some(index) => {
                 let key = self.group_keys.get(index).copied()?;
                 Some(
-                    iced_runtime::task::widget(FindTabStripReveal {
+                    iced_runtime::task::widget(FindStripReveal {
                         scrollable_id: TAB_STRIP_SCROLLABLE_ID.clone(),
                         tab_id: group_tab_id(key),
                         viewport: None,
@@ -600,7 +626,12 @@ impl HearthDeck {
                         translation_x: None,
                         tab: None,
                     })
-                    .map(|offset| cosmic::Action::App(Message::ScrollTabStrip(offset))),
+                    .map(|offset| {
+                        cosmic::Action::App(Message::ScrollStrip(
+                            TAB_STRIP_SCROLLABLE_ID.clone(),
+                            offset,
+                        ))
+                    }),
                 )
             }
         }
@@ -991,7 +1022,19 @@ enum Message {
     ConfirmFocused(widget::Id),
     SelectSection(Section),
     SelectGroup(Option<usize>),
-    ToggleFilterMenu,
+    /// Open or close the console filter panel.
+    ToggleFilterPanel,
+    /// Open the filter panel on one facet, by index into the bar's facets (a
+    /// click on that facet's chip).
+    FilterFacet(usize),
+    /// Point one facet at `value`, or clear that facet when `value` is `None`
+    /// (the panel's "All" chip).
+    SelectFilter {
+        facet: RommFacet,
+        value: Option<String>,
+    },
+    /// Drop every console filter.
+    ClearFilters,
     ReorderGroup(Vec<GroupRowKey>),
     Delete(usize),
     ConfirmDelete,
@@ -1030,9 +1073,9 @@ enum Message {
         offset: f32,
         viewport: f32,
     },
-    /// Absolute horizontal scroll offset that keeps the selected tab visible
-    /// inside the single-line tab strip.
-    ScrollTabStrip(f32),
+    /// Absolute horizontal scroll offset that keeps a chip or tab visible
+    /// inside its single-line strip (`id`).
+    ScrollStrip(widget::Id, f32),
     PinToAppTray(usize),
     UnPinFromAppTray(usize),
     ToggleFavorite(usize),
@@ -1119,6 +1162,17 @@ impl VirtualKeyboard {
         self.pending_target = Some(self.requested_visible);
         self.pending_target
     }
+}
+
+/// Where the console filter panel's cursor sits: which facet is active, whether
+/// the cursor is on the facet row or on that facet's values, and which value it
+/// points at. Index 0 of a facet's values is its "All" chip, so the cursor can
+/// always clear the facet it is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FilterCursor {
+    facet: usize,
+    value: usize,
+    on_values: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1397,6 +1451,218 @@ impl HearthDeck {
         }
     }
 
+    /// Whether the console grid's local view has to see the whole scope before
+    /// it can be trusted. Both the search box and the filters run over the
+    /// records the frontend already holds, while the grid loads a page at a
+    /// time, so a narrowed console view keeps pulling pages until RomM runs
+    /// out. Plain browsing stays on-demand.
+    fn console_needs_all_pages(&self) -> bool {
+        self.cur_section == Section::ConsoleGames
+            && (!self.search_value.is_empty() || self.filters.is_active())
+    }
+
+    /// The facets the current section can filter on, in the order the filter bar
+    /// shows them. Only console games expose facets today, and a facet that no
+    /// loaded record carries is dropped rather than shown empty: a library
+    /// without region metadata simply gets no region chip.
+    fn filter_facets(&self) -> Vec<RommFacet> {
+        if self.cur_section != Section::ConsoleGames {
+            return Vec::new();
+        }
+        RommFacet::ALL
+            .into_iter()
+            .filter(|facet| !facet.values(&self.all_entries).is_empty())
+            .collect()
+    }
+
+    /// The options a facet offers, "All" first. The panel cursor's value index
+    /// indexes into this list, so index 0 always means "no filter here".
+    fn filter_options(&self, facet: RommFacet) -> Vec<Option<String>> {
+        std::iter::once(None)
+            .chain(facet.values(&self.all_entries).into_iter().map(Some))
+            .collect()
+    }
+
+    /// Where the cursor should sit to rest on a facet's current value. The
+    /// leading `None` of the option list matches a facet with no selection, so
+    /// this lands on "All" for an unfiltered facet.
+    fn filter_selected_index(&self, facet: RommFacet) -> usize {
+        let selected = self.filters.selected(facet);
+        self.filter_options(facet)
+            .iter()
+            .position(|option| option.as_deref() == selected)
+            .unwrap_or(0)
+    }
+
+    /// Points the open panel's cursor at `facet` and its selected value.
+    fn point_filter_cursor(&mut self, facet: RommFacet) {
+        let Some(index) = self
+            .filter_facets()
+            .iter()
+            .position(|candidate| *candidate == facet)
+        else {
+            return;
+        };
+        let value = self.filter_selected_index(facet);
+        if let Some(cursor) = self.filter_cursor.as_mut() {
+            cursor.facet = index;
+            cursor.value = value;
+            cursor.on_values = true;
+        }
+    }
+
+    /// Opens the filter panel on `facet` (clamped to the facets on show), with
+    /// the cursor resting on that facet's current value. A section with no
+    /// facets closes the panel instead of showing an empty one.
+    fn open_filter_panel(&mut self, facet: usize) -> Task<Message> {
+        let facets = self.filter_facets();
+        if facets.is_empty() {
+            self.filter_cursor = None;
+            return Task::none();
+        }
+        let facet = facets[facet.min(facets.len() - 1)];
+        self.filter_cursor = Some(FilterCursor {
+            facet: 0,
+            value: 0,
+            on_values: true,
+        });
+        self.point_filter_cursor(facet);
+        // Opening the panel is not a text-input gesture: drop the on-screen
+        // keyboard if the search box was focused.
+        Task::batch([
+            self.request_virtual_keyboard(false),
+            self.reveal_filter_cursor(),
+        ])
+    }
+
+    /// One D-pad step inside the open filter panel. `column` walks the active
+    /// row sideways: facets from the facet row, values from the value row, both
+    /// wrapping. `row` moves between the two rows, and up off the facet row
+    /// leaves the panel, the way a dropdown closes upward.
+    fn step_filter_cursor(&mut self, column: i32, row: i32) -> Task<Message> {
+        let Some(cursor) = self.filter_cursor else {
+            return Task::none();
+        };
+        let facets = self.filter_facets();
+        if facets.is_empty() {
+            self.filter_cursor = None;
+            return Task::none();
+        }
+
+        if row < 0 && !cursor.on_values {
+            self.filter_cursor = None;
+            return Task::none();
+        }
+
+        let mut next = cursor;
+        if row != 0 {
+            next.on_values = row > 0;
+        }
+        if column != 0 {
+            if next.on_values {
+                let options = self.filter_options(facets[cursor.facet]).len();
+                next.value = (cursor.value as i32 + column).rem_euclid(options as i32) as usize;
+            } else {
+                next.facet =
+                    (cursor.facet as i32 + column).rem_euclid(facets.len() as i32) as usize;
+                next.value = self.filter_selected_index(facets[next.facet]);
+            }
+        }
+        self.filter_cursor = Some(next);
+        self.reveal_filter_cursor()
+    }
+
+    /// Applies whatever the open panel's cursor points at: a value on the value
+    /// row sets that facet, while A on the facet row only steps down into its
+    /// values.
+    fn apply_filter_cursor(&mut self) -> Task<Message> {
+        let Some(cursor) = self.filter_cursor else {
+            return Task::none();
+        };
+        let facets = self.filter_facets();
+        let Some(facet) = facets.get(cursor.facet).copied() else {
+            self.filter_cursor = None;
+            return Task::none();
+        };
+        if !cursor.on_values {
+            self.filter_cursor = Some(FilterCursor {
+                on_values: true,
+                ..cursor
+            });
+            return self.reveal_filter_cursor();
+        }
+        let value = self
+            .filter_options(facet)
+            .get(cursor.value)
+            .cloned()
+            .flatten();
+        self.select_filter(facet, value)
+    }
+
+    /// Points `facet` at `value` (or clears it), re-projects the grid and keeps
+    /// the panel cursor on what was just chosen.
+    fn select_filter(&mut self, facet: RommFacet, value: Option<String>) -> Task<Message> {
+        self.filters.set(facet, value);
+        self.point_filter_cursor(facet);
+        Task::batch([self.reload_console_grid(), self.reveal_filter_cursor()])
+    }
+
+    /// Re-projects the console grid after the filter changes: back to the top of
+    /// the new result set, and on to the next page while the narrowed view still
+    /// needs the whole scope loaded.
+    fn reload_console_grid(&mut self) -> Task<Message> {
+        self.load_apps();
+        self.scroll_offset = 0.0;
+        let mut tasks = vec![iced::widget::scrollable::scroll_to(
+            SCROLLABLE_ID.clone(),
+            AbsoluteOffset {
+                x: Some(0.0),
+                y: Some(0.0),
+            },
+        )];
+        if self.console_needs_all_pages()
+            && !self.romm_loading_page
+            && let Some(offset) = self.romm_next_offset
+        {
+            tasks.push(self.load_romm_page(offset));
+        }
+        Task::batch(tasks)
+    }
+
+    /// Scrolls the panel's value strip so the cursor's chip is visible: the
+    /// strip is one line, so a value past its right edge would otherwise be
+    /// reachable but invisible.
+    fn reveal_filter_cursor(&self) -> Task<Message> {
+        let Some(cursor) = self.filter_cursor else {
+            return Task::none();
+        };
+        iced_runtime::task::widget(FindStripReveal {
+            scrollable_id: FILTER_VALUES_SCROLLABLE_ID.clone(),
+            tab_id: filter_value_id(cursor.facet, cursor.value),
+            viewport: None,
+            content_width: None,
+            translation_x: None,
+            tab: None,
+        })
+        .map(|offset| {
+            cosmic::Action::App(Message::ScrollStrip(
+                FILTER_VALUES_SCROLLABLE_ID.clone(),
+                offset,
+            ))
+        })
+    }
+
+    /// Focuses the first grid tile once a reload has painted the new entries.
+    /// Deferred through a no-op task because the focus operation needs widget
+    /// ids that only exist after the next view, and the grid - not the search
+    /// box - is where entering a section should land.
+    fn focus_grid_after_reload(&mut self) -> Task<Message> {
+        if std::mem::take(&mut self.gamepad_focus_first) {
+            return Task::perform(async {}, |_| cosmic::Action::App(Message::FocusGridFirst));
+        }
+        Task::none()
+    }
+
     pub fn load_apps(&mut self) {
         // The daemon owns discovery; this only projects its catalog records
         // into the currently selected section and group.
@@ -1406,6 +1672,7 @@ impl HearthDeck {
             self.cur_group,
             &self.search_value,
             &self.all_entries,
+            &self.filters,
         );
 
         // collect duplicates
@@ -1450,12 +1717,14 @@ impl HearthDeck {
         let cur_section = self.cur_section;
         let cur_group = self.cur_group;
         let input = self.search_value.clone();
+        let filters = self.filters.clone();
         let prerender = tile_width(self.window_width) as u32;
         if !self.waiting_for_filtered {
             self.waiting_for_filtered = true;
             iced::Task::perform(
                 async move {
-                    let mut apps = config.filtered(cur_section, cur_group, &input, &all_entries);
+                    let mut apps =
+                        config.filtered(cur_section, cur_group, &input, &all_entries, &filters);
                     apps.sort_by(|a, b| a.name.cmp(&b.name));
                     let icon_handles = apps
                         .iter()
@@ -1475,6 +1744,11 @@ impl HearthDeck {
     /// page actually changes. Re-selecting the current page snaps instead of
     /// fading to the same place.
     fn switch_page(&mut self, to: Page) {
+        // The filter panel belongs to the library screen; leaving it must not
+        // leave the panel behind to reappear on the way back.
+        if to != Page::Library {
+            self.filter_cursor = None;
+        }
         if self.page == to {
             self.page_animation = None;
             return;
@@ -1523,6 +1797,7 @@ impl HearthDeck {
     fn apply_group(&mut self, group: Option<usize>) -> Task<Message> {
         self.edit_name = None;
         self.search_value.clear();
+        self.filter_cursor = None;
         self.cur_group = group;
         self.scroll_offset = 0.0;
         let load = if self.cur_section == Section::ConsoleGames {
@@ -1540,11 +1815,10 @@ impl HearthDeck {
                 },
             ),
         ];
-        if group.is_none() && !self.gamepad_focus_first {
-            cmds.push(self.focus_text_input(SEARCH_ID.clone()));
-        } else {
-            cmds.push(self.request_virtual_keyboard(false));
-        }
+        // A tab change lands on the grid, not in the search box: focusing a text
+        // input raises the on-screen keyboard, which is hostile on a TV.
+        self.gamepad_focus_first = true;
+        cmds.push(self.request_virtual_keyboard(false));
         if let Some(task) = self.reveal_tab_strip() {
             cmds.push(task);
         }
@@ -2534,6 +2808,16 @@ impl HearthDeck {
             self.move_menu_selection(delta);
             return Task::none();
         }
+        if self.filter_cursor.is_some() {
+            // The filter panel is the same idea: its cursor owns the D-pad.
+            return match msg {
+                Message::PrevRow => self.step_filter_cursor(0, -1),
+                Message::NextRow => self.step_filter_cursor(0, 1),
+                Message::PrevCol => self.step_filter_cursor(-1, 0),
+                Message::NextCol => self.step_filter_cursor(1, 0),
+                _ => Task::none(),
+            };
+        }
         if self.focused_is_text_input() {
             return match msg {
                 Message::NextRow | Message::NextCol => {
@@ -2544,6 +2828,26 @@ impl HearthDeck {
             };
         }
         self.update(msg)
+    }
+
+    /// Acts on a filter chip that holds iced's focus, if `focused` is one. The
+    /// bar's chips are focusable so the D-pad can walk into them; each then does
+    /// exactly what a click on it does, instead of being a dead end.
+    fn confirm_filter_chip(&mut self, focused: &widget::Id) -> Option<Task<Message>> {
+        if focused == &*CLEAR_FILTERS_ID {
+            return Some(self.update(Message::ClearFilters));
+        }
+        let index =
+            (0..self.filter_facets().len()).find(|index| focused == &filter_facet_id(*index))?;
+        Some(self.open_filter_panel(index))
+    }
+
+    /// Routes a direction to the transient UI that owns it, if any: the context
+    /// menu moves its highlight and the filter panel moves its cursor, rather
+    /// than the grid behind them moving its selection. `None` leaves the
+    /// direction to the screen itself.
+    fn direction_to_overlay(&mut self, message: Message) -> Option<Task<Message>> {
+        (self.menu.is_some() || self.filter_cursor.is_some()).then(|| self.gamepad_move(message))
     }
 
     /// Handle the gamepad confirm (A) button.
@@ -2558,6 +2862,10 @@ impl HearthDeck {
             // The details screen acts on its own cursor rather than on iced's
             // focus, so Confirm still works on the first frame after opening.
             return self.activate_details();
+        }
+        if self.filter_cursor.is_some() {
+            // Like the details screen, the filter panel acts on its own cursor.
+            return self.apply_filter_cursor();
         }
         if self.menu.is_some() {
             // A context menu is open: confirm its highlighted entry.
@@ -2589,6 +2897,12 @@ impl HearthDeck {
         }
         if self.menu.is_some() {
             return self.update(Message::CloseContextMenu);
+        }
+        // The filter panel is a surface of its own too: Back closes it before
+        // it reaches the screen behind it.
+        if self.filter_cursor.is_some() {
+            self.filter_cursor = None;
+            return Task::none();
         }
         if self.new_group.is_some() {
             return self.update(Message::CancelNewGroup);
@@ -2641,7 +2955,10 @@ impl HearthDeck {
     /// surfaces, so the main window can look unfocused while they are up, and
     /// app-state changes (the menu highlight) do not otherwise repaint them.
     fn frontend_surface_open(&self) -> bool {
-        self.menu.is_some() || self.new_group.is_some() || self.group_to_delete.is_some()
+        self.menu.is_some()
+            || self.filter_cursor.is_some()
+            || self.new_group.is_some()
+            || self.group_to_delete.is_some()
     }
 
     /// Number of entries the context menu shows for the current selection.
@@ -2818,12 +3135,13 @@ impl Operation<f32> for FindViewport {
     }
 }
 
-/// An operation that measures how far a group tab sits outside the visible
-/// part of the single-line tab strip, and returns the absolute scroll offset
-/// that would center it. Layout coordinates from the tree are the strip's
-/// natural (unscrolled) positions, so the current scroll offset must be
-/// subtracted before comparing against the viewport.
-struct FindTabStripReveal {
+/// An operation that measures how far a chip sits outside the visible part of
+/// its single-line strip, and returns the absolute scroll offset that would
+/// center it. Layout coordinates from the tree are the strip's natural
+/// (unscrolled) positions, so the current scroll offset must be subtracted
+/// before comparing against the viewport. Used by both the section tab strip
+/// and the filter panel's value strip.
+struct FindStripReveal {
     scrollable_id: Id,
     tab_id: Id,
     viewport: Option<Rectangle>,
@@ -2832,7 +3150,7 @@ struct FindTabStripReveal {
     tab: Option<Rectangle>,
 }
 
-impl Operation<f32> for FindTabStripReveal {
+impl Operation<f32> for FindStripReveal {
     fn scrollable(
         &mut self,
         id: Option<&Id>,
@@ -3046,21 +3364,24 @@ impl cosmic::Application for HearthDeck {
                 // tiles each time a later page landed (visible reflow). Pages
                 // are appended in order; more load on scroll.
                 self.load_apps();
-                // While a search is active, the local filter must see the whole
-                // scope, so keep pulling pages until it is exhausted. Plain
-                // browsing stays on-demand.
-                if !self.search_value.is_empty()
+                // A section entry focuses the grid once its first page exists.
+                let focus = self.focus_grid_after_reload();
+                // While a search or a filter is active, the local projection must
+                // see the whole scope, so keep pulling pages until it is
+                // exhausted. Plain browsing stays on-demand.
+                if self.console_needs_all_pages()
                     && let Some(offset) = self.romm_next_offset
                 {
-                    return self.load_romm_page(offset);
+                    return Task::batch([focus, self.load_romm_page(offset)]);
                 }
                 // Load just enough further pages to fill the viewport.
                 if let Some(offset) = self.romm_next_offset {
                     let loaded_rows = self.entry_path_input.len().div_ceil(GRID_COLUMNS) as f32;
                     if loaded_rows < self.visible_row_count() + 1.0 {
-                        return self.load_romm_page(offset);
+                        return Task::batch([focus, self.load_romm_page(offset)]);
                     }
                 }
+                return focus;
             }
             Message::UpdateFocused(id) => {
                 self.focused_id = id;
@@ -3103,10 +3424,8 @@ impl cosmic::Application for HearthDeck {
             },
 
             Message::PrevRow => {
-                if self.menu.is_some() {
-                    // Keyboard arrows drive the menu highlight too, so a
-                    // controller that presents as a keyboard can navigate it.
-                    return self.gamepad_move(Message::PrevRow);
+                if let Some(task) = self.direction_to_overlay(Message::PrevRow) {
+                    return task;
                 }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_vertical_target(-1) else {
@@ -3152,8 +3471,8 @@ impl cosmic::Application for HearthDeck {
                 return Task::batch(tasks);
             }
             Message::NextRow => {
-                if self.menu.is_some() {
-                    return self.gamepad_move(Message::NextRow);
+                if let Some(task) = self.direction_to_overlay(Message::NextRow) {
+                    return task;
                 }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_vertical_target(1) else {
@@ -3200,8 +3519,8 @@ impl cosmic::Application for HearthDeck {
                 return Task::batch(tasks);
             }
             Message::PrevCol => {
-                if self.menu.is_some() {
-                    return self.gamepad_move(Message::PrevCol);
+                if let Some(task) = self.direction_to_overlay(Message::PrevCol) {
+                    return task;
                 }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_horizontal_target(-1) else {
@@ -3224,8 +3543,8 @@ impl cosmic::Application for HearthDeck {
                 return self.focus_grid_index(i - 1);
             }
             Message::NextCol => {
-                if self.menu.is_some() {
-                    return self.gamepad_move(Message::NextCol);
+                if let Some(task) = self.direction_to_overlay(Message::NextCol) {
+                    return task;
                 }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_horizontal_target(1) else {
@@ -3253,6 +3572,22 @@ impl cosmic::Application for HearthDeck {
                 // is open, even if that surface drove input ownership away from
                 // `Frontend` (e.g. a popup that took keyboard focus).
                 if !self.input_ownership.frontend_has_control() && !self.frontend_surface_open() {
+                    return Task::none();
+                }
+                // The open filter panel owns the pad: its cursor handles the
+                // D-pad and A, B closes it, and letting any other button through
+                // would act on the screen behind it.
+                if self.filter_cursor.is_some()
+                    && !matches!(
+                        event,
+                        GamepadEvent::MoveUp
+                            | GamepadEvent::MoveDown
+                            | GamepadEvent::MoveLeft
+                            | GamepadEvent::MoveRight
+                            | GamepadEvent::Confirm
+                            | GamepadEvent::Back
+                    )
+                {
                     return Task::none();
                 }
                 return match event {
@@ -3385,10 +3720,10 @@ impl cosmic::Application for HearthDeck {
             Message::InputChanged(value) => {
                 self.search_value = value;
                 let filter = self.filter_apps();
-                // Console search filters the loaded RomM entries locally, so an
-                // active query has to pull the remaining pages.
-                if self.cur_section == Section::ConsoleGames
-                    && !self.search_value.is_empty()
+                // While a search or a filter is active the local projection has
+                // to see the whole scope, so keep pulling pages until it is
+                // exhausted. Plain browsing stays on-demand.
+                if self.console_needs_all_pages()
                     && !self.romm_loading_page
                     && let Some(offset) = self.romm_next_offset
                 {
@@ -3416,6 +3751,12 @@ impl cosmic::Application for HearthDeck {
                     return self.update(Message::CloseDetails);
                 }
                 if self.page == Page::Library {
+                    // Back dismisses the topmost transient UI first: the filter
+                    // panel closes before the screen is left.
+                    if self.filter_cursor.is_some() {
+                        self.filter_cursor = None;
+                        return Task::none();
+                    }
                     return self.update(Message::OpenDashboard);
                 }
                 return Task::none();
@@ -3462,6 +3803,12 @@ impl cosmic::Application for HearthDeck {
                 if focused == *EDIT_GROUP_ID {
                     return self.update(Message::SubmitName);
                 }
+                if focused == *FILTER_ID {
+                    return self.update(Message::ToggleFilterPanel);
+                }
+                if let Some(task) = self.confirm_filter_chip(&focused) {
+                    return task;
+                }
                 let Some(i) = focused_entry_index(&focused, &self.entry_ids) else {
                     return Task::none();
                 };
@@ -3473,6 +3820,7 @@ impl cosmic::Application for HearthDeck {
                 }
                 self.edit_name = None;
                 self.search_value.clear();
+                self.filter_cursor = None;
                 self.cur_section = section;
                 self.cur_group = None;
                 self.scroll_offset = 0.0;
@@ -3492,11 +3840,10 @@ impl cosmic::Application for HearthDeck {
                         },
                     ),
                 ];
-                if self.gamepad_focus_first {
-                    cmds.push(self.request_virtual_keyboard(false));
-                } else {
-                    cmds.push(self.focus_text_input(SEARCH_ID.clone()));
-                }
+                // Entering a section lands on the grid rather than in the search
+                // box, which would raise the on-screen keyboard.
+                self.gamepad_focus_first = true;
+                cmds.push(self.request_virtual_keyboard(false));
                 if let Some(task) = self.reveal_tab_strip() {
                     cmds.push(task);
                 }
@@ -3511,9 +3858,30 @@ impl cosmic::Application for HearthDeck {
                 self.begin_tab_animation(group);
                 return Task::none();
             }
-            // TODO: wire the filter popover. The button and total-item count
-            // are already in place; this message currently does nothing.
-            Message::ToggleFilterMenu => {}
+            // The filter panel is a transient surface of the library screen: it
+            // owns the grid's filter row until it is closed.
+            Message::ToggleFilterPanel => {
+                if self.filter_cursor.is_some() {
+                    self.filter_cursor = None;
+                    return Task::none();
+                }
+                return self.open_filter_panel(0);
+            }
+            Message::FilterFacet(index) => {
+                return self.open_filter_panel(index);
+            }
+            Message::SelectFilter { facet, value } => {
+                return self.select_filter(facet, value);
+            }
+            Message::ClearFilters => {
+                self.filters.clear();
+                let mut tasks = vec![self.reload_console_grid()];
+                // Point the still-open panel back at the first facet's "All".
+                if self.filter_cursor.is_some() {
+                    tasks.push(self.open_filter_panel(0));
+                }
+                return Task::batch(tasks);
+            }
             Message::ReorderGroup(new_order) => {
                 let prev_selected_key =
                     self.cur_group.and_then(|i| self.group_keys.get(i).copied());
@@ -3796,9 +4164,9 @@ impl cosmic::Application for HearthDeck {
             } => {
                 self.dashboard_rail_scroll.insert(key, (offset, viewport));
             }
-            Message::ScrollTabStrip(offset) => {
+            Message::ScrollStrip(id, offset) => {
                 return iced::widget::scrollable::scroll_to(
-                    TAB_STRIP_SCROLLABLE_ID.clone(),
+                    id,
                     AbsoluteOffset {
                         x: Some(offset),
                         y: None,
@@ -3835,11 +4203,7 @@ impl cosmic::Application for HearthDeck {
                 if self.search_value != input {
                     return self.filter_apps();
                 }
-                if std::mem::take(&mut self.gamepad_focus_first) {
-                    return Task::perform(async {}, |_| {
-                        cosmic::Action::App(Message::FocusGridFirst)
-                    });
-                }
+                return self.focus_grid_after_reload();
             }
             Message::PinToAppTray(usize) => {
                 let pinned_id = self.entry_path_input.get(usize).map(|e| e.id.clone());
@@ -5188,9 +5552,10 @@ impl HearthDeck {
 
         // The Console Games grid lazy-loads pages, so its "N items" label must
         // not track the loaded-page count (which climbs as the user scrolls).
-        // Use RomM's own per-console total unless a local search is narrowing
-        // the visible set, where the loaded count *is* the result count.
-        let item_count = if cur_section == Section::ConsoleGames && self.search_value.is_empty() {
+        // Use RomM's own per-console total unless the view is narrowed by a
+        // search or a filter, where the loaded count *is* the result count.
+        let item_count = if cur_section == Section::ConsoleGames && !self.console_needs_all_pages()
+        {
             self.console_total_count()
                 .unwrap_or(self.entry_path_input.len())
         } else {
@@ -5406,26 +5771,6 @@ impl HearthDeck {
         .align_y(Alignment::Center)
         .spacing(space_s);
 
-        // ===== Filter button + item count (right side of the tab row) =====
-        let filter_btn = button::custom(
-            container(
-                row![
-                    icon::icon(icon::from_name("view-filter-symbolic").into()).size(ICON_BODY),
-                    text::body(fl!("filter")).size(TEXT_BODY),
-                ]
-                .spacing(space_xs)
-                .align_y(Alignment::Center),
-            )
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-            .padding([space_none, space_m]),
-        )
-        .height(Length::Fixed(filter_button_height()))
-        .width(Length::Shrink)
-        .class(section_button_class(false))
-        .id(FILTER_ID.clone())
-        .on_press(Message::ToggleFilterMenu);
-
         // ===== Sub-tab strip =====
         // A tab is a text button with a 4px underline that shows the accent
         // color on the active tab. Both custom group tabs and the locked
@@ -5551,10 +5896,137 @@ impl HearthDeck {
         .scrollbar_width(0)
         .scroller_width(0);
 
-        let tab_row = row![
-            tab_strip,
-            filter_btn,
-            container(text::body(fl!("count-items", count = item_count)).size(TEXT_BODY),)
+        let tab_row = row![tab_strip]
+            .spacing(space_m)
+            .align_y(Alignment::Center)
+            .width(Length::Fill);
+
+        // ===== Filter bar + item count =====
+        // A line of its own under the tab strip: the tabs are the library's
+        // grouping, the bar is a second, independent axis over the same grid.
+        // Only Console Games has facets today, so every other section gets the
+        // bar with just the item count on it.
+        let facets = self.filter_facets();
+
+        // One chip shape for the whole filter UI: the facet chips in the bar and
+        // the value chips in the panel only differ in what they do on press.
+        let filter_chip = |label: String, selected: bool, cursor: bool, on_press: Message| {
+            button::custom(
+                container(text::body(label).size(TEXT_BODY))
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center)
+                    .padding([space_xxs, space_s]),
+            )
+            .height(Length::Fixed(filter_button_height()))
+            .width(Length::Shrink)
+            .class(filter_chip_class(selected, cursor))
+            .on_press(on_press)
+        };
+
+        let mut bar_items: Vec<Element<'_, Message>> = Vec::new();
+        if !facets.is_empty() {
+            let label = if self.filters.is_active() {
+                fl!("filter-count", count = self.filters.len())
+            } else {
+                fl!("filter")
+            };
+            bar_items.push(
+                button::custom(
+                    container(
+                        row![
+                            icon::icon(icon::from_name("view-filter-symbolic").into())
+                                .size(ICON_BODY),
+                            text::body(label).size(TEXT_BODY),
+                        ]
+                        .spacing(space_xs)
+                        .align_y(Alignment::Center),
+                    )
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center)
+                    .padding([space_none, space_m]),
+                )
+                .height(Length::Fixed(filter_button_height()))
+                .width(Length::Shrink)
+                // The only focusable widget in the bar: it is where Up from the
+                // grid's first row lands, and where A opens the panel.
+                .class(section_button_class(self.filter_cursor.is_some()))
+                .id(FILTER_ID.clone())
+                .on_press(Message::ToggleFilterPanel)
+                .into(),
+            );
+
+            for (index, facet) in facets.iter().enumerate() {
+                let selected = self.filters.selected(*facet);
+                let label = match selected {
+                    Some(value) => fl!(
+                        "filter-facet-chip",
+                        facet = facet.name(),
+                        value = facet.value_label(value)
+                    ),
+                    None => facet.name(),
+                };
+                let cursor = self
+                    .filter_cursor
+                    .is_some_and(|cursor| cursor.facet == index && !cursor.on_values);
+                bar_items.push(
+                    filter_chip(
+                        label,
+                        selected.is_some(),
+                        cursor,
+                        Message::FilterFacet(index),
+                    )
+                    .id(filter_facet_id(index))
+                    .into(),
+                );
+            }
+
+            if self.filters.is_active() {
+                bar_items.push(
+                    filter_chip(fl!("filter-clear"), false, false, Message::ClearFilters)
+                        .id(CLEAR_FILTERS_ID.clone())
+                        .into(),
+                );
+            }
+        }
+
+        // The open panel's options: one strip per facet, "All" leading, with the
+        // cursor's chip ringed. Horizontal so a long genre list stays one line.
+        let filter_values: Option<Element<'_, Message>> = self.filter_cursor.and_then(|cursor| {
+            let facet = *facets.get(cursor.facet)?;
+            let selected = self.filters.selected(facet);
+            let chips = self
+                .filter_options(facet)
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    let label = value
+                        .as_deref()
+                        .map_or_else(|| fl!("filter-all"), |value| facet.value_label(value));
+                    filter_chip(
+                        label,
+                        value.as_deref() == selected,
+                        cursor.on_values && cursor.value == index,
+                        Message::SelectFilter {
+                            facet,
+                            value: value.clone(),
+                        },
+                    )
+                    .id(filter_value_id(cursor.facet, index))
+                    .into()
+                });
+            Some(
+                widget::scrollable::horizontal(row(chips).spacing(space_xs))
+                    .id(FILTER_VALUES_SCROLLABLE_ID.clone())
+                    .scrollbar_width(0)
+                    .scroller_width(0)
+                    .into(),
+            )
+        });
+
+        let filter_bar = row![
+            row(bar_items).spacing(space_xs).align_y(Alignment::Center),
+            space::horizontal(),
+            container(text::body(fl!("count-items", count = item_count)).size(TEXT_BODY))
                 .align_y(Vertical::Center),
         ]
         .spacing(space_m)
@@ -5654,19 +6126,27 @@ impl HearthDeck {
             .height(Length::Fill)
             .class(theme::Container::Custom(Box::new(sidebar_divider)));
 
+        let mut main_column: Vec<Element<'_, Message>> = vec![
+            container(title_row).padding([space_l, 0, 0, 0]).into(),
+            // Keep the tab strip visually attached to its section title:
+            // a full 64px gap pushed the grid too far down the window.
+            space::vertical().height(space_m).into(),
+            container(tab_row).padding([0, 0, 0, 0]).into(),
+            // The filter bar is its own line under the tabs, and the open
+            // panel's value strip slots in between it and the grid.
+            container(filter_bar).padding([space_s, 0, 0, 0]).into(),
+        ];
+        if let Some(values) = filter_values {
+            main_column.push(values);
+        }
+        main_column.push(app_scrollable);
+
         let content = row![
             sidebar,
             sidebar_divider,
-            column![
-                container(title_row).padding([space_l, 0, 0, 0]),
-                // Keep the tab strip visually attached to its section title:
-                // a full 64px gap pushed the grid too far down the window.
-                space::vertical().height(space_m),
-                container(tab_row).padding([0, 0, 0, 0]),
-                app_scrollable,
-            ]
-            .width(Length::Fill)
-            .padding([0, content_horizontal_padding()]),
+            column(main_column)
+                .width(Length::Fill)
+                .padding([0, content_horizontal_padding()]),
         ]
         .height(Length::Fill);
 
@@ -5781,7 +6261,7 @@ mod tests {
         degraded_providers, focused_entry_index, is_primary_window, next_romm_offset,
         rail_scroll_target, romm_page_is_current, selected_romm_platform_id,
     };
-    use crate::app_group::{AppGroup, AppLibraryConfig, FilterType, Section};
+    use crate::app_group::{AppGroup, AppLibraryConfig, FilterType, RommFacet, Section};
     use crate::providers::GameRecord;
     use crate::providers::daemon::{
         HealthResponse, HostCapabilities, ProviderHealthInfo, RetroConsole, RetroGameDetails,
@@ -7056,5 +7536,216 @@ mod tests {
 
         assert_eq!(app.cur_section, section);
         assert_eq!(app.page, super::Page::Details);
+    }
+
+    /// A loaded console game carrying RomM facet tags, as the provider converts
+    /// one in `retro_game_to_game_record`.
+    fn console_entry(id: i64, name: &str, tags: &[&str]) -> Arc<DesktopEntryData> {
+        let mut record = romm_record(id, name, 7);
+        record
+            .categories
+            .extend(tags.iter().map(|tag| (*tag).to_string()));
+        Arc::new(record.into_desktop_entry())
+    }
+
+    /// The library open on Console Games, one console tab, two games in
+    /// different genres - so a genre filter has something to narrow.
+    fn console_app() -> HearthDeck {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string())]);
+        let mut app = HearthDeck {
+            config,
+            page: Page::Library,
+            cur_section: Section::ConsoleGames,
+            cur_group: Some(0),
+            ..Default::default()
+        };
+        app.all_entries = vec![
+            console_entry(1, "Mario", &["hearthdeck-genre:Action"]),
+            console_entry(2, "Chrono", &["hearthdeck-genre:RPG"]),
+        ];
+        app.load_apps();
+        app
+    }
+
+    fn grid_names(app: &HearthDeck) -> Vec<&str> {
+        app.entry_path_input
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn entering_a_section_focuses_the_grid_not_the_search_box() {
+        let mut app = HearthDeck::default();
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::SelectSection(Section::Applications),
+        );
+
+        // Focusing the search box raises the on-screen keyboard, so entering a
+        // section must not do it. The grid is focused instead, deferred through
+        // the reload that produces its entries.
+        assert_ne!(app.focused_id, Some(super::SEARCH_ID.clone()));
+        assert!(app.gamepad_focus_first);
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::FilterApps(String::new(), Vec::new(), Vec::new()),
+        );
+        assert!(!app.gamepad_focus_first);
+
+        app.entry_path_input = vec![entry("writer")];
+        app.update_entry_metadata();
+        let _ =
+            <HearthDeck as cosmic::Application>::update(&mut app, super::Message::FocusGridFirst);
+        assert_eq!(app.focused_id, app.entry_ids.first().cloned());
+    }
+
+    #[test]
+    fn the_search_message_still_focuses_the_search_box() {
+        let mut app = console_app();
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSearch);
+
+        assert_eq!(app.focused_id, Some(super::SEARCH_ID.clone()));
+    }
+
+    #[test]
+    fn a_console_filter_narrows_the_grid_and_asks_for_the_whole_scope() {
+        let mut app = console_app();
+        assert_eq!(grid_names(&app), ["Mario", "Chrono"]);
+        // The facets are whatever the loaded records carry.
+        assert_eq!(app.filter_facets(), [RommFacet::Genre]);
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::SelectFilter {
+                facet: RommFacet::Genre,
+                value: Some("RPG".into()),
+            },
+        );
+
+        assert_eq!(grid_names(&app), ["Chrono"]);
+        // Filters run over the loaded records, so a narrowed console view has to
+        // pull the rest of the scope before its result set can be trusted.
+        assert!(app.console_needs_all_pages());
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::ClearFilters);
+        assert_eq!(grid_names(&app), ["Mario", "Chrono"]);
+        assert!(!app.console_needs_all_pages());
+    }
+
+    #[test]
+    fn console_filters_do_not_leak_into_other_sections() {
+        let mut app = console_app();
+        app.filters.set(RommFacet::Genre, Some("RPG".into()));
+        app.all_entries.push(entry("writer"));
+
+        app.cur_section = Section::Applications;
+        app.cur_group = None;
+        app.load_apps();
+
+        // The application section keeps its own entries, and its grid never
+        // asks for RomM pages to satisfy a console filter.
+        assert_eq!(grid_names(&app), ["writer"]);
+        assert!(!app.console_needs_all_pages());
+    }
+
+    #[test]
+    fn the_filter_panel_owns_the_pad_until_back_closes_it() {
+        use crate::input_ownership::Event as InputEvent;
+
+        let mut app = console_app();
+        app.input_ownership
+            .update(InputEvent::SessionObserved(false));
+
+        assert!(app.filter_cursor.is_none());
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::ToggleFilterPanel,
+        );
+        // The cursor opens on the first facet's current value ("All").
+        assert_eq!(
+            app.filter_cursor,
+            Some(super::FilterCursor {
+                facet: 0,
+                value: 0,
+                on_values: true,
+            })
+        );
+
+        // Every other button would act on the screen behind the open panel.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::Search),
+        );
+        assert_eq!(app.page, Page::Library);
+
+        // Right walks the option strip; A applies the chip under the cursor.
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextCol);
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::Confirm),
+        );
+        assert_eq!(app.filters.selected(RommFacet::Genre), Some("Action"));
+        assert_eq!(grid_names(&app), ["Mario"]);
+
+        // Up leaves the value row for the facet row, up again closes the panel.
+        // The filter it applied stays.
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::PrevRow);
+        assert!(app.filter_cursor.is_some_and(|cursor| !cursor.on_values));
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::PrevRow);
+        assert!(app.filter_cursor.is_none());
+        assert_eq!(app.filters.selected(RommFacet::Genre), Some("Action"));
+
+        // Back is the global contract: it closes the panel, not the screen.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::ToggleFilterPanel,
+        );
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::Back),
+        );
+        assert!(app.filter_cursor.is_none());
+        assert_eq!(app.page, Page::Library);
+
+        // "All" leads every facet's options, so choosing it clears the facet.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::ToggleFilterPanel,
+        );
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::PrevCol);
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::Confirm),
+        );
+        assert!(app.filters.selected(RommFacet::Genre).is_none());
+        assert_eq!(grid_names(&app), ["Mario", "Chrono"]);
+    }
+
+    #[test]
+    fn a_focused_filter_chip_does_what_clicking_it_does() {
+        let mut app = console_app();
+
+        // Up from the grid's first row lands on a bar chip, so confirming one
+        // has to act on it rather than dead-ending: a facet chip opens the panel
+        // on its own facet.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::ConfirmFocused(super::filter_facet_id(0)),
+        );
+        assert_eq!(app.filter_cursor.map(|cursor| cursor.facet), Some(0));
+
+        // The clear chip drops every filter.
+        app.filters.set(RommFacet::Genre, Some("Action".into()));
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::ConfirmFocused(super::CLEAR_FILTERS_ID.clone()),
+        );
+        assert!(!app.filters.is_active());
+        assert_eq!(grid_names(&app), ["Mario", "Chrono"]);
     }
 }

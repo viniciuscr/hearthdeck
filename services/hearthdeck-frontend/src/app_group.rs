@@ -6,7 +6,7 @@ use cosmic::cosmic_config::{
 };
 use cosmic::desktop::DesktopEntryData;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, LazyLock};
 
 static HOME: LazyLock<AppGroup> = LazyLock::new(|| AppGroup {
@@ -19,6 +19,140 @@ const CONSOLE_CATEGORY_PREFIX: &str = "hearthdeck-console:";
 
 pub fn romm_console_category(platform_id: i64) -> String {
     format!("{CONSOLE_CATEGORY_PREFIX}{platform_id}")
+}
+
+/// RomM metadata that the console grid can filter on rides on each record as a
+/// namespaced category, the same way stores ([`AppLibraryConfig::sync_category_groups`])
+/// and consoles (above) do. `DesktopEntryData` has no metadata field, so
+/// categories are the only channel a record's RomM metadata survives on; a
+/// facet is then a prefix plus a value, and matching is a category lookup.
+const GENRE_FACET_PREFIX: &str = "hearthdeck-genre:";
+const DECADE_FACET_PREFIX: &str = "hearthdeck-decade:";
+const REGION_FACET_PREFIX: &str = "hearthdeck-region:";
+
+pub fn romm_genre_category(genre: &str) -> String {
+    format!("{GENRE_FACET_PREFIX}{genre}")
+}
+
+pub fn romm_region_category(region: &str) -> String {
+    format!("{REGION_FACET_PREFIX}{region}")
+}
+
+/// Tags a game with the decade its release year falls in: 1994 -> `1990`.
+/// Decades rather than years because a console library spans few enough decades
+/// for the filter row to stay a single short strip.
+pub fn romm_decade_category(release_year: i32) -> String {
+    let decade = release_year - release_year.rem_euclid(10);
+    format!("{DECADE_FACET_PREFIX}{decade}")
+}
+
+/// A RomM metadata field the Console Games grid can be filtered by. Each
+/// variant owns the record-category prefix carrying its values, so adding a
+/// filter option is one variant plus one tag on the record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RommFacet {
+    Genre,
+    Decade,
+    Region,
+}
+
+impl RommFacet {
+    /// Every facet, in the order the filter bar shows them.
+    pub const ALL: [RommFacet; 3] = [Self::Genre, Self::Decade, Self::Region];
+
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Genre => GENRE_FACET_PREFIX,
+            Self::Decade => DECADE_FACET_PREFIX,
+            Self::Region => REGION_FACET_PREFIX,
+        }
+    }
+
+    /// The facet's name, shown on its chip in the filter bar.
+    pub fn name(self) -> String {
+        match self {
+            Self::Genre => fl!("filter-genre"),
+            Self::Decade => fl!("filter-decade"),
+            Self::Region => fl!("filter-region"),
+        }
+    }
+
+    /// How one of this facet's values reads on a chip: a decade is a range, so
+    /// it is shown as one ("1990s") rather than as its first year.
+    pub fn value_label(self, value: &str) -> String {
+        match self {
+            Self::Decade => format!("{value}s"),
+            Self::Genre | Self::Region => value.to_owned(),
+        }
+    }
+
+    /// Every value of this facet present in `entries`, deduplicated and sorted.
+    /// Decades sort as text just like years would, because they are all four
+    /// digits long.
+    pub fn values(self, entries: &[Arc<DesktopEntryData>]) -> Vec<String> {
+        entries
+            .iter()
+            .flat_map(|entry| entry.categories.iter())
+            .filter_map(|category| category.strip_prefix(self.prefix()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Whether `entry` carries `value` for this facet.
+    fn matches(self, value: &str, entry: &DesktopEntryData) -> bool {
+        let tag = format!("{}{value}", self.prefix());
+        entry.categories.iter().any(|category| category == &tag)
+    }
+}
+
+/// The Console Games filter selection: at most one value per facet, with an
+/// absent facet meaning "All". Transient view state rather than configuration,
+/// so it is never written to disk; it is also deliberately *not* multi-select,
+/// which keeps the panel a single flat strip of options per facet.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RommFilters {
+    selected: BTreeMap<RommFacet, String>,
+}
+
+impl RommFilters {
+    pub fn selected(&self, facet: RommFacet) -> Option<&str> {
+        self.selected.get(&facet).map(String::as_str)
+    }
+
+    /// Points `facet` at `value`, or clears it when `value` is `None`.
+    pub fn set(&mut self, facet: RommFacet, value: Option<String>) {
+        match value {
+            Some(value) => {
+                self.selected.insert(facet, value);
+            }
+            None => {
+                self.selected.remove(&facet);
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.selected.clear();
+    }
+
+    pub fn is_active(&self) -> bool {
+        !self.selected.is_empty()
+    }
+
+    /// How many facets are narrowed, for the filter bar's badge.
+    pub fn len(&self) -> usize {
+        self.selected.len()
+    }
+
+    /// Whether `entry` satisfies every selected facet. An empty selection
+    /// matches everything, so an unfiltered grid is the same code path.
+    pub fn matches(&self, entry: &DesktopEntryData) -> bool {
+        self.selected
+            .iter()
+            .all(|(facet, value)| facet.matches(value, entry))
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
@@ -473,12 +607,15 @@ impl AppLibraryConfig {
         }
     }
 
+    /// The entries one tab of one section shows: the section's records, the
+    /// tab's group, the search box and the console filters, all applied.
     pub fn filtered(
         &self,
         section: Section,
         tab: Option<usize>,
         input_value: &str,
         entries: &[Arc<DesktopEntryData>],
+        filters: &RommFilters,
     ) -> Vec<Arc<DesktopEntryData>> {
         let tab_group = tab.and_then(|i| self.sections.get(section).get(i));
         entries
@@ -490,6 +627,12 @@ impl AppLibraryConfig {
                 if let Some(group) = tab_group
                     && !group.matches(de)
                 {
+                    return false;
+                }
+                // The filters are the console grid's own: only that section
+                // renders their controls, and only its records carry the tags,
+                // so leaving them set must not empty another section.
+                if section == Section::ConsoleGames && !filters.matches(de) {
                     return false;
                 }
                 if !input_value.is_empty()
@@ -615,7 +758,10 @@ impl AppLibraryConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppGroup, AppLibraryConfig, FilterType, Section};
+    use super::{
+        AppGroup, AppLibraryConfig, FilterType, RommFacet, RommFilters, Section,
+        romm_console_category, romm_decade_category, romm_genre_category, romm_region_category,
+    };
     use cosmic::desktop::{DesktopEntryData, fde::IconSource};
     use std::sync::Arc;
 
@@ -813,6 +959,83 @@ mod tests {
 
         config.toggle_desktop_input("writer");
         assert!(!config.desktop_input_enabled("writer"));
+    }
+
+    /// A console game as the RomM provider records it: the tags that put it in
+    /// the Console Games section, plus the facet tags the filters read.
+    fn console_game(
+        id: &str,
+        genres: &[&str],
+        release_years: &[i32],
+        regions: &[&str],
+    ) -> Arc<DesktopEntryData> {
+        let mut categories = vec!["Game".to_string(), romm_console_category(7)];
+        categories.extend(genres.iter().map(|genre| romm_genre_category(genre)));
+        categories.extend(release_years.iter().map(|year| romm_decade_category(*year)));
+        categories.extend(regions.iter().map(|region| romm_region_category(region)));
+        let categories: Vec<&str> = categories.iter().map(String::as_str).collect();
+        entry(id, &categories)
+    }
+
+    #[test]
+    fn console_facets_read_their_values_from_the_romm_tags() {
+        let entries = [
+            console_game("mario", &["Action", "Platformer"], &[1991], &["USA"]),
+            console_game("chrono", &["RPG"], &[1995], &["USA", "Japan"]),
+        ];
+
+        assert_eq!(
+            RommFacet::Genre.values(&entries),
+            ["Action", "Platformer", "RPG"]
+        );
+        assert_eq!(RommFacet::Decade.values(&entries), ["1990"]);
+        assert_eq!(RommFacet::Region.values(&entries), ["Japan", "USA"]);
+        // A decade widens to the span it stands for; other values read as-is.
+        assert_eq!(RommFacet::Decade.value_label("1990"), "1990s");
+        assert_eq!(RommFacet::Genre.value_label("RPG"), "RPG");
+    }
+
+    #[test]
+    fn filters_narrow_console_games_and_leave_other_sections_alone() {
+        let entries = [
+            console_game("mario", &["Action"], &[1991], &["USA"]),
+            console_game("chrono", &["RPG"], &[1995], &["Japan"]),
+            entry("writer", &["Office"]),
+        ];
+        let config = AppLibraryConfig::default();
+        let mut filters = RommFilters::default();
+        let visible = |section, filters: &RommFilters| {
+            config
+                .filtered(section, None, "", &entries, filters)
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect::<Vec<_>>()
+        };
+
+        // No selection matches everything, so browsing is the same code path.
+        assert!(!filters.is_active());
+        assert_eq!(
+            visible(Section::ConsoleGames, &filters),
+            ["mario", "chrono"]
+        );
+
+        filters.set(RommFacet::Genre, Some("RPG".into()));
+        assert_eq!(visible(Section::ConsoleGames, &filters), ["chrono"]);
+        // The selection is the console grid's: applications keep their entry.
+        assert_eq!(visible(Section::Applications, &filters), ["writer"]);
+
+        // Facets combine, and setting one back to "All" drops only that one.
+        filters.set(RommFacet::Region, Some("USA".into()));
+        assert!(visible(Section::ConsoleGames, &filters).is_empty());
+        filters.set(RommFacet::Region, None);
+        assert_eq!(visible(Section::ConsoleGames, &filters), ["chrono"]);
+
+        filters.clear();
+        assert!(filters.selected(RommFacet::Genre).is_none());
+        assert_eq!(
+            visible(Section::ConsoleGames, &filters),
+            ["mario", "chrono"]
+        );
     }
 
     #[test]
