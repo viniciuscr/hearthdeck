@@ -229,6 +229,29 @@ disagrees.
    overrides are future work, alongside the core-install configurability in
    open question 2.
 
+9. **Guide/Home belongs to Hearthdeck, so RetroArch's menu opens with
+   Start + Select.** Every bundled joypad autoconfig profile binds the pad's
+   Guide button as RetroArch's single-press menu toggle — the same button the
+   quick-menu overlay uses (`docs/arch-package.md`) — so the binding is removed
+   in the profiles the bridge seeds (`retro_profiles::without_menu_toggle_binding`)
+   and the managed config pins `input_menu_toggle_gamepad_combo` to
+   Start + Select for the route into the menu that the pad keeps
+   (`RETRO_MENU_TOGGLE_UNBOUND`, `RETRO_MENU_TOGGLE_COMBO` in
+   `platform/linux.rs`).
+   Rationale: both halves are needed, and only one of them is a config
+   change. RetroArch applies autoconfig when a pad is *detected*, which is
+   after it has read its config files, so a Guide binding coming from a profile
+   would survive any config-side unbind — the profile is what actually keeps
+   the button free. The combo has to be set explicitly rather than left alone
+   because RetroArch's default is `INPUT_COMBO_NONE` on desktop Linux, so
+   taking Guide away without it would leave the controller with no way into
+   RetroArch's menu at all. The trade-off is that Hearthdeck now rewrites part
+   of a vendored upstream file on the way to disk (the vendored copies stay
+   byte-identical and refreshable — see `profiles/udev/README.md`), and that the
+   rewrite is applied only to copies recognised as Hearthdeck's own (upstream
+   verbatim, or its rewrite), so a mapping re-saved from RetroArch's controller
+   wizard is still never clobbered.
+
 ## Starting the RomM server itself
 
 RomM is an external self-hosted server (here a Podman Compose stack), not

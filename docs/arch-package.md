@@ -157,7 +157,11 @@ is stopped, or is replaced. The physical controller is not grabbed, so Guide
 continues to reach the overlay; the overlay's existing exclusive grab takes
 precedence while it is visible. Leave compatibility disabled for games with
 native controller support, or they may receive both controller and emulated
-keyboard/mouse input.
+keyboard/mouse input. RetroArch's own menu deliberately does not answer to
+Guide, so the two uses of that button cannot race: Hearthdeck seeds its joypad
+autoconfig profiles with the Guide/Home menu-toggle binding unbound and pins
+the emulator's menu combo to **Start + Select** (decision 9 in
+`docs/retroarch-integration.md`).
 
 PipeWire/WirePlumber provide audio, while NetworkManager and BlueZ remain
 system services. Their existing connections and paired devices continue to

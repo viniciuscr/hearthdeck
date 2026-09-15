@@ -309,6 +309,31 @@ const SHADER_PRESET_BY_CORE: &[(&str, &str)] = &[
     ("ppsspp_libretro.so", "handheld/lcd-grid-v2.slangp"),
 ];
 
+/// Guide/Home is Hearthdeck's button - it opens the quick-menu overlay - so
+/// RetroArch's single-button menu toggle is left unbound. Its pad route into
+/// the menu is the combo below instead.
+///
+/// This line and the profile rewriting in `retro_profiles` are two halves of
+/// one fix, because RetroArch runs joypad autoconfig when the pad is
+/// *detected*, after it has read this file: a Guide binding that reached a pad
+/// from an autoconfig profile survives anything written here. The profiles are
+/// what actually keep Guide unbound; this is the belt to that braces, and
+/// covers a pad autoconfigured from a profile outside Hearthdeck's directory
+/// (say, one left over from a desktop RetroArch install).
+const RETRO_MENU_TOGGLE_UNBOUND: &str = "input_menu_toggle_btn = \"nul\"";
+
+/// RetroArch's other route into its menu, pinned for every launch: the value is
+/// an index into RetroArch's own `input_combo_type` enum
+/// (`input/input_defines.h` upstream), where `4` is `INPUT_COMBO_START_SELECT`
+/// (Start + Select).
+///
+/// Set explicitly rather than left alone, because the default is
+/// `INPUT_COMBO_NONE` on desktop Linux - so taking Guide away without this
+/// would leave the pad no way into the menu at all. Start + Select needs no
+/// Guide, and needs no button a core uses for anything unusual, which is what
+/// lets it coexist with Hearthdeck's claim on the Guide button.
+const RETRO_MENU_TOGGLE_COMBO: &str = "input_menu_toggle_gamepad_combo = \"4\"";
+
 /// The preset to apply for a core, if the shaders package is installed.
 /// Split from the filesystem check so the lookup is unit-testable against a
 /// temp directory, mirroring `validate_retro_core_path_in`.
@@ -435,6 +460,11 @@ fn retroarch_managed_config(
         // only seeds the `udev/` subdirectory, so another driver would find an
         // empty folder and report every pad "not configured" again.
         "input_joypad_driver = \"udev\"",
+        // Guide/Home belongs to Hearthdeck, so the menu moves to a Start combo.
+        // Both constants carry the reasoning; neither is worth much without
+        // the other.
+        RETRO_MENU_TOGGLE_UNBOUND,
+        RETRO_MENU_TOGGLE_COMBO,
     ]
     .join("\n");
     // Point RetroArch at a Hearthdeck-owned autoconfig directory. RetroArch
@@ -1376,6 +1406,72 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reseeded, 0);
+    }
+
+    #[test]
+    fn managed_retroarch_config_moves_the_menu_off_the_guide_button() {
+        let autoconfig_directory = tempfile::tempdir().unwrap();
+
+        let config = retroarch_managed_config(autoconfig_directory.path(), None, "vulkan");
+
+        // Guide/Home opens Hearthdeck's overlay, so RetroArch must not also use
+        // it as a menu button...
+        assert!(config.contains("input_menu_toggle_btn = \"nul\""));
+        // ...and a Start combo is the menu route the pad keeps instead.
+        assert!(config.contains("input_menu_toggle_gamepad_combo = \"4\""));
+    }
+
+    #[tokio::test]
+    async fn seeding_unbinds_the_guide_button_in_the_profiles_it_writes() {
+        let directory = tempfile::tempdir().unwrap();
+
+        retro_profiles::seed_retroarch_profiles(directory.path())
+            .await
+            .unwrap();
+
+        // Every profile lands exactly as the rewrite produces it, which is what
+        // makes the rewrite - not the managed config - the reason no pad can
+        // autoconfigure Guide back as the menu button.
+        for (name, contents) in retro_profiles::bundled_retroarch_profiles() {
+            assert_eq!(
+                std::fs::read_to_string(directory.path().join(name)).unwrap(),
+                retro_profiles::without_menu_toggle_binding(contents)
+            );
+        }
+
+        // The pad this integration was built against, and its label line, which
+        // is not a binding and stays as upstream wrote it.
+        let pad =
+            std::fs::read_to_string(directory.path().join("Microsoft_X-Box_Series_XS_pad.cfg"))
+                .unwrap();
+        assert!(pad.contains("input_menu_toggle_btn = \"nul\""));
+        assert!(!pad.contains("input_menu_toggle_btn = \"8\""));
+        assert!(pad.contains("input_menu_toggle_btn_label = \"Guide\""));
+    }
+
+    #[tokio::test]
+    async fn seeding_refreshes_a_copy_that_is_still_the_vendored_profile() {
+        let directory = tempfile::tempdir().unwrap();
+        let name = "Microsoft_X-Box_Series_XS_pad.cfg";
+        let vendored = retro_profiles::bundled_retroarch_profiles()
+            .iter()
+            .find(|(bundled, _)| *bundled == name)
+            .map(|(_, contents)| *contents)
+            .unwrap();
+        // What a release before the rewrite would have left on disk.
+        std::fs::write(directory.path().join(name), vendored).unwrap();
+
+        let seeded = retro_profiles::seed_retroarch_profiles(directory.path())
+            .await
+            .unwrap();
+
+        // Everything else in the directory is being seeded for the first time,
+        // so the count is the whole set - the point is that the vendored copy is
+        // included in it rather than being left alone.
+        assert_eq!(seeded, retro_profiles::bundled_retroarch_profiles().len());
+        let refreshed = std::fs::read_to_string(directory.path().join(name)).unwrap();
+        assert!(refreshed.contains("input_menu_toggle_btn = \"nul\""));
+        assert!(!refreshed.contains("input_menu_toggle_btn = \"8\""));
     }
 
     #[tokio::test]
