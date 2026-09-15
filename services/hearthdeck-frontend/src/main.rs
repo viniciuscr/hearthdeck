@@ -13,6 +13,7 @@ mod providers;
 mod style;
 mod subscriptions;
 mod system_status;
+mod toplevel;
 mod widgets;
 
 use config::{APP_ID, VERSION};

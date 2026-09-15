@@ -112,6 +112,11 @@ pub fn content_horizontal_padding() -> u16 {
 /// Number of installed titles shown on the dashboard.
 pub const DASHBOARD_VISIBLE_TILES: usize = 4;
 
+/// Game cards on the dashboard are portrait, matching the posters they show.
+/// Square cards cropped a poster to its middle, which usually cuts off the part
+/// of the art that carries the title.
+pub const DASHBOARD_GAME_ASPECT: f32 = 2.0 / 3.0;
+
 /// Number of cards a dashboard rail may hold. The rail scrolls horizontally,
 /// so this only bounds how much it fetches and renders up front.
 pub const DASHBOARD_RAIL_TILES: usize = 12;
@@ -229,18 +234,23 @@ pub const DETAILS_SHOT_ASPECT: f32 = 16.0 / 9.0;
 /// Width of the label column in the details screen's fact list.
 pub const DETAILS_FACT_LABEL_WIDTH: f32 = 132.0;
 
-/// Height of a secondary button on the details screen's action line; 72px at
-/// Standard. Larger than any control on the Library: the action line is the
-/// only interactive surface on the screen and is read from a couch, not a desk.
+/// Height shared by every button on a details action line; 64px at Standard.
+/// One height for all of them: the line reads as a single strip of controls, and
+/// Play is set apart by width and the accent fill rather than by being taller.
 pub fn details_action_height() -> f32 {
-    let s = spacing();
-    f32::from(s.space_xl + s.space_m)
+    f32::from(spacing().space_xxl)
 }
 
-/// Height of Play, which leads the action line; 88px at Standard.
-pub fn details_play_height() -> f32 {
-    let s = spacing();
-    f32::from(s.space_xxl + s.space_m)
+/// Width of a secondary button on the details action line. Fixed, so the line
+/// stays even however long its labels are.
+pub const DETAILS_ACTION_WIDTH: f32 = 216.0;
+
+/// Width of Play, which leads the action line.
+pub const DETAILS_PLAY_WIDTH: f32 = 276.0;
+
+/// Padding inside the action line's backplate.
+pub fn details_action_bar_padding() -> u16 {
+    spacing().space_s
 }
 
 /// Widest the details screen's disc picker panel may grow.
@@ -376,10 +386,10 @@ pub fn artwork_fit<'a, M: 'a>(
     }
 }
 
-/// Artwork scaled to fill its bounds, for cover art that is expected to be
-/// cropped to the surface.
+/// Artwork scaled to fill its bounds without distortion, for cover art that is
+/// expected to be cropped to the surface.
 pub fn artwork<'a, M: 'a>(handle: &icon::Handle, width: Length, height: Length) -> Element<'a, M> {
-    artwork_fit(handle, ContentFit::Fill, width, height)
+    artwork_fit(handle, ContentFit::Cover, width, height)
 }
 
 // ---------------------------------------------------------------------------
@@ -530,15 +540,26 @@ pub fn hero_card(theme: &Theme) -> container::Style {
 }
 
 /// Full-bleed wash over a details screen's backdrop art: opaque enough to keep
-/// body text readable over any cover, translucent enough to tint the page with
-/// the game's own palette.
+/// body text readable over any screenshot, translucent enough to tint the page
+/// with the game's own palette.
 pub fn backdrop_wash(theme: &Theme) -> container::Style {
     let mut color: Color = theme.cosmic().bg_color().into();
-    color.a = 0.86;
+    color.a = 0.8;
     container::Style {
         background: Some(Background::Color(color)),
         ..container::Style::default()
     }
+}
+
+/// Backplate behind a details screen's action line: one translucent bar, so the
+/// buttons read as a single strip of controls rather than floating shapes over
+/// the artwork.
+pub fn action_bar(theme: &Theme) -> container::Style {
+    let mut style = card_surface(theme);
+    if let Some(Background::Color(color)) = style.background.as_mut() {
+        color.a = 0.72;
+    }
+    style
 }
 
 /// Bottom-up scrim for a details screen: clear over the artwork, solid behind
@@ -755,16 +776,16 @@ pub fn primary_action_button_class() -> Button {
 }
 
 /// A details action that holds a state (favorite, play later): the chip fill is
-/// always present so the secondary buttons read as one line of controls, and the
-/// accent colors appear only while the state is on.
+/// always present so the secondary buttons read as one strip of controls, and
+/// the accent colors appear only while the state is on.
 pub fn details_toggle_button_class(active: bool) -> Button {
     let styled = move |focused: bool, theme: &Theme, hovered: bool| {
         let mut style = theme.active(focused, false, &Button::IconVertical);
         style.border_radius = theme.cosmic().corner_radii.radius_m.into();
         let fill = match (active, hovered) {
-            (true, _) => 0.22,
-            (false, true) => 0.10,
-            (false, false) => 0.06,
+            (true, _) => 0.26,
+            (false, true) => 0.18,
+            (false, false) => 0.10,
         };
         style.background = Some(chip_background(fill, theme));
         if active {

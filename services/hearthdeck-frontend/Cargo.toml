@@ -59,6 +59,15 @@ cosmic-app-list-config = { git = "https://github.com/pop-os/cosmic-applets" }
 ureq = "3"
 reqwest.workspace = true
 
+# Wayland client, for asking the compositor to fullscreen a launched app's
+# window (see src/toplevel.rs). These are already in the workspace's lock file:
+# libcosmic pulls in cosmic-protocols, and sctk pulls in wayland-client.
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "32283d7", features = [
+    "client",
+] }
+
 # Utilities
 anyhow.workspace = true
 async-trait.workspace = true

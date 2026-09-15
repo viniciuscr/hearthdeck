@@ -90,23 +90,25 @@ use crate::providers::daemon::{
     RetroDetails, RetroGameDetails, RetroRomVersion, retro_rom_versions, retro_version_label,
 };
 use crate::style::{
-    DASHBOARD_RAIL_TILES, DETAILS_FACT_LABEL_WIDTH, DETAILS_HERO_RASTER, DETAILS_PICKER_WIDTH,
-    DETAILS_SHOT_ASPECT, DETAILS_SHOT_RASTER, DETAILS_SHOT_SIZE, DIALOG_ACTION_WIDTH, DIALOG_WIDTH,
-    DIVIDER_WIDTH, EDIT_NAME_INPUT_WIDTH, GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH,
-    ICON_SMALL, ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION,
-    SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY, TEXT_CAPTION,
-    TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, artwork_fit,
+    DASHBOARD_GAME_ASPECT, DASHBOARD_RAIL_TILES, DETAILS_ACTION_WIDTH, DETAILS_FACT_LABEL_WIDTH,
+    DETAILS_HERO_RASTER, DETAILS_PICKER_WIDTH, DETAILS_PLAY_WIDTH, DETAILS_SHOT_ASPECT,
+    DETAILS_SHOT_RASTER, DETAILS_SHOT_SIZE, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
+    EDIT_NAME_INPUT_WIDTH, GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH, ICON_SMALL,
+    ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION, SEARCH_WIDTH,
+    SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER,
+    TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, action_bar, artwork_fit,
     backdrop_scrim, backdrop_wash, card_surface, content_horizontal_padding,
     dashboard_console_tile_size, dashboard_nav_button_class, dashboard_tile_size,
-    details_action_height, details_hero_width, details_play_height, details_toggle_button_class,
-    filter_button_height, grid_gap, grid_top_padding, hero_card, launch_overlay, modal_scrim,
-    primary_action_button_class, root_background, search_icon_padding, section_button_class,
-    sidebar_accent_bar_height, sidebar_divider, sidebar_header_height, sidebar_item_height,
-    sidebar_width, tab_button_class, tab_height, tab_underline_height, tab_width, tile_height,
-    tile_width, title_action_height,
+    details_action_bar_padding, details_action_height, details_hero_width,
+    details_toggle_button_class, filter_button_height, grid_gap, grid_top_padding, hero_card,
+    launch_overlay, modal_scrim, primary_action_button_class, root_background, search_icon_padding,
+    section_button_class, sidebar_accent_bar_height, sidebar_divider, sidebar_header_height,
+    sidebar_item_height, sidebar_width, tab_button_class, tab_height, tab_underline_height,
+    tab_width, tile_height, tile_width, title_action_height,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
+use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
 use crate::widgets::application::{AppletString, ApplicationButton};
 use crate::widgets::rail::{rail, rail_item};
 use crate::widgets::transition::{PageTransition, TabTransition};
@@ -798,7 +800,7 @@ struct Details {
     hero: Option<icon::Handle>,
     /// Screenshot thumbnails, in RomM's order.
     screenshots: Vec<icon::Handle>,
-    /// Screenshot the user picked to show as the hero, if any.
+    /// Screenshot the user picked to show as the backdrop, if any.
     hero_shot: Option<usize>,
     /// Every version of the game, the one Play targets first. Only populated
     /// for games RomM collapsed from several files; empty means single-file.
@@ -826,16 +828,22 @@ struct Details {
 }
 
 impl Details {
-    /// Artwork the screen leads with: the screenshot the user picked, otherwise
-    /// the large cover, otherwise the grid tile's own cover. Used for both the
-    /// full-bleed backdrop and the card over it.
-    fn hero(&self) -> Option<&icon::Handle> {
-        if let Some(index) = self.hero_shot
-            && let Some(shot) = self.screenshots.get(index)
-        {
-            return Some(shot);
-        }
+    /// Poster art for the card: the large cover, otherwise the grid tile's own
+    /// cover. Always the cover, so the card stays the game's identity whatever
+    /// the backdrop is previewing.
+    fn cover_art(&self) -> Option<&icon::Handle> {
         self.hero.as_ref().or(self.cover.as_ref())
+    }
+
+    /// Art for the full-bleed backdrop: the screenshot being previewed, or the
+    /// game's first. Screenshots are 16:9 and survive being scaled to the
+    /// window; `None` when the game has none, which leaves the page a flat
+    /// surface rather than a stretched, blurry poster.
+    fn backdrop_art(&self) -> Option<&icon::Handle> {
+        match self.hero_shot {
+            Some(index) => self.screenshots.get(index),
+            None => self.screenshots.first(),
+        }
     }
 
     /// The version Play launches, when the game has more than one file. `None`
@@ -1721,10 +1729,15 @@ impl HearthDeck {
         let Some(client) = self.daemon_client.clone() else {
             return Task::none();
         };
+        // Built before the launch so the compositor watcher is already listening
+        // when the window appears. A launch that fails leaves the hint to expire
+        // on its own; nothing matches, so nothing happens.
+        let window_hint = self.launch_window_hint(&app_id, &title);
         if self.launch_state.update(LaunchEvent::Start(title)) != LaunchEffect::Launch {
             return Task::none();
         }
         self.input_ownership.update(InputEvent::LaunchStarted);
+        fullscreen_when_it_appears(window_hint);
         Task::perform(
             async move {
                 match target {
@@ -1739,6 +1752,21 @@ impl HearthDeck {
                 }
             },
         )
+    }
+
+    /// What the window this launch is about to produce should look like, for the
+    /// compositor watcher that takes it fullscreen.
+    ///
+    /// The entry's declared window class matters here: a Wayland app reports it
+    /// as its app id, and it is often the only name that differs from the
+    /// desktop file's own.
+    fn launch_window_hint(&self, app_id: &str, title: &str) -> WindowHint {
+        let wm_class = self
+            .all_entries
+            .iter()
+            .find(|entry| entry.id == app_id)
+            .and_then(|entry| entry.wm_class.clone());
+        WindowHint::for_entry(app_id, title, wm_class.as_deref())
     }
 
     /// Consoles offered on the dashboard, derived from the live RomM platform
@@ -2262,7 +2290,9 @@ impl HearthDeck {
             let card = if key == CONSOLES_RAIL_KEY {
                 dashboard_console_tile_size(self.window_width, spacing.space_l, spacing.space_l)
             } else {
-                card
+                // The same width the rail actually renders its cards at, or the
+                // scroll target would be computed for a wider card than exists.
+                card * DASHBOARD_GAME_ASPECT
             };
             let (offset, viewport) = self
                 .dashboard_rail_scroll
@@ -4721,6 +4751,9 @@ impl HearthDeck {
                         crate::icon_cache::entry_icon_handle(&entry.icon, tile_size as u32),
                         tile_size,
                     )
+                    // Portrait, so a poster is cropped on the sides rather than
+                    // losing its title art to a square crop.
+                    .aspect(DASHBOARD_GAME_ASPECT)
                     .on_press(Message::ActivateDashboardApp(entry.id.clone()))
                     .into()
                 })
@@ -4794,11 +4827,11 @@ impl HearthDeck {
         // the highlight back to Play instead of highlighting nothing.
         let cursor = self.details_cursor().unwrap_or_default();
 
-        // ---- Backdrop: the art the screen is currently showing, washed so text
-        // over it stays readable and scrimmed so the action line sits on a solid
-        // surface. One image, reused by the hero card below. ----
-        let art = details.hero();
-        let backdrop: Element<'_, Message> = match art {
+        // ---- Backdrop: the screenshot being previewed, full-bleed. Screenshots
+        // are 16:9 and survive being scaled to the window; a portrait cover
+        // stretched here only ever looked blurry, so with no screenshots the
+        // page stays a flat surface and the cover card carries the art. ----
+        let backdrop: Element<'_, Message> = match details.backdrop_art() {
             Some(handle) => artwork_fit(handle, ContentFit::Cover, Length::Fill, Length::Fill),
             None => container(space::horizontal())
                 .width(Length::Fill)
@@ -4816,7 +4849,7 @@ impl HearthDeck {
             .class(theme::Container::Custom(Box::new(backdrop_scrim)))
             .into();
 
-        let hero: Element<'_, Message> = match art {
+        let hero: Element<'_, Message> = match details.cover_art() {
             Some(handle) => artwork_fit(handle, ContentFit::Contain, Length::Fill, Length::Fill),
             None => container(
                 icon::icon(icon::from_name("applications-games-symbolic").into()).size(ICON_LARGE),
@@ -4833,27 +4866,36 @@ impl HearthDeck {
             .padding(space_s)
             .class(theme::Container::Custom(Box::new(hero_card)));
 
-        // ---- Action line: every interaction the screen has, in one place ----
-        // One builder for the secondary buttons so they cannot drift apart; Play
-        // is built separately because it leads the line.
+        // ---- Action line: every interaction the screen has, in one strip. ----
+        // One builder for all of them, so heights, text sizes, icon sizes and
+        // padding cannot drift apart; Play differs only by width and by using the
+        // accent fill.
         let action_button = |focus: DetailsFocus,
                              icon_name: &'static str,
                              label: String,
-                             active: bool,
+                             width: f32,
+                             class: Button,
                              message: Message|
          -> Element<'_, Message> {
             button::custom(
-                row![
-                    icon::icon(icon::from_name(icon_name).size(ICON_BODY).into()),
-                    text::body(label).size(TEXT_LARGE),
-                ]
-                .spacing(space_s)
-                .align_y(Alignment::Center),
+                container(
+                    row![
+                        icon::icon(icon::from_name(icon_name).size(ICON_BODY).into()),
+                        text::body(label).size(TEXT_LARGE),
+                    ]
+                    .spacing(space_s)
+                    .align_y(Alignment::Center),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Horizontal::Center)
+                .align_y(Vertical::Center),
             )
             .id(details_focus_id(focus))
+            .width(Length::Fixed(width))
             .height(Length::Fixed(details_action_height()))
-            .padding([space_xs, space_l])
-            .class(details_toggle_button_class(active))
+            .padding(0)
+            .class(class)
             .on_press(message)
             .into()
         };
@@ -4863,43 +4905,33 @@ impl HearthDeck {
             "non-starred-symbolic"
         };
 
-        let play: Element<'_, Message> = button::custom(
-            row![
-                icon::icon(
-                    icon::from_name("media-playback-start-symbolic")
-                        .size(ICON_LARGE)
-                        .into()
-                ),
-                text::body(fl!("play")).size(TEXT_HEADER),
-            ]
-            .spacing(space_s)
-            .align_y(Alignment::Center),
-        )
-        .id(details_focus_id(DetailsFocus::Play))
-        .height(Length::Fixed(details_play_height()))
-        .padding([space_xs, space_xl])
-        .class(primary_action_button_class())
-        .on_press(Message::ActivateRomVariant {
-            rom_id: details.rom_id,
-            title: details.title.clone(),
-        })
-        .into();
-
         let show_disc = details.versions.len() > 1;
         let mut action_line = row![
             action_button(
                 DetailsFocus::Back,
                 "go-previous-symbolic",
                 fl!("back"),
-                false,
+                DETAILS_ACTION_WIDTH,
+                details_toggle_button_class(false),
                 Message::CloseDetails,
             ),
-            play,
+            action_button(
+                DetailsFocus::Play,
+                "media-playback-start-symbolic",
+                fl!("play"),
+                DETAILS_PLAY_WIDTH,
+                primary_action_button_class(),
+                Message::ActivateRomVariant {
+                    rom_id: details.rom_id,
+                    title: details.title.clone(),
+                },
+            ),
             action_button(
                 DetailsFocus::Favorite,
                 favorite_icon,
                 fl!("favorite"),
-                details.favorite.unwrap_or(false),
+                DETAILS_ACTION_WIDTH,
+                details_toggle_button_class(details.favorite.unwrap_or(false)),
                 Message::DetailsToggleFavorite,
             ),
         ]
@@ -4910,7 +4942,8 @@ impl HearthDeck {
                 DetailsFocus::Disc,
                 "media-optical-symbolic",
                 fl!("disc"),
-                details.disc_picker,
+                DETAILS_ACTION_WIDTH,
+                details_toggle_button_class(details.disc_picker),
                 Message::DetailsToggleDiscPicker,
             ));
         }
@@ -4918,9 +4951,15 @@ impl HearthDeck {
             DetailsFocus::PlayLater,
             "alarm-symbolic",
             fl!("play-later"),
-            details.backlogged.unwrap_or(false),
+            DETAILS_ACTION_WIDTH,
+            details_toggle_button_class(details.backlogged.unwrap_or(false)),
             Message::DetailsToggleBacklog,
         ));
+        let action_strip = container(action_line)
+            .width(Length::Fill)
+            .padding(details_action_bar_padding())
+            .align_x(Horizontal::Center)
+            .class(theme::Container::Custom(Box::new(action_bar)));
 
         let chips: Element<'_, Message> = row(details
             .chips()
@@ -5079,17 +5118,11 @@ impl HearthDeck {
             .spacing(space_xl)
             .height(Length::Fill)
             .width(Length::Fill);
-        let page = column![
-            body,
-            shots,
-            container(action_line)
-                .width(Length::Fill)
-                .align_x(Horizontal::Center),
-        ]
-        .spacing(space_m)
-        .padding(space_l)
-        .height(Length::Fill)
-        .width(Length::Fill);
+        let page = column![body, shots, action_strip,]
+            .spacing(space_m)
+            .padding(space_l)
+            .height(Length::Fill)
+            .width(Length::Fill);
 
         let mut layers: Vec<Element<'_, Message>> = vec![backdrop, wash, scrim, page.into()];
         if details.disc_picker {
@@ -5244,6 +5277,7 @@ impl HearthDeck {
                 sidebar_header,
                 build_section_button(crate::app_group::Section::PcGames),
                 build_section_button(crate::app_group::Section::ConsoleGames),
+                build_section_button(crate::app_group::Section::Streaming),
                 build_section_button(crate::app_group::Section::Applications),
                 space::vertical().height(Length::Fill),
                 storage_info,

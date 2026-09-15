@@ -2,6 +2,7 @@ hearthdeck = HearthDeck
 pc-games = PC Games
 console-games = Console Games
 consoles = Consoles
+streaming = Streaming
 applications = Applications
 cosmic-library-home = Library Home
 cosmic-office = Office

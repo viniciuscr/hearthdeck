@@ -2882,6 +2882,7 @@ dependencies = [
  "chrono",
  "clap",
  "cosmic-app-list-config",
+ "cosmic-protocols",
  "futures",
  "gilrs",
  "hearthdeck-protocol",
@@ -2906,6 +2907,8 @@ dependencies = [
  "ureq",
  "url",
  "urlencoding",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]
