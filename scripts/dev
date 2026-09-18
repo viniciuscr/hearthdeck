@@ -5,6 +5,27 @@ runtime_dir=$(mktemp -d /tmp/hearthdeck-dev.XXXXXX)
 log_dir="${HEARTHDECK_DEV_LOG_DIR:-$runtime_dir}"
 frontend_command="${HEARTHDECK_DEV_FRONTEND_COMMAND:-}"
 
+# The ports are overridable so a local run can sit beside an installed
+# hearthdeck.target, which already owns the default loopback ports.
+api_port="${HEARTHDECK_DEV_API_PORT:-38400}"
+admin_port="${HEARTHDECK_DEV_ADMIN_PORT:-38401}"
+backend_url="http://127.0.0.1:$api_port"
+admin_url="http://127.0.0.1:$admin_port"
+
+port_is_free() {
+  ruby -rsocket -e 'TCPServer.new("127.0.0.1", ARGV[0].to_i).close' "$1" 2>/dev/null
+}
+
+# Refuse to start on occupied ports: otherwise the health and pairing calls
+# below would silently succeed against a foreign daemon while our own exits.
+for port in "$api_port" "$admin_port"; do
+  if ! port_is_free "$port"; then
+    print -u2 "Hearthdeck port $port is already in use."
+    print -u2 "An installed hearthdeck.target may be running; use 'just dev-local' for alternate ports."
+    exit 1
+  fi
+done
+
 # Build through the project task runner before isolating service runtime state.
 just build-services-debug
 
@@ -38,8 +59,8 @@ env \
   XDG_DATA_HOME="$runtime_dir/data" \
   HEARTHDECK_BRIDGE_SOCKET="$runtime_dir/runtime/bridge.sock" \
   HEARTHDECK_DATABASE_PATH="$runtime_dir/data/hearthdeck.db" \
-  HEARTHDECK_BIND_ADDRESS="127.0.0.1:38400" \
-  HEARTHDECK_LOCAL_ADMIN_ADDRESS="127.0.0.1:38401" \
+  HEARTHDECK_BIND_ADDRESS="127.0.0.1:$api_port" \
+  HEARTHDECK_LOCAL_ADMIN_ADDRESS="127.0.0.1:$admin_port" \
   ./services/target/debug/hearthdeck-daemon \
   > "$log_dir/daemon.log" 2>&1 &
 daemon_pid=$!
@@ -50,7 +71,7 @@ if [[ "${HEARTHDECK_DEV_SHOW_LOGS:-true}" == "true" ]]; then
 fi
 
 for attempt in {1..100}; do
-  if curl --fail --silent http://127.0.0.1:38400/v1/health > /dev/null; then
+  if curl --fail --silent "$backend_url/v1/health" > /dev/null; then
     break
   fi
   if ! kill -0 "$bridge_pid" 2>/dev/null || ! kill -0 "$daemon_pid" 2>/dev/null; then
@@ -61,22 +82,22 @@ for attempt in {1..100}; do
   sleep 0.1
 done
 
-if ! curl --fail --silent http://127.0.0.1:38400/v1/health > /dev/null; then
+if ! curl --fail --silent "$backend_url/v1/health" > /dev/null; then
   print -u2 "Hearthdeck services did not become healthy within 10 seconds."
   cat "$log_dir/bridge.log" "$log_dir/daemon.log" >&2
   keep_runtime_dir=true
   exit 1
 fi
 
-pairing_code=$(curl --fail --silent -X POST http://127.0.0.1:38401/v1/pairing | \
+pairing_code=$(curl --fail --silent -X POST "$admin_url/v1/pairing" | \
   ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("code")')
-pairing_token=$(curl --fail --silent -X POST http://127.0.0.1:38400/v1/pairing/complete \
+pairing_token=$(curl --fail --silent -X POST "$backend_url/v1/pairing/complete" \
   -H 'content-type: application/json' \
   --data "{\"code\":\"$pairing_code\",\"client_name\":\"hearthdeck-dev\"}" | \
   ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("token")')
 
 for attempt in {1..100}; do
-  catalog=$(curl --fail --silent http://127.0.0.1:38400/v1/library \
+  catalog=$(curl --fail --silent "$backend_url/v1/library" \
     -H "authorization: Bearer $pairing_token")
   catalog_count=$(printf '%s' "$catalog" | ruby -rjson -e 'print JSON.parse(STDIN.read).length')
   if [[ "$catalog_count" -gt 0 ]]; then
@@ -94,7 +115,7 @@ if [[ -n "$frontend_command" ]]; then
   eval "$frontend_command"
 else
   env \
-    HEARTHDECK_BACKEND_URL="http://127.0.0.1:38400" \
+    HEARTHDECK_BACKEND_URL="$backend_url" \
     HEARTHDECK_PAIRING_TOKEN="$pairing_token" \
     ./services/target/debug/hearthdeck-frontend
 fi

@@ -16,6 +16,10 @@ setup:
 dev:
   ./scripts/dev
 
+# Run the local stack on alternate ports, beside an installed hearthdeck.target.
+dev-local:
+  HEARTHDECK_DEV_API_PORT=38410 HEARTHDECK_DEV_ADMIN_PORT=38411 ./scripts/dev
+
 # Format Rust source files.
 format:
   mise exec -- cargo fmt --manifest-path {{services_manifest}} --all

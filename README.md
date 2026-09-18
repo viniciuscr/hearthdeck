@@ -27,7 +27,10 @@ just run-frontend-debug   # debug build + run
 
 `just dev` starts the bridge and daemon with an isolated local pairing and then
 launches the frontend against them. It is the normal way to verify discovered
-applications end-to-end.
+applications end-to-end. On a machine that already runs an installed
+`hearthdeck.target` - which owns the default loopback ports - use
+`just dev-local`, which runs the same stack on alternate ports instead of
+attaching the frontend to the installed daemon.
 
 ## Local Services
 

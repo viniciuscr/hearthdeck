@@ -80,7 +80,9 @@ use itertools::Itertools;
 use log::{error, warn};
 use serde::{Deserialize, Serialize};
 
-use crate::app_group::{AppGroup, AppLibraryConfig, RommFacet, RommFilters, Section};
+use crate::app_group::{
+    AppGroup, AppLibraryConfig, RommFacet, RommFilters, Section, is_watch_entry,
+};
 use crate::fl;
 use crate::input_ownership::{
     Event as InputEvent, InputOwnership, LaunchTarget, managed_launch_target,
@@ -138,6 +140,11 @@ static APP_ICON: LazyLock<icon::Handle> = LazyLock::new(|| {
 
 /// Single fixed scrollable id shared by all sections.
 static SCROLLABLE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("section-scrollable"));
+
+/// Vertical scrollable holding the dashboard's shelves. The top bar stays put
+/// while the shelves below it scroll, so a dashboard with more rows than the
+/// window can show still reaches every one of them.
+static DASHBOARD_SCROLLABLE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-scrollable"));
 
 /// Horizontal scrollable that keeps the section tab strip on one line.
 static TAB_STRIP_SCROLLABLE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("section-tabs-strip"));
@@ -673,6 +680,7 @@ struct TabAnimation {
 enum DashboardShelf {
     Recent,
     Favorites,
+    Watch,
     Library,
 }
 
@@ -720,6 +728,7 @@ impl DashboardShelf {
         match self {
             Self::Recent => "recent",
             Self::Favorites => "favorites",
+            Self::Watch => "watch",
             Self::Library => "library",
         }
     }
@@ -728,6 +737,7 @@ impl DashboardShelf {
         match self {
             Self::Recent => fl!("recently-played"),
             Self::Favorites => fl!("favorites"),
+            Self::Watch => fl!("watch"),
             Self::Library => "Games & apps".to_owned(),
         }
     }
@@ -736,6 +746,7 @@ impl DashboardShelf {
         match self {
             Self::Recent => fl!("no-recently-played"),
             Self::Favorites => fl!("no-favorites"),
+            Self::Watch => fl!("no-watch"),
             Self::Library => fl!("library-empty"),
         }
     }
@@ -1076,6 +1087,9 @@ enum Message {
     /// Absolute horizontal scroll offset that keeps a chip or tab visible
     /// inside its single-line strip (`id`).
     ScrollStrip(widget::Id, f32),
+    /// Absolute vertical scroll offset that keeps a focused dashboard card
+    /// visible inside the shelf scrollable.
+    ScrollDashboard(f32),
     PinToAppTray(usize),
     UnPinFromAppTray(usize),
     ToggleFavorite(usize),
@@ -1939,11 +1953,26 @@ impl HearthDeck {
             .into_iter()
             .take(DASHBOARD_RAIL_TILES)
             .collect::<Vec<_>>();
-        let show_library = recent.is_empty() && favorites.is_empty();
+        // Streaming service clients get their own shelf here rather than a
+        // library section, so they are grouped without splitting the catalog.
+        // Only shown when there is something to show, like the console rail.
+        let watch = self
+            .all_entries
+            .iter()
+            .filter(|entry| is_watch_entry(entry))
+            .take(DASHBOARD_RAIL_TILES)
+            .collect::<Vec<_>>();
+        // The Library shelf is only a fallback when no curated shelf has
+        // content. Otherwise Watch apps would appear once in Watch and again
+        // in the all-apps fallback.
+        let show_library = recent.is_empty() && favorites.is_empty() && watch.is_empty();
         let mut shelves = vec![
             (DashboardShelf::Recent, recent),
             (DashboardShelf::Favorites, favorites),
         ];
+        if !watch.is_empty() {
+            shelves.push((DashboardShelf::Watch, watch));
+        }
         if show_library {
             shelves.push((
                 DashboardShelf::Library,
@@ -2615,6 +2644,25 @@ impl HearthDeck {
         if let Some(reveal) = self.reveal_dashboard_rail(&id) {
             tasks.push(reveal);
         }
+        // The rail reveal only moves the shelf horizontally; this keeps the
+        // whole shelf row on screen once the dashboard has more of them than
+        // the window can show. Only cards inside the scrollable are worth
+        // measuring; focusing the fixed top bar must not move the shelves.
+        let in_shelves = self.dashboard_entry_id_for_widget(&id).is_some()
+            || self.dashboard_console_id_for_widget(&id).is_some();
+        if in_shelves {
+            tasks.push(
+                iced_runtime::task::widget(FindDashboardReveal {
+                    scrollable_id: DASHBOARD_SCROLLABLE_ID.clone(),
+                    target_id: id,
+                    viewport: None,
+                    content_height: None,
+                    translation_y: None,
+                    target: None,
+                })
+                .map(|offset| cosmic::Action::App(Message::ScrollDashboard(offset))),
+            );
+        }
         Task::batch(tasks)
     }
 
@@ -3200,6 +3248,75 @@ impl Operation<f32> for FindStripReveal {
         let target =
             (tab.x + tab.width * 0.5 - (viewport.x + viewport.width * 0.5)).clamp(0.0, max);
         Outcome::Some(target)
+    }
+}
+
+/// Vertical counterpart of `FindStripReveal`: measures how far a focused
+/// dashboard card sits outside the visible rows of the shelf scrollable, and
+/// returns the absolute Y offset that would center it. Mirrors the strip
+/// formula on the other axis, subtracting the scrollable's translation because
+/// layout coordinates are the content's unscrolled positions.
+struct FindDashboardReveal {
+    scrollable_id: Id,
+    target_id: Id,
+    viewport: Option<Rectangle>,
+    content_height: Option<f32>,
+    translation_y: Option<f32>,
+    target: Option<Rectangle>,
+}
+
+impl Operation<f32> for FindDashboardReveal {
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        content_bounds: Rectangle,
+        translation: Vector,
+        _state: &mut dyn operation::Scrollable,
+    ) {
+        if id.is_some_and(|id| id == &self.scrollable_id) {
+            self.viewport = Some(bounds);
+            self.content_height = Some(content_bounds.height);
+            self.translation_y = Some(translation.y);
+        }
+    }
+
+    fn focusable(&mut self, id: Option<&Id>, bounds: Rectangle, _state: &mut dyn Focusable) {
+        if id.is_some_and(|id| id == &self.target_id) {
+            self.target = Some(bounds);
+        }
+    }
+
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<f32>)) {
+        if self.target.is_none() {
+            operate(self);
+        }
+    }
+
+    fn finish(&self) -> Outcome<f32> {
+        let Some(viewport) = self.viewport else {
+            return Outcome::None;
+        };
+        let Some(content_height) = self.content_height else {
+            return Outcome::None;
+        };
+        let Some(scroll_y) = self.translation_y else {
+            return Outcome::None;
+        };
+        let Some(target) = self.target else {
+            return Outcome::None;
+        };
+        let visible_top = target.y - scroll_y;
+        if visible_top >= viewport.y && visible_top + target.height <= viewport.y + viewport.height
+        {
+            // The card is already fully visible: keep the shelves where the
+            // user put them and let the cursor walk within the row.
+            return Outcome::None;
+        }
+        let max = (content_height - viewport.height).max(0.0);
+        let offset =
+            (target.y + target.height * 0.5 - (viewport.y + viewport.height * 0.5)).clamp(0.0, max);
+        Outcome::Some(offset)
     }
 }
 
@@ -4173,6 +4290,15 @@ impl cosmic::Application for HearthDeck {
                     },
                 );
             }
+            Message::ScrollDashboard(offset) => {
+                return iced::widget::scrollable::scroll_to(
+                    DASHBOARD_SCROLLABLE_ID.clone(),
+                    AbsoluteOffset {
+                        x: None,
+                        y: Some(offset),
+                    },
+                );
+            }
             Message::ConfirmDelete => {
                 let mut cmds = vec![destroy_layer_surface(*DELETE_GROUP_WINDOW_ID)];
                 if let Some(group) = self.group_to_delete.take() {
@@ -5101,8 +5227,7 @@ impl HearthDeck {
         .height(Length::Fixed(f32::from(space_xxl)));
 
         let console_tile_size = dashboard_console_tile_size(self.window_width, space_l, space_l);
-        let content = column![top_bar].spacing(space_m);
-        let mut lower = column![].spacing(space_l);
+        let mut shelves = column![].spacing(space_l);
         // Shelves render in order; the console rail is inserted right after
         // Recently Played so games lead the dashboard and consoles sit below.
         for (shelf, entries) in self.dashboard_shelves() {
@@ -5135,7 +5260,7 @@ impl HearthDeck {
             .align_x(Horizontal::Left)
             .align_y(Alignment::Center)
             .into();
-            lower = lower.push(
+            shelves = shelves.push(
                 rail(dashboard_rail_id(shelf.key()), shelf.title(), tile_size)
                     .items(cards)
                     .empty(empty)
@@ -5148,13 +5273,21 @@ impl HearthDeck {
             if shelf == DashboardShelf::Recent
                 && let Some(consoles) = self.console_rail(console_tile_size)
             {
-                lower = lower.push(consoles);
+                shelves = shelves.push(consoles);
             }
         }
-        let content = content
-            .push(space::vertical().height(Length::Fill))
-            .push(lower)
-            .push(space::vertical().height(space_xxl))
+
+        // The top bar stays fixed and the shelves below it scroll, so a
+        // dashboard with more rows than the window can show still reaches
+        // every one of them instead of clipping the last rows away.
+        let shelves = scrollable(shelves.padding([0, 0, space_xxl, 0]))
+            .id(DASHBOARD_SCROLLABLE_ID.clone())
+            .scrollbar_width(0)
+            .scroller_width(0)
+            .height(Length::Fill);
+
+        let content = column![top_bar, shelves]
+            .spacing(space_m)
             .width(Length::Fill)
             .height(Length::Fill)
             .padding(space_l);
@@ -5642,7 +5775,6 @@ impl HearthDeck {
                 sidebar_header,
                 build_section_button(crate::app_group::Section::PcGames),
                 build_section_button(crate::app_group::Section::ConsoleGames),
-                build_section_button(crate::app_group::Section::Streaming),
                 build_section_button(crate::app_group::Section::Applications),
                 space::vertical().height(Length::Fill),
                 storage_info,
@@ -6976,6 +7108,73 @@ mod tests {
                 .map(|entry| entry.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["game"]
+        );
+    }
+
+    #[test]
+    fn dashboard_watch_shelf_lists_streaming_services() {
+        let watch = {
+            let mut data = entry("com.stremio.Stremio.desktop").as_ref().clone();
+            data.categories = vec!["AudioVideo".into(), "Video".into()];
+            Arc::new(data)
+        };
+        let app = HearthDeck {
+            all_entries: vec![entry("writer"), watch, game_entry("game")],
+            ..Default::default()
+        };
+
+        let shelves = app.dashboard_shelves();
+        let (_, entries) = shelves
+            .iter()
+            .find(|(shelf, _)| *shelf == DashboardShelf::Watch)
+            .expect("a watch shelf");
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["com.stremio.Stremio.desktop"]
+        );
+    }
+
+    #[test]
+    fn no_watch_shelf_without_streaming_services() {
+        // A media-category app that is not a known service (a local player or
+        // capture tool) must not create the shelf.
+        let player = {
+            let mut data = entry("com.system76.CosmicPlayer.desktop").as_ref().clone();
+            data.categories = vec!["AudioVideo".into(), "Player".into(), "Video".into()];
+            Arc::new(data)
+        };
+        let app = HearthDeck {
+            all_entries: vec![entry("writer"), player, game_entry("game")],
+            ..Default::default()
+        };
+
+        assert!(
+            app.dashboard_shelves()
+                .iter()
+                .all(|(shelf, _)| *shelf != DashboardShelf::Watch)
+        );
+    }
+
+    #[test]
+    fn watch_shelf_does_not_duplicate_apps_in_the_library_fallback() {
+        let app = HearthDeck {
+            all_entries: vec![entry("com.stremio.Stremio.desktop")],
+            ..Default::default()
+        };
+
+        let shelves = app.dashboard_shelves();
+        assert!(
+            shelves
+                .iter()
+                .any(|(shelf, _)| *shelf == DashboardShelf::Watch)
+        );
+        assert!(
+            shelves
+                .iter()
+                .all(|(shelf, _)| *shelf != DashboardShelf::Library)
         );
     }
 

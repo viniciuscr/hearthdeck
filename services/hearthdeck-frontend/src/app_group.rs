@@ -296,27 +296,22 @@ impl AppGroup {
 pub enum Section {
     PcGames,
     ConsoleGames,
-    /// Video and streaming apps: players, and clients for services that ship as
-    /// a browser `--app=` window or an Electron app.
-    Streaming,
     Applications,
 }
 
 impl Section {
-    pub const ALL: [Section; 4] = [
+    pub const ALL: [Section; 3] = [
         Section::PcGames,
         Section::ConsoleGames,
-        Section::Streaming,
         Section::Applications,
     ];
 
     /// Icon shown beside the section's name in the sidebar. Named rather than
-    /// inlined at the view so the sections cannot drift apart in style.
+    /// inlined at the view so the three sections cannot drift apart in style.
     pub fn icon_name(self) -> &'static str {
         match self {
             Self::PcGames => "applications-games-symbolic",
             Self::ConsoleGames => "input-gaming-symbolic",
-            Self::Streaming => "video-display-symbolic",
             Self::Applications => "view-app-grid-symbolic",
         }
     }
@@ -325,7 +320,6 @@ impl Section {
         match self {
             Section::PcGames => fl!("pc-games"),
             Section::ConsoleGames => fl!("console-games"),
-            Section::Streaming => fl!("streaming"),
             Section::Applications => fl!("applications"),
         }
     }
@@ -334,8 +328,7 @@ impl Section {
         match self {
             Section::PcGames => 0,
             Section::ConsoleGames => 1,
-            Section::Streaming => 2,
-            Section::Applications => 3,
+            Section::Applications => 2,
         }
     }
 
@@ -343,14 +336,13 @@ impl Section {
     pub fn all_name(&self) -> String {
         match self {
             Section::PcGames | Section::ConsoleGames => fl!("all-games"),
-            Section::Streaming | Section::Applications => fl!("all-apps"),
+            Section::Applications => fl!("all-apps"),
         }
     }
 
-    /// Whether an entry belongs to this section. Each entry lands in exactly
-    /// one: games are split between PC Games and Console Games (console games
-    /// being emulator titles), video and streaming apps get their own section,
-    /// and everything else is an application.
+    /// Whether an entry belongs to this section. Games are split between the
+    /// PC Games and Console Games sections (console games being emulator
+    /// titles), everything else lands in Applications.
     pub fn matches(&self, entry: &DesktopEntryData) -> bool {
         let is_game = entry
             .categories
@@ -360,8 +352,7 @@ impl Section {
         match self {
             Section::PcGames => is_game && !is_emulator,
             Section::ConsoleGames => is_game && is_emulator,
-            Section::Streaming => !is_game && is_streaming_entry(entry),
-            Section::Applications => !is_game && !is_streaming_entry(entry),
+            Section::Applications => !is_game,
         }
     }
 }
@@ -374,8 +365,6 @@ pub struct Sections {
     #[serde(default)]
     pub console_games: Vec<AppGroup>,
     #[serde(default)]
-    pub streaming: Vec<AppGroup>,
-    #[serde(default)]
     pub applications: Vec<AppGroup>,
 }
 
@@ -384,7 +373,6 @@ impl Sections {
         match section {
             Section::PcGames => &self.pc_games,
             Section::ConsoleGames => &self.console_games,
-            Section::Streaming => &self.streaming,
             Section::Applications => &self.applications,
         }
     }
@@ -393,31 +381,34 @@ impl Sections {
         match section {
             Section::PcGames => &mut self.pc_games,
             Section::ConsoleGames => &mut self.console_games,
-            Section::Streaming => &mut self.streaming,
             Section::Applications => &mut self.applications,
         }
     }
 }
 
-/// Returns true when the entry is a video or streaming app rather than a
-/// general utility: either it declares one of the media categories freedesktop
-/// players and streaming clients use, or its id/exec names a known service.
+/// Returns true when the entry is a streaming service client — the kind the
+/// dashboard's Watch shelf is for — rather than a game, a local media player,
+/// or a general utility.
 ///
-/// The name check exists because the two shapes these usually ship in declare
-/// nothing useful: a browser `--app=<url>` window (a hand-written desktop entry)
-/// and a bundled Electron client.
-fn is_streaming_entry(entry: &DesktopEntryData) -> bool {
-    const CATEGORIES: &[&str] = &["AudioVideo", "Video", "Player", "Streaming", "TV"];
-    if entry.categories.iter().any(|category| {
-        CATEGORIES
-            .iter()
-            .any(|known| category.eq_ignore_ascii_case(known))
-    }) {
-        return true;
+/// Matching is by name only, on purpose. Freedesktop categories are too coarse
+/// to identify a service: `AudioVideo` is also declared by volume mixers and
+/// video-capture tools, and `Player` by local players, so a category match
+/// pulled in apps that have nothing to watch. The services themselves rarely
+/// declare anything useful either — they ship as a browser `--app=<url>` window
+/// (a hand-written desktop entry) or a bundled Electron client — so the id and
+/// exec line are what is left to match on.
+pub(crate) fn is_watch_entry(entry: &DesktopEntryData) -> bool {
+    if entry
+        .categories
+        .iter()
+        .any(|category| category.eq_ignore_ascii_case("game"))
+    {
+        return false;
     }
 
     // Deliberately specific strings: these are matched against the whole exec
-    // line, which can contain a path with the user's name in it.
+    // line, which can contain a path with the user's name in it, so a bare
+    // service name like "max" or "prime" would match far too much.
     const SERVICES: &[&str] = &[
         "stremio",
         "netflix",
@@ -429,17 +420,22 @@ fn is_streaming_entry(entry: &DesktopEntryData) -> bool {
         "hulu",
         "hbomax",
         "hbo max",
+        "max.com",
         "crunchyroll",
         "paramountplus",
-        "peacocktv",
+        "paramount+",
+        "peacock",
         "tubitv",
+        "tubi.tv",
+        "plutotv",
+        "pluto.tv",
+        "appletv",
+        "apple tv",
+        "tv.apple",
         "plex",
         "jellyfin",
         "emby",
         "kodi",
-        "vlc",
-        "mpv",
-        "popcorn",
     ];
     let haystack =
         format!("{} {}", entry.id, entry.exec.as_deref().unwrap_or_default()).to_lowercase();
@@ -679,10 +675,7 @@ impl AppLibraryConfig {
                             .iter()
                             .any(|known| category.eq_ignore_ascii_case(known)),
                         Section::PcGames => category.starts_with(STORE_CATEGORY_PREFIX),
-                        // Streaming has no tabs of its own: the section is
-                        // already the grouping, and its apps share one or two
-                        // categories that would only add noise.
-                        Section::ConsoleGames | Section::Streaming => false,
+                        Section::ConsoleGames => false,
                     };
                     if category.eq_ignore_ascii_case("game") || !visible {
                         continue;
@@ -890,46 +883,57 @@ mod tests {
     }
 
     #[test]
-    fn streaming_apps_are_their_own_section() {
-        // A packaged video client declares the media categories...
-        let stremio = entry("stremio.desktop", &["AudioVideo", "Video", "Player"]);
-        // ...while a hand-written browser web app often declares nothing useful,
-        // so its name has to be enough.
-        let prime = entry("prime-video.desktop", &["Network"]);
-        let utility = entry("org.example.Tool.desktop", &["Utility"]);
-
-        assert!(Section::Streaming.matches(&stremio));
-        assert!(Section::Streaming.matches(&prime));
-        assert!(!Section::Applications.matches(&stremio));
-        assert!(!Section::Applications.matches(&prime));
-
-        // An ordinary application stays where it was.
-        assert!(Section::Applications.matches(&utility));
-        assert!(!Section::Streaming.matches(&utility));
-        // A game never drifts into it, whatever it plays.
-        assert!(
-            !Section::Streaming.matches(&entry("hearthdeck:video-game", &["Game", "AudioVideo"]))
+    fn watch_entries_are_classified_by_name_only() {
+        // A packaged streaming client is recognized by its id...
+        let stremio = entry(
+            "com.stremio.Stremio.desktop",
+            &["AudioVideo", "Video", "Player"],
         );
+        // ...and a hand-written browser web app by its `--app=` URL, because it
+        // declares nothing useful.
+        let netflix = Arc::new(DesktopEntryData {
+            exec: Some("google-chrome --app=https://www.netflix.com".into()),
+            ..entry("chrome-netflix.desktop", &["Network"])
+                .as_ref()
+                .clone()
+        });
+
+        assert!(super::is_watch_entry(&stremio));
+        assert!(super::is_watch_entry(&netflix));
+        // A game never counts, whatever it plays.
+        assert!(!super::is_watch_entry(&entry(
+            "hearthdeck:video-game",
+            &["Game", "AudioVideo"]
+        )));
     }
 
     #[test]
-    fn streaming_gets_no_category_tabs_of_its_own() {
-        let mut config = AppLibraryConfig::default();
-
-        config.sync_category_groups(&[
-            entry("stremio.desktop", &["AudioVideo", "Video"]),
-            entry("org.example.Tool.desktop", &["Utility"]),
-        ]);
-
-        assert!(config.sections.streaming.is_empty());
-        // And the section's app is not counted as an application tab either.
-        assert!(
-            config
-                .sections
-                .applications
-                .iter()
-                .all(|group| group.name() != "AudioVideo")
+    fn media_categories_alone_do_not_make_a_watch_app() {
+        // Volume mixers and capture tools declare AudioVideo/Video/Player but
+        // have nothing to watch; matching on the category used to pull them in
+        // alongside the players a local install already has.
+        let mixer = entry(
+            "org.pulseaudio.pavucontrol.desktop",
+            &["AudioVideo", "Utility"],
         );
+        let capture = entry("qvidcap.desktop", &["AudioVideo", "Video", "Player"]);
+        let player = entry(
+            "com.system76.CosmicPlayer.desktop",
+            &["AudioVideo", "Player", "Video"],
+        );
+
+        assert!(!super::is_watch_entry(&mixer));
+        assert!(!super::is_watch_entry(&capture));
+        assert!(!super::is_watch_entry(&player));
+    }
+
+    #[test]
+    fn watch_apps_stay_in_the_application_section() {
+        // Watch apps have no library section of their own; the dashboard shelf
+        // is the grouping, so the catalog keeps them as applications.
+        let stremio = entry("stremio.desktop", &["AudioVideo", "Video"]);
+        assert!(Section::Applications.matches(&stremio));
+        assert_eq!(Section::ALL.len(), 3);
     }
 
     #[test]

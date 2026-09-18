@@ -1288,8 +1288,10 @@ mod tests {
         socket_path: std::path::PathBuf,
         respond: impl FnOnce(BridgeRequest) -> BridgeResponse + Send + 'static,
     ) -> tokio::task::JoinHandle<()> {
+        // Bind before returning so callers cannot race the launch request
+        // against the test bridge becoming available.
+        let listener = UnixListener::bind(&socket_path).expect("bind fake bridge socket");
         tokio::spawn(async move {
-            let listener = UnixListener::bind(&socket_path).unwrap();
             let (stream, _) = listener.accept().await.unwrap();
             let (reader, mut writer) = stream.into_split();
             let mut reader = BufReader::new(reader);
