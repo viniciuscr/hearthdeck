@@ -5,9 +5,13 @@
 //! not track sessions; `api.rs` handles that, the same way it already does
 //! for Heroic and desktop-app launches.
 
-use std::path::{Component, Path, PathBuf};
+use std::{
+    path::{Component, Path, PathBuf},
+    time::{Duration, SystemTime},
+};
 
 use tokio::fs;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -21,6 +25,20 @@ use crate::{
 /// output, so a mismatch here fails safe as a rejected launch, not a
 /// security hole.
 const CORE_DIRECTORY: &str = "/usr/lib/libretro";
+
+/// How long a cached rom survives without being played before the janitor
+/// evicts it. This is the default only; `HEARTHDECK_ROM_CACHE_MAX_AGE_DAYS`
+/// overrides it per deployment (see `Config::load`).
+pub const DEFAULT_ROM_CACHE_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// A `.<name>.<uuid>.part` file older than this cannot belong to a running
+/// download — `download_rom_content` times out after two minutes — so it is
+/// debris from a process that died mid-download.
+const PARTIAL_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// How often the janitor sweeps the cache. A `tokio::time::interval`'s first
+/// tick fires immediately, so every daemon start sweeps too.
+const SWEEP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Platform `fs_slug` (RomM's on-disk-folder-naming slug, e.g. "snes",
 /// "ngc") to libretro core filename.
@@ -247,6 +265,7 @@ async fn ensure_rom_cached(
     validate_content_filename(fs_name)?;
     let rom_path = rom_cache_directory().join(rom_id.to_string()).join(fs_name);
     if fs::metadata(&rom_path).await.is_ok() {
+        touch_cached_rom(&rom_path).await;
         return Ok(rom_path);
     }
     if let Some(parent) = rom_path.parent() {
@@ -267,6 +286,38 @@ async fn ensure_rom_cached(
         return Err(RetroLaunchError::Cache(error));
     }
     Ok(rom_path)
+}
+
+/// Re-stamps a cache hit so the janitor measures "last played", not "first
+/// downloaded". Deliberately not atime: Linux mounts default to `relatime`,
+/// which often leaves a read-only access without updating the timestamp.
+///
+/// Best-effort by design: a filesystem that refuses the update only costs an
+/// early eviction, and an evicted rom is re-downloaded on the next launch.
+async fn touch_cached_rom(rom_path: &Path) {
+    let path = rom_path.to_path_buf();
+    // Tokio has no `set_modified`, and the timestamp syscall is blocking, so
+    // it runs on the blocking pool rather than stalling an async worker.
+    let touched = tokio::task::spawn_blocking(move || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.set_modified(SystemTime::now()))
+    })
+    .await;
+    match touched {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!(
+            path = %rom_path.display(),
+            %error,
+            "could not refresh rom cache timestamp"
+        ),
+        Err(error) => warn!(
+            path = %rom_path.display(),
+            %error,
+            "rom cache timestamp update did not run"
+        ),
+    }
 }
 
 fn validate_content_filename(fs_name: &str) -> Result<(), RetroLaunchError> {
@@ -292,11 +343,271 @@ fn rom_cache_directory() -> PathBuf {
         .join("hearthdeck/romm")
 }
 
+/// What one cache sweep removed, in entries.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CacheSweep {
+    roms: usize,
+    partials: usize,
+}
+
+/// Spawns the background task that keeps the rom cache bounded: at startup
+/// and every `SWEEP_INTERVAL` it deletes roms untouched for longer than
+/// `max_age` and abandoned partial downloads.
+///
+/// Failing is not fatal. The cache is re-creatable by definition — an evicted
+/// rom is downloaded again the next time it is launched — so a failed sweep
+/// logs and waits for the next tick rather than disturbing playback.
+pub fn start_cache_janitor(max_age: Duration) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut timer = tokio::time::interval(SWEEP_INTERVAL);
+        loop {
+            timer.tick().await;
+            match sweep_rom_cache(&rom_cache_directory(), max_age).await {
+                Ok(sweep) if sweep != CacheSweep::default() => info!(
+                    evicted_roms = sweep.roms,
+                    evicted_partials = sweep.partials,
+                    max_age_secs = max_age.as_secs(),
+                    "rom cache swept"
+                ),
+                Ok(_) => {}
+                Err(error) => warn!(%error, "rom cache sweep failed"),
+            }
+        }
+    })
+}
+
+/// Deletes the cached roms under `root` that have not been touched for
+/// `max_age`, plus the partial files old enough to be crash debris.
+///
+/// A rom's age is the newest modification time among the files inside its
+/// directory, not the directory's own time: `touch_cached_rom` stamps the
+/// content file on every launch, so a rom still in rotation never ages out,
+/// while one downloaded and never launched again does. A directory holding no
+/// content at all falls back to its own timestamp, which is when its last
+/// entry was written or removed — that is, when the failed download happened.
+/// Partials count as activity only while they are fresh: a fresh `.part` is an
+/// in-flight download and must protect its directory, a stale one is debris
+/// that is deleted and counted against nothing.
+async fn sweep_rom_cache(root: &Path, max_age: Duration) -> std::io::Result<CacheSweep> {
+    let cutoff = SystemTime::now()
+        .checked_sub(max_age)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let partial_cutoff = SystemTime::now()
+        .checked_sub(PARTIAL_MAX_AGE)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let mut sweep = CacheSweep::default();
+    let mut roms = match fs::read_dir(root).await {
+        Ok(roms) => roms,
+        // The cache directory only exists once something has been downloaded.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(sweep),
+        Err(error) => return Err(error),
+    };
+    while let Some(rom) = roms.next_entry().await? {
+        let path = rom.path();
+        let Ok(metadata) = rom.metadata().await else {
+            warn!(path = %path.display(), "skipping unreadable rom cache entry");
+            continue;
+        };
+        if !metadata.is_dir() {
+            // Not a shape `ensure_rom_cached` writes, but sweep it rather than
+            // let an unexpected file claim space forever.
+            if modified_at(&metadata) < cutoff && fs::remove_file(&path).await.is_ok() {
+                sweep.roms += 1;
+            }
+            continue;
+        }
+        let mut newest: Option<SystemTime> = None;
+        let mut contents = fs::read_dir(&path).await?;
+        while let Some(content) = contents.next_entry().await? {
+            let content_path = content.path();
+            let Ok(content_metadata) = content.metadata().await else {
+                continue;
+            };
+            // Nested directories are not a shape this cache produces; skip
+            // them rather than recurse, so no unexpected layout can turn the
+            // janitor into an unbounded tree walk.
+            if content_metadata.is_dir() {
+                continue;
+            }
+            let content_modified = modified_at(&content_metadata);
+            if is_partial(&content_path)
+                && content_modified < partial_cutoff
+                && fs::remove_file(&content_path).await.is_ok()
+            {
+                sweep.partials += 1;
+                continue;
+            }
+            newest = Some(newest.map_or(content_modified, |newest| newest.max(content_modified)));
+        }
+        let age = newest.unwrap_or_else(|| modified_at(&metadata));
+        if age < cutoff {
+            match fs::remove_dir_all(&path).await {
+                Ok(()) => sweep.roms += 1,
+                Err(error) => warn!(
+                    path = %path.display(),
+                    %error,
+                    "could not evict rom cache entry"
+                ),
+            }
+        }
+    }
+    Ok(sweep)
+}
+
+/// Matches the `.<fs_name>.<uuid>.part` names `ensure_rom_cached` downloads to.
+fn is_partial(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with('.') && name.ends_with(".part"))
+}
+
+/// A file whose modification time cannot be read is treated as ancient, so
+/// unreadable debris is evicted rather than kept forever.
+fn modified_at(metadata: &std::fs::Metadata) -> SystemTime {
+    metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, SystemTime};
+
     use super::{
-        CORE_BY_PLATFORM_SLUG, RetroLaunchError, resolve_core_path, validate_content_filename,
+        CORE_BY_PLATFORM_SLUG, CacheSweep, RetroLaunchError, resolve_core_path, sweep_rom_cache,
+        touch_cached_rom, validate_content_filename,
     };
+
+    const RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+    /// Backdates a file's modification time, standing in for "last used".
+    /// Read-only is enough: the tests own the files, and Unix allows an owner
+    /// to set timestamps through a read-only descriptor. Directories need it,
+    /// since they cannot be opened for writing.
+    fn backdate(path: &std::path::Path, age: Duration) {
+        let file = std::fs::File::open(path).unwrap();
+        file.set_modified(SystemTime::now() - age).unwrap();
+    }
+
+    fn write_rom(directory: &std::path::Path, name: &str, age: Duration) -> std::path::PathBuf {
+        std::fs::create_dir_all(directory).unwrap();
+        let path = directory.join(name);
+        std::fs::write(&path, b"rom").unwrap();
+        backdate(&path, age);
+        path
+    }
+
+    #[tokio::test]
+    async fn evicts_only_roms_unused_for_longer_than_the_retention_window() {
+        let cache = tempfile::tempdir().unwrap();
+        let played = write_rom(
+            &cache.path().join("1"),
+            "played.sfc",
+            Duration::from_secs(60),
+        );
+        let stale = write_rom(
+            &cache.path().join("2"),
+            "stale.sfc",
+            Duration::from_secs(30 * 86_400),
+        );
+
+        let sweep = sweep_rom_cache(cache.path(), RETENTION).await.unwrap();
+
+        assert_eq!(sweep.roms, 1);
+        assert!(played.exists());
+        assert!(!cache.path().join("2").exists());
+        assert!(!stale.exists());
+    }
+
+    #[tokio::test]
+    async fn a_fresh_download_partial_keeps_its_rom_directory_alive() {
+        let cache = tempfile::tempdir().unwrap();
+        let rom_directory = cache.path().join("42");
+        write_rom(&rom_directory, "old.sfc", Duration::from_secs(30 * 86_400));
+        // An in-flight download: fresh `.part`, older content file.
+        std::fs::write(rom_directory.join(".new.sfc.abc.part"), b"partial").unwrap();
+
+        let sweep = sweep_rom_cache(cache.path(), RETENTION).await.unwrap();
+
+        assert_eq!(sweep, CacheSweep::default());
+        assert!(rom_directory.join(".new.sfc.abc.part").exists());
+    }
+
+    #[tokio::test]
+    async fn removes_a_partial_older_than_a_day_without_evicting_the_rom() {
+        let cache = tempfile::tempdir().unwrap();
+        let rom_directory = cache.path().join("42");
+        let rom = write_rom(&rom_directory, "game.sfc", Duration::from_secs(60));
+        let partial = rom_directory.join(".game.sfc.abc.part");
+        std::fs::write(&partial, b"partial").unwrap();
+        backdate(&partial, Duration::from_secs(3 * 86_400));
+
+        let sweep = sweep_rom_cache(cache.path(), RETENTION).await.unwrap();
+
+        assert_eq!(
+            sweep,
+            CacheSweep {
+                roms: 0,
+                partials: 1,
+            }
+        );
+        assert!(!partial.exists());
+        assert!(rom.exists());
+    }
+
+    #[tokio::test]
+    async fn a_stale_partial_does_not_keep_an_unused_rom_alive() {
+        let cache = tempfile::tempdir().unwrap();
+        let rom_directory = cache.path().join("42");
+        write_rom(&rom_directory, "game.sfc", Duration::from_secs(30 * 86_400));
+        let partial = rom_directory.join(".game.sfc.abc.part");
+        std::fs::write(&partial, b"partial").unwrap();
+        backdate(&partial, Duration::from_secs(3 * 86_400));
+
+        let sweep = sweep_rom_cache(cache.path(), RETENTION).await.unwrap();
+
+        assert_eq!(
+            sweep,
+            CacheSweep {
+                roms: 1,
+                partials: 1,
+            }
+        );
+        assert!(!rom_directory.exists());
+    }
+
+    #[tokio::test]
+    async fn evicts_an_empty_rom_directory_older_than_the_retention_window() {
+        let cache = tempfile::tempdir().unwrap();
+        let rom_directory = cache.path().join("42");
+        std::fs::create_dir_all(&rom_directory).unwrap();
+        backdate(&rom_directory, Duration::from_secs(30 * 86_400));
+
+        let sweep = sweep_rom_cache(cache.path(), RETENTION).await.unwrap();
+
+        assert_eq!(sweep.roms, 1);
+        assert!(!rom_directory.exists());
+    }
+
+    #[tokio::test]
+    async fn a_missing_cache_directory_is_not_an_error() {
+        let cache = tempfile::tempdir().unwrap();
+
+        let sweep = sweep_rom_cache(&cache.path().join("absent"), RETENTION)
+            .await
+            .unwrap();
+
+        assert_eq!(sweep, CacheSweep::default());
+    }
+
+    #[tokio::test]
+    async fn a_cache_hit_refreshes_the_timestamp_the_janitor_measures() {
+        let cache = tempfile::tempdir().unwrap();
+        let rom = write_rom(cache.path(), "game.sfc", Duration::from_secs(30 * 86_400));
+
+        touch_cached_rom(&rom).await;
+
+        let modified = std::fs::metadata(&rom).unwrap().modified().unwrap();
+        assert!(modified > SystemTime::now() - Duration::from_secs(60));
+    }
 
     #[test]
     fn every_pkgbuild_optdepend_core_has_a_platform_mapping() {

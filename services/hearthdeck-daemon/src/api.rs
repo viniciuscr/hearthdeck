@@ -1346,6 +1346,7 @@ mod tests {
                 bridge_socket_path: temporary.path().join("bridge.sock"),
                 lan_enabled: false,
                 tls: None,
+                rom_cache_max_age: crate::retro::DEFAULT_ROM_CACHE_MAX_AGE,
             },
             database,
         );

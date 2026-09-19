@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use directories::ProjectDirs;
@@ -11,6 +11,9 @@ pub struct Config {
     pub bridge_socket_path: PathBuf,
     pub lan_enabled: bool,
     pub tls: Option<TlsConfig>,
+    /// How long a downloaded RomM rom may sit unused in the cache before the
+    /// daemon's janitor evicts it. See `crate::retro::start_cache_janitor`.
+    pub rom_cache_max_age: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -66,6 +69,20 @@ impl Config {
         } else {
             None
         };
+        let rom_cache_max_age = match env::var("HEARTHDECK_ROM_CACHE_MAX_AGE_DAYS") {
+            Ok(value) => {
+                let days: u64 = value
+                    .trim()
+                    .parse()
+                    .context("HEARTHDECK_ROM_CACHE_MAX_AGE_DAYS must be a whole number of days")?;
+                Duration::from_secs(
+                    days.checked_mul(24 * 60 * 60)
+                        .context("HEARTHDECK_ROM_CACHE_MAX_AGE_DAYS is too large")?,
+                )
+            }
+            Err(env::VarError::NotPresent) => crate::retro::DEFAULT_ROM_CACHE_MAX_AGE,
+            Err(error) => bail!("HEARTHDECK_ROM_CACHE_MAX_AGE_DAYS is not valid unicode: {error}"),
+        };
         Ok(Self {
             bind_address,
             local_admin_address,
@@ -78,6 +95,7 @@ impl Config {
                 .unwrap_or_else(|| runtime_dir.join("hearthdeck/bridge.sock")),
             lan_enabled,
             tls,
+            rom_cache_max_age,
         })
     }
 }

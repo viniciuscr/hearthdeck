@@ -252,6 +252,24 @@ disagrees.
    verbatim, or its rewrite), so a mapping re-saved from RetroArch's controller
    wizard is still never clobbered.
 
+10. **The ROM cache is bounded by age, not by size.** A cached rom is a
+    copy of something that lives on the RomM server, so evicting it is never
+    data loss — the next launch downloads it again. The daemon therefore keeps
+    no size ledger at all: it re-stamps a cached rom's timestamp on every
+    launch (`touch_cached_rom` in `retro.rs`, deliberately not atime, which
+    Linux's `relatime` default often leaves un-updated on a read) and a
+    background task (`start_cache_janitor`) sweeps
+    `$XDG_CACHE_HOME/hearthdeck/romm/` at startup and every six hours, deleting
+    any rom no launch has touched for `HEARTHDECK_ROM_CACHE_MAX_AGE_DAYS`
+    (default 7), plus `.part` files old enough to be crash debris rather than
+    an in-flight download. The alternative — a byte budget — needs RomM to
+    report a size for everything on disk and still has to pick victims; age is
+    one file timestamp and one comparison. The trade-off is that a game played
+    less often than the window pays a re-download, tunable per deployment via
+    the env var. Serving the file straight from RomM instead is not an option
+    with the current design: libretro cores open a local path, and the bridge
+    only accepts a launch path under this cache directory.
+
 ## Starting the RomM server itself
 
 RomM is an external self-hosted server (here a Podman Compose stack), not
@@ -367,7 +385,8 @@ Each phase is scoped to be doable in one sitting and independently useful.
   `diagnostics.rs`, same authenticated-proxy pattern as `romm_asset` —
   credentials never leave the daemon) into `$XDG_CACHE_HOME/hearthdeck/romm/`,
   the same path the bridge's own allowlist expects. User-configurable core
-  overrides remain future work (open question 2).
+  overrides remain future work (open question 2). Cache retention landed later
+  as `retro::start_cache_janitor` (decision 10).
 - **Phase 3 — Bridge: launch + stop. Code done, hardware verification
   pending.** `launch_retro_game`, path validation, and the systemd-run/
   gamescope wrapping landed in Phase 1's implementation above. What's left:
