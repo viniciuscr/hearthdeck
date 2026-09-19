@@ -286,6 +286,16 @@ pub fn filter_button_height() -> f32 {
     f32::from(s.space_l + s.space_xxs)
 }
 
+/// Width of the console filter sidebar (the right-hand context drawer).
+/// Clamped so it keeps a readable label column on small windows without
+/// swallowing the grid on a TV-sized one.
+pub fn filter_drawer_width(window_width: f32) -> f32 {
+    (window_width * 0.32).clamp(280.0, FILTER_DRAWER_MAX_WIDTH)
+}
+
+/// Upper bound for [`filter_drawer_width`].
+pub const FILTER_DRAWER_MAX_WIDTH: f32 = 420.0;
+
 // ---------------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------------
@@ -704,30 +714,34 @@ pub fn tab_button_class(selected: bool) -> Button {
     }
 }
 
-/// Console filter chips, used by both the facet chips in the library's filter bar
-/// and the value chips in its panel: a pill whose fill marks a selected value.
+/// One option row in the console filter sidebar: a full-width list row that
+/// fills with the selection color when it holds the facet's current value.
 ///
-/// A chip rings when it holds iced's focus (so the D-pad can walk the bar) or
-/// when it sits under the panel's own cursor (the panel is navigated by that
-/// cursor rather than by focus, like the details screen).
-pub fn filter_chip_class(selected: bool, cursor: bool) -> Button {
+/// It rings when it holds iced's focus (so the keyboard can reach it) or when
+/// it sits under the drawer's own cursor - the drawer is navigated by that
+/// cursor rather than by focus, like the details screen and context menu.
+/// The base row is COSMIC's native `ListItem` appearance, so the sidebar reads
+/// as a settings list rather than as a stack of custom chips.
+pub fn filter_option_class(selected: bool, cursor: bool) -> Button {
     let styled = move |focused: bool, theme: &Theme| {
-        let mut style = theme.active(focused, false, &Button::IconVertical);
-        style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-        style.background = Some(chip_background(if selected { 0.18 } else { 0.06 }, theme));
-        style.text_color = Some(theme.cosmic().on_bg_color().into());
-        focus_ring(style, focused || cursor, theme)
+        let class = Button::ListItem(theme.cosmic().radius_s());
+        focus_ring(
+            theme.active(focused, selected, &class),
+            focused || cursor,
+            theme,
+        )
     };
 
     Button::Custom {
         active: Box::new(styled),
-        disabled: Box::new(|theme| theme.disabled(&Button::IconVertical)),
+        disabled: Box::new(|theme| theme.disabled(&Button::ListItem(theme.cosmic().radius_s()))),
         hovered: Box::new(move |focused, theme| {
-            let mut style = theme.hovered(focused, false, &Button::IconVertical);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            style.background = Some(chip_background(if selected { 0.18 } else { 0.10 }, theme));
-            style.text_color = Some(theme.cosmic().on_bg_color().into());
-            focus_ring(style, focused || cursor, theme)
+            let class = Button::ListItem(theme.cosmic().radius_s());
+            focus_ring(
+                theme.hovered(focused, selected, &class),
+                focused || cursor,
+                theme,
+            )
         }),
         pressed: Box::new(styled),
     }

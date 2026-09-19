@@ -65,7 +65,7 @@ use cosmic::{
         self,
         autosize::autosize,
         button::{self},
-        divider,
+        context_drawer, divider,
         dnd_destination::dnd_destination_for_data,
         icon, list,
         list::list_column,
@@ -102,11 +102,12 @@ use crate::style::{
     backdrop_scrim, backdrop_wash, card_surface, content_horizontal_padding,
     dashboard_console_tile_size, dashboard_nav_button_class, dashboard_tile_size,
     details_action_bar_padding, details_action_height, details_hero_width,
-    details_toggle_button_class, filter_button_height, filter_chip_class, grid_gap,
-    grid_top_padding, hero_card, launch_overlay, modal_scrim, primary_action_button_class,
-    root_background, search_icon_padding, section_button_class, sidebar_accent_bar_height,
-    sidebar_divider, sidebar_header_height, sidebar_item_height, sidebar_width, tab_button_class,
-    tab_height, tab_underline_height, tab_width, tile_height, tile_width, title_action_height,
+    details_toggle_button_class, filter_button_height, filter_drawer_width, filter_option_class,
+    grid_gap, grid_top_padding, hero_card, launch_overlay, modal_scrim,
+    primary_action_button_class, root_background, search_icon_padding, section_button_class,
+    sidebar_accent_bar_height, sidebar_divider, sidebar_header_height, sidebar_item_height,
+    sidebar_width, tab_button_class, tab_height, tab_underline_height, tab_width, tile_height,
+    tile_width, title_action_height,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
@@ -121,9 +122,9 @@ use crate::widgets::transition::{PageTransition, TabTransition};
 
 static SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("search"));
 static FILTER_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter"));
-/// Single-line strip of value chips inside the open console filter panel. Its
-/// own id because, like the tab strip, it scrolls to keep the cursor visible.
-static FILTER_VALUES_SCROLLABLE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter-values"));
+/// Scrollable holding the open console filter sidebar's option list. Its own id
+/// so the drawer can scroll to keep the controller cursor visible.
+static FILTER_DRAWER_SCROLL_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter-drawer"));
 static DASHBOARD_HOME_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-home"));
 static DASHBOARD_LIBRARY_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-library"));
 static DASHBOARD_SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-search"));
@@ -154,20 +155,13 @@ fn group_tab_id(key: u64) -> Id {
     Id::new(format!("group-tab-{key}"))
 }
 
-/// Widget id of one value chip in the open filter panel. The id is how the
-/// scroll-to-cursor operation finds the chip's bounds.
-fn filter_value_id(facet: usize, value: usize) -> Id {
-    Id::new(format!("filter-value-{facet}-{value}"))
-}
-
-/// Widget id of the facet chip at `index` in the filter bar, so a chip reached
-/// with the D-pad can be confirmed like a click.
-fn filter_facet_id(index: usize) -> Id {
-    Id::new(format!("filter-facet-{index}"))
+/// Widget id of one option row in the open filter sidebar. The id is how the
+/// scroll-to-cursor operation finds the row's bounds.
+fn filter_option_id(facet: usize, value: usize) -> Id {
+    Id::new(format!("filter-option-{facet}-{value}"))
 }
 
 static EDIT_GROUP_ID: LazyLock<Id> = LazyLock::new(|| Id::new("edit_group"));
-static CLEAR_FILTERS_ID: LazyLock<Id> = LazyLock::new(|| Id::new("clear_filters"));
 static NEW_GROUP_ID: LazyLock<Id> = LazyLock::new(|| Id::new("new_group"));
 static SUBMIT_DELETE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("cancel_delete"));
 
@@ -446,7 +440,7 @@ struct HearthDeck {
     /// RomM metadata to filter on today; the grid projection applies this to
     /// them and ignores it everywhere else.
     filters: RommFilters,
-    /// Cursor of the open console filter panel, or `None` while it is closed.
+    /// Cursor of the open console filter sidebar, or `None` while it is closed.
     /// Navigated by the application's own cursor rather than iced focus, like
     /// the context menu and the details screen.
     filter_cursor: Option<FilterCursor>,
@@ -1033,19 +1027,21 @@ enum Message {
     ConfirmFocused(widget::Id),
     SelectSection(Section),
     SelectGroup(Option<usize>),
-    /// Open or close the console filter panel.
+    /// Open or close the console filter sidebar.
     ToggleFilterPanel,
-    /// Open the filter panel on one facet, by index into the bar's facets (a
-    /// click on that facet's chip).
-    FilterFacet(usize),
+    /// Close the console filter sidebar (the drawer's own close control).
+    CloseFilterPanel,
     /// Point one facet at `value`, or clear that facet when `value` is `None`
-    /// (the panel's "All" chip).
+    /// (the sidebar's "All" row).
     SelectFilter {
         facet: RommFacet,
         value: Option<String>,
     },
     /// Drop every console filter.
     ClearFilters,
+    /// Absolute vertical scroll offset that keeps the filter sidebar's cursor
+    /// row visible inside its option list.
+    ScrollFilterDrawer(f32),
     ReorderGroup(Vec<GroupRowKey>),
     Delete(usize),
     ConfirmDelete,
@@ -1178,15 +1174,14 @@ impl VirtualKeyboard {
     }
 }
 
-/// Where the console filter panel's cursor sits: which facet is active, whether
-/// the cursor is on the facet row or on that facet's values, and which value it
-/// points at. Index 0 of a facet's values is its "All" chip, so the cursor can
-/// always clear the facet it is on.
+/// Where the console filter sidebar's cursor sits: which facet, and which of
+/// that facet's options. Option 0 is its "All" row, so the cursor can always
+/// clear the facet it is on. The cursor owns the D-pad while the drawer is
+/// open and doubles as the drawer's open/closed flag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FilterCursor {
     facet: usize,
     value: usize,
-    on_values: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1465,20 +1460,34 @@ impl HearthDeck {
         }
     }
 
-    /// Whether the console grid's local view has to see the whole scope before
-    /// it can be trusted. Both the search box and the filters run over the
-    /// records the frontend already holds, while the grid loads a page at a
-    /// time, so a narrowed console view keeps pulling pages until RomM runs
-    /// out. Plain browsing stays on-demand.
-    fn console_needs_all_pages(&self) -> bool {
+    /// Whether the console grid's projection is narrowed by something the user
+    /// can see and clear: a search term or a chosen filter. This is the set of
+    /// cases where the loaded count *is* the result count, rather than a page
+    /// of RomM's own total.
+    fn console_is_narrowed(&self) -> bool {
         self.cur_section == Section::ConsoleGames
             && (!self.search_value.is_empty() || self.filters.is_active())
     }
 
-    /// The facets the current section can filter on, in the order the filter bar
-    /// shows them. Only console games expose facets today, and a facet that no
-    /// loaded record carries is dropped rather than shown empty: a library
-    /// without region metadata simply gets no region chip.
+    /// Whether the console grid's local view has to see the whole scope before
+    /// it can be trusted. Search and the filters both run over the records the
+    /// frontend already holds, while the grid loads a page at a time, so a
+    /// narrowed console view keeps pulling pages until RomM runs out.
+    ///
+    /// The open filter sidebar counts too, even with no filter chosen yet: its
+    /// option lists are derived from the loaded records, so it has to pull the
+    /// whole scope for every genre/decade/region to appear - otherwise it would
+    /// offer only the values present in the first page or two. Plain browsing
+    /// with the drawer closed stays on-demand.
+    fn console_needs_all_pages(&self) -> bool {
+        self.console_is_narrowed()
+            || (self.cur_section == Section::ConsoleGames && self.filter_cursor.is_some())
+    }
+
+    /// The facets the current section can filter on, in the order the filter
+    /// sidebar shows them. Only console games expose facets today, and a facet
+    /// that no loaded record carries is dropped rather than shown empty: a
+    /// library without region metadata simply gets no region section.
     fn filter_facets(&self) -> Vec<RommFacet> {
         if self.cur_section != Section::ConsoleGames {
             return Vec::new();
@@ -1489,8 +1498,8 @@ impl HearthDeck {
             .collect()
     }
 
-    /// The options a facet offers, "All" first. The panel cursor's value index
-    /// indexes into this list, so index 0 always means "no filter here".
+    /// The options a facet offers, "All" first. The cursor's value index indexes
+    /// into this list, so index 0 always means "no filter here".
     fn filter_options(&self, facet: RommFacet) -> Vec<Option<String>> {
         std::iter::once(None)
             .chain(facet.values(&self.all_entries).into_iter().map(Some))
@@ -1508,7 +1517,7 @@ impl HearthDeck {
             .unwrap_or(0)
     }
 
-    /// Points the open panel's cursor at `facet` and its selected value.
+    /// Points the open sidebar's cursor at `facet` and its selected value.
     fn point_filter_cursor(&mut self, facet: RommFacet) {
         let Some(index) = self
             .filter_facets()
@@ -1521,90 +1530,110 @@ impl HearthDeck {
         if let Some(cursor) = self.filter_cursor.as_mut() {
             cursor.facet = index;
             cursor.value = value;
-            cursor.on_values = true;
         }
     }
 
-    /// Opens the filter panel on `facet` (clamped to the facets on show), with
-    /// the cursor resting on that facet's current value. A section with no
-    /// facets closes the panel instead of showing an empty one.
-    fn open_filter_panel(&mut self, facet: usize) -> Task<Message> {
+    /// Keeps the cursor inside the facets and options currently on show. Pages
+    /// arrive while the sidebar is open, so a cursor set when the list was
+    /// shorter - or a facet that has since lost its only value - has to be
+    /// pulled back onto something real before the view indexes into it.
+    fn clamp_filter_cursor(&mut self) {
+        let Some(cursor) = self.filter_cursor else {
+            return;
+        };
         let facets = self.filter_facets();
         if facets.is_empty() {
-            self.filter_cursor = None;
-            return Task::none();
+            self.filter_cursor = Some(FilterCursor { facet: 0, value: 0 });
+            return;
         }
-        let facet = facets[facet.min(facets.len() - 1)];
+        let facet = cursor.facet.min(facets.len() - 1);
+        let options = self.filter_options(facets[facet]).len();
         self.filter_cursor = Some(FilterCursor {
-            facet: 0,
-            value: 0,
-            on_values: true,
+            facet,
+            value: cursor.value.min(options.saturating_sub(1)),
         });
-        self.point_filter_cursor(facet);
-        // Opening the panel is not a text-input gesture: drop the on-screen
-        // keyboard if the search box was focused.
-        Task::batch([
-            self.request_virtual_keyboard(false),
-            self.reveal_filter_cursor(),
-        ])
     }
 
-    /// One D-pad step inside the open filter panel. `column` walks the active
-    /// row sideways: facets from the facet row, values from the value row, both
-    /// wrapping. `row` moves between the two rows, and up off the facet row
-    /// leaves the panel, the way a dropdown closes upward.
+    /// Opens the console filter sidebar with the cursor on the first facet's
+    /// current value. The drawer opens even before any facet is known, so it can
+    /// fill in as pages arrive; a section with no filters at all is never opened
+    /// because only console games expose facets.
+    fn open_filter_panel(&mut self) -> Task<Message> {
+        if self.cur_section != Section::ConsoleGames {
+            return Task::none();
+        }
+        self.filter_cursor = Some(FilterCursor { facet: 0, value: 0 });
+        self.clamp_filter_cursor();
+        // Opening the drawer pulls the whole scope so its options are complete,
+        // and it is not a text-input gesture: drop the on-screen keyboard if the
+        // search box was focused.
+        let mut tasks = vec![
+            self.request_virtual_keyboard(false),
+            self.reveal_filter_cursor(),
+        ];
+        if self.console_needs_all_pages()
+            && !self.romm_loading_page
+            && let Some(offset) = self.romm_next_offset
+        {
+            tasks.push(self.load_romm_page(offset));
+        }
+        Task::batch(tasks)
+    }
+
+    /// One D-pad step inside the open sidebar. `row` walks the option list: down
+    /// crosses from the last option of a facet onto the first option of the next
+    /// one, up crosses the other way, and neither wraps around the ends. `column`
+    /// switches facet, wrapping, landing on that facet's current value.
     fn step_filter_cursor(&mut self, column: i32, row: i32) -> Task<Message> {
         let Some(cursor) = self.filter_cursor else {
             return Task::none();
         };
         let facets = self.filter_facets();
-        if facets.is_empty() {
-            self.filter_cursor = None;
-            return Task::none();
-        }
-
-        if row < 0 && !cursor.on_values {
-            self.filter_cursor = None;
+        if facets.is_empty() || cursor.facet >= facets.len() {
             return Task::none();
         }
 
         let mut next = cursor;
-        if row != 0 {
-            next.on_values = row > 0;
-        }
-        if column != 0 {
-            if next.on_values {
-                let options = self.filter_options(facets[cursor.facet]).len();
-                next.value = (cursor.value as i32 + column).rem_euclid(options as i32) as usize;
+        if row > 0 {
+            let options = self.filter_options(facets[cursor.facet]).len();
+            if cursor.value + 1 < options {
+                next.value = cursor.value + 1;
+            } else if cursor.facet + 1 < facets.len() {
+                next.facet = cursor.facet + 1;
+                next.value = 0;
             } else {
-                next.facet =
-                    (cursor.facet as i32 + column).rem_euclid(facets.len() as i32) as usize;
-                next.value = self.filter_selected_index(facets[next.facet]);
+                return Task::none();
             }
+        } else if row < 0 {
+            if cursor.value > 0 {
+                next.value = cursor.value - 1;
+            } else if cursor.facet > 0 {
+                next.facet = cursor.facet - 1;
+                next.value = self
+                    .filter_options(facets[cursor.facet - 1])
+                    .len()
+                    .saturating_sub(1);
+            } else {
+                return Task::none();
+            }
+        } else if column != 0 {
+            next.facet = (cursor.facet as i32 + column).rem_euclid(facets.len() as i32) as usize;
+            next.value = self.filter_selected_index(facets[next.facet]);
         }
         self.filter_cursor = Some(next);
         self.reveal_filter_cursor()
     }
 
-    /// Applies whatever the open panel's cursor points at: a value on the value
-    /// row sets that facet, while A on the facet row only steps down into its
-    /// values.
+    /// Applies whatever the open sidebar's cursor points at: the option row sets
+    /// its facet, with the "All" row clearing it.
     fn apply_filter_cursor(&mut self) -> Task<Message> {
         let Some(cursor) = self.filter_cursor else {
             return Task::none();
         };
         let facets = self.filter_facets();
         let Some(facet) = facets.get(cursor.facet).copied() else {
-            self.filter_cursor = None;
             return Task::none();
         };
-        if !cursor.on_values {
-            self.filter_cursor = Some(FilterCursor {
-                on_values: true,
-                ..cursor
-            });
-            return self.reveal_filter_cursor();
-        }
         let value = self
             .filter_options(facet)
             .get(cursor.value)
@@ -1614,7 +1643,7 @@ impl HearthDeck {
     }
 
     /// Points `facet` at `value` (or clears it), re-projects the grid and keeps
-    /// the panel cursor on what was just chosen.
+    /// the sidebar cursor on what was just chosen.
     fn select_filter(&mut self, facet: RommFacet, value: Option<String>) -> Task<Message> {
         self.filters.set(facet, value);
         self.point_filter_cursor(facet);
@@ -1643,27 +1672,22 @@ impl HearthDeck {
         Task::batch(tasks)
     }
 
-    /// Scrolls the panel's value strip so the cursor's chip is visible: the
-    /// strip is one line, so a value past its right edge would otherwise be
-    /// reachable but invisible.
+    /// Scrolls the sidebar so the cursor's option row is visible: the option
+    /// list is vertical and taller than the drawer for a large genre set, so a
+    /// row past its bottom edge would otherwise be reachable but invisible.
     fn reveal_filter_cursor(&self) -> Task<Message> {
         let Some(cursor) = self.filter_cursor else {
             return Task::none();
         };
-        iced_runtime::task::widget(FindStripReveal {
-            scrollable_id: FILTER_VALUES_SCROLLABLE_ID.clone(),
-            tab_id: filter_value_id(cursor.facet, cursor.value),
+        iced_runtime::task::widget(FindDashboardReveal {
+            scrollable_id: FILTER_DRAWER_SCROLL_ID.clone(),
+            target_id: filter_option_id(cursor.facet, cursor.value),
             viewport: None,
-            content_width: None,
-            translation_x: None,
-            tab: None,
+            content_height: None,
+            translation_y: None,
+            target: None,
         })
-        .map(|offset| {
-            cosmic::Action::App(Message::ScrollStrip(
-                FILTER_VALUES_SCROLLABLE_ID.clone(),
-                offset,
-            ))
-        })
+        .map(|offset| cosmic::Action::App(Message::ScrollFilterDrawer(offset)))
     }
 
     /// Focuses the first grid tile once a reload has painted the new entries.
@@ -2857,7 +2881,9 @@ impl HearthDeck {
             return Task::none();
         }
         if self.filter_cursor.is_some() {
-            // The filter panel is the same idea: its cursor owns the D-pad.
+            // The filter sidebar is the same idea: its cursor owns the D-pad,
+            // with up/down walking the option list and left/right switching
+            // facet.
             return match msg {
                 Message::PrevRow => self.step_filter_cursor(0, -1),
                 Message::NextRow => self.step_filter_cursor(0, 1),
@@ -2878,20 +2904,8 @@ impl HearthDeck {
         self.update(msg)
     }
 
-    /// Acts on a filter chip that holds iced's focus, if `focused` is one. The
-    /// bar's chips are focusable so the D-pad can walk into them; each then does
-    /// exactly what a click on it does, instead of being a dead end.
-    fn confirm_filter_chip(&mut self, focused: &widget::Id) -> Option<Task<Message>> {
-        if focused == &*CLEAR_FILTERS_ID {
-            return Some(self.update(Message::ClearFilters));
-        }
-        let index =
-            (0..self.filter_facets().len()).find(|index| focused == &filter_facet_id(*index))?;
-        Some(self.open_filter_panel(index))
-    }
-
     /// Routes a direction to the transient UI that owns it, if any: the context
-    /// menu moves its highlight and the filter panel moves its cursor, rather
+    /// menu moves its highlight and the filter sidebar moves its cursor, rather
     /// than the grid behind them moving its selection. `None` leaves the
     /// direction to the screen itself.
     fn direction_to_overlay(&mut self, message: Message) -> Option<Task<Message>> {
@@ -2912,7 +2926,7 @@ impl HearthDeck {
             return self.activate_details();
         }
         if self.filter_cursor.is_some() {
-            // Like the details screen, the filter panel acts on its own cursor.
+            // Like the details screen, the filter sidebar acts on its own cursor.
             return self.apply_filter_cursor();
         }
         if self.menu.is_some() {
@@ -2946,7 +2960,7 @@ impl HearthDeck {
         if self.menu.is_some() {
             return self.update(Message::CloseContextMenu);
         }
-        // The filter panel is a surface of its own too: Back closes it before
+        // The filter sidebar is a surface of its own too: Back closes it before
         // it reaches the screen behind it.
         if self.filter_cursor.is_some() {
             self.filter_cursor = None;
@@ -3187,8 +3201,7 @@ impl Operation<f32> for FindViewport {
 /// its single-line strip, and returns the absolute scroll offset that would
 /// center it. Layout coordinates from the tree are the strip's natural
 /// (unscrolled) positions, so the current scroll offset must be subtracted
-/// before comparing against the viewport. Used by both the section tab strip
-/// and the filter panel's value strip.
+/// before comparing against the viewport. Used by the section tab strip.
 struct FindStripReveal {
     scrollable_id: Id,
     tab_id: Id,
@@ -3251,11 +3264,12 @@ impl Operation<f32> for FindStripReveal {
     }
 }
 
-/// Vertical counterpart of `FindStripReveal`: measures how far a focused
-/// dashboard card sits outside the visible rows of the shelf scrollable, and
-/// returns the absolute Y offset that would center it. Mirrors the strip
-/// formula on the other axis, subtracting the scrollable's translation because
-/// layout coordinates are the content's unscrolled positions.
+/// Vertical counterpart of `FindStripReveal`: measures how far a target widget
+/// sits outside the visible rows of a vertical scrollable, and returns the
+/// absolute Y offset that would center it. Used by the dashboard shelf
+/// scrollable and by the console filter sidebar's option list. Mirrors the
+/// strip formula on the other axis, subtracting the scrollable's translation
+/// because layout coordinates are the content's unscrolled positions.
 struct FindDashboardReveal {
     scrollable_id: Id,
     target_id: Id,
@@ -3691,7 +3705,7 @@ impl cosmic::Application for HearthDeck {
                 if !self.input_ownership.frontend_has_control() && !self.frontend_surface_open() {
                     return Task::none();
                 }
-                // The open filter panel owns the pad: its cursor handles the
+                // The open filter sidebar owns the pad: its cursor handles the
                 // D-pad and A, B closes it, and letting any other button through
                 // would act on the screen behind it.
                 if self.filter_cursor.is_some()
@@ -3869,7 +3883,7 @@ impl cosmic::Application for HearthDeck {
                 }
                 if self.page == Page::Library {
                     // Back dismisses the topmost transient UI first: the filter
-                    // panel closes before the screen is left.
+                    // sidebar closes before the screen is left.
                     if self.filter_cursor.is_some() {
                         self.filter_cursor = None;
                         return Task::none();
@@ -3923,9 +3937,6 @@ impl cosmic::Application for HearthDeck {
                 if focused == *FILTER_ID {
                     return self.update(Message::ToggleFilterPanel);
                 }
-                if let Some(task) = self.confirm_filter_chip(&focused) {
-                    return task;
-                }
                 let Some(i) = focused_entry_index(&focused, &self.entry_ids) else {
                     return Task::none();
                 };
@@ -3975,17 +3986,18 @@ impl cosmic::Application for HearthDeck {
                 self.begin_tab_animation(group);
                 return Task::none();
             }
-            // The filter panel is a transient surface of the library screen: it
-            // owns the grid's filter row until it is closed.
+            // The filter sidebar is a transient surface of the library screen:
+            // it owns the D-pad until it is closed.
             Message::ToggleFilterPanel => {
                 if self.filter_cursor.is_some() {
                     self.filter_cursor = None;
                     return Task::none();
                 }
-                return self.open_filter_panel(0);
+                return self.open_filter_panel();
             }
-            Message::FilterFacet(index) => {
-                return self.open_filter_panel(index);
+            Message::CloseFilterPanel => {
+                self.filter_cursor = None;
+                return Task::none();
             }
             Message::SelectFilter { facet, value } => {
                 return self.select_filter(facet, value);
@@ -3993,11 +4005,22 @@ impl cosmic::Application for HearthDeck {
             Message::ClearFilters => {
                 self.filters.clear();
                 let mut tasks = vec![self.reload_console_grid()];
-                // Point the still-open panel back at the first facet's "All".
+                // Point the still-open sidebar back at the first facet's "All".
                 if self.filter_cursor.is_some() {
-                    tasks.push(self.open_filter_panel(0));
+                    self.filter_cursor = Some(FilterCursor { facet: 0, value: 0 });
+                    self.clamp_filter_cursor();
+                    tasks.push(self.reveal_filter_cursor());
                 }
                 return Task::batch(tasks);
+            }
+            Message::ScrollFilterDrawer(offset) => {
+                return iced::widget::scrollable::scroll_to(
+                    FILTER_DRAWER_SCROLL_ID.clone(),
+                    AbsoluteOffset {
+                        x: None,
+                        y: Some(offset),
+                    },
+                );
             }
             Message::ReorderGroup(new_order) => {
                 let prev_selected_key =
@@ -5687,8 +5710,7 @@ impl HearthDeck {
         // not track the loaded-page count (which climbs as the user scrolls).
         // Use RomM's own per-console total unless the view is narrowed by a
         // search or a filter, where the loaded count *is* the result count.
-        let item_count = if cur_section == Section::ConsoleGames && !self.console_needs_all_pages()
-        {
+        let item_count = if cur_section == Section::ConsoleGames && !self.console_is_narrowed() {
             self.console_total_count()
                 .unwrap_or(self.entry_path_input.len())
         } else {
@@ -6033,130 +6055,46 @@ impl HearthDeck {
             .align_y(Alignment::Center)
             .width(Length::Fill);
 
-        // ===== Filter bar + item count =====
+        // ===== Filter button + item count =====
         // A line of its own under the tab strip: the tabs are the library's
-        // grouping, the bar is a second, independent axis over the same grid.
-        // Only Console Games has facets today, so every other section gets the
-        // bar with just the item count on it.
-        let facets = self.filter_facets();
-
-        // One chip shape for the whole filter UI: the facet chips in the bar and
-        // the value chips in the panel only differ in what they do on press.
-        let filter_chip = |label: String, selected: bool, cursor: bool, on_press: Message| {
-            button::custom(
-                container(text::body(label).size(TEXT_BODY))
-                    .align_x(Alignment::Center)
-                    .align_y(Alignment::Center)
-                    .padding([space_xxs, space_s]),
-            )
-            .height(Length::Fixed(filter_button_height()))
-            .width(Length::Shrink)
-            .class(filter_chip_class(selected, cursor))
-            .on_press(on_press)
-        };
-
-        let mut bar_items: Vec<Element<'_, Message>> = Vec::new();
-        if !facets.is_empty() {
+        // grouping, and the filter button is a second, independent axis over the
+        // same grid. Only Console Games exposes facets today, so every other
+        // section gets the line with just the item count on it. The options
+        // themselves live in a right-hand sidebar (see `view_filter_drawer`)
+        // rather than folding out under this button.
+        let filter_button: Element<'_, Message> = if self.cur_section == Section::ConsoleGames {
             let label = if self.filters.is_active() {
                 fl!("filter-count", count = self.filters.len())
             } else {
                 fl!("filter")
             };
-            bar_items.push(
-                button::custom(
-                    container(
-                        row![
-                            icon::icon(icon::from_name("view-filter-symbolic").into())
-                                .size(ICON_BODY),
-                            text::body(label).size(TEXT_BODY),
-                        ]
-                        .spacing(space_xs)
-                        .align_y(Alignment::Center),
-                    )
-                    .align_x(Alignment::Center)
-                    .align_y(Alignment::Center)
-                    .padding([space_none, space_m]),
+            button::custom(
+                container(
+                    row![
+                        icon::icon(icon::from_name("view-filter-symbolic").into()).size(ICON_BODY),
+                        text::body(label).size(TEXT_BODY),
+                    ]
+                    .spacing(space_xs)
+                    .align_y(Alignment::Center),
                 )
-                .height(Length::Fixed(filter_button_height()))
-                .width(Length::Shrink)
-                // The only focusable widget in the bar: it is where Up from the
-                // grid's first row lands, and where A opens the panel.
-                .class(section_button_class(self.filter_cursor.is_some()))
-                .id(FILTER_ID.clone())
-                .on_press(Message::ToggleFilterPanel)
-                .into(),
-            );
-
-            for (index, facet) in facets.iter().enumerate() {
-                let selected = self.filters.selected(*facet);
-                let label = match selected {
-                    Some(value) => fl!(
-                        "filter-facet-chip",
-                        facet = facet.name(),
-                        value = facet.value_label(value)
-                    ),
-                    None => facet.name(),
-                };
-                let cursor = self
-                    .filter_cursor
-                    .is_some_and(|cursor| cursor.facet == index && !cursor.on_values);
-                bar_items.push(
-                    filter_chip(
-                        label,
-                        selected.is_some(),
-                        cursor,
-                        Message::FilterFacet(index),
-                    )
-                    .id(filter_facet_id(index))
-                    .into(),
-                );
-            }
-
-            if self.filters.is_active() {
-                bar_items.push(
-                    filter_chip(fl!("filter-clear"), false, false, Message::ClearFilters)
-                        .id(CLEAR_FILTERS_ID.clone())
-                        .into(),
-                );
-            }
-        }
-
-        // The open panel's options: one strip per facet, "All" leading, with the
-        // cursor's chip ringed. Horizontal so a long genre list stays one line.
-        let filter_values: Option<Element<'_, Message>> = self.filter_cursor.and_then(|cursor| {
-            let facet = *facets.get(cursor.facet)?;
-            let selected = self.filters.selected(facet);
-            let chips = self
-                .filter_options(facet)
-                .into_iter()
-                .enumerate()
-                .map(|(index, value)| {
-                    let label = value
-                        .as_deref()
-                        .map_or_else(|| fl!("filter-all"), |value| facet.value_label(value));
-                    filter_chip(
-                        label,
-                        value.as_deref() == selected,
-                        cursor.on_values && cursor.value == index,
-                        Message::SelectFilter {
-                            facet,
-                            value: value.clone(),
-                        },
-                    )
-                    .id(filter_value_id(cursor.facet, index))
-                    .into()
-                });
-            Some(
-                widget::scrollable::horizontal(row(chips).spacing(space_xs))
-                    .id(FILTER_VALUES_SCROLLABLE_ID.clone())
-                    .scrollbar_width(0)
-                    .scroller_width(0)
-                    .into(),
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .padding([space_none, space_m]),
             )
-        });
+            .height(Length::Fixed(filter_button_height()))
+            .width(Length::Shrink)
+            // Where Up from the grid's first row lands, and where A opens the
+            // sidebar.
+            .class(section_button_class(self.filter_cursor.is_some()))
+            .id(FILTER_ID.clone())
+            .on_press(Message::ToggleFilterPanel)
+            .into()
+        } else {
+            space::horizontal().width(Length::Shrink).into()
+        };
 
         let filter_bar = row![
-            row(bar_items).spacing(space_xs).align_y(Alignment::Center),
+            filter_button,
             space::horizontal(),
             container(text::body(fl!("count-items", count = item_count)).size(TEXT_BODY))
                 .align_y(Vertical::Center),
@@ -6264,13 +6202,10 @@ impl HearthDeck {
             // a full 64px gap pushed the grid too far down the window.
             space::vertical().height(space_m).into(),
             container(tab_row).padding([0, 0, 0, 0]).into(),
-            // The filter bar is its own line under the tabs, and the open
-            // panel's value strip slots in between it and the grid.
+            // The filter button's line is its own row under the tabs; the
+            // open sidebar floats over the grid rather than in this column.
             container(filter_bar).padding([space_s, 0, 0, 0]).into(),
         ];
-        if let Some(values) = filter_values {
-            main_column.push(values);
-        }
         main_column.push(app_scrollable);
 
         let content = row![
@@ -6282,10 +6217,116 @@ impl HearthDeck {
         ]
         .height(Length::Fill);
 
-        container(content)
+        let page = container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .class(theme::Container::Custom(Box::new(root_background)))
+            .class(theme::Container::Custom(Box::new(root_background)));
+
+        // The console filter options live in COSMIC's right-hand context drawer,
+        // the same surface cosmic-settings uses, rather than in a strip under
+        // the filter button. It only exists while the cursor is set.
+        if self.filter_cursor.is_some() {
+            context_drawer(
+                Some(fl!("filter").into()),
+                None,
+                None,
+                Some(self.filter_drawer_footer()),
+                Message::CloseFilterPanel,
+                page,
+                self.view_filter_drawer(),
+                filter_drawer_width(self.window_width),
+            )
+            .into()
+        } else {
+            page.into()
+        }
+    }
+
+    /// The console filter sidebar's body: one section per facet, its options
+    /// listed vertically with "All" leading. Built only while the drawer is
+    /// open, and empty until the first page of a console arrives - the drawer
+    /// stays open while further pages load so it can fill in place.
+    fn view_filter_drawer(&self) -> Element<'_, Message> {
+        let space = theme::spacing();
+        let facets = self.filter_facets();
+        let mut sections: Vec<Element<'_, Message>> = Vec::new();
+
+        for (facet_index, facet) in facets.iter().enumerate() {
+            let selected = self.filters.selected(*facet);
+            sections.push(
+                container(text::caption(facet.name()).size(TEXT_CAPTION))
+                    .padding([space.space_s, space.space_xxs])
+                    .into(),
+            );
+
+            for (value_index, value) in self.filter_options(*facet).into_iter().enumerate() {
+                let is_selected = value.as_deref() == selected;
+                let cursor = self.filter_cursor.is_some_and(|cursor| {
+                    cursor.facet == facet_index && cursor.value == value_index
+                });
+                let label = value
+                    .as_deref()
+                    .map_or_else(|| fl!("filter-all"), |value| facet.value_label(value));
+                // A fixed-width lead slot so labels line up whether or not the
+                // row is the selected one.
+                let lead: Element<'_, Message> = if is_selected {
+                    icon::icon(
+                        icon::from_name("object-select-symbolic")
+                            .size(ICON_SMALL)
+                            .into(),
+                    )
+                    .into()
+                } else {
+                    space::horizontal()
+                        .width(Length::Fixed(f32::from(ICON_SMALL)))
+                        .into()
+                };
+
+                sections.push(
+                    button::custom(
+                        row![lead, text::body(label).size(TEXT_BODY)]
+                            .spacing(space.space_s)
+                            .align_y(Alignment::Center)
+                            .width(Length::Fill),
+                    )
+                    .id(filter_option_id(facet_index, value_index))
+                    .width(Length::Fill)
+                    .padding([space.space_xs, space.space_m])
+                    .class(filter_option_class(is_selected, cursor))
+                    .on_press(Message::SelectFilter {
+                        facet: *facet,
+                        value: value.clone(),
+                    })
+                    .into(),
+                );
+            }
+        }
+
+        if sections.is_empty() {
+            sections.push(
+                container(text::body(fl!("filter-empty")).size(TEXT_BODY))
+                    .padding([space.space_s, space.space_xxs])
+                    .into(),
+            );
+        }
+
+        scrollable(
+            column(sections)
+                .spacing(space.space_xxs)
+                .width(Length::Fill),
+        )
+        .id(FILTER_DRAWER_SCROLL_ID.clone())
+        .height(Length::Fill)
+        .into()
+    }
+
+    /// The filter sidebar's footer: one action, dropping every chosen facet.
+    fn filter_drawer_footer(&self) -> Element<'_, Message> {
+        let space = theme::spacing();
+        button::custom(text::body(fl!("filter-clear")).size(TEXT_BODY))
+            .class(Button::Destructive)
+            .on_press(Message::ClearFilters)
+            .padding([space.space_xs, space.space_l])
             .into()
     }
 }
@@ -7853,7 +7894,7 @@ mod tests {
     }
 
     #[test]
-    fn the_filter_panel_owns_the_pad_until_back_closes_it() {
+    fn the_filter_sidebar_owns_the_pad_until_back_closes_it() {
         use crate::input_ownership::Event as InputEvent;
 
         let mut app = console_app();
@@ -7865,25 +7906,21 @@ mod tests {
             &mut app,
             super::Message::ToggleFilterPanel,
         );
-        // The cursor opens on the first facet's current value ("All").
+        // The cursor opens on the first facet's first option ("All").
         assert_eq!(
             app.filter_cursor,
-            Some(super::FilterCursor {
-                facet: 0,
-                value: 0,
-                on_values: true,
-            })
+            Some(super::FilterCursor { facet: 0, value: 0 })
         );
 
-        // Every other button would act on the screen behind the open panel.
+        // Every other button would act on the screen behind the open sidebar.
         let _ = <HearthDeck as cosmic::Application>::update(
             &mut app,
             super::Message::GamepadEvent(super::GamepadEvent::Search),
         );
         assert_eq!(app.page, Page::Library);
 
-        // Right walks the option strip; A applies the chip under the cursor.
-        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextCol);
+        // Down walks the option list; A applies the row under the cursor.
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
         let _ = <HearthDeck as cosmic::Application>::update(
             &mut app,
             super::Message::GamepadEvent(super::GamepadEvent::Confirm),
@@ -7891,60 +7928,44 @@ mod tests {
         assert_eq!(app.filters.selected(RommFacet::Genre), Some("Action"));
         assert_eq!(grid_names(&app), ["Mario"]);
 
-        // Up leaves the value row for the facet row, up again closes the panel.
-        // The filter it applied stays.
+        // Up walks back to "All", whose row clears the facet.
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::PrevRow);
-        assert!(app.filter_cursor.is_some_and(|cursor| !cursor.on_values));
-        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::PrevRow);
-        assert!(app.filter_cursor.is_none());
-        assert_eq!(app.filters.selected(RommFacet::Genre), Some("Action"));
-
-        // Back is the global contract: it closes the panel, not the screen.
-        let _ = <HearthDeck as cosmic::Application>::update(
-            &mut app,
-            super::Message::ToggleFilterPanel,
-        );
-        let _ = <HearthDeck as cosmic::Application>::update(
-            &mut app,
-            super::Message::GamepadEvent(super::GamepadEvent::Back),
-        );
-        assert!(app.filter_cursor.is_none());
-        assert_eq!(app.page, Page::Library);
-
-        // "All" leads every facet's options, so choosing it clears the facet.
-        let _ = <HearthDeck as cosmic::Application>::update(
-            &mut app,
-            super::Message::ToggleFilterPanel,
-        );
-        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::PrevCol);
         let _ = <HearthDeck as cosmic::Application>::update(
             &mut app,
             super::Message::GamepadEvent(super::GamepadEvent::Confirm),
         );
         assert!(app.filters.selected(RommFacet::Genre).is_none());
         assert_eq!(grid_names(&app), ["Mario", "Chrono"]);
+
+        // Back is the global contract: it closes the sidebar, not the screen.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::Back),
+        );
+        assert!(app.filter_cursor.is_none());
+        assert_eq!(app.page, Page::Library);
     }
 
     #[test]
-    fn a_focused_filter_chip_does_what_clicking_it_does() {
+    fn the_filter_button_toggles_the_sidebar() {
         let mut app = console_app();
 
-        // Up from the grid's first row lands on a bar chip, so confirming one
-        // has to act on it rather than dead-ending: a facet chip opens the panel
-        // on its own facet.
+        // Up from the grid's first row lands on the filter button, so confirming
+        // it has to open the sidebar rather than dead-end.
         let _ = <HearthDeck as cosmic::Application>::update(
             &mut app,
-            super::Message::ConfirmFocused(super::filter_facet_id(0)),
+            super::Message::ConfirmFocused(super::FILTER_ID.clone()),
         );
-        assert_eq!(app.filter_cursor.map(|cursor| cursor.facet), Some(0));
+        assert_eq!(
+            app.filter_cursor,
+            Some(super::FilterCursor { facet: 0, value: 0 })
+        );
 
-        // The clear chip drops every filter.
-        app.filters.set(RommFacet::Genre, Some("Action".into()));
+        // Confirming it again closes the sidebar.
         let _ = <HearthDeck as cosmic::Application>::update(
             &mut app,
-            super::Message::ConfirmFocused(super::CLEAR_FILTERS_ID.clone()),
+            super::Message::ConfirmFocused(super::FILTER_ID.clone()),
         );
-        assert!(!app.filters.is_active());
-        assert_eq!(grid_names(&app), ["Mario", "Chrono"]);
+        assert!(app.filter_cursor.is_none());
     }
 }

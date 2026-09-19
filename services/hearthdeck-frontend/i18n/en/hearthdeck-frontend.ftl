@@ -19,6 +19,7 @@ filter-region = Region
 filter-all = All
 filter-facet-chip = { $facet }: { $value }
 filter-clear = Clear filters
+filter-empty = No filters available yet
 count-items = { $count ->
     [one] { $count } item
     *[other] { $count } items

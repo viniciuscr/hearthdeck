@@ -227,11 +227,16 @@ frontend instead browses console games through the Console Games section.
 console at once, forwarded to RomM's own `search_term`, rather than requiring
 the client to page through every console's full library to filter locally.
 
-The Console Games filter bar is the same kind of client-side projection. Its
+The Console Games filter sidebar is the same kind of client-side projection. Its
 facets (genre, decade, region) come from the RomM metadata already carried on
 each loaded record, and a filter only narrows what has been loaded, so an active
 filter keeps pulling pages until RomM runs out - the rule search already
-follows. Filtering in the daemon instead means forwarding RomM's own
+follows. Opening the sidebar pulls the whole scope even before a filter is
+chosen, because its option lists are also derived from the loaded records:
+otherwise a library of many pages would offer only the values seen on the first
+one. The options render in COSMIC's right-hand context drawer (`context_drawer`),
+the native sidebar surface, rather than in a strip folded out under the filter
+button. Filtering in the daemon instead means forwarding RomM's own
 `genres`/`regions`/`tags` parameters, which belongs to the `RemoteLibraryAdapter`
 work described in `docs/retroarch-integration.md`.
 
