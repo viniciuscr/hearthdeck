@@ -340,7 +340,7 @@ pub fn tab_width(label: &str) -> f32 {
 pub const DIALOG_WIDTH: f32 = 432.0;
 /// Width of a dialog action button.
 pub const DIALOG_ACTION_WIDTH: u16 = 142;
-/// Maximum size of the context menu surface.
+/// Maximum size of the context menu card and the details disc picker.
 pub const MENU_MAX_WIDTH: f32 = 300.0;
 pub const MENU_MAX_HEIGHT: f32 = 800.0;
 

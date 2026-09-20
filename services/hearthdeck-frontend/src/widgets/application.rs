@@ -33,7 +33,7 @@ pub const MIME_TYPE: &str = "text/uri-list";
 #[allow(missing_debug_implementations)]
 pub struct ApplicationButton<'a, Message> {
     content: Element<'a, Message>,
-    on_right_release: Box<dyn Fn(Rectangle) -> Message + 'a>,
+    on_right_release: Box<dyn Fn() -> Message + 'a>,
 
     // Optional icon, and text
     source_icon: Option<Element<'a, Message>>,
@@ -54,7 +54,7 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
         // More than one overlays a disc badge on the artwork so a collapsed
         // multi-disc game is still visibly distinct from a single-file one.
         version_count: usize,
-        on_right_release: impl Fn(Rectangle) -> Message + 'a,
+        on_right_release: impl Fn() -> Message + 'a,
         on_pressed: Option<Message>,
         source: Option<&(AppSource, Option<icon::Handle>)>,
         selected: bool,
@@ -363,7 +363,7 @@ where
                 Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right))
                     if state.right_press =>
                 {
-                    shell.publish(self.on_right_release.as_ref()(layout.bounds()));
+                    shell.publish(self.on_right_release.as_ref()());
                     state.right_press = false;
                     shell.capture_event();
                 }

@@ -8,22 +8,18 @@ use std::time::Instant;
 
 use clap::Parser;
 use cosmic::iced::window;
-use cosmic::surface::action::{LiveSettings, simple_popup};
 use cosmic::widget::menu::menu_column::MenuColumn;
 use cosmic::widget::reorderable_flex_row;
 use cosmic::{
     Application as CosmicApplication, Element,
     app::{Core, CosmicFlags, Settings, Task},
-    cctk::sctk::{
-        self,
-        shell::wlr_layer::{Anchor, KeyboardInteractivity},
-    },
+    cctk::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity},
     cosmic_config::{Config, ConfigGet, CosmicConfigEntry},
     cosmic_theme::Spacing,
     dbus_activation,
     desktop::{DesktopEntryData, fde::IconSource, fde::PathSource, load_desktop_file},
     iced::{
-        self, Alignment, ContentFit, Length, Limits, Subscription,
+        self, Alignment, ContentFit, Length, Subscription,
         event::listen_with,
         executor,
         id::Id,
@@ -45,18 +41,12 @@ use cosmic::{
             window::Event as WindowEvent,
             window::Id as SurfaceId,
         },
-        platform_specific::shell::wayland::commands::{
-            self,
-            layer_surface::{destroy_layer_surface, get_layer_surface},
-            popup::destroy_popup,
+        platform_specific::shell::wayland::commands::layer_surface::{
+            destroy_layer_surface, get_layer_surface,
         },
         runtime::{
-            self as iced_runtime,
-            dnd::end_dnd,
-            platform_specific::wayland::{
-                layer_surface::SctkLayerSurfaceSettings,
-                popup::{SctkPopupSettings, SctkPositioner},
-            },
+            self as iced_runtime, dnd::end_dnd,
+            platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings,
         },
     },
     keyboard_nav,
@@ -69,7 +59,7 @@ use cosmic::{
         dnd_destination::dnd_destination_for_data,
         icon, list,
         list::list_column,
-        scrollable, space, svg, text, text_input,
+        mouse_area, scrollable, space, svg, text, text_input,
         toaster::{self, Toast, ToastId, Toasts},
         tooltip,
     },
@@ -181,9 +171,6 @@ static NEW_GROUP_AUTOSIZE_ID: LazyLock<cosmic::widget::Id> =
     LazyLock::new(cosmic::widget::Id::unique);
 static DELETE_GROUP_WINDOW_ID: LazyLock<SurfaceId> = LazyLock::new(SurfaceId::unique);
 static DELETE_GROUP_AUTOSIZE_ID: LazyLock<cosmic::widget::Id> =
-    LazyLock::new(cosmic::widget::Id::unique);
-pub(crate) static MENU_ID: LazyLock<SurfaceId> = LazyLock::new(SurfaceId::unique);
-pub(crate) static MENU_AUTOSIZE_ID: LazyLock<cosmic::widget::Id> =
     LazyLock::new(cosmic::widget::Id::unique);
 
 /// Watch channel for provider records. The ProviderService writes to the
@@ -1068,7 +1055,10 @@ enum Message {
         Vec<Arc<DesktopEntryData>>,
         Vec<widget::icon::Handle>,
     ),
-    OpenContextMenu(Rectangle, usize),
+    /// Show the context menu for the entry at this index, or hide it when it
+    /// is already showing. The menu is drawn inside the main window, so the
+    /// index is all it needs; nothing has to be anchored to a screen rect.
+    OpenContextMenu(usize),
     CloseContextMenu,
     /// Confirm the highlighted entry of an open context menu (keyboard Enter).
     MenuConfirm,
@@ -1955,7 +1945,6 @@ impl HearthDeck {
 
         iced::Task::batch(vec![
             keyboard,
-            destroy_popup(*MENU_ID),
             destroy_layer_surface(*NEW_GROUP_WINDOW_ID),
             destroy_layer_surface(*DELETE_GROUP_WINDOW_ID),
             window::close(window::Id::RESERVED),
@@ -2060,10 +2049,11 @@ impl HearthDeck {
         app_id: String,
         title: String,
     ) -> Task<Message> {
-        // A frontend-owned surface (the context menu) still owns the launch
-        // even if it took keyboard focus and drove `input_ownership` off
-        // `Frontend`; the menu can only be open while the frontend is the
-        // active surface.
+        // A launch can be triggered from a frontend-owned transient UI (the
+        // context menu, the details disc picker) while a layer-surface dialog
+        // holds keyboard focus, so `input_ownership` may not read `Frontend`
+        // even though the frontend is what the user is driving. Treat any open
+        // frontend surface as still owning the launch.
         if !self.input_ownership.frontend_has_control() && !self.frontend_surface_open() {
             return Task::none();
         }
@@ -3023,20 +3013,14 @@ impl HearthDeck {
         {
             return self.update(Message::OpenDetails(i));
         }
-        let Some(target) = self.entry_ids.get(i).cloned() else {
-            return Task::none();
-        };
-        iced_runtime::task::widget(FindBounds {
-            target,
-            bounds: None,
-        })
-        .map(move |rect| cosmic::Action::App(Message::OpenContextMenu(rect, i)))
+        self.update(Message::OpenContextMenu(i))
     }
 
-    /// Whether a frontend-owned transient surface is open: the context menu
-    /// popup or one of the modal dialogs. These live in separate Wayland
-    /// surfaces, so the main window can look unfocused while they are up, and
-    /// app-state changes (the menu highlight) do not otherwise repaint them.
+    /// Whether a frontend-owned transient UI is open: the context menu, the
+    /// filter drawer, or one of the modal dialogs. Only the dialogs are separate
+    /// Wayland surfaces that can take keyboard focus, and that focus change
+    /// arrives as the *main* window unfocusing; this keeps the frontend from
+    /// reading that as the user driving something else.
     fn frontend_surface_open(&self) -> bool {
         self.menu.is_some()
             || self.filter_cursor.is_some()
@@ -3045,7 +3029,7 @@ impl HearthDeck {
     }
 
     /// Number of entries the context menu shows for the current selection.
-    /// Mirrors the order built in `view_window` for `MENU_ID`.
+    /// Mirrors the order built in `view_context_menu`.
     fn menu_entry_count(&self) -> usize {
         // Run, pin, favorite, controller compatibility, plus remove when the
         // app belongs to a group.
@@ -3087,13 +3071,13 @@ impl HearthDeck {
                 return Task::none();
             };
             // Launch before clearing `menu`: an open frontend surface is what
-            // authorizes the launch if a popup focus change moved ownership.
+            // authorizes a launch the ownership gate would otherwise drop.
             let launch = self.update(Message::ActivateRomVariant {
                 rom_id: version.id,
                 title: version.title,
             });
             self.menu = None;
-            return Task::batch(vec![commands::popup::destroy_popup(*MENU_ID), launch]);
+            return launch;
         }
         let pinned = self
             .entry_path_input
@@ -3112,7 +3096,7 @@ impl HearthDeck {
                 // As above: authorize the launch while the menu is still open.
                 let launch = self.update(Message::ActivateApp(i));
                 self.menu = None;
-                Task::batch(vec![commands::popup::destroy_popup(*MENU_ID), launch])
+                launch
             }
         }
     }
@@ -3158,31 +3142,6 @@ impl HearthDeck {
         };
         self.gamepad_focus_first = true;
         self.update(Message::SelectGroup(next_group))
-    }
-}
-
-/// An operation that finds the layout bounds of the focusable widget with
-/// the given ID, so the gamepad can open a context menu for it.
-struct FindBounds {
-    target: Id,
-    bounds: Option<Rectangle>,
-}
-
-impl Operation<Rectangle> for FindBounds {
-    fn focusable(&mut self, id: Option<&Id>, bounds: Rectangle, _state: &mut dyn Focusable) {
-        if id.is_some_and(|id| id == &self.target) {
-            self.bounds = Some(bounds);
-        }
-    }
-
-    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<Rectangle>)) {
-        if self.bounds.is_none() {
-            operate(self);
-        }
-    }
-
-    fn finish(&self) -> Outcome<Rectangle> {
-        self.bounds.map_or(Outcome::None, Outcome::Some)
     }
 }
 
@@ -4155,47 +4114,18 @@ impl cosmic::Application for HearthDeck {
                 };
                 return Self::toggle_virtual_keyboard(next_target);
             }
-            Message::OpenContextMenu(rect, i) => {
-                if self.menu.take().is_some() {
-                    return destroy_popup(*MENU_ID);
+            Message::OpenContextMenu(i) => {
+                // Pressing the context button (or right-clicking a tile) twice
+                // toggles the menu, matching how the popup version behaved.
+                if self.menu.is_some() {
+                    self.menu = None;
                 } else {
                     self.menu = Some(i);
                     self.menu_selection = 0;
-                    let offset = self.scroll_offset as i32;
-                    return cosmic::surface::surface_task(simple_popup(
-                        LiveSettings::default,
-                        move || {
-                            SctkPopupSettings {
-                        parent: SurfaceId::RESERVED,
-                        id: *MENU_ID,
-                        positioner: SctkPositioner {
-                            size: None,
-                            size_limits: Limits::NONE.min_width(1.0).min_height(1.0).max_width(MENU_MAX_WIDTH).max_height(MENU_MAX_HEIGHT),
-                            anchor_rect: Rectangle {
-                                x: rect.x as i32,
-                                y: rect.y as i32 - offset,
-                                width: rect.width as i32,
-                                height: rect.height as i32,
-                            },
-                            anchor:
-                                sctk::reexports::protocols::xdg::shell::client::xdg_positioner::Anchor::Right,
-                            gravity: sctk::reexports::protocols::xdg::shell::client::xdg_positioner::Gravity::Right,
-                            reactive: true,
-                            ..Default::default()
-                        },
-                        grab: false,
-                        parent_size: None,
-                        close_with_children: true,
-                        input_zone: None,
-                    }
-                        },
-                        None::<Box<fn() -> cosmic::Element<'static, cosmic::Action<Message>>>>,
-                    ));
                 }
             }
             Message::CloseContextMenu => {
                 self.menu = None;
-                return commands::popup::destroy_popup(*MENU_ID);
             }
             Message::MenuConfirm => {
                 if self.menu.is_some() {
@@ -4203,7 +4133,7 @@ impl cosmic::Application for HearthDeck {
                 }
             }
             Message::SelectAction(action) => {
-                let mut tasks = vec![commands::popup::destroy_popup(*MENU_ID)];
+                let mut tasks = Vec::new();
                 if let Some(info) = self.menu.take().and_then(|i| self.entry_path_input.get(i)) {
                     match action {
                         MenuAction::ToggleControllerCompatibility => {
@@ -4353,7 +4283,6 @@ impl cosmic::Application for HearthDeck {
                     self.app_list_config.add_pinned(pinned_id, &app_list_helper);
                 }
                 self.menu = None;
-                return commands::popup::destroy_popup(*MENU_ID);
             }
             Message::UnPinFromAppTray(usize) => {
                 let pinned_id = self.entry_path_input.get(usize).map(|e| e.id.clone());
@@ -4364,7 +4293,6 @@ impl cosmic::Application for HearthDeck {
                         .remove_pinned(&pinned_id, &app_list_helper);
                 }
                 self.menu = None;
-                return commands::popup::destroy_popup(*MENU_ID);
             }
             Message::ToggleFavorite(usize) => {
                 if let Some(id) = self
@@ -4380,7 +4308,6 @@ impl cosmic::Application for HearthDeck {
                     }
                 }
                 self.menu = None;
-                return commands::popup::destroy_popup(*MENU_ID);
             }
             Message::AppListConfig(config) => {
                 self.app_list_config = config;
@@ -4389,13 +4316,13 @@ impl cosmic::Application for HearthDeck {
                 return window::set_mode(SurfaceId::RESERVED, window::Mode::Fullscreen);
             }
             Message::WindowFocusChanged(focused) => {
-                // A frontend-owned transient surface (context menu, dialog)
-                // takes keyboard focus when it opens, which arrives here as the
-                // *main* window losing focus. That is not the frontend yielding
-                // input: the popup is part of it. Treating it as unfocused
-                // flipped ownership to `Unfocused`, and the gamepad gate then
-                // dropped every event, leaving the context menu unnavigable by
-                // controller even though it is still on screen.
+                // One of the frontend's own modal dialogs (new group, delete
+                // group) takes keyboard focus when it opens, which arrives here
+                // as the *main* window losing focus. That is not the frontend
+                // yielding input: the dialog is part of it. Treating it as
+                // unfocused flipped ownership to `Unfocused`, and the gamepad
+                // gate then dropped every event, leaving the dialog unnavigable
+                // by controller even though it is still on screen.
                 if !focused && self.frontend_surface_open() {
                     return Task::none();
                 }
@@ -4593,6 +4520,13 @@ impl cosmic::Application for HearthDeck {
             self.page_element(self.page)
         };
 
+        // The context menu is a layer of this window rather than a Wayland
+        // popup, so it never takes focus away from the page underneath it.
+        let content: Element<'a, Message> = match self.view_context_menu() {
+            Some(menu) => cosmic::iced::widget::stack(vec![content, menu]).into(),
+            None => content,
+        };
+
         // Alerts float above whatever page is showing, including the launch
         // overlay, so a daemon outage is visible wherever the user is.
         toaster::toaster(&self.toasts, content)
@@ -4603,167 +4537,6 @@ impl cosmic::Application for HearthDeck {
             space_xxs, space_s, ..
         } = theme::spacing();
 
-        if id == *MENU_ID {
-            let Some((menu, i)) = self
-                .menu
-                .as_ref()
-                .and_then(|i| self.entry_path_input.get(*i).map(|e| (e, i)))
-            else {
-                return container(space::horizontal())
-                    .width(Length::Fixed(1.0))
-                    .height(Length::Fixed(1.0))
-                    .into();
-            };
-
-            let mut list_column = Vec::new();
-
-            list_column.push(
-                menu_button(text::body(RUN.clone()).size(TEXT_BODY))
-                    .on_press(Message::ActivateApp(*i))
-                    .selected(self.menu_selection == 0)
-                    .into(),
-            );
-
-            // add to pinned
-            let svg_accent = Rc::new(|theme: &cosmic::Theme| {
-                let color = theme.cosmic().accent_color().into();
-                svg::Style { color: Some(color) }
-            });
-            let is_pinned = self.app_list_config.favorites.iter().any(|p| p == &menu.id);
-            let pin_to_app_tray = menu_button(
-                if is_pinned {
-                    row![
-                        icon::icon(
-                            icon::from_name("checkbox-checked-symbolic")
-                                .size(ICON_SMALL)
-                                .into()
-                        )
-                        .class(cosmic::theme::Svg::Custom(svg_accent.clone())),
-                        text::body(fl!("pin-to-app-tray")).size(TEXT_BODY)
-                    ]
-                } else {
-                    row![
-                        space::horizontal().width(ICON_SMALL),
-                        text::body(fl!("pin-to-app-tray")).size(TEXT_BODY)
-                    ]
-                }
-                .spacing(space_xxs),
-            )
-            .on_press(if is_pinned {
-                Message::UnPinFromAppTray(*i)
-            } else {
-                Message::PinToAppTray(*i)
-            })
-            .selected(self.menu_selection == 1);
-            list_column.push(divider::horizontal::light().into());
-            list_column.push(pin_to_app_tray.into());
-
-            let is_favorite = self.config.is_favorite(&menu.id);
-            list_column.push(divider::horizontal::light().into());
-            list_column.push(
-                menu_button(
-                    row![
-                        if is_favorite {
-                            icon::icon(
-                                icon::from_name("checkbox-checked-symbolic")
-                                    .size(ICON_SMALL)
-                                    .into(),
-                            )
-                            .class(cosmic::theme::Svg::Custom(svg_accent.clone()))
-                        } else {
-                            icon::icon(icon::from_name("checkbox-symbolic").size(ICON_SMALL).into())
-                        },
-                        text::body(fl!("favorite")).size(TEXT_BODY)
-                    ]
-                    .spacing(space_xxs),
-                )
-                .on_press(Message::ToggleFavorite(*i))
-                .selected(self.menu_selection == 2)
-                .into(),
-            );
-
-            let compatibility_enabled = self.config.desktop_input_enabled(&menu.id);
-            list_column.push(divider::horizontal::light().into());
-            list_column.push(
-                menu_button(
-                    row![
-                        if compatibility_enabled {
-                            icon::icon(
-                                icon::from_name("checkbox-checked-symbolic")
-                                    .size(ICON_SMALL)
-                                    .into(),
-                            )
-                            .class(cosmic::theme::Svg::Custom(svg_accent.clone()))
-                        } else {
-                            icon::icon(icon::from_name("checkbox-symbolic").size(ICON_SMALL).into())
-                        },
-                        text::body(fl!("controller-compatibility")).size(TEXT_BODY)
-                    ]
-                    .spacing(space_xxs),
-                )
-                .on_press(Message::SelectAction(
-                    MenuAction::ToggleControllerCompatibility,
-                ))
-                .selected(self.menu_selection == 3)
-                .into(),
-            );
-
-            if self.cur_group.is_some() {
-                list_column.push(divider::horizontal::light().into());
-                list_column.push(
-                    menu_button(text::body(REMOVE.clone()).size(TEXT_BODY))
-                        .on_press(Message::SelectAction(MenuAction::Remove))
-                        .selected(self.menu_selection == 4)
-                        .into(),
-                );
-            }
-
-            // A collapsed multi-disc/multi-region game offers every file here,
-            // the representative first. Each is labelled with its own file name,
-            // so discs and regions are distinguishable; the one "Run" targets
-            // is checked.
-            let versions = self.menu_rom_versions();
-            if !versions.is_empty() {
-                let fixed = 4 + usize::from(self.cur_group.is_some());
-                let current_id = menu
-                    .id
-                    .strip_prefix("romm:")
-                    .and_then(|id| id.parse::<i64>().ok());
-                list_column.push(divider::horizontal::light().into());
-                for (offset, version) in versions.into_iter().enumerate() {
-                    let version_icon = if current_id == Some(version.id) {
-                        "checkbox-checked-symbolic"
-                    } else {
-                        "media-optical-symbolic"
-                    };
-                    let index = fixed + offset;
-                    list_column.push(
-                        menu_button(
-                            row![
-                                icon::icon(icon::from_name(version_icon).size(ICON_SMALL).into())
-                                    .class(cosmic::theme::Svg::Custom(svg_accent.clone())),
-                                text::body(version.title.clone()).size(TEXT_BODY),
-                            ]
-                            .spacing(space_xxs),
-                        )
-                        .on_press(Message::ActivateRomVariant {
-                            rom_id: version.id,
-                            title: version.title,
-                        })
-                        .selected(self.menu_selection == index)
-                        .into(),
-                    );
-                }
-            }
-
-            return autosize(
-                container(scrollable(MenuColumn::with_children(list_column))).padding(1),
-                MENU_AUTOSIZE_ID.clone(),
-            )
-            .max_height(MENU_MAX_HEIGHT)
-            .max_width(MENU_MAX_WIDTH)
-            .into();
-        }
         if id == *NEW_GROUP_WINDOW_ID {
             let Some(group_name) = self.new_group.as_ref() else {
                 return container(space::horizontal())
@@ -4879,9 +4652,9 @@ impl cosmic::Application for HearthDeck {
                 {
                     Some(Message::WindowFocusChanged(false))
                 }
-                // Only the main window drives the layout. Popups (context menu)
-                // and dialogs are separate surfaces, and letting their size
-                // overwrite `window_width` reflows the whole grid.
+                // Only the main window drives the layout. The dialogs are
+                // separate surfaces, and letting their size overwrite
+                // `window_width` reflows the whole grid.
                 cosmic::iced::Event::Window(WindowEvent::Resized(size))
                     if is_primary_window(id) =>
                 {
@@ -4892,11 +4665,6 @@ impl cosmic::Application for HearthDeck {
                     modifiers: _mods,
                     ..
                 }) => Some(Message::Close),
-                cosmic::iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_))
-                    if id == SurfaceId::RESERVED =>
-                {
-                    Some(Message::CloseContextMenu)
-                }
                 cosmic::iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key,
                     text: _,
@@ -5688,6 +5456,188 @@ impl HearthDeck {
             .into()
     }
 
+    /// The context menu: the actions for one entry, as a card in the middle of
+    /// the window over a dimming scrim. `None` when no menu is open.
+    ///
+    /// This replaced a Wayland popup anchored to the entry's tile. A popup is a
+    /// surface of its own, so opening one moved keyboard focus off the main
+    /// window; the gamepad then read the frontend as unfocused and the menu was
+    /// not navigable with a controller. Drawn inside the main window it shares
+    /// that window's focus and its input, and `menu_selection` alone drives the
+    /// highlight.
+    fn view_context_menu<'a>(&'a self) -> Option<Element<'a, Message>> {
+        let Spacing { space_xxs, .. } = theme::spacing();
+        let (menu, i) = self
+            .menu
+            .and_then(|i| self.entry_path_input.get(i).map(|entry| (entry, i)))?;
+
+        let mut list_column = Vec::new();
+
+        list_column.push(
+            menu_button(text::body(RUN.clone()).size(TEXT_BODY))
+                .on_press(Message::ActivateApp(i))
+                .selected(self.menu_selection == 0)
+                .into(),
+        );
+
+        // add to pinned
+        let svg_accent = Rc::new(|theme: &cosmic::Theme| {
+            let color = theme.cosmic().accent_color().into();
+            svg::Style { color: Some(color) }
+        });
+        let is_pinned = self.app_list_config.favorites.iter().any(|p| p == &menu.id);
+        let pin_to_app_tray = menu_button(
+            if is_pinned {
+                row![
+                    icon::icon(
+                        icon::from_name("checkbox-checked-symbolic")
+                            .size(ICON_SMALL)
+                            .into()
+                    )
+                    .class(cosmic::theme::Svg::Custom(svg_accent.clone())),
+                    text::body(fl!("pin-to-app-tray")).size(TEXT_BODY)
+                ]
+            } else {
+                row![
+                    space::horizontal().width(ICON_SMALL),
+                    text::body(fl!("pin-to-app-tray")).size(TEXT_BODY)
+                ]
+            }
+            .spacing(space_xxs),
+        )
+        .on_press(if is_pinned {
+            Message::UnPinFromAppTray(i)
+        } else {
+            Message::PinToAppTray(i)
+        })
+        .selected(self.menu_selection == 1);
+        list_column.push(divider::horizontal::light().into());
+        list_column.push(pin_to_app_tray.into());
+
+        let is_favorite = self.config.is_favorite(&menu.id);
+        list_column.push(divider::horizontal::light().into());
+        list_column.push(
+            menu_button(
+                row![
+                    if is_favorite {
+                        icon::icon(
+                            icon::from_name("checkbox-checked-symbolic")
+                                .size(ICON_SMALL)
+                                .into(),
+                        )
+                        .class(cosmic::theme::Svg::Custom(svg_accent.clone()))
+                    } else {
+                        icon::icon(icon::from_name("checkbox-symbolic").size(ICON_SMALL).into())
+                    },
+                    text::body(fl!("favorite")).size(TEXT_BODY)
+                ]
+                .spacing(space_xxs),
+            )
+            .on_press(Message::ToggleFavorite(i))
+            .selected(self.menu_selection == 2)
+            .into(),
+        );
+
+        let compatibility_enabled = self.config.desktop_input_enabled(&menu.id);
+        list_column.push(divider::horizontal::light().into());
+        list_column.push(
+            menu_button(
+                row![
+                    if compatibility_enabled {
+                        icon::icon(
+                            icon::from_name("checkbox-checked-symbolic")
+                                .size(ICON_SMALL)
+                                .into(),
+                        )
+                        .class(cosmic::theme::Svg::Custom(svg_accent.clone()))
+                    } else {
+                        icon::icon(icon::from_name("checkbox-symbolic").size(ICON_SMALL).into())
+                    },
+                    text::body(fl!("controller-compatibility")).size(TEXT_BODY)
+                ]
+                .spacing(space_xxs),
+            )
+            .on_press(Message::SelectAction(
+                MenuAction::ToggleControllerCompatibility,
+            ))
+            .selected(self.menu_selection == 3)
+            .into(),
+        );
+
+        if self.cur_group.is_some() {
+            list_column.push(divider::horizontal::light().into());
+            list_column.push(
+                menu_button(text::body(REMOVE.clone()).size(TEXT_BODY))
+                    .on_press(Message::SelectAction(MenuAction::Remove))
+                    .selected(self.menu_selection == 4)
+                    .into(),
+            );
+        }
+
+        // A collapsed multi-disc/multi-region game offers every file here,
+        // the representative first. Each is labelled with its own file name,
+        // so discs and regions are distinguishable; the one "Run" targets
+        // is checked.
+        let versions = self.menu_rom_versions();
+        if !versions.is_empty() {
+            let fixed = 4 + usize::from(self.cur_group.is_some());
+            let current_id = menu
+                .id
+                .strip_prefix("romm:")
+                .and_then(|id| id.parse::<i64>().ok());
+            list_column.push(divider::horizontal::light().into());
+            for (offset, version) in versions.into_iter().enumerate() {
+                let version_icon = if current_id == Some(version.id) {
+                    "checkbox-checked-symbolic"
+                } else {
+                    "media-optical-symbolic"
+                };
+                let index = fixed + offset;
+                list_column.push(
+                    menu_button(
+                        row![
+                            icon::icon(icon::from_name(version_icon).size(ICON_SMALL).into())
+                                .class(cosmic::theme::Svg::Custom(svg_accent.clone())),
+                            text::body(version.title.clone()).size(TEXT_BODY),
+                        ]
+                        .spacing(space_xxs),
+                    )
+                    .on_press(Message::ActivateRomVariant {
+                        rom_id: version.id,
+                        title: version.title,
+                    })
+                    .selected(self.menu_selection == index)
+                    .into(),
+                );
+            }
+        }
+
+        let list = autosize(
+            container(scrollable(MenuColumn::with_children(list_column))).padding(1),
+            Id::new("context-menu-autosize"),
+        )
+        .max_width(MENU_MAX_WIDTH)
+        .max_height(MENU_MAX_HEIGHT);
+        let card = container(list)
+            .padding(space_xxs)
+            .class(theme::Container::Custom(Box::new(card_surface)));
+
+        // The scrim both dims the page and dismisses the menu: a press it does
+        // not pass on to a menu entry closes it. `MouseArea` forwards the press
+        // to its content first, so pressing an entry activates it instead.
+        let overlay = mouse_area(
+            container(card)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Horizontal::Center)
+                .align_y(Vertical::Center)
+                .class(theme::Container::Custom(Box::new(modal_scrim))),
+        )
+        .on_press(Message::CloseContextMenu);
+
+        Some(overlay.into())
+    }
+
     fn view_main_content<'a>(&'a self) -> Element<'a, Message> {
         let Spacing {
             space_none,
@@ -6125,7 +6075,7 @@ impl HearthDeck {
                     self.romm_versions
                         .get(&entry.id)
                         .map_or(1, |versions| versions.len()),
-                    move |rect| Message::OpenContextMenu(rect, i),
+                    move || Message::OpenContextMenu(i),
                     if self.menu.is_none() {
                         Some(Message::ActivateApp(i))
                     } else if selected {
@@ -6526,7 +6476,7 @@ mod tests {
     }
 
     #[test]
-    fn gamepad_navigates_the_menu_even_when_a_popup_took_focus() {
+    fn gamepad_navigates_the_menu_even_when_ownership_is_unfocused() {
         use crate::input_ownership::Event as InputEvent;
 
         let mut app = HearthDeck {
@@ -6535,8 +6485,8 @@ mod tests {
         };
         app.input_ownership
             .update(InputEvent::SessionObserved(false));
-        // A popup taking keyboard focus can leave ownership `Unfocused`; the
-        // open menu must still keep the gamepad subscription alive and accept
+        // A modal dialog taking keyboard focus can leave ownership `Unfocused`;
+        // an open menu must still keep the gamepad subscription alive and accept
         // events, or it is dead to the controller.
         app.input_ownership.update(InputEvent::FrontendUnfocused);
         assert!(!app.input_ownership.frontend_has_control());
@@ -7503,7 +7453,16 @@ mod tests {
             super::Message::GamepadEvent(super::GamepadEvent::ContextMenu),
         );
         assert!(app.details.is_none());
+        assert_eq!(app.menu, Some(0));
         assert_eq!(app.page, super::Page::Library);
+
+        // X is a toggle, so it closes that menu again before it can open
+        // anything else.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::ContextMenu),
+        );
+        assert!(app.menu.is_none());
 
         // A RomM game gets the details screen instead, seeded from the tile.
         app.focused_id = app.entry_ids.get(1).cloned();
@@ -7810,6 +7769,50 @@ mod tests {
         // RomM sent, since `regions` is empty), languages and file size.
         assert_eq!(details.facts().len(), 7);
         assert_eq!(details.current_version_label(), Some("Disc 1"));
+    }
+
+    #[test]
+    fn the_context_menu_view_builds_for_every_entry_kind() {
+        use crate::providers::daemon::RetroRomVersion;
+
+        let mut app = HearthDeck {
+            entry_path_input: vec![entry("org.example.App"), entry("romm:1")],
+            ..Default::default()
+        };
+        app.update_entry_metadata();
+        app.romm_versions.insert(
+            "romm:1".to_string(),
+            vec![
+                RetroRomVersion {
+                    id: 1,
+                    title: "Disc 1".to_string(),
+                    is_main_sibling: true,
+                },
+                RetroRomVersion {
+                    id: 2,
+                    title: "Disc 2".to_string(),
+                    is_main_sibling: false,
+                },
+            ],
+        );
+
+        // Closed: no layer, so the menu must not complicate the page's view.
+        assert!(app.view_context_menu().is_none());
+
+        // Open on a plain application: Run, pin, favorite, compatibility.
+        app.menu = Some(0);
+        app.menu_selection = 3;
+        assert!(app.view_context_menu().is_some());
+
+        // Open on a game: the same rows plus one per file, and the selected row
+        // is in that tail. Building the view resolves every localised label it
+        // uses, so a missing fluent key fails here rather than at runtime.
+        app.menu = Some(1);
+        app.menu_selection = 5;
+        assert!(app.view_context_menu().is_some());
+
+        // The whole window view layers it over the page without panicking.
+        let _ = <HearthDeck as cosmic::Application>::view(&app);
     }
 
     #[test]
