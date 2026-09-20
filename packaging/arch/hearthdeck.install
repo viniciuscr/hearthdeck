@@ -27,6 +27,15 @@ launching Hearthdeck, run as that user:
   systemctl --user daemon-reload
   systemctl --user start hearthdeck.target
 
+To skip the login screen entirely - the usual setup for a box under a TV with
+no keyboard - on a greetd-based display manager:
+
+  sudo /usr/lib/hearthdeck/hearthdeck-autologin enable
+
+It adds greetd's [initial_session] to the config the running display manager
+uses; run it with --help for other users, other session commands, or to get the
+login screen back with `disable`. See KIOSK-SESSION.md for what it changes.
+
 The launcher pairs with the loopback daemon automatically. Optional LAN/TLS
 configuration belongs in ~/.config/hearthdeck/daemon.env; see
 /usr/share/doc/hearthdeck/daemon.env.example.

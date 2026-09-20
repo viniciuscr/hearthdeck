@@ -7,6 +7,9 @@ CachyOS. It installs:
 - `/usr/bin/hearthdeck-frontend`: the COSMIC (libcosmic) frontend.
 - `/usr/lib/hearthdeck/linux-acceptance`: target-host service, RomM, API, and
   aggregate-log acceptance checks.
+- `/usr/lib/hearthdeck/hearthdeck-autologin`: enables or disables greetd
+  autologin into the Kiosk session, so a keyboardless box boots past the login
+  screen; see `docs/kiosk-session.md`.
 - `/usr/lib/hearthdeck/`: the local bridge, daemon, controller compatibility
   broker, and Kiosk session script.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, API
@@ -92,8 +95,10 @@ repeat it), and what not to change.
 
 **Hearthdeck Kiosk** is a plain Gamescope session with no desktop shell: no
 panel, launcher, wallpaper, notifications, or settings daemon. Select it in the
-display manager, or configure it as the autologin session, to boot straight
-into Hearthdeck fullscreen with the lowest possible memory and CPU footprint.
+display manager, or make it the autologin session - which is what a keyboardless
+TV box needs, and what `hearthdeck-autologin enable` sets up (see
+`docs/kiosk-session.md`) - to boot straight into Hearthdeck fullscreen with the
+lowest possible memory and CPU footprint.
 
 The session script (`/usr/lib/hearthdeck/hearthdeck-session`) starts
 `hearthdeck.target` for the current user and then execs Gamescope directly on

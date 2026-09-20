@@ -75,6 +75,57 @@ than, adding a second compositor process); nothing new joins this outer
 Gamescope instance as *another Gamescope process*, which is the specific
 thing that caused the incident below and remains the hard rule.
 
+## Autologin: getting into this session without a keyboard
+
+A box under a TV has no keyboard at the login screen, so it should never show
+one. `hearthdeck-autologin` (at `scripts/hearthdeck-autologin` in a checkout,
+installed as `/usr/lib/hearthdeck/hearthdeck-autologin`) switches that on and
+off by editing the greetd config file that the running display manager
+*actually reads* - on a cosmic-greeter host that is
+`/etc/greetd/cosmic-greeter.toml`, taken from its own `ExecStart`, not assumed:
+
+```sh
+sudo hearthdeck-autologin enable                       # invoking user, Kiosk session
+sudo hearthdeck-autologin enable --user deck           # a different account
+sudo hearthdeck-autologin disable                      # back to the login screen
+sudo hearthdeck-autologin status                       # config in use, current setting
+```
+
+What it writes is greetd's own documented autologin section (greetd(5),
+`initial_session`) and nothing else:
+
+```toml
+[initial_session]
+command = "/usr/lib/hearthdeck/hearthdeck-session"
+user = "vinicius"
+```
+
+Three details of that section decide whether it behaves the way you expect:
+
+- **It runs once per boot, not once per logout.** greetd only honours the
+  initial session on its first start since boot, which it tracks with a runfile
+  (`general.runfile`, `/run/greetd.run` by default). That is what keeps signing
+  out workable: when Hearthdeck exits, greetd starts its normal
+  `[default_session]` greeter instead of immediately logging back in. It also
+  means a newly enabled autologin is not retried until that runfile is gone - by
+  rebooting, or with `sudo rm -f /run/greetd.run` followed by
+  `sudo systemctl restart display-manager`.
+- **The command is run by `sh(1)`, with no session around it.** There is no
+  login shell, no `.profile`, and no desktop session of greetd's own; the
+  session script is what supplies Wayland. Handing greetd
+  `--command /usr/bin/start-cosmic` autologins into the COSMIC desktop instead,
+  for a machine that is also developed on.
+- **A config greetd refuses to parse leaves the machine with no display
+  manager at all.** The most likely way to cause that here is an
+  `[initial_session]` with no `[default_session]` left to fall back to, so the
+  script refuses to write one into a config that has none.
+
+It only handles greetd-based display managers: it reads
+`display-manager.service`'s `ExecStart` and stops if that is not greetd (SDDM
+and GDM each have their own autologin configuration). The file it edits is
+saved first as `<config>.hearthdeck-autologin.bak`, and `disable` removes just
+that one section, leaving the rest of the file byte-for-byte alone.
+
 ## Launching apps and games: direct connection, not a second Gamescope
 
 Every desktop app and RetroArch launch (`launch_application`/
