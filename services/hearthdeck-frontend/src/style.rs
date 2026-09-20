@@ -340,8 +340,13 @@ pub fn tab_width(label: &str) -> f32 {
 pub const DIALOG_WIDTH: f32 = 432.0;
 /// Width of a dialog action button.
 pub const DIALOG_ACTION_WIDTH: u16 = 142;
-/// Maximum size of the context menu card and the details disc picker.
-pub const MENU_MAX_WIDTH: f32 = 300.0;
+/// Width of the context menu card. Not a theme token: COSMIC's spacing/density
+/// scale changes how much air the card has *inside* itself, not how wide the
+/// menu wants to be. Kept fixed so the menu reads the same at every density
+/// setting, like the same-shaped quick menu in `hearthdeck-overlay`.
+pub const MENU_CARD_WIDTH: f32 = 420.0;
+/// Tallest the action menu and the details disc picker grow before their list
+/// scrolls instead.
 pub const MENU_MAX_HEIGHT: f32 = 800.0;
 
 // ---------------------------------------------------------------------------
@@ -609,6 +614,20 @@ pub fn modal_scrim(theme: &Theme) -> container::Style {
     color.a = 0.7;
     container::Style {
         background: Some(Background::Color(color)),
+        ..container::Style::default()
+    }
+}
+
+/// Dimming layer behind the action menu.
+///
+/// Black, so the card keeps the same relative contrast over any page art, at an
+/// opacity the theme's own brightness picks: a dark theme can afford a stronger
+/// dim than a light one, which would otherwise go black behind the card. Same
+/// reasoning as the quick menu's scrim in `hearthdeck-overlay`.
+pub fn menu_scrim(theme: &Theme) -> container::Style {
+    let alpha = if theme.cosmic().is_dark { 0.6 } else { 0.4 };
+    container::Style {
+        background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, alpha))),
         ..container::Style::default()
     }
 }
