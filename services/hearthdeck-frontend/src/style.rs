@@ -290,11 +290,15 @@ pub fn filter_button_height() -> f32 {
 /// Clamped so it keeps a readable label column on small windows without
 /// swallowing the grid on a TV-sized one.
 pub fn filter_drawer_width(window_width: f32) -> f32 {
-    (window_width * 0.32).clamp(280.0, FILTER_DRAWER_MAX_WIDTH)
+    (window_width * 0.43).clamp(340.0, FILTER_DRAWER_MAX_WIDTH)
 }
 
 /// Upper bound for [`filter_drawer_width`].
-pub const FILTER_DRAWER_MAX_WIDTH: f32 = 420.0;
+pub const FILTER_DRAWER_MAX_WIDTH: f32 = 560.0;
+
+/// Width of the value slot in a filter sidebar row. Fixed so the stepper arrows
+/// of every facet line up and long genre names cannot widen the drawer.
+pub const FILTER_VALUE_WIDTH: f32 = 150.0;
 
 // ---------------------------------------------------------------------------
 // Tabs
@@ -714,36 +718,35 @@ pub fn tab_button_class(selected: bool) -> Button {
     }
 }
 
-/// One option row in the console filter sidebar: a full-width list row that
-/// fills with the selection color when it holds the facet's current value.
+/// One facet row in the console filter sidebar: a full-width row that fills
+/// with the selection color once its facet is narrowed, and rings while the
+/// controller cursor is on it.
 ///
-/// It rings when it holds iced's focus (so the keyboard can reach it) or when
-/// it sits under the drawer's own cursor - the drawer is navigated by that
-/// cursor rather than by focus, like the details screen and context menu.
-/// The base row is COSMIC's native `ListItem` appearance, so the sidebar reads
-/// as a settings list rather than as a stack of custom chips.
-pub fn filter_option_class(selected: bool, cursor: bool) -> Button {
-    let styled = move |focused: bool, theme: &Theme| {
-        let class = Button::ListItem(theme.cosmic().radius_s());
-        focus_ring(
-            theme.active(focused, selected, &class),
-            focused || cursor,
-            theme,
-        )
-    };
-
-    Button::Custom {
-        active: Box::new(styled),
-        disabled: Box::new(|theme| theme.disabled(&Button::ListItem(theme.cosmic().radius_s()))),
-        hovered: Box::new(move |focused, theme| {
-            let class = Button::ListItem(theme.cosmic().radius_s());
-            focus_ring(
-                theme.hovered(focused, selected, &class),
-                focused || cursor,
-                theme,
-            )
-        }),
-        pressed: Box::new(styled),
+/// The arrows and value inside are ordinary buttons; this only paints the row
+/// they sit in, so the whole row reads as one control rather than as three
+/// loose widgets - the compact, list-row shape a large option set needs.
+pub fn filter_row(selected: bool, cursor: bool) -> impl Fn(&Theme) -> container::Style {
+    move |theme| {
+        let alpha = match (selected, cursor) {
+            (true, _) => 0.18,
+            (false, true) => 0.08,
+            (false, false) => 0.0,
+        };
+        container::Style {
+            text_color: Some(theme.cosmic().on_bg_color().into()),
+            icon_color: Some(theme.cosmic().on_bg_color().into()),
+            background: (alpha > 0.0).then(|| chip_background(alpha, theme)),
+            border: Border {
+                radius: theme.cosmic().radius_m().into(),
+                width: if cursor { FOCUS_RING_WIDTH } else { 0.0 },
+                color: if cursor {
+                    theme.cosmic().accent.base.into()
+                } else {
+                    Color::TRANSPARENT
+                },
+            },
+            ..container::Style::default()
+        }
     }
 }
 
