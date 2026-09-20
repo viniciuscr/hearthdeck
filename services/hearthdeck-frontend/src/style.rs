@@ -345,8 +345,7 @@ pub const DIALOG_ACTION_WIDTH: u16 = 142;
 /// menu wants to be. Kept fixed so the menu reads the same at every density
 /// setting, like the same-shaped quick menu in `hearthdeck-overlay`.
 pub const MENU_CARD_WIDTH: f32 = 420.0;
-/// Tallest the action menu and the details disc picker grow before their list
-/// scrolls instead.
+/// Tallest the details disc picker grows before its list scrolls instead.
 pub const MENU_MAX_HEIGHT: f32 = 800.0;
 
 // ---------------------------------------------------------------------------

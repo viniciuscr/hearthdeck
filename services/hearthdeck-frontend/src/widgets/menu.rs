@@ -18,12 +18,9 @@ use cosmic::iced::alignment::{Horizontal, Vertical};
 use cosmic::iced::core::text::Wrapping;
 use cosmic::iced::{Alignment, Length};
 use cosmic::theme;
-use cosmic::widget::{
-    Id, autosize::autosize, column, container, list, list::list_column, mouse_area, scrollable,
-    text,
-};
+use cosmic::widget::{column, container, list, list::list_column, mouse_area, text};
 
-use crate::style::{MENU_CARD_WIDTH, MENU_MAX_HEIGHT, TEXT_BODY, TEXT_HEADER, menu_scrim};
+use crate::style::{MENU_CARD_WIDTH, TEXT_BODY, TEXT_HEADER, menu_scrim};
 
 /// One row of a [`Menu`]: what it reads and the message activating it sends.
 pub struct Row<Message> {
@@ -155,20 +152,17 @@ impl<'a, Message: Clone + 'static> Menu<'a, Message> {
             );
         }
 
-        // The list is capped rather than the card, so an entry with many rows
-        // scrolls instead of pushing the card off the screen.
-        let list = autosize(
-            container(scrollable(items.into_element())).padding(1),
-            Id::new("action-menu-autosize"),
-        )
-        .max_height(MENU_MAX_HEIGHT);
-
+        // A plain card of a fixed width, like the overlay's: the list takes the
+        // card's inner width and the card grows with its rows. It must not be
+        // wrapped in `autosize` or a `scrollable` - `autosize` hands its content
+        // unbounded limits on the axis it sizes, so a `Fill` list would be laid
+        // out infinitely wide and then clipped away, leaving an empty card.
         let card = container(
             column![
                 text::title3(title)
                     .size(TEXT_HEADER)
                     .wrapping(Wrapping::Word),
-                list,
+                items.into_element(),
             ]
             .spacing(space_s)
             .align_x(Alignment::Center),
