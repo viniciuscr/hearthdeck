@@ -59,6 +59,13 @@ pub const PAGE_TRANSITION_DURATION: Duration = Duration::from_millis(320);
 /// of direction.
 pub const TAB_TRANSITION_DURATION: Duration = Duration::from_millis(240);
 
+/// Duration of the vertical slide when switching section (PC Games / Console
+/// Games / Applications). Longer than the tab slide because a section swap
+/// replaces the whole content column, and the taller travel reads better with a
+/// little more time; still inside the 167-333 ms band Fluent gives for this kind
+/// of transition.
+pub const SECTION_TRANSITION_DURATION: Duration = Duration::from_millis(300);
+
 // ---------------------------------------------------------------------------
 // Window & layout (proportional — sizes computed from window_width)
 // ---------------------------------------------------------------------------

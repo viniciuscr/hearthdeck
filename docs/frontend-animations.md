@@ -37,15 +37,16 @@ transition's lifetime must be bounded by the application, not by a widget.
   `duration: Duration` field with a local default (toggler 200 ms, cards 200 ms,
   `reorderable_flex_row` 180 ms) exposed through a builder method.
 
-## Two transitions, two patterns
+## Three transitions, two patterns
 
-Hearthdeck has two motion patterns because the navigation has two kinds of
-relationship:
+Hearthdeck has three transitions because the navigation has three kinds of
+relationship, but only two patterns:
 
 | Change | Relationship | Pattern | Duration |
 | --- | --- | --- | --- |
 | Dashboard <-> Library | Sibling top-level destinations | Fade through | `PAGE_TRANSITION_DURATION` (320 ms) |
 | Tab (group) change in the Library | Peers on an ordered strip | Shared axis X | `TAB_TRANSITION_DURATION` (240 ms) |
+| Section change (PC Games / Console Games / Applications) | Stacked peers in the sidebar | Shared axis Y | `SECTION_TRANSITION_DURATION` (300 ms) |
 
 ## Why a fade through, not a lateral push
 
@@ -108,9 +109,9 @@ The Dashboard <-> Library fade through is the reference implementation
    `PageAnimation { from, started_at }`. `switch_page` flips `self.page`
    immediately (so routing and tests are unaffected) and records the origin.
 2. **One clock, only when needed.** `subscription()` adds
-   `window::frames().map(|(_, at)| Message::Animate(at))` *only* while a page or
-   tab transition is in flight. An idle window has no frames subscription and
-   schedules no redraws at all.
+   `window::frames().map(|(_, at)| Message::Animate(at))` *only* while a page,
+   tab or section transition is in flight. An idle window has no frames
+   subscription and schedules no redraws at all.
 3. **Progress is derived in `view()`.** `transition_progress` maps
    `now - started_at` through `cosmic::anim::smootherstep` to an eased `0..=1`.
    libcosmic's `Application::update` does not receive a `now` argument the way raw
@@ -148,6 +149,35 @@ implementation deliberately differs from the page fade in one key way: it render
 Direction comes from `tab_position` (the "all apps" tab is 0, groups follow), so
 the grid slides left when moving right along the strip and vice versa.
 
+### Sections: shared-axis slide on Y
+
+The sidebar sections are peers with a spatial relationship too - they are stacked
+top to bottom - so a section change is the same shared-axis slide as a tab
+change, on the other axis. It reuses the tab machinery almost verbatim:
+
+- `HearthDeck::section_animation` holds the target section, start time, direction
+  and a `swapped` flag. `begin_section_animation` records it **without changing
+  `cur_section`**, so the outgoing section's title, tabs and grid stay on screen
+  while they slide off.
+- `SectionTransition` is the vertical twin of `TabTransition`, sharing the same
+  `slide(progress, direction, extent)` curve, just fed `bounds.height` instead of
+  `bounds.width`. It wraps the whole content column, not the grid, so the title
+  and tab strip travel with the grid. The left sidebar stays put: it is the fixed
+  navigation, and leaving it still is what makes the motion read as "the content
+  changed", not "the app moved".
+- The swap happens on a tick, under the opaque cover: `advance_section_animation`
+  calls `apply_section` once `progress >= 0.5` and clears the animation at
+  `progress >= 1.0`. `apply_section` is the old body of the `SelectSection`
+  handler, now deferred to the midpoint.
+- Direction comes from `Section::index()` (sidebar order), so moving down the
+  sidebar makes the new content rise from the bottom edge and moving up makes it
+  descend from the top.
+
+One caveat: the vertical slide is drawn by `view_main_content`, so a
+`SelectSection` delivered while some other page is showing (a test, or a future
+caller) applies immediately instead of animating. The sidebar is the only thing
+that emits the message, and it only exists on the Library screen.
+
 ### Where timings live
 
 All motion timing is a design token in `style.rs`, in the `Motion` section:
@@ -155,6 +185,7 @@ All motion timing is a design token in `style.rs`, in the `Motion` section:
 ```rust
 pub const PAGE_TRANSITION_DURATION: Duration = Duration::from_millis(320);
 pub const TAB_TRANSITION_DURATION: Duration = Duration::from_millis(240);
+pub const SECTION_TRANSITION_DURATION: Duration = Duration::from_millis(300);
 ```
 
 Widgets take a duration as a parameter (the same shape as libcosmic's widgets);
@@ -178,9 +209,9 @@ they never define their own. Add a token here rather than a literal in a view.
   `update`. An animation that never terminates keeps forcing full redraws, which
   is exactly the failure that made library scrolling sluggish: a lingering
   transition kept redrawing both pages inside a clipping layer on every frame.
-- **Keep transitions short.** The two `Motion` tokens (240 ms tab, 320 ms page)
-  sit inside Fluent's 167-333 ms band. Much longer starts to feel sluggish and
-  multiplies full-window redraws.
+- **Keep transitions short.** The three `Motion` tokens (240 ms tab, 300 ms
+  section, 320 ms page) sit inside Fluent's 167-333 ms band. Much longer starts
+  to feel sluggish and multiplies full-window redraws.
 - **Do not animate backdrops.** `docs/appearance-system.md` forbids procedural
   animation, shaders, or periodic repainting in the backdrop surface; content
   and navigation are animated instead.

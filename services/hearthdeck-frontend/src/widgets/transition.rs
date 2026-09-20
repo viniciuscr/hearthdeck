@@ -384,6 +384,169 @@ where
     }
 }
 
+/// A vertical content change, used when switching section.
+///
+/// Sections are stacked in the sidebar, so this is a shared-axis slide like the
+/// tab change, on the other axis: the current content slides out in `direction`,
+/// the content is swapped under a surface-colour cover, then the new content
+/// slides back in from the opposite edge. Moving down the sidebar makes the new
+/// content rise from below; moving up makes it descend from above.
+#[allow(missing_debug_implementations)]
+pub struct SectionTransition<'a, Message> {
+    content: Element<'a, Message>,
+    /// Eased progress in `0.0..=1.0` from the outgoing to the incoming section.
+    progress: f32,
+    /// `+1.0` when the incoming section sits below the outgoing one.
+    direction: f32,
+}
+
+impl<'a, Message> SectionTransition<'a, Message> {
+    pub fn new(content: Element<'a, Message>, progress: f32, direction: f32) -> Self {
+        Self {
+            content,
+            progress,
+            direction,
+        }
+    }
+}
+
+impl<'a, Message> Widget<Message, Theme, Renderer> for SectionTransition<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    fn children(&self) -> Vec<Tree> {
+        vec![Tree::new(&self.content)]
+    }
+
+    fn diff(&mut self, tree: &mut Tree) {
+        tree.diff_children(&mut [&mut self.content]);
+    }
+
+    fn size(&self) -> Size<Length> {
+        self.content.as_widget().size()
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.content
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: layout::Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        self.content.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: layout::Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        let bounds = layout.bounds();
+        let (offset, cover) = slide(self.progress, self.direction, bounds.height);
+
+        // Clip the sliding content to the window, then cover the swap.
+        renderer.with_layer(bounds, |renderer| {
+            renderer.with_translation(Vector::new(0.0, offset), |renderer| {
+                self.content.as_widget().draw(
+                    &tree.children[0],
+                    renderer,
+                    theme,
+                    style,
+                    layout,
+                    cursor,
+                    viewport,
+                );
+            });
+        });
+
+        surface_cover(renderer, theme, bounds, cover);
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: layout::Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation<()>,
+    ) {
+        self.content
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: layout::Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        self.content.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: layout::Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.content.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
+}
+
+impl<'a, Message> From<SectionTransition<'a, Message>> for Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    fn from(widget: SectionTransition<'a, Message>) -> Self {
+        Element::new(widget)
+    }
+}
+
 /// Fills `bounds` with the page's surface colour at `alpha`.
 ///
 /// The cover must live in its own layer, allocated after the content's layers:

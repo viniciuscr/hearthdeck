@@ -97,11 +97,11 @@ use crate::style::{
     DETAILS_SHOT_RASTER, DETAILS_SHOT_SIZE, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
     EDIT_NAME_INPUT_WIDTH, FILTER_VALUE_WIDTH, GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH,
     ICON_SMALL, ICON_TILE_ACTION, MENU_MAX_HEIGHT, MENU_MAX_WIDTH, PAGE_TRANSITION_DURATION,
-    SEARCH_WIDTH, SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY, TEXT_CAPTION,
-    TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, action_bar,
-    artwork_fit, backdrop_scrim, backdrop_wash, card_surface, content_horizontal_padding,
-    dashboard_console_tile_size, dashboard_nav_button_class, dashboard_tile_size,
-    details_action_bar_padding, details_action_height, details_hero_width,
+    SEARCH_WIDTH, SECTION_TRANSITION_DURATION, SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION,
+    TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH,
+    accent_bar, action_bar, artwork_fit, backdrop_scrim, backdrop_wash, card_surface,
+    content_horizontal_padding, dashboard_console_tile_size, dashboard_nav_button_class,
+    dashboard_tile_size, details_action_bar_padding, details_action_height, details_hero_width,
     details_toggle_button_class, filter_button_height, filter_drawer_width, filter_row, grid_gap,
     grid_top_padding, hero_card, launch_overlay, modal_scrim, primary_action_button_class,
     root_background, search_icon_padding, section_button_class, sidebar_accent_bar_height,
@@ -113,7 +113,7 @@ use crate::system_status::SystemStatus;
 use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
 use crate::widgets::application::{AppletString, ApplicationButton};
 use crate::widgets::rail::{rail, rail_item};
-use crate::widgets::transition::{PageTransition, TabTransition};
+use crate::widgets::transition::{PageTransition, SectionTransition, TabTransition};
 
 // popovers should show options, but also the desktop info options
 // should be a way to add apps to groups
@@ -488,6 +488,10 @@ struct HearthDeck {
     /// In-flight tab slide, if any. Bounded by [`TAB_TRANSITION_DURATION`] and
     /// cleared by [`HearthDeck::advance_tab_animation`].
     tab_animation: Option<TabAnimation>,
+    /// In-flight section slide, if any. Bounded by
+    /// [`SECTION_TRANSITION_DURATION`] and cleared by
+    /// [`HearthDeck::advance_section_animation`].
+    section_animation: Option<SectionAnimation>,
     /// Timestamp of the current frame, refreshed by the `window::frames()`
     /// subscription while a transition is in flight (the application's `update`
     /// does not receive it the way raw iced's does).
@@ -550,6 +554,7 @@ impl Default for HearthDeck {
             virtual_keyboard: VirtualKeyboard::default(),
             page_animation: None,
             tab_animation: None,
+            section_animation: None,
             now: Instant::now(),
         }
     }
@@ -655,6 +660,19 @@ struct TabAnimation {
     target: Option<usize>,
     started_at: Instant,
     /// `+1.0` when the incoming tab sits to the right of the outgoing one.
+    direction: f32,
+    /// Whether the pending `target` has been applied yet.
+    swapped: bool,
+}
+
+/// State for a section change: the target is applied under the transition's
+/// cover, once the outgoing content column has slid off-stage vertically.
+#[derive(Clone, Copy, Debug)]
+struct SectionAnimation {
+    target: Section,
+    started_at: Instant,
+    /// `+1.0` when the incoming section sits below the outgoing one in the
+    /// sidebar.
     direction: f32,
     /// Whether the pending `target` has been applied yet.
     swapped: bool,
@@ -1822,6 +1840,96 @@ impl HearthDeck {
         }
 
         Task::none()
+    }
+
+    /// Starts the vertical slide for a section change. The content column itself
+    /// is only swapped once the cover is opaque (see
+    /// [`HearthDeck::advance_section_animation`]), so the outgoing section slides
+    /// off before the incoming one slides on.
+    fn begin_section_animation(&mut self, target: Section) {
+        // The sidebar lists sections top to bottom, so a later section is below
+        // the current one and its content rises from the bottom edge.
+        let direction = if target.index() >= self.cur_section.index() {
+            1.0
+        } else {
+            -1.0
+        };
+        self.now = Instant::now();
+        self.section_animation = Some(SectionAnimation {
+            target,
+            started_at: self.now,
+            direction,
+            swapped: false,
+        });
+    }
+
+    /// Eased `0.0..=1.0` progress of the section slide, if one is in flight.
+    fn section_progress(&self) -> Option<f32> {
+        let animation = self.section_animation?;
+        let elapsed = self.now.saturating_duration_since(animation.started_at);
+        let raw =
+            (elapsed.as_secs_f32() / SECTION_TRANSITION_DURATION.as_secs_f32()).clamp(0.0, 1.0);
+        Some(cosmic::anim::smootherstep(raw))
+    }
+
+    /// Drives the section slide: apply the pending section under cover at the
+    /// midpoint, then drop the animation once it has run its course.
+    fn advance_section_animation(&mut self) -> Task<Message> {
+        let Some(animation) = self.section_animation else {
+            return Task::none();
+        };
+        let Some(progress) = self.section_progress() else {
+            return Task::none();
+        };
+
+        if progress >= 1.0 {
+            self.section_animation = None;
+            return Task::none();
+        }
+
+        if progress >= 0.5 && !animation.swapped {
+            if let Some(animation) = self.section_animation.as_mut() {
+                animation.swapped = true;
+            }
+            return self.apply_section(animation.target);
+        }
+
+        Task::none()
+    }
+
+    /// Applies a section selection: reset the view state, reload the grid and
+    /// move focus. Called on a tick, underneath the slide's opaque cover.
+    fn apply_section(&mut self, section: Section) -> Task<Message> {
+        self.edit_name = None;
+        self.search_value.clear();
+        self.filter_cursor = None;
+        self.cur_section = section;
+        self.cur_group = None;
+        self.scroll_offset = 0.0;
+        self.group_keys = (0..self.config.sections.get(section).len() as u64).collect();
+        let load = if section == Section::ConsoleGames {
+            self.load_romm_page(0)
+        } else {
+            self.filter_apps()
+        };
+        let mut cmds = vec![
+            load,
+            iced::widget::scrollable::scroll_to(
+                SCROLLABLE_ID.clone(),
+                AbsoluteOffset {
+                    x: Some(0.0),
+                    y: Some(0.0),
+                },
+            ),
+        ];
+        // Entering a section lands on the grid rather than in the search box,
+        // which would raise the on-screen keyboard.
+        self.gamepad_focus_first = true;
+        cmds.push(self.request_virtual_keyboard(false));
+        if let Some(task) = self.reveal_tab_strip() {
+            cmds.push(task);
+        }
+        iced::Task::batch(cmds)
     }
 
     pub fn close(&mut self) -> Task<Message> {
@@ -3858,36 +3966,14 @@ impl cosmic::Application for HearthDeck {
                 if section == self.cur_section {
                     return Task::none();
                 }
-                self.edit_name = None;
-                self.search_value.clear();
-                self.filter_cursor = None;
-                self.cur_section = section;
-                self.cur_group = None;
-                self.scroll_offset = 0.0;
-                self.group_keys = (0..self.config.sections.get(section).len() as u64).collect();
-                let load = if section == Section::ConsoleGames {
-                    self.load_romm_page(0)
-                } else {
-                    self.filter_apps()
-                };
-                let mut cmds = vec![
-                    load,
-                    iced::widget::scrollable::scroll_to(
-                        SCROLLABLE_ID.clone(),
-                        AbsoluteOffset {
-                            x: Some(0.0),
-                            y: Some(0.0),
-                        },
-                    ),
-                ];
-                // Entering a section lands on the grid rather than in the search
-                // box, which would raise the on-screen keyboard.
-                self.gamepad_focus_first = true;
-                cmds.push(self.request_virtual_keyboard(false));
-                if let Some(task) = self.reveal_tab_strip() {
-                    cmds.push(task);
+                // The vertical slide is drawn by the library screen's own view,
+                // so only animate when that is what is showing; anywhere else
+                // (a test driving the message directly, say) applies immediately.
+                if self.page != Page::Library {
+                    return self.apply_section(section);
                 }
-                return iced::Task::batch(cmds);
+                self.begin_section_animation(section);
+                return Task::none();
             }
             Message::SelectGroup(group) => {
                 if group == self.cur_group {
@@ -4460,7 +4546,10 @@ impl cosmic::Application for HearthDeck {
             Message::Animate(now) => {
                 self.now = now;
                 self.expire_page_animation();
-                return self.advance_tab_animation();
+                return Task::batch([
+                    self.advance_tab_animation(),
+                    self.advance_section_animation(),
+                ]);
             }
         }
         Task::none()
@@ -4877,7 +4966,10 @@ impl cosmic::Application for HearthDeck {
         // Only subscribe to the frame clock while a transition is in flight, so
         // an idle window schedules no redraws at all. This is iced's documented
         // way to drive application animations: see `iced::window::frames`.
-        if self.page_animation.is_some() || self.tab_animation.is_some() {
+        if self.page_animation.is_some()
+            || self.tab_animation.is_some()
+            || self.section_animation.is_some()
+        {
             subs.push(window::frames().map(|(_window, at)| Message::Animate(at)));
         }
 
@@ -6114,14 +6206,25 @@ impl HearthDeck {
         ];
         main_column.push(app_scrollable);
 
-        let content = row![
-            sidebar,
-            sidebar_divider,
-            column(main_column)
-                .width(Length::Fill)
-                .padding([0, content_horizontal_padding()]),
-        ]
-        .height(Length::Fill);
+        // A section change slides the whole content column vertically, leaving the
+        // sidebar in place as the fixed navigation: the new section's title, tabs
+        // and grid all travel together. The swap happens under cover at the
+        // midpoint, exactly like the tab slide.
+        let content_column: Element<'_, Message> = column(main_column)
+            .width(Length::Fill)
+            .padding([0, content_horizontal_padding()])
+            .into();
+        let content_column: Element<'_, Message> = match self.section_progress() {
+            Some(progress) => {
+                let direction = self
+                    .section_animation
+                    .map_or(1.0, |animation| animation.direction);
+                SectionTransition::new(content_column, progress, direction).into()
+            }
+            None => content_column,
+        };
+
+        let content = row![sidebar, sidebar_divider, content_column].height(Length::Fill);
 
         let page = container(content)
             .width(Length::Fill)
@@ -6339,9 +6442,9 @@ fn is_primary_window(id: SurfaceId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DashboardShelf, HearthDeck, Page, TAB_TRANSITION_DURATION, VirtualKeyboard,
-        degraded_providers, focused_entry_index, is_primary_window, next_romm_offset,
-        rail_scroll_target, romm_page_is_current, selected_romm_platform_id,
+        DashboardShelf, HearthDeck, Page, SECTION_TRANSITION_DURATION, TAB_TRANSITION_DURATION,
+        VirtualKeyboard, degraded_providers, focused_entry_index, is_primary_window,
+        next_romm_offset, rail_scroll_target, romm_page_is_current, selected_romm_platform_id,
     };
     use crate::app_group::{AppGroup, AppLibraryConfig, FilterType, RommFacet, Section};
     use crate::providers::GameRecord;
@@ -6634,6 +6737,16 @@ mod tests {
         animation.started_at = std::time::Instant::now() - elapsed;
     }
 
+    /// Ages the in-flight section slide by `elapsed` so a tick lands at a known
+    /// point in the transition.
+    fn age_section_slide(app: &mut HearthDeck, elapsed: std::time::Duration) {
+        let animation = app
+            .section_animation
+            .as_mut()
+            .expect("section slide in flight");
+        animation.started_at = std::time::Instant::now() - elapsed;
+    }
+
     #[test]
     fn switching_tabs_starts_a_directional_slide() {
         let mut app = HearthDeck::default();
@@ -6701,6 +6814,95 @@ mod tests {
             super::Message::Animate(std::time::Instant::now()),
         );
         assert!(app.tab_animation.is_none());
+    }
+
+    #[test]
+    fn switching_sections_starts_a_vertical_slide() {
+        let mut app = HearthDeck {
+            page: Page::Library,
+            cur_section: Section::PcGames,
+            ..Default::default()
+        };
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::SelectSection(Section::Applications),
+        );
+
+        let animation = app.section_animation.expect("section slide");
+        assert_eq!(animation.target, Section::Applications);
+        // Moving down the sidebar: the new content rises from the bottom edge.
+        assert_eq!(animation.direction, 1.0);
+        // The section is not swapped until the cover is opaque.
+        assert_eq!(app.cur_section, Section::PcGames);
+    }
+
+    #[test]
+    fn section_direction_follows_sidebar_order() {
+        let mut app = HearthDeck {
+            page: Page::Library,
+            cur_section: Section::Applications,
+            ..Default::default()
+        };
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::SelectSection(Section::PcGames),
+        );
+
+        assert_eq!(
+            app.section_animation.expect("section slide").direction,
+            -1.0
+        );
+    }
+
+    #[test]
+    fn reselecting_the_current_section_does_not_slide() {
+        let mut app = HearthDeck {
+            page: Page::Library,
+            cur_section: Section::PcGames,
+            ..Default::default()
+        };
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::SelectSection(Section::PcGames),
+        );
+
+        assert!(app.section_animation.is_none());
+    }
+
+    #[test]
+    fn the_section_slide_swaps_under_cover_then_clears() {
+        let mut app = HearthDeck {
+            page: Page::Library,
+            cur_section: Section::PcGames,
+            ..Default::default()
+        };
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::SelectSection(Section::Applications),
+        );
+
+        // Midway: the pending section is applied, still covered.
+        age_section_slide(&mut app, SECTION_TRANSITION_DURATION / 2);
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::Animate(std::time::Instant::now()),
+        );
+        assert_eq!(app.cur_section, Section::Applications);
+        assert!(
+            app.section_animation
+                .is_some_and(|animation| animation.swapped)
+        );
+
+        // Past the end: the slide is dropped.
+        age_section_slide(&mut app, SECTION_TRANSITION_DURATION);
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::Animate(std::time::Instant::now()),
+        );
+        assert!(app.section_animation.is_none());
     }
 
     #[test]
