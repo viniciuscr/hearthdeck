@@ -1,0 +1,310 @@
+#!/usr/bin/bash
+# Boot straight into a session with no password prompt, for a machine with no
+# keyboard attached (a TV box).
+#
+# This edits the greetd config file that the running display manager actually
+# uses, adding - or removing - the `[initial_session]` section greetd documents
+# as "auto-login" (greetd(5)). greetd runs that command once, as that user,
+# the first time it starts after boot; when the session ends, greetd falls back
+# to its normal greeter, so signing out still works and a failed session cannot
+# lock the machine out of its login screen.
+#
+# The command is run by sh(1), so `hearthdeck-session` (which execs Gamescope
+# itself) is all that is needed here - greetd does not wrap it in a desktop
+# session of its own. See docs/kiosk-session.md for what the session does, and
+# what must not be added around it.
+#
+# Usage:
+#   hearthdeck-autologin enable [--user USER] [--command CMD] [--config PATH]
+#   hearthdeck-autologin disable [--config PATH]
+#   hearthdeck-autologin status [--config PATH]
+#
+# `enable` and `disable` write to a root-owned file under /etc, so run them
+# through sudo. Nothing else in Hearthdeck needs the machine to be provisioned
+# this way; it is purely how a keyboardless box gets past the login screen.
+set -Eeuo pipefail
+
+session_command=/usr/lib/hearthdeck/hearthdeck-session
+user=""
+config=""
+
+die() { printf 'hearthdeck-autologin: %s\n' "$*" >&2; exit 1; }
+say() { printf '%s\n' "$*"; }
+
+usage() {
+  cat <<'EOF'
+usage: hearthdeck-autologin enable [--user USER] [--command CMD] [--config PATH]
+       hearthdeck-autologin disable [--config PATH]
+       hearthdeck-autologin status [--config PATH]
+
+enable   log USER in automatically, running CMD
+         (default: /usr/lib/hearthdeck/hearthdeck-session, the Kiosk session)
+disable  remove the autologin section again
+status   show the config file in use and the current setting
+
+--config PATH  edit PATH instead of the display manager's own greetd config
+EOF
+}
+
+# The invoking user, not root: under sudo, $USER is root and the account that
+# should be logged in is the one that ran sudo. `logname` reads the owner of
+# the controlling terminal and survives sudo, but needs a tty, so it is only
+# the second choice.
+invoking_user() {
+  local candidate=${SUDO_USER:-}
+  if [[ -z $candidate ]]; then
+    candidate=$(logname 2>/dev/null || true)
+  fi
+  if [[ -z $candidate && ${USER:-} != root ]]; then
+    candidate=${USER:-}
+  fi
+  printf '%s' "$candidate"
+}
+
+# greetd is not necessarily the display manager, and when it is, it is not
+# necessarily reading /etc/greetd/config.toml: cosmic-greeter runs
+# `greetd --config /etc/greetd/cosmic-greeter.toml` (see its ExecStart). Read
+# the config path the running display manager was actually started with rather
+# than guessing, so this cannot edit a file nothing reads.
+detect_config() {
+  local exec_start path i
+  local -a tokens
+
+  exec_start=$(systemctl show -p ExecStart --value display-manager.service 2>/dev/null || true)
+  [[ -n $exec_start ]] || die 'no display-manager.service: pass --config PATH'
+  [[ $exec_start == *greetd* ]] || die \
+    'the active display manager is not greetd, and only greetd supports this' \
+    '(cosmic-greeter runs greetd, so it does)'
+
+  read -r -a tokens <<<"${exec_start//;/ }"
+  for ((i = 0; i < ${#tokens[@]}; i++)); do
+    case ${tokens[i]} in
+    --config | -c) path=${tokens[i + 1]:-} ; break ;;
+    --config=*) path=${tokens[i]#*=} ; break ;;
+    esac
+  done
+
+  [[ -n $path ]] || path=/etc/greetd/config.toml
+  [[ -f $path ]] || die "greetd config not found: $path (pass --config PATH)"
+  printf '%s' "$path"
+}
+
+# Path greetd guards its "has already run since boot" check with (greetd(5),
+# general.runfile). Removing it is what makes a newly enabled autologin take
+# effect without a full reboot.
+runfile() {
+  local path
+  path=$(sed -n 's/^[[:space:]]*runfile[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | head -n1)
+  printf '%s' "${path:-/run/greetd.run}"
+}
+
+# Print the value of a key inside the [initial_session] section, if any.
+initial_value() {
+  awk -v key="$1" '
+    /^\[initial_session\][[:space:]]*$/ { inside = 1; next }
+    inside && /^\[/ { inside = 0 }
+    inside && $1 == key {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      sub(/^"/, "")
+      sub(/"$/, "")
+      print
+      exit
+    }
+  ' "$config"
+}
+
+write_initial_session() {
+  local block lines tmp
+  block=$(printf '[initial_session]\ncommand = "%s"\nuser = "%s"' "$session_command" "$user")
+
+  tmp=$(mktemp "$config.XXXXXX")
+  awk -v block="$block" '
+    BEGIN { n = split(block, lines, "\n") }
+    /^\[initial_session\][[:space:]]*$/ {
+      if (!written) { for (i = 1; i <= n; i++) print lines[i]; written = 1 }
+      skipping = 1
+      next
+    }
+    skipping && /^\[/ { skipping = 0; if (blank) print ""; blank = 0 }
+    skipping && /^[[:space:]]*$/ { blank = 1; next }
+    skipping { next }
+    { print }
+    END {
+      if (!written) { print ""; for (i = 1; i <= n; i++) print lines[i] }
+    }
+  ' "$config" >"$tmp"
+
+  chmod --reference="$config" "$tmp"
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    chown --reference="$config" "$tmp"
+  fi
+
+  if cmp -s "$tmp" "$config"; then
+    rm -f "$tmp"
+    say "already configured: $config"
+    return 0
+  fi
+  cp -p "$config" "$config.hearthdeck-autologin.bak"
+  mv "$tmp" "$config"
+  say "wrote $config (previous version saved as $config.hearthdeck-autologin.bak)"
+}
+
+remove_initial_session() {
+  local tmp
+  tmp=$(mktemp "$config.XXXXXX")
+  awk '
+    /^\[initial_session\][[:space:]]*$/ { skipping = 1; next }
+    skipping && /^\[/ { skipping = 0 }
+    skipping { next }
+    { print }
+  ' "$config" >"$tmp"
+
+  chmod --reference="$config" "$tmp"
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    chown --reference="$config" "$tmp"
+  fi
+
+  if cmp -s "$tmp" "$config"; then
+    rm -f "$tmp"
+    say "no autologin configured in $config"
+    return 0
+  fi
+  cp -p "$config" "$config.hearthdeck-autologin.bak"
+  mv "$tmp" "$config"
+  say "removed the [initial_session] section from $config (previous version saved as $config.hearthdeck-autologin.bak)"
+}
+
+report_restart() {
+  local file
+  file=$(runfile)
+  say ""
+  say "Apply it by restarting the display manager:"
+  say "  sudo systemctl restart display-manager"
+  say "If greetd already ran since boot, delete its runfile first so autologin is retried:"
+  say "  sudo rm -f $file"
+}
+
+action=${1:-}
+if [[ -n $action ]]; then
+  shift
+fi
+
+case $action in
+-h | --help | help)
+  usage
+  exit 0
+  ;;
+esac
+
+while (($#)); do
+  case $1 in
+  --config | -c)
+    config=${2:?--config needs a path}
+    shift 2
+    ;;
+  --config=*)
+    config=${1#*=}
+    shift
+    ;;
+  --command)
+    session_command=${2:?--command needs a command}
+    shift 2
+    ;;
+  --command=*)
+    session_command=${1#*=}
+    shift
+    ;;
+  --user)
+    user=${2:?--user needs a user name}
+    shift 2
+    ;;
+  --user=*)
+    user=${1#*=}
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    die "unexpected argument: $1 (try --help)"
+    ;;
+  esac
+done
+
+case $action in
+enable | disable | status) ;;
+"")
+  usage
+  exit 2
+  ;;
+*)
+  die "unknown action: $action (expected enable, disable, or status)"
+  ;;
+esac
+
+# --config is honoured for any file, which is also what makes this testable
+# without root; without it the running display manager's own config is used and
+# the file is root-owned.
+if [[ -z $config ]]; then
+  config=$(detect_config)
+fi
+[[ -f $config ]] || die "no such config file: $config"
+
+case $action in
+status)
+  say "config:      $config"
+  current_command=$(initial_value command)
+  current_user=$(initial_value user)
+  if [[ -n $current_command || -n $current_user ]]; then
+    say "autologin:   enabled"
+    say "  command:   $current_command"
+    say "  user:      $current_user"
+  else
+    say "autologin:   disabled (no [initial_session] section)"
+  fi
+  file=$(runfile)
+  if [[ -e $file ]]; then
+    say "runfile:     $file (present, so greetd has already started since boot; delete it before restarting display-manager to retry autologin)"
+  else
+    say "runfile:     $file (absent, so autologin still applies on the next greetd start)"
+  fi
+  exit 0
+  ;;
+esac
+
+if [[ ! -w $config ]]; then
+  die "$config is not writable by ${USER:-$(id -un)}; rerun with sudo"
+fi
+
+if [[ $action == disable ]]; then
+  remove_initial_session
+  report_restart
+  exit 0
+fi
+
+# enable: an [initial_session] alone is not a valid greetd configuration, and a
+# config greetd refuses to parse leaves the machine with no display manager at
+# all. Refuse to write one.
+grep -q '^\[default_session\]' "$config" ||
+  die "$config has no [default_session] section: greetd would refuse to start (the greeter is what runs after the session exits)"
+
+if [[ -z $user ]]; then
+  user=$(invoking_user)
+fi
+[[ -n $user ]] || die 'could not determine which user to log in; pass --user USER'
+[[ $user != root ]] || die 'refusing to autologin the root account; pass --user USER'
+id -u "$user" >/dev/null 2>&1 || die "no such user: $user"
+
+[[ $session_command != *'"'* ]] || die 'the command cannot contain a double quote'
+[[ $user != *'"'* ]] || die 'the user name cannot contain a double quote'
+
+# Only checked for absolute paths: the command runs through sh(1), so anything
+# else is treated as a shell command line rather than a program name.
+first_word=${session_command%% *}
+if [[ $first_word == /* && ! -e $first_word ]]; then
+  die "$first_word does not exist; install or upgrade the hearthdeck package, or pass --command CMD"
+fi
+
+write_initial_session
+report_restart
