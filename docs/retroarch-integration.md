@@ -285,8 +285,8 @@ scripts) — never an imperative shell-out embedded in the daemon or bridge.
 `docs/product-foundations.md`'s own rule is explicit: "the daemon... must not
 contain host-specific command construction." Wrapping `podman-compose up -d`
 in a daemon startup routine would be exactly that, plus it would reinvent
-what systemd already does correctly for free: restart-on-failure, proper
-start/stop ordering, and boot/session integration.
+what systemd already does correctly for free: proper start/stop ordering and
+boot/session integration.
 
 `deploy/systemd/romm.service` is an optional `systemd --user` oneshot unit
 (`RemainAfterExit=yes`) wrapping `podman-compose up -d`/`down`. The Arch
@@ -296,6 +296,30 @@ and accepts an optional `ROMM_COMPOSE_FILE` override from
 `~/.config/hearthdeck/romm.env`. This starts RomM with the active Hearthdeck
 user session rather than system boot, and avoids putting host command
 construction in the daemon.
+
+Two details of that unit are deliberate and easy to get wrong:
+
+- **It has no restart policy.** `podman-compose up -d` converges a stack by
+  *recreating* any container whose config differs from the compose files —
+  including containers an earlier `up` already got running. Auto-retrying a
+  failed up therefore recreates, and can leave down, a stack that was fine,
+  rather than fixing anything. Confirmed the hard way: a `Restart=on-failure`
+  here turned one failed start into a loop that tore down a running stack and
+  left its containers `Created`. A failure now stays failed and visible.
+- **`ROMM_COMPOSE_ARGS` carries extra argv, not a file path.** It holds
+  additional `podman-compose` arguments (typically extra `-f` override files)
+  and relies on systemd's *unbraced* `$VAR` expansion, which splits the value
+  on whitespace and drops the argument entirely when unset — so the
+  no-override case passes exactly `-f <base>` and nothing else. A `${VAR}`
+  spelling would pass one empty argument and break it. Compose overrides are
+  how a host whose podman cannot open `/dev/net/tun` (podman's default `pasta`
+  networking needs it; `tun` is a module on most kernels) switches the stack to
+  `network_mode: host` without forking the base compose file. Example
+  `romm.env` line:
+
+  ```sh
+  ROMM_COMPOSE_ARGS=-f %h/.config/hearthdeck/romm-hostnet.yaml
+  ```
 
 **"A place in the UI to do this kind of stuff":** rather than build a new
 control surface, `service_statuses()` in `diagnostics.rs` — the same

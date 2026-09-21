@@ -962,6 +962,32 @@ async fn service_status(id: &'static str, unit: &'static str, on_demand: bool) -
     }
 }
 
+/// The `systemd --user` unit [`restart_romm_service`] acts on. A named constant,
+/// never built from request data: this is a narrowly scoped action on one
+/// specific unit, not a generic "restart any unit" capability.
+const ROMM_SERVICE_UNIT: &str = "romm.service";
+
+/// The fixed argv that restarts it, kept as data so its scope is assertable in a
+/// test without a systemd user session present - and without restarting a real
+/// RomM stack as a side effect of running the test suite.
+const ROMM_RESTART_ARGS: [&str; 3] = ["--user", "restart", ROMM_SERVICE_UNIT];
+
+/// Maps a finished `systemctl restart` onto the caller's result. A missing unit
+/// fails the same way `systemctl` itself reports it, surfaced to the caller
+/// rather than silently ignored. `systemd` can also fail with nothing on stderr,
+/// so that case still yields a message naming the unit that was rejected.
+fn romm_restart_result(success: bool, stderr: &[u8]) -> anyhow::Result<()> {
+    if success {
+        return Ok(());
+    }
+    let message = String::from_utf8_lossy(stderr).trim().to_owned();
+    Err(if message.is_empty() {
+        anyhow::anyhow!("systemd rejected the {ROMM_SERVICE_UNIT} restart")
+    } else {
+        anyhow::anyhow!("systemd rejected the {ROMM_SERVICE_UNIT} restart: {message}")
+    })
+}
+
 /// Restarts the optional RomM systemd unit
 /// (`deploy/systemd/romm.service`). The unit name is a fixed
 /// constant, never caller-supplied: this is a narrowly scoped action on one
@@ -970,19 +996,11 @@ async fn service_status(id: &'static str, unit: &'static str, on_demand: bool) -
 /// caller rather than silently ignored.
 pub async fn restart_romm_service() -> anyhow::Result<()> {
     let output = Command::new("systemctl")
-        .args(["--user", "restart", "romm.service"])
+        .args(ROMM_RESTART_ARGS)
         .stdin(Stdio::null())
         .output()
         .await?;
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(if message.is_empty() {
-            anyhow::anyhow!("systemd rejected the romm.service restart")
-        } else {
-            anyhow::anyhow!("systemd rejected the romm.service restart: {message}")
-        });
-    }
-    Ok(())
+    romm_restart_result(output.status.success(), &output.stderr)
 }
 
 async fn recent_logs() -> LogTail {
@@ -1252,6 +1270,7 @@ mod tests {
         let kiosk_session = include_str!("../../../packaging/arch/hearthdeck-session");
         let acceptance = include_str!("../../../scripts/linux-acceptance");
         let package = include_str!("../../../packaging/arch/PKGBUILD");
+        let install = include_str!("../../../packaging/arch/hearthdeck.install");
         let justfile = include_str!("../../../justfile");
 
         assert!(
@@ -1261,10 +1280,33 @@ mod tests {
         assert!(service.contains("EnvironmentFile=-%h/.config/hearthdeck/romm.env"));
         assert!(service.contains("ExecCondition=/usr/bin/test -f ${ROMM_COMPOSE_FILE}"));
         assert!(service.contains("Starting RomM Podman Compose stack"));
-        assert!(service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} up -d"));
-        assert!(service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} down"));
+        assert!(
+            service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} $ROMM_COMPOSE_ARGS up -d")
+        );
+        assert!(service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} $ROMM_COMPOSE_ARGS down"));
         assert!(service.contains("SyslogIdentifier=romm"));
         assert!(service.contains("PartOf=hearthdeck.target"));
+        // `$ROMM_COMPOSE_ARGS` (no braces) is what makes systemd split the value
+        // into separate arguments, and drop the argument entirely when the
+        // variable is unset - a `${ROMM_COMPOSE_ARGS}` spelling would pass one
+        // empty argument and break the no-override case.
+        assert!(service.contains("$ROMM_COMPOSE_ARGS"));
+        assert!(!service.contains("${ROMM_COMPOSE_ARGS}"));
+        // No restart policy: `podman-compose up` recreates containers to converge,
+        // so retrying a failed up tears down a stack that was already running.
+        // Asserted on whole lines so the explanatory comment above is allowed to
+        // name the directive.
+        assert!(
+            !service.lines().any(|line| line.starts_with("Restart=")),
+            "romm.service must not auto-restart: retrying a failed `podman-compose up` recreates containers"
+        );
+        // romm.service's Documentation= must resolve to a file the package ships.
+        assert!(service.contains("Documentation=file:///usr/share/doc/hearthdeck/ROMM.md"));
+        assert!(package.contains("docs/retroarch-integration.md"));
+        assert!(package.contains("usr/share/doc/hearthdeck/ROMM.md"));
+        // podman's default networking opens /dev/net/tun, mirroring the uinput
+        // module the controller broker already needs.
+        assert!(install.contains("modprobe tun"));
         assert!(log_service.contains("StandardOutput=append:%h/hearthdeck.log"));
         assert!(log_service.contains("ExecStartPre=/usr/bin/truncate --size=0 %h/hearthdeck.log"));
         assert!(log_service.contains("ExecStartPre=/usr/bin/chmod 600 %h/hearthdeck.log"));
@@ -1292,7 +1334,12 @@ mod tests {
         assert!(package.contains("scripts/linux-acceptance"));
         assert!(acceptance.contains("systemctl --user restart hearthdeck.target"));
         assert!(acceptance.contains("http://127.0.0.1:38400/v1/health"));
-        assert!(acceptance.contains("podman-compose -f \"$romm_compose_file\" ps"));
+        assert!(
+            acceptance.contains("podman-compose -f \"$romm_compose_file\" $romm_compose_args ps")
+        );
+        // The acceptance check must reconstruct the same podman-compose argv the
+        // unit runs, overrides included, or it verifies a stack nobody started.
+        assert!(acceptance.contains("ROMM_COMPOSE_ARGS"));
         assert!(acceptance.contains("stat -c '%a' \"$log_file\""));
         assert!(justfile.contains("./scripts/linux-acceptance --require-romm"));
         assert!(justfile.contains("cp deploy/systemd/hearthdeck-log.service"));
@@ -1458,11 +1505,37 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn restart_romm_service_fails_safely_when_the_unit_is_unavailable() {
-        // No systemd user session (or no romm.service unit) is available in
-        // the test/CI environment; this only asserts the call surfaces a
-        // failure instead of panicking or hanging.
-        assert!(super::restart_romm_service().await.is_err());
+    #[test]
+    fn romm_restart_targets_the_one_fixed_unit() {
+        // Locks in scope: this may only ever restart the single fixed unit, and
+        // its name may not become a request parameter (the same discipline the
+        // install-request boundary uses).
+        assert_eq!(
+            super::ROMM_RESTART_ARGS,
+            ["--user", "restart", "romm.service"]
+        );
+    }
+
+    #[test]
+    fn romm_restart_surfaces_systemd_failures_instead_of_swallowing_them() {
+        assert!(super::romm_restart_result(true, b"").is_ok());
+
+        let reported = super::romm_restart_result(
+            false,
+            b"Failed to restart romm.service: Unit romm.service not found.\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            reported.contains("Unit romm.service not found"),
+            "{reported}"
+        );
+
+        // systemd can fail with nothing useful on stderr; the message must still
+        // name the unit that was rejected.
+        let bare = super::romm_restart_result(false, b"  \n")
+            .unwrap_err()
+            .to_string();
+        assert!(bare.contains("romm.service"), "{bare}");
     }
 }

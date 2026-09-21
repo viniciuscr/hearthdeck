@@ -6,6 +6,11 @@ post_install() {
   udevadm control --reload-rules 2>/dev/null || true
   modprobe uinput 2>/dev/null || true
   udevadm trigger --subsystem-match=misc --sysname-match=uinput 2>/dev/null || true
+  # The optional romm.service runs `podman-compose up`, and podman's default
+  # (pasta) networking opens /dev/net/tun. Same shape of need as uinput above:
+  # best-effort load so a host that ships tun as a module gets it, and never a
+  # hard failure on hosts where tun is built in or absent.
+  modprobe tun 2>/dev/null || true
   if ! grep -qxF 'Include = /etc/pacman.d/hearthdeck.conf' /etc/pacman.conf; then
     cat >>/etc/pacman.conf <<'EOF'
 

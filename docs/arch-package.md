@@ -76,16 +76,48 @@ Arch systemd user units cannot reliably support directives such as
 
 `hearthdeck.target` starts the API daemon, owns the
 `hearthdeck-bridge.socket`, and attempts the optional `romm.service`. The RomM
-unit is skipped unless its environment file exists, so installations without
-RomM are unaffected. The bridge process is socket-activated on its first typed
-request. Future network and Bluetooth bridges will follow the same
-target-plus-socket lifecycle.
+unit is skipped (cleanly, not failed) unless its compose file exists, so
+installations without RomM are unaffected. The bridge process is
+socket-activated on its first typed request. Future network and Bluetooth
+bridges will follow the same target-plus-socket lifecycle.
 
 If you previously used `just install-services`, its copies in
 `~/.config/systemd/user/` override the package units. Move
 `hearthdeck-bridge.service` and `hearthdeck-daemon.service` aside before
 enabling the packaged target, then preserve any local customization in a
 systemd drop-in.
+
+### After an upgrade
+
+A root package transaction cannot reload a logged-in user's manager, so an
+upgrade replaces the unit files on disk while the running manager keeps the
+definitions it already loaded - including a `hearthdeck.target` from before
+RomM existed, which wants no `romm.service` at all. New units therefore take
+effect only once the manager re-reads them. The Kiosk and COSMIC session
+scripts and the launcher each run `systemctl --user daemon-reload` before
+starting the target, so signing out and back in is enough. To apply an upgrade
+in the current session instead:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user restart hearthdeck.target
+```
+
+Then confirm the stack actually came up with the session rather than assuming
+it did:
+
+```sh
+systemctl --user status romm.service        # active (exited): RemainAfterExit
+podman-compose -f "$ROMM_COMPOSE_FILE" ps   # containers running
+grep 'RomM' ~/hearthdeck.log                # "Starting RomM Podman Compose stack"
+```
+
+`systemctl --user status romm.service` reporting `could not be found` means the
+installed package predates `romm.service`; check `pacman -Q hearthdeck` and
+upgrade. RomM is external, so `romm.service` also needs `podman-compose`
+installed and - unless the deployment uses host networking - podman's default
+networking to be able to open `/dev/net/tun` (see `docs/retroarch-integration.md`
+for the `ROMM_COMPOSE_ARGS` override and why the unit has no restart policy).
 
 ## Kiosk session
 

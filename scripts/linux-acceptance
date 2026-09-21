@@ -108,6 +108,7 @@ else
 fi
 
 romm_compose_file=/mnt/external/romM/podman-compose.yaml
+romm_compose_args=""
 romm_env="$HOME/.config/hearthdeck/romm.env"
 romm_expected=false
 if [[ -r "$romm_env" ]]; then
@@ -117,6 +118,16 @@ if [[ -r "$romm_env" ]]; then
       romm_compose_file=${romm_compose_file%$'\r'}
       if [[ "$romm_compose_file" == \"*\" || "$romm_compose_file" == \'*\' ]]; then
         romm_compose_file=${romm_compose_file:1:${#romm_compose_file}-2}
+      fi
+    elif [[ "$line" == ROMM_COMPOSE_ARGS=* ]]; then
+      # Extra `podman-compose` argv (typically `-f <override>`), passed to the
+      # unit's ExecStart as whitespace-split arguments. Reconstructed here the
+      # same way - unquoted, so the shell splits it - so this check inspects the
+      # stack the unit actually runs.
+      romm_compose_args=${line#ROMM_COMPOSE_ARGS=}
+      romm_compose_args=${romm_compose_args%$'\r'}
+      if [[ "$romm_compose_args" == \"*\" || "$romm_compose_args" == \'*\' ]]; then
+        romm_compose_args=${romm_compose_args:1:${#romm_compose_args}-2}
       fi
     fi
   done < "$romm_env"
@@ -136,10 +147,10 @@ if [[ -f "$romm_compose_file" ]]; then
       fail "romm.service is not active"
     fi
 
-    container_ids=$(podman-compose -f "$romm_compose_file" ps --quiet 2>/dev/null)
+    container_ids=$(podman-compose -f "$romm_compose_file" $romm_compose_args ps --quiet 2>/dev/null)
     compose_status=$?
     if (( compose_status != 0 )); then
-      container_ids=$(podman-compose -f "$romm_compose_file" ps -q 2>/dev/null)
+      container_ids=$(podman-compose -f "$romm_compose_file" $romm_compose_args ps -q 2>/dev/null)
       compose_status=$?
     fi
     if (( compose_status != 0 )); then
