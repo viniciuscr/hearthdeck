@@ -275,6 +275,17 @@ impl ScanRunner for ProcessScanRunner {
                     self.settings.work_dir.display()
                 )
             })?;
+        // The checkpoint cache too, so the first scan writes into a directory that
+        // already exists whatever the downloader would have done with the path.
+        // Nothing else creates it, and a scan is the only thing that ever will.
+        tokio::fs::create_dir_all(&self.settings.cache_dir)
+            .await
+            .with_context(|| {
+                format!(
+                    "could not create the checkpoint cache {}",
+                    self.settings.cache_dir.display()
+                )
+            })?;
         let library =
             serde_json::to_vec(&apps).context("could not serialize the library for a scan")?;
         let library_path = self.settings.library_file();
@@ -813,6 +824,12 @@ mod tests {
         }
     }
 
+    /// The fixture's directory is bound in every pattern below rather than
+    /// elided with `..`, because a `..` in a struct pattern drops the fields it
+    /// does not name — at the end of that `let`, not at the end of the test.
+    /// Dropping the guard deletes the database file while the pool is still
+    /// opening connections lazily into it, which fails a test at random with
+    /// "unable to open database file".
     struct Fixture {
         service: CategorizationService,
         settings: CategorizerSettings,
@@ -1006,7 +1023,11 @@ mod tests {
     #[tokio::test]
     async fn a_successful_scan_is_stored_and_announced() {
         let runner = Arc::new(FixedRunner::succeeding());
-        let Fixture { service, .. } = fixture(runner.clone()).await;
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture(runner.clone()).await;
         let mut events = service.inner.events.subscribe();
 
         assert!(service.claim(false).await);
@@ -1033,7 +1054,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_scan_releases_the_slot_and_stores_nothing() {
-        let Fixture { service, .. } = fixture(Arc::new(FixedRunner::failing())).await;
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture(Arc::new(FixedRunner::failing())).await;
 
         assert!(service.claim(false).await);
         service.run_and_record().await;
@@ -1047,7 +1072,11 @@ mod tests {
     #[tokio::test]
     async fn a_second_request_coalesces_into_the_running_one() {
         let release = Arc::new(tokio::sync::Notify::new());
-        let Fixture { service, .. } = fixture(Arc::new(HangingRunner {
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture(Arc::new(HangingRunner {
             release: release.clone(),
         }))
         .await;
@@ -1060,7 +1089,11 @@ mod tests {
     #[tokio::test]
     async fn a_run_with_no_checkpoint_says_it_is_downloading_one() {
         let release = Arc::new(tokio::sync::Notify::new());
-        let Fixture { service, .. } = fixture(Arc::new(HangingRunner {
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture(Arc::new(HangingRunner {
             release: release.clone(),
         }))
         .await;
@@ -1085,7 +1118,9 @@ mod tests {
     async fn the_childs_phase_file_drives_the_scanning_progress() {
         let release = Arc::new(tokio::sync::Notify::new());
         let Fixture {
-            service, settings, ..
+            service,
+            settings,
+            _directory,
         } = fixture(Arc::new(HangingRunner {
             release: release.clone(),
         }))
@@ -1110,7 +1145,9 @@ mod tests {
     async fn a_half_written_phase_file_is_not_an_error() {
         let release = Arc::new(tokio::sync::Notify::new());
         let Fixture {
-            service, settings, ..
+            service,
+            settings,
+            _directory,
         } = fixture(Arc::new(HangingRunner {
             release: release.clone(),
         }))
@@ -1171,7 +1208,11 @@ mod tests {
 
         let sideloaded = path.clone();
         let runner = Arc::new(FixedRunner::succeeding());
-        let Fixture { service, .. } = fixture_with(runner, |settings| {
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture_with(runner, |settings| {
             settings.model_path = Some(sideloaded);
         })
         .await;
@@ -1188,7 +1229,9 @@ mod tests {
     #[tokio::test]
     async fn deleting_a_checkpoint_frees_it_and_is_safe_to_repeat() {
         let Fixture {
-            service, settings, ..
+            service,
+            settings,
+            _directory,
         } = fixture(Arc::new(FixedRunner::succeeding())).await;
         let checkpoint = settings.cache_dir.join("models--convaiinnovations--laya");
         std::fs::create_dir_all(&checkpoint).unwrap();
@@ -1203,7 +1246,11 @@ mod tests {
     #[tokio::test]
     async fn a_running_scan_cannot_have_its_checkpoint_deleted() {
         let release = Arc::new(tokio::sync::Notify::new());
-        let Fixture { service, .. } = fixture(Arc::new(HangingRunner {
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture(Arc::new(HangingRunner {
             release: release.clone(),
         }))
         .await;

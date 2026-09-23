@@ -195,6 +195,11 @@ pub struct ScanReport {
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct CategoryProposal {
+    /// The taxonomy's stable name for this category. Tabs are built from the
+    /// display name, but anything that has to *recognise* a category — the
+    /// dashboard's Watch shelf, say — reads this, so a translated `name` cannot
+    /// break it.
+    pub slug: String,
     pub name: String,
     /// Snakified `Section`. A proposal only becomes a tab in the section it was
     /// placed in; the daemon's baseline taxonomy is all applications, but a

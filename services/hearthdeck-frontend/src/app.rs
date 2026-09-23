@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -164,6 +164,13 @@ const CATEGORIZATION_POLL_INTERVAL: std::time::Duration = std::time::Duration::f
 /// The snakified `Section::Applications`, exactly as the daemon serializes it.
 /// Only a proposal the scan placed in this section becomes a tab here.
 const APPLICATIONS_SECTION: &str = "applications";
+/// The scan's categories that mean "something to watch on".
+///
+/// Streaming clients and local media libraries are one shelf on the dashboard
+/// and two tabs in the library, because they are the same activity to a person
+/// sitting on a couch. Slugs, not names: the daemon owns these strings and the
+/// frontend only recognises them.
+const WATCH_RAIL_CATEGORY_SLUGS: [&str; 2] = ["video_streaming", "media_center"];
 /// Stop watching a scan after this many polls. A scan of a large library on CPU
 /// can run for a long time, so this is a generous backstop against polling a
 /// wedged daemon forever, not a timeout on the scan itself.
@@ -2349,6 +2356,63 @@ impl HearthDeck {
         self.activate_entry(entry)
     }
 
+    /// The Watch shelf.
+    ///
+    /// What belongs on it is a judgement about what an application *is*, and the
+    /// scan already made that judgement — so when smart categorization is on this
+    /// shelf is the scan's answer, and the name matching it used to use is only
+    /// the fallback. A name is a guess: it can miss a service that is a browser
+    /// window with a hand-written desktop entry, and it can pull in a local player
+    /// that happens to share a word with one.
+    fn watch_rail_entries(&self) -> Vec<&Arc<DesktopEntryData>> {
+        let Some(scanned) = self.scanned_watch_ids() else {
+            return self
+                .all_entries
+                .iter()
+                .filter(|entry| is_watch_entry(entry))
+                .take(DASHBOARD_RAIL_TILES)
+                .collect();
+        };
+        self.all_entries
+            .iter()
+            .filter(|entry| scanned.contains(&entry.id))
+            .take(DASHBOARD_RAIL_TILES)
+            .collect()
+    }
+
+    /// The entry ids the last scan filed under the categories that mean watching
+    /// something, or `None` when the scan has no answer to give.
+    ///
+    /// `None` covers off, unread, and "the scan saw no applications at all" — the
+    /// last one because a report that never saw the library would empty a working
+    /// shelf, which is worse than the guess it replaces. A report that did see the
+    /// library and found nothing to watch is an answer, and the shelf goes away.
+    fn scanned_watch_ids(&self) -> Option<HashSet<String>> {
+        let snapshot = self.categorization.as_ref()?;
+        if !snapshot.enabled {
+            return None;
+        }
+        let report = snapshot.report.as_ref()?;
+        if report.app_count == 0 {
+            return None;
+        }
+        Some(
+            report
+                .categories
+                .iter()
+                .filter(|category| {
+                    category.section == APPLICATIONS_SECTION
+                        && WATCH_RAIL_CATEGORY_SLUGS.contains(&category.slug.as_str())
+                })
+                // Any of the categories is enough. Deliberately not gated on
+                // `recommended`, which is the bar for a *tab*: a shelf with two
+                // services on it is a shelf worth having.
+                .flat_map(|category| category.app_ids.iter())
+                .map(|id| format!("{CATALOG_ENTRY_PREFIX}{id}"))
+                .collect(),
+        )
+    }
+
     fn dashboard_shelves(&self) -> Vec<(DashboardShelf, Vec<&Arc<DesktopEntryData>>)> {
         // "Recently Played" is a games shelf: launch activity for plain
         // applications is filtered out here, matching how the catalog already
@@ -2380,15 +2444,11 @@ impl HearthDeck {
                 favorites.push(entry);
             }
         }
-        // Streaming service clients get their own shelf here rather than a
-        // library section, so they are grouped without splitting the catalog.
-        // Only shown when there is something to show, like the console rail.
-        let watch = self
-            .all_entries
-            .iter()
-            .filter(|entry| is_watch_entry(entry))
-            .take(DASHBOARD_RAIL_TILES)
-            .collect::<Vec<_>>();
+        // Streaming service clients and local media libraries get their own shelf
+        // here rather than a library section, so they are grouped without
+        // splitting the catalog. Only shown when there is something to show, like
+        // the console rail.
+        let watch = self.watch_rail_entries();
         // The Library shelf is only a fallback when no curated shelf has
         // content. Otherwise Watch apps would appear once in Watch and again
         // in the all-apps fallback.
@@ -8157,6 +8217,105 @@ mod tests {
         };
         let app = HearthDeck {
             all_entries: vec![entry("writer"), player, game_entry("game")],
+            ..Default::default()
+        };
+
+        assert!(
+            app.dashboard_shelves()
+                .iter()
+                .all(|(shelf, _)| *shelf != DashboardShelf::Watch)
+        );
+    }
+
+    /// The fixture's report, with the streaming category claiming `members`
+    /// instead and a report that covered `app_count` applications.
+    fn scan_of(members: &[&str], app_count: usize) -> CategorizationSnapshot {
+        let mut value = snapshot_json(false, true);
+        let report = value["report"].as_object_mut().expect("report");
+        report.insert("app_count".into(), serde_json::json!(app_count));
+        report["categories"][0]["app_ids"] = serde_json::json!(members);
+        serde_json::from_value(value).expect("scan snapshot")
+    }
+
+    #[test]
+    fn the_watch_shelf_is_the_scans_answer_when_it_has_one() {
+        // Two applications, one word each way: a name the guess would take and
+        // the scan did not place, and an opaque name the scan did place. The
+        // shelf has to follow the scan in both directions, or the guess is still
+        // the thing deciding what the shelf holds.
+        let app = HearthDeck {
+            all_entries: vec![
+                entry("com.stremio.Stremio.desktop"),
+                entry("hearthdeck:desktop:big-screen.desktop"),
+            ],
+            categorization: Some(scan_of(&["desktop:big-screen.desktop"], 12)),
+            ..Default::default()
+        };
+
+        let ids: Vec<&str> = app
+            .watch_rail_entries()
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["hearthdeck:desktop:big-screen.desktop"]);
+
+        // The same answer is what the dashboard draws.
+        let (_, shelf) = app
+            .dashboard_shelves()
+            .into_iter()
+            .find(|(shelf, _)| *shelf == DashboardShelf::Watch)
+            .expect("a watch shelf");
+        assert_eq!(shelf.len(), 1);
+    }
+
+    #[test]
+    fn the_watch_shelf_keeps_its_guess_while_smart_categories_are_off() {
+        let app = HearthDeck {
+            all_entries: vec![
+                entry("com.stremio.Stremio.desktop"),
+                entry("hearthdeck:desktop:big-screen.desktop"),
+            ],
+            categorization: Some(
+                serde_json::from_value(snapshot_json(false, false)).expect("snapshot"),
+            ),
+            ..Default::default()
+        };
+
+        // Off means off: the stored scan is not what decides the shelf.
+        let ids: Vec<&str> = app
+            .watch_rail_entries()
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["com.stremio.Stremio.desktop"]);
+    }
+
+    #[test]
+    fn a_scan_that_saw_no_applications_leaves_the_watch_shelf_alone() {
+        let app = HearthDeck {
+            all_entries: vec![
+                entry("com.stremio.Stremio.desktop"),
+                entry("hearthdeck:desktop:big-screen.desktop"),
+            ],
+            // A report that covered nothing is not an answer, and acting on it
+            // would empty a shelf the name matching still fills.
+            categorization: Some(scan_of(&[], 0)),
+            ..Default::default()
+        };
+
+        let ids: Vec<&str> = app
+            .watch_rail_entries()
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["com.stremio.Stremio.desktop"]);
+    }
+
+    #[test]
+    fn a_scan_that_saw_applications_and_no_watching_ones_drops_the_shelf() {
+        let app = HearthDeck {
+            all_entries: vec![entry("com.stremio.Stremio.desktop")],
+            categorization: Some(scan_of(&[], 12)),
             ..Default::default()
         };
 
