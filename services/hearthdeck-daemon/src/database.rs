@@ -178,6 +178,15 @@ impl Database {
                 .await?;
             transaction.commit().await?;
         }
+        // Columns added after `user_settings` was first defined have to be added
+        // here, below the versioned rebuilds: those rebuild the table from a fixed
+        // column list, so a column added before them is dropped again on any
+        // database that has not yet applied them.
+        let _ = sqlx::query(
+            "ALTER TABLE user_settings ADD COLUMN categorization_enabled INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&self.pool)
+        .await;
         sqlx::query(
             "INSERT OR IGNORE INTO user_settings (id, theme_mode, backdrop_mode, revision, updated_at) VALUES (1, 'noir', 'solid', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         )

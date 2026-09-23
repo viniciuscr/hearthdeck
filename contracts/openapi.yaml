@@ -176,8 +176,11 @@ paths:
       description: >-
         The state of the categorization scan and the most recent report it
         produced, which the client turns into the library's category tabs. A
-        `null` report means the library has never been scanned. Answers `503`
-        when the deployment has categorization switched off.
+        `null` report means the library has never been scanned. `enabled` is the
+        user's opt-in: while it is false nothing is downloaded, nothing is
+        scanned, and a client must leave the ordinary tabs alone. Answers `503`
+        when the deployment does not provide categorization at all — see
+        `capabilities.categorization` on `/v1/health`.
       responses:
         '200':
           description: The scan status and the latest report
@@ -185,19 +188,65 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CategorizationResponse'
+  /v1/categorization/enable:
+    post:
+      operationId: enableCategorization
+      security:
+        - bearerAuth: []
+      description: >-
+        Turns smart categorization on and starts the scan, which is the one
+        action that fetches the checkpoint when none is cached. Answers as soon
+        as the scan is accepted; progress is on `GET /v1/categorization`.
+      responses:
+        '202':
+          description: Enabled, and the scan accepted
+        '503':
+          description: The deployment does not provide categorization
+  /v1/categorization/disable:
+    post:
+      operationId: disableCategorization
+      security:
+        - bearerAuth: []
+      description: >-
+        Turns it off. A scan already running is left to finish, but its report
+        is not applied by a client honouring `enabled`.
+      responses:
+        '204':
+          description: Disabled
   /v1/categorization/scan:
     post:
       operationId: startCategorizationScan
       security:
         - bearerAuth: []
       description: >-
-        Starts a scan. A scan runs for minutes in its own process, so this
-        answers as soon as it is accepted; the result arrives on the event
-        stream (`categorization_changed`) and in the next `GET`. Requesting a
-        scan while one runs coalesces into it rather than failing.
+        Starts a further scan, for a library that is already enabled. A scan runs
+        for minutes in its own process, so this answers as soon as it is
+        accepted; the result arrives on the event stream
+        (`categorization_changed`) and in the next `GET`. Requesting a scan while
+        one runs coalesces into it rather than failing.
       responses:
         '202':
           description: Scan accepted
+        '409':
+          description: Categorization is not enabled
+  /v1/categorization/model:
+    delete:
+      operationId: deleteCategorizationModel
+      security:
+        - bearerAuth: []
+      description: >-
+        Removes the downloaded checkpoint, freeing what it costs on disk — most
+        of a gigabyte. The most recent report is kept: it still describes the
+        library, and the tabs it built are still the user's. Never deletes a
+        checkpoint the deployment pointed at with
+        `HEARTHDECK_CATEGORIZER_MODEL_PATH`.
+      responses:
+        '204':
+          description: Checkpoint removed
+        '409':
+          description: >-
+            The checkpoint is an external directory, or a scan is running and
+            reading it
   /v1/retro/consoles:
     get:
       operationId: listRetroConsoles
@@ -593,12 +642,18 @@ components:
           $ref: '#/components/schemas/HostCapabilities'
     HostCapabilities:
       type: object
-      required: [launch, application_sessions, install_requests, retro_launch]
+      required: [launch, application_sessions, install_requests, retro_launch, categorization]
       properties:
         launch: { type: boolean }
         application_sessions: { type: boolean }
         install_requests: { type: boolean }
         retro_launch: { type: boolean }
+        categorization:
+          type: boolean
+          description: >-
+            Whether this deployment provides categorization. False means the
+            feature does not exist for this client; true still requires the
+            user's opt-in before anything is downloaded or scanned.
     Diagnostics:
       type: object
       required: [generated_at, services, romm, logs]
@@ -678,10 +733,16 @@ components:
         token: { type: string }
     UserSettings:
       type: object
-      required: [theme_mode, backdrop_mode, revision, updated_at]
+      required: [theme_mode, backdrop_mode, categorization_enabled, revision, updated_at]
       properties:
         theme_mode: { type: string, enum: [system, aurora, ember, indigo, noir] }
         backdrop_mode: { type: string, enum: [solid, edge_wash, quiet_grid] }
+        categorization_enabled:
+          type: boolean
+          description: >-
+            The user's opt-in for smart categorization, defaulting to false.
+            Set it through the categorization endpoints rather than the settings
+            update, which the theme and backdrop clients share.
         revision: { type: integer, minimum: 0 }
         updated_at: { type: string, format: date-time }
     UserSettingsUpdate:
@@ -933,8 +994,13 @@ components:
         token: { type: string, minLength: 1, maxLength: 2048 }
     CategorizationResponse:
       type: object
-      required: [status, report]
+      required: [enabled, status, report]
       properties:
+        enabled:
+          type: boolean
+          description: >-
+            The user's opt-in. Everything heavy waits on it, and a client only
+            applies a report's tabs while it is true.
         status: { $ref: '#/components/schemas/CategorizationStatus' }
         report:
           oneOf:
@@ -942,11 +1008,47 @@ components:
             - type: 'null'
     CategorizationStatus:
       type: object
-      required: [running]
+      required: [running, phase, completed, total, model]
       properties:
         running: { type: boolean }
+        phase: { $ref: '#/components/schemas/CategorizationPhase' }
+        completed:
+          type: integer
+          minimum: 0
+          description: Applications decided so far, while `phase` is `scanning`.
+        total:
+          type: integer
+          minimum: 0
+          description: Applications to decide, while `phase` is `scanning`.
+        model: { $ref: '#/components/schemas/ModelStatus' }
         last_error: { type: [string, 'null'] }
         last_completed_at: { type: [string, 'null'], format: date-time }
+    CategorizationPhase:
+      type: string
+      enum: [idle, downloading, loading, scanning]
+      description: >-
+        `downloading` is the daemon's reading of the load phase when no
+        checkpoint was on disk: fetching one happens inside the engine load.
+    ModelStatus:
+      oneOf:
+        - type: object
+          required: [state]
+          properties:
+            state: { type: string, enum: [absent] }
+        - type: object
+          required: [state, bytes, path]
+          properties:
+            state: { type: string, enum: [downloaded] }
+            bytes: { type: integer, minimum: 0 }
+            path: { type: string }
+        - type: object
+          required: [state, path]
+          properties:
+            state: { type: string, enum: [external] }
+            path: { type: string }
+      description: >-
+        `external` is a checkpoint the deployment pointed at directly, which is
+        how an offline install sideloads one. Hearthdeck never deletes it.
     ScanReport:
       type: object
       required: [generated_at, categorizer, app_count, assignments, failures, categories, unclassified]

@@ -27,7 +27,7 @@ use tower_http::{
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     trace::TraceLayer,
 };
-use tracing::{info, info_span};
+use tracing::{info, info_span, warn};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -104,10 +104,20 @@ async fn main() -> Result<()> {
         None => state,
     };
     let state = Arc::new(state);
-    if let Some(categorization) = &state.categorization {
-        // Produces the first version of the report, once: a boot that already has
-        // one reads it instead of paying for the model again.
-        categorization.scan_if_missing().await;
+    // Nothing runs at boot, on purpose: the first scan is the user turning smart
+    // categorization on, and until they do, the ordinary category tabs stand and
+    // no checkpoint is fetched. All this does is say which state the machine is
+    // in, because "why did nothing happen" is otherwise a journal question.
+    if state.categorization.is_some() {
+        match state.settings.get().await {
+            Ok(settings) => info!(
+                enabled = settings.categorization_enabled,
+                "categorization is provided by this deployment"
+            ),
+            Err(error) => warn!(%error, "could not read the categorization preference"),
+        }
+    } else {
+        info!("categorization is not provided by this deployment");
     }
     let router = api::router(state.clone())
         .layer(DefaultBodyLimit::max(32 * 1024))

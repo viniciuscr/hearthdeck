@@ -9,25 +9,34 @@
 //! Arguments are parsed by hand rather than with a parser crate: the contract is
 //! a fixed, flat list of flags and the daemon spawns one exact command line, so
 //! a dependency would buy nothing.
+//!
+//! A second, optional channel exists for the parent process: `--phase-file`
+//! names a JSON file this process overwrites as it works, because the daemon can
+//! poll a file but cannot see inside its child. It is a data channel exactly like
+//! `--output`, not a log, and it is best effort — a scan succeeds with or without
+//! it.
 
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use hearthdeck_categorizer::{
     AppProfile, Categorizer, HeuristicCategorizer, LibraryScanner, NoopResearcher, ScanOptions,
-    ScanReport,
+    ScanPhase, ScanProgress, ScanReport,
 };
 #[cfg(feature = "laya")]
 use hearthdeck_categorizer::{LayaCategorizer, LayaConfig, LayaModel};
-use tracing::info;
+use serde::Serialize;
+use tracing::{debug, info, warn};
 
 /// Printed to stderr whenever the command line does not match the contract.
 const USAGE: &str = "usage: hearthdeck-categorizer scan --library <PATH> --output <PATH> \
                      [--engine heuristic|laya] [--model english|multilingual] \
-                     [--model-path <DIR>] [--dtype <DTYPE>] [--research]";
+                     [--model-path <DIR>] [--dtype <DTYPE>] [--research] \
+                     [--phase-file <PATH>]";
 
 /// Checkpoint precision used when `--dtype` is not given.
 const DEFAULT_DTYPE: &str = "float16";
@@ -96,6 +105,9 @@ struct Request {
     model_path: Option<PathBuf>,
     dtype: String,
     research: bool,
+    /// Where to publish scan progress for the parent process. Absent when a
+    /// human runs the CLI by hand, in which case nothing is written.
+    phase_file: Option<PathBuf>,
 }
 
 impl Request {
@@ -124,6 +136,7 @@ impl Request {
         let mut model_path = None;
         let mut dtype = DEFAULT_DTYPE.to_owned();
         let mut research = false;
+        let mut phase_file = None;
 
         while index < args.len() {
             let flag = args[index].to_str().ok_or_else(|| {
@@ -143,6 +156,9 @@ impl Request {
                 }
                 "--dtype" => dtype = value_text(&args, &mut index, flag)?,
                 "--research" => research = true,
+                "--phase-file" => {
+                    phase_file = Some(PathBuf::from(value(&args, &mut index, flag)?));
+                }
                 other => return Err(format!("unknown argument `{other}`")),
             }
         }
@@ -155,6 +171,7 @@ impl Request {
             model_path,
             dtype,
             research,
+            phase_file,
         })
     }
 }
@@ -206,8 +223,19 @@ async fn run(request: Request) -> Result<(), String> {
         dtype = %request.dtype,
         model_path = ?request.model_path,
         research = request.research,
+        phase_file = ?request.phase_file,
         "categorizer scan requested"
     );
+
+    // The phase file is the daemon's only window into this process, so it is
+    // announced before the library is read and long before the engine is built.
+    let phase = request
+        .phase_file
+        .clone()
+        .map(|path| Arc::new(PhaseWriter::new(path)));
+    if let Some(phase) = &phase {
+        phase.loading();
+    }
 
     let apps = load_library(&request.library)?;
     let categorizer = build_categorizer(&request)?;
@@ -219,6 +247,15 @@ async fn run(request: Request) -> Result<(), String> {
     let mut scanner = LibraryScanner::new(categorizer).with_options(options);
     if request.research {
         scanner = scanner.with_researcher(Arc::new(NoopResearcher));
+    }
+    if let Some(phase) = phase {
+        scanner = scanner.with_progress(Arc::new(move |progress: ScanProgress| {
+            // `Researching` and `Aggregating` are not progress the daemon has a
+            // place for; only per-application decisions are reported.
+            if progress.phase == ScanPhase::Deciding {
+                phase.scanning(progress.completed, progress.total);
+            }
+        }));
     }
 
     let report = scanner
@@ -234,6 +271,97 @@ async fn run(request: Request) -> Result<(), String> {
         "categorizer scan written"
     );
     Ok(())
+}
+
+/// One entry of the phase file. Serialized field order is the order the daemon
+/// reads, and `completed`/`total` are omitted entirely unless there is progress
+/// to report — the file's shape is a contract, so no extra keys appear.
+#[derive(Serialize)]
+struct PhaseUpdate<'a> {
+    phase: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total: Option<usize>,
+}
+
+/// Publishes scan progress for the parent process as a JSON file.
+///
+/// Every write here is best effort by design: the daemon's progress line is not
+/// worth a failed categorization run, so a missing directory, a read-only mount
+/// or a permission problem is logged and then ignored.
+struct PhaseWriter {
+    path: PathBuf,
+    /// Whether a failure has already been logged. A scan writes this file once
+    /// per application, so only the first problem is worth a warning.
+    reported: AtomicBool,
+}
+
+impl PhaseWriter {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            reported: AtomicBool::new(false),
+        }
+    }
+
+    /// The engine is being built. From the daemon's point of view this whole
+    /// stretch is "getting the model ready": a Laya checkpoint is downloaded
+    /// here when it is not cached, and the daemon tells a download from a load
+    /// itself by watching the model directory.
+    fn loading(&self) {
+        self.write(&PhaseUpdate {
+            phase: "loading",
+            completed: None,
+            total: None,
+        });
+    }
+
+    /// `completed` applications out of `total` have been decided.
+    fn scanning(&self, completed: usize, total: usize) {
+        self.write(&PhaseUpdate {
+            phase: "scanning",
+            completed: Some(completed),
+            total: Some(total),
+        });
+    }
+
+    fn write(&self, update: &PhaseUpdate<'_>) {
+        let json = match serde_json::to_string(update) {
+            Ok(json) => json,
+            Err(error) => return self.report(&error),
+        };
+
+        // Written beside the target and renamed over it: the daemon polls every
+        // few seconds, and a rename inside one directory is atomic, so it can
+        // never read half an object.
+        let temporary = self.temporary_path();
+        if let Err(error) =
+            fs::write(&temporary, json).and_then(|()| fs::rename(&temporary, &self.path))
+        {
+            self.report(&error);
+        }
+    }
+
+    fn temporary_path(&self) -> PathBuf {
+        let mut temporary = self.path.clone().into_os_string();
+        temporary.push(".tmp");
+        PathBuf::from(temporary)
+    }
+
+    /// Note a phase-file problem and carry on. This method is the only place
+    /// that decides such a problem is survivable, so the scan never sees it.
+    fn report(&self, error: &dyn std::fmt::Display) {
+        if self.reported.swap(true, Ordering::Relaxed) {
+            debug!(path = %self.path.display(), %error, "phase file still not writable");
+        } else {
+            warn!(
+                path = %self.path.display(),
+                %error,
+                "phase file not writable; scan continues without progress"
+            );
+        }
+    }
 }
 
 fn build_categorizer(request: &Request) -> Result<Arc<dyn Categorizer>, String> {

@@ -74,6 +74,9 @@ impl BackdropMode {
 pub struct UserSettings {
     pub theme_mode: ThemeMode,
     pub backdrop_mode: BackdropMode,
+    /// The user's opt-in for smart categorization. Off until they say so, and
+    /// nothing is downloaded, scanned or replaced while it is off.
+    pub categorization_enabled: bool,
     pub revision: i64,
     pub updated_at: String,
 }
@@ -110,11 +113,28 @@ impl SettingsRepository {
 
     pub async fn get(&self) -> Result<UserSettings> {
         let row = sqlx::query(
-            "SELECT theme_mode, backdrop_mode, revision, updated_at FROM user_settings WHERE id = 1",
+            "SELECT theme_mode, backdrop_mode, categorization_enabled, revision, updated_at FROM user_settings WHERE id = 1",
         )
         .fetch_one(&self.pool)
         .await?;
         settings_from_row(&row)
+    }
+
+    /// Records the user's answer on smart categorization.
+    ///
+    /// A direct write, unlike [`SettingsRepository::update`], because there is no
+    /// two-way editing here to reconcile: the flag is the daemon's gate on a
+    /// capability, and a half-applied toggle would be worse than a lost one.
+    pub async fn set_categorization_enabled(&self, enabled: bool) -> Result<UserSettings> {
+        let updated_at = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE user_settings SET categorization_enabled = ?, revision = revision + 1, updated_at = ? WHERE id = 1",
+        )
+        .bind(enabled)
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await?;
+        self.get().await
     }
 
     pub async fn update(
@@ -124,7 +144,7 @@ impl SettingsRepository {
     ) -> Result<SettingsUpdate> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
-            "SELECT theme_mode, backdrop_mode, revision, updated_at FROM user_settings WHERE id = 1",
+            "SELECT theme_mode, backdrop_mode, categorization_enabled, revision, updated_at FROM user_settings WHERE id = 1",
         )
         .fetch_one(&mut *transaction)
         .await?;
@@ -152,7 +172,7 @@ impl SettingsRepository {
         .execute(&mut *transaction)
         .await?;
         let row = sqlx::query(
-            "SELECT theme_mode, backdrop_mode, revision, updated_at FROM user_settings WHERE id = 1",
+            "SELECT theme_mode, backdrop_mode, categorization_enabled, revision, updated_at FROM user_settings WHERE id = 1",
         )
         .fetch_one(&mut *transaction)
         .await?;
@@ -242,6 +262,7 @@ fn settings_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<UserSettings> {
             .ok_or_else(|| anyhow!("invalid stored theme mode: {theme_mode}"))?,
         backdrop_mode: BackdropMode::parse(&backdrop_mode)
             .ok_or_else(|| anyhow!("invalid stored backdrop mode: {backdrop_mode}"))?,
+        categorization_enabled: row.get("categorization_enabled"),
         revision: row.get("revision"),
         updated_at: row.get("updated_at"),
     })

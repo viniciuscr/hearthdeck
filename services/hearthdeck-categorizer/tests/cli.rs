@@ -169,3 +169,134 @@ fn research_installs_the_noop_researcher() {
     assert_eq!(report.researcher.as_deref(), Some("none"));
     assert_eq!(report.assignments.len(), 4);
 }
+
+/// The scan runs to completion before the process exits, so the last write to
+/// the phase file must be the final application's progress rather than an
+/// intermediate state — which is what lets the daemon trust this file at exit.
+#[test]
+fn a_phase_file_ends_on_the_final_scanning_progress() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let library = write(dir.path(), "library.json", LIBRARY);
+    let output = dir.path().join("report.json");
+    let phase = dir.path().join("phase.json");
+
+    let result = run(&[
+        "scan",
+        "--library",
+        library.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+        "--engine",
+        "heuristic",
+        "--phase-file",
+        phase.to_str().unwrap(),
+    ]);
+
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&text(&phase)).expect("phase file is valid JSON");
+
+    // The keys are a contract with the daemon: exactly these three, nothing else.
+    // Order is *not* part of it — `serde_json` serializes maps in insertion order
+    // only when `preserve_order` happens to be unified on, so compare as a set.
+    let object = json.as_object().expect("phase file is a JSON object");
+    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["completed", "phase", "total"]);
+
+    assert_eq!(object["phase"], "scanning");
+    assert!(
+        object["completed"].is_u64(),
+        "completed is a number: {json}"
+    );
+    assert!(object["total"].is_u64(), "total is a number: {json}");
+    assert_eq!(object["completed"], 4);
+    assert_eq!(object["total"], 4);
+
+    // The report is still the primary output, and the write-then-rename leaves
+    // no temporary behind for the daemon to trip over.
+    let report: ScanReport = serde_json::from_str(&text(&output)).expect("report is valid JSON");
+    assert_eq!(report.app_count, 4);
+    assert!(!dir.path().join("phase.json.tmp").exists());
+}
+
+/// Without the flag the CLI is the same tool a human runs by hand, so it must
+/// not invent a phone-home file anywhere.
+#[test]
+fn a_scan_without_a_phase_file_writes_no_extra_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let library = write(dir.path(), "library.json", LIBRARY);
+    let output = dir.path().join("report.json");
+
+    let result = run(&[
+        "scan",
+        "--library",
+        library.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+        "--engine",
+        "heuristic",
+    ]);
+
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let mut entries: Vec<String> = std::fs::read_dir(dir.path())
+        .expect("read tempdir")
+        .map(|entry| {
+            entry
+                .expect("dir entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    entries.sort();
+
+    assert_eq!(entries, ["library.json", "report.json"]);
+
+    let report: ScanReport = serde_json::from_str(&text(&output)).expect("report is valid JSON");
+    assert_eq!(report.app_count, 4);
+}
+
+/// Progress is a convenience for the daemon, never a precondition for the scan:
+/// a phase path the process cannot write must not cost the user their library.
+#[test]
+fn an_unwritable_phase_file_does_not_fail_the_scan() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let library = write(dir.path(), "library.json", LIBRARY);
+    let output = dir.path().join("report.json");
+    // The parent directory does not exist, so no write to this path can succeed.
+    let phase = dir.path().join("absent").join("phase.json");
+
+    let result = run(&[
+        "scan",
+        "--library",
+        library.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+        "--engine",
+        "heuristic",
+        "--phase-file",
+        phase.to_str().unwrap(),
+    ]);
+
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!phase.exists());
+
+    let report: ScanReport = serde_json::from_str(&text(&output)).expect("report is valid JSON");
+    assert_eq!(report.app_count, 4);
+    assert_eq!(report.assignments.len(), 4);
+}

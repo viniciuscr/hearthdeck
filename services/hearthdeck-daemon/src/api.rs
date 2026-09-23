@@ -6,7 +6,7 @@ use axum::{
     },
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
 use hearthdeck_categorizer::ScanReport;
@@ -59,7 +59,13 @@ pub fn router(state: SharedState) -> Router {
         )
         .route("/v1/library/rescan", post(rescan_library))
         .route("/v1/categorization", get(categorization))
+        .route("/v1/categorization/enable", post(enable_categorization))
+        .route("/v1/categorization/disable", post(disable_categorization))
         .route("/v1/categorization/scan", post(start_categorization))
+        .route(
+            "/v1/categorization/model",
+            delete(delete_categorization_model),
+        )
         .route("/v1/settings", get(get_settings).put(update_settings))
         .route("/v1/discovery/{source_id}/refresh", post(refresh_source))
         .route("/v1/metadata/{provider_id}/refresh", post(refresh_metadata))
@@ -80,6 +86,11 @@ pub fn local_router(state: SharedState) -> Router {
 }
 
 async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
+    // The platform probe answers for the capabilities a host either has or does
+    // not; categorization depends on how this deployment was configured, so it is
+    // filled in here rather than guessed at from the OS.
+    let mut capabilities = host_capabilities();
+    capabilities.categorization = state.categorization.is_some();
     Json(HealthResponse {
         version: env!("CARGO_PKG_VERSION"),
         lan_enabled: state.config.lan_enabled,
@@ -89,7 +100,7 @@ async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
             "http"
         },
         providers: state.provider_health().await,
-        capabilities: host_capabilities(),
+        capabilities,
     })
 }
 
@@ -100,6 +111,8 @@ fn host_capabilities() -> HostCapabilities {
         application_sessions: true,
         install_requests: false,
         retro_launch: true,
+        // Per-deployment, filled in by `health`.
+        categorization: false,
     }
 }
 
@@ -110,6 +123,7 @@ fn host_capabilities() -> HostCapabilities {
         application_sessions: false,
         install_requests: false,
         retro_launch: false,
+        categorization: false,
     }
 }
 
@@ -452,10 +466,13 @@ async fn rescan_library(
     Ok(StatusCode::ACCEPTED)
 }
 
-/// The scan button's two questions: is a scan running (and did the last one
-/// work), and what did the last one conclude.
+/// The scan button's questions: does the user want this, what is the job doing,
+/// and what did the last completed one conclude.
 #[derive(Serialize)]
 struct CategorizationResponse {
+    /// The user's opt-in, which is what a settings toggle reflects. Everything
+    /// heavy — the download, the scan, replacing the tabs — waits on it.
+    enabled: bool,
     status: CategorizationStatus,
     report: Option<ScanReport>,
 }
@@ -469,9 +486,67 @@ async fn categorization(
         .categorization
         .as_ref()
         .ok_or_else(ApiError::service_unavailable)?;
+    let enabled = state
+        .settings
+        .get()
+        .await
+        .map_err(ApiError::internal)?
+        .categorization_enabled;
     let status = service.status().await;
     let report = service.latest_report().await.map_err(ApiError::internal)?;
-    Ok(Json(CategorizationResponse { status, report }))
+    Ok(Json(CategorizationResponse {
+        enabled,
+        status,
+        report,
+    }))
+}
+
+/// Turns smart categorization on, which is the one action that fetches the
+/// checkpoint and produces the first report.
+///
+async fn enable_categorization(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    let service = state
+        .categorization
+        .as_ref()
+        .ok_or_else(ApiError::service_unavailable)?;
+    state
+        .settings
+        .set_categorization_enabled(true)
+        .await
+        .map_err(ApiError::internal)?;
+    match service.request_scan().await {
+        ScanRequest::Started => {
+            info!("categorization enabled; first scan started");
+            Ok(StatusCode::ACCEPTED)
+        }
+        ScanRequest::AlreadyRunning => {
+            info!("categorization enabled; a scan is already running");
+            Ok(StatusCode::ACCEPTED)
+        }
+    }
+}
+
+/// Turns it off. Any scan already running is left to finish — it is a child
+/// process doing one job, and killing it mid-write helps nobody — but its report
+/// is not applied, because applying is the client's decision and the client only
+/// applies while this is on.
+///
+async fn disable_categorization(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    state
+        .settings
+        .set_categorization_enabled(false)
+        .await
+        .map_err(ApiError::internal)?;
+    info!("categorization disabled");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Starts a scan. A scan takes minutes, so this answers `202` as soon as it is
@@ -486,6 +561,15 @@ async fn start_categorization(
         .categorization
         .as_ref()
         .ok_or_else(ApiError::service_unavailable)?;
+    if !state
+        .settings
+        .get()
+        .await
+        .map_err(ApiError::internal)?
+        .categorization_enabled
+    {
+        return Err(ApiError::conflict("categorization is not enabled"));
+    }
     match service.request_scan().await {
         ScanRequest::Started => {
             info!("categorization scan started");
@@ -496,6 +580,24 @@ async fn start_categorization(
             Ok(StatusCode::ACCEPTED)
         }
     }
+}
+
+/// Frees what the checkpoint costs on disk. The report it produced is kept: it
+/// still describes the library, and the tabs it built are still the user's.
+async fn delete_categorization_model(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    let service = state
+        .categorization
+        .as_ref()
+        .ok_or_else(ApiError::service_unavailable)?;
+    service
+        .delete_model()
+        .await
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_settings(
@@ -850,6 +952,10 @@ struct HostCapabilities {
     application_sessions: bool,
     install_requests: bool,
     retro_launch: bool,
+    /// Whether this deployment can categorize at all. Distinct from the user's
+    /// opt-in: with this false the feature does not exist for the client, and with
+    /// it true the client still has to ask.
+    categorization: bool,
 }
 
 #[derive(Serialize)]
@@ -1382,6 +1488,15 @@ impl ApiError {
         Self {
             status: StatusCode::NOT_IMPLEMENTED,
             message: format!("{capability} are unavailable on this host"),
+            settings: None,
+        }
+    }
+
+    /// Well formed, but the daemon's state says no, and the message says which.
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
             settings: None,
         }
     }
