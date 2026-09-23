@@ -21,8 +21,10 @@ pub struct AppState {
     pub settings: SettingsRepository,
     pub discovery: Option<DiscoveryService>,
     pub enrichment: Option<EnrichmentService>,
-    /// Absent unless `HEARTHDECK_CATEGORIZER_ENABLED` asked for it, the same way
-    /// a platform without a launcher has no discovery service.
+    /// Always present on Linux. It stays an `Option` for the same reason
+    /// discovery does — a build or platform without it is not an error — but
+    /// nothing has to be configured to have it, and no checkpoint is loaded
+    /// until a user asks for a scan.
     pub categorization: Option<CategorizationService>,
     pub events: broadcast::Sender<ServerEvent>,
 }

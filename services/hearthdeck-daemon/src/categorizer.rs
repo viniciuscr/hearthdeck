@@ -105,19 +105,30 @@ pub struct CategorizerSettings {
 }
 
 impl CategorizerSettings {
-    /// Read the daemon's environment, or `None` when categorization is off.
+    /// Read the daemon's environment.
     ///
-    /// Off is the default on purpose: enabling it is what opts a machine into
-    /// downloading a checkpoint on its first scan.
-    pub fn load(database_path: &Path) -> Option<Self> {
-        Self::from_lookup(database_path, &|name| std::env::var(name).ok())
+    /// Always answers: whether a scan ever runs is the user's preference, held
+    /// in their settings, not something a deployment has to be configured for.
+    /// The environment variables below are overrides for the unusual machine
+    /// (a sideloaded checkpoint, a second model), never a switch to turn the
+    /// feature on — there is exactly one switch, and it is in the UI.
+    ///
+    /// Nothing here loads a checkpoint or touches the network; the first scan
+    /// is what downloads one, and only a user can ask for that.
+    pub fn load(database_path: &Path) -> Self {
+        Self::from_lookup(
+            database_path,
+            &|name| std::env::var(name).ok(),
+            default_binary(),
+        )
     }
 
     /// The same read, with the environment injected, so it can be tested.
-    fn from_lookup(database_path: &Path, get: &dyn Fn(&str) -> Option<String>) -> Option<Self> {
-        if !flag(get("HEARTHDECK_CATEGORIZER_ENABLED")) {
-            return None;
-        }
+    fn from_lookup(
+        database_path: &Path,
+        get: &dyn Fn(&str) -> Option<String>,
+        fallback_binary: PathBuf,
+    ) -> Self {
         // The scratch files sit beside the database rather than in a directory
         // of their own: they are derived from the library the database holds,
         // and a deployment that moves one wants the other to follow.
@@ -125,11 +136,11 @@ impl CategorizerSettings {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
-        Some(Self {
+        Self {
             binary: get("HEARTHDECK_CATEGORIZER_BIN")
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("hearthdeck-categorizer")),
+                .unwrap_or(fallback_binary),
             work_dir: get("HEARTHDECK_CATEGORIZATION_DIR")
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
@@ -153,7 +164,7 @@ impl CategorizerSettings {
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "float16".to_owned()),
             research: flag(get("HEARTHDECK_CATEGORIZER_RESEARCH")),
-        })
+        }
     }
 
     /// Where the child writes what it is doing. One file, because the daemon and
@@ -174,6 +185,35 @@ impl CategorizerSettings {
 
 fn flag(value: Option<String>) -> bool {
     value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+/// The name of the program that does the scan.
+const CATEGORIZER_BINARY: &str = "hearthdeck-categorizer";
+
+/// The categorizer that ships beside the daemon, or the bare name to look for on
+/// `PATH` when there is none.
+///
+/// Both binaries land in the same directory however Hearthdeck was installed —
+/// `~/.local/bin` from the install task, `target/debug` in a development build —
+/// so the daemon finds its own worker without anybody setting an environment
+/// variable for it.
+fn sibling_of(daemon: &Path) -> PathBuf {
+    let Some(directory) = daemon.parent() else {
+        return PathBuf::from(CATEGORIZER_BINARY);
+    };
+    let candidate = directory.join(CATEGORIZER_BINARY);
+    if candidate.is_file() {
+        candidate
+    } else {
+        PathBuf::from(CATEGORIZER_BINARY)
+    }
+}
+
+fn default_binary() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .map(|daemon| sibling_of(&daemon))
+        .unwrap_or_else(|| PathBuf::from(CATEGORIZER_BINARY))
 }
 
 /// Runs one scan over a library.
@@ -700,7 +740,7 @@ mod tests {
     use super::{
         CategorizationPhase, CategorizationService, CategorizerSettings, ModelStatus,
         ProcessScanRunner, ScanEngine, ScanModel, ScanRequest, ScanRunner, model_status,
-        profile_from_item,
+        profile_from_item, sibling_of,
     };
     use crate::{
         catalog::{CatalogItem, CatalogStore},
@@ -829,12 +869,17 @@ mod tests {
     }
 
     #[test]
-    fn categorization_is_off_unless_it_is_asked_for() {
+    fn settings_are_always_produced_and_the_environment_only_overrides_them() {
+        // Nothing in the environment: the defaults stand. Enabling is the user's
+        // setting in the UI, so a deployment that configures nothing still has a
+        // working categorizer.
         let dir = std::path::Path::new("/data");
-        assert!(CategorizerSettings::from_lookup(dir, &|_| None).is_none());
-        assert!(
-            CategorizerSettings::from_lookup(dir, &|name| Some(format!("false-for-{name}")))
-                .is_none()
+        let settings = CategorizerSettings::from_lookup(dir, &|_| None, bare_binary());
+        assert_eq!(settings.engine, ScanEngine::Laya);
+        assert_eq!(settings.model, ScanModel::English);
+        assert_eq!(
+            settings.binary,
+            std::path::PathBuf::from("hearthdeck-categorizer")
         );
     }
 
@@ -843,12 +888,14 @@ mod tests {
         // The scratch directory is derived from the database location, so this
         // doubles as a check that a moved database moves its scans with it.
         let database = std::path::Path::new("/data/hearthdeck.db");
-        let settings = CategorizerSettings::from_lookup(database, &|name| match name {
-            "HEARTHDECK_CATEGORIZER_ENABLED" => Some("true".to_owned()),
-            "HEARTHDECK_CATEGORIZER_MODEL" => Some("multilingual".to_owned()),
-            _ => None,
-        })
-        .expect("enabled settings");
+        let settings = CategorizerSettings::from_lookup(
+            database,
+            &|name| match name {
+                "HEARTHDECK_CATEGORIZER_MODEL" => Some("multilingual".to_owned()),
+                _ => None,
+            },
+            bare_binary(),
+        );
 
         assert_eq!(settings.engine, ScanEngine::Laya);
         assert_eq!(settings.model, ScanModel::Multilingual);
@@ -863,6 +910,28 @@ mod tests {
             settings.binary,
             std::path::PathBuf::from("hearthdeck-categorizer")
         );
+    }
+
+    #[test]
+    fn the_categorizer_is_looked_for_beside_the_daemon_before_the_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let daemon = directory.path().join("hearthdeck-daemon");
+
+        // Neither binary is installed: the bare name, left to `PATH`.
+        assert_eq!(
+            sibling_of(&daemon),
+            std::path::PathBuf::from("hearthdeck-categorizer")
+        );
+
+        // Installed side by side, which is how both the package and `just
+        // install-services` lay them out: found without a variable to say so.
+        let worker = directory.path().join("hearthdeck-categorizer");
+        std::fs::write(&worker, b"").unwrap();
+        assert_eq!(sibling_of(&daemon), worker);
+    }
+
+    fn bare_binary() -> std::path::PathBuf {
+        std::path::PathBuf::from("hearthdeck-categorizer")
     }
 
     #[test]

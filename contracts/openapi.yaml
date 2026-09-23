@@ -177,10 +177,11 @@ paths:
         The state of the categorization scan and the most recent report it
         produced, which the client turns into the library's category tabs. A
         `null` report means the library has never been scanned. `enabled` is the
-        user's opt-in: while it is false nothing is downloaded, nothing is
-        scanned, and a client must leave the ordinary tabs alone. Answers `503`
-        when the deployment does not provide categorization at all — see
-        `capabilities.categorization` on `/v1/health`.
+        user's opt-in, the only switch there is: while it is false nothing is
+        downloaded, nothing is scanned, and a client must leave the ordinary tabs
+        alone. `POST /v1/categorization/enable` is the whole of the setup — it
+        fetches the checkpoint and scans, with no deployment configuration
+        involved.
       responses:
         '200':
           description: The scan status and the latest report
@@ -195,13 +196,13 @@ paths:
         - bearerAuth: []
       description: >-
         Turns smart categorization on and starts the scan, which is the one
-        action that fetches the checkpoint when none is cached. Answers as soon
-        as the scan is accepted; progress is on `GET /v1/categorization`.
+        action that fetches the checkpoint when none is cached. This is the only
+        setup there is: the client offers it as a switch, and pressing it is all
+        a user has to do. Answers as soon as the scan is accepted; progress is on
+        `GET /v1/categorization`.
       responses:
         '202':
           description: Enabled, and the scan accepted
-        '503':
-          description: The deployment does not provide categorization
   /v1/categorization/disable:
     post:
       operationId: disableCategorization
@@ -651,9 +652,10 @@ components:
         categorization:
           type: boolean
           description: >-
-            Whether this deployment provides categorization. False means the
-            feature does not exist for this client; true still requires the
-            user's opt-in before anything is downloaded or scanned.
+            Whether this daemon can run a scan at all. True on every Linux
+            deployment — it is a statement about the build, not a switch — and
+            true still means nothing is downloaded or scanned until the user's
+            own opt-in says so.
     Diagnostics:
       type: object
       required: [generated_at, services, romm, logs]

@@ -53,8 +53,8 @@ categorization-complete = Library categorized: { $categories } categories, { $un
 categorization-still-running = The categorization scan is still running in the background
 settings-title = Settings
 categorization-intro = A local model can sort your apps into categories. The first scan downloads a checkpoint ({ $size }) and later scans reuse it. Nothing runs until you turn this on, and the folders you made yourself are never touched.
-categorization-unsupported = This installation does not provide smart categorization.
-categorization-unsupported-hint = It needs HEARTHDECK_CATEGORIZER_ENABLED=true on the daemon, and the hearthdeck-categorizer program installed beside it.
+categorization-unsupported = This installation cannot run smart categorization.
+categorization-unsupported-hint = It needs the hearthdeck-categorizer program installed beside the daemon.
 categorization-reading-status = Checking…
 categorization-off = Off. Your categories are the ones Hearthdeck works out from each app.
 categorization-phase-downloading = Downloading the model…

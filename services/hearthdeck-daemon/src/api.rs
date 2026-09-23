@@ -87,8 +87,10 @@ pub fn local_router(state: SharedState) -> Router {
 
 async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
     // The platform probe answers for the capabilities a host either has or does
-    // not; categorization depends on how this deployment was configured, so it is
-    // filled in here rather than guessed at from the OS.
+    // not; whether a scan can run is the daemon's own state, so it is filled in
+    // here rather than guessed at from the OS. It is a statement about the
+    // daemon, not a switch: turning smart categories on is the user's job, in
+    // their settings, and needs nothing of the deployment.
     let mut capabilities = host_capabilities();
     capabilities.categorization = state.categorization.is_some();
     Json(HealthResponse {

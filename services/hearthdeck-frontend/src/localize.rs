@@ -26,8 +26,14 @@ macro_rules! fl {
         i18n_embed_fl::fl!($crate::localize::LANGUAGE_LOADER, $message_id)
     }};
 
-    ($message_id:literal, $($args:expr),*) => {{
-        i18n_embed_fl::fl!($crate::localize::LANGUAGE_LOADER, $message_id, $($args), *)
+    // Tokens are captured and forwarded verbatim (`tt`), not re-parsed as
+    // expressions. The macro this wraps is a proc macro, and a wrapped proc
+    // macro that is fed re-printed `expr` metavariables loses its spans and
+    // types — rust-analyzer then reports the generated `HashMap` argument as
+    // mismatched on every one of these calls. Forwarding raw tokens keeps the
+    // expansion analysable. rustc is unaffected either way.
+    ($message_id:literal, $($args:tt)*) => {{
+        i18n_embed_fl::fl!($crate::localize::LANGUAGE_LOADER, $message_id, $($args)*)
     }};
 }
 

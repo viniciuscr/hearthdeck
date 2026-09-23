@@ -59,6 +59,10 @@ package() {
   install -Dm755 scripts/linux-acceptance "$pkgdir/usr/lib/hearthdeck/linux-acceptance"
   install -Dm755 services/target/release/hearthdeck-bridge "$pkgdir/usr/lib/hearthdeck/hearthdeck-bridge"
   install -Dm755 services/target/release/hearthdeck-daemon "$pkgdir/usr/lib/hearthdeck/hearthdeck-daemon"
+  # The scan runs in this child process. It sits beside the daemon because that is
+  # where the daemon looks for it first, which is what makes the Settings screen's
+  # switch work with nothing configured.
+  install -Dm755 services/target/release/hearthdeck-categorizer "$pkgdir/usr/lib/hearthdeck/hearthdeck-categorizer"
   install -Dm755 services/target/release/hearthdeck-input "$pkgdir/usr/lib/hearthdeck/hearthdeck-input"
   install -Dm755 services/target/release/hearthdeck-overlay "$pkgdir/usr/lib/hearthdeck/hearthdeck-overlay"
   install -Dm644 packaging/arch/hearthdeck.target "$pkgdir/usr/lib/systemd/user/hearthdeck.target"

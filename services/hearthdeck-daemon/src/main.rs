@@ -88,36 +88,32 @@ async fn main() -> Result<()> {
         .expect("enrichment service must be registered")
         .request_all()
         .await;
-    // Categorization is opt-in, and nothing here loads a checkpoint: a scan runs
-    // in the categorizer binary, which the service spawns on demand and lets
-    // exit when it is done.
-    let state = match categorizer::CategorizerSettings::load(&config.database_path) {
-        Some(settings) => {
-            let categorization = categorizer::CategorizationService::start(
-                settings,
-                state.catalog.clone(),
-                pool,
-                state.events.clone(),
-            );
-            AppState::with_categorization(state, categorization)
-        }
-        None => state,
-    };
-    let state = Arc::new(state);
+    // Categorization is wired unconditionally: whether a scan ever runs is the
+    // user's preference in their own settings, not something a deployment is
+    // configured for. Nothing here loads a checkpoint — a scan runs in the
+    // categorizer binary, which the service spawns on demand and lets exit when
+    // it is done.
+    let categorizer_settings = categorizer::CategorizerSettings::load(&config.database_path);
+    let categorization = categorizer::CategorizationService::start(
+        categorizer_settings.clone(),
+        state.catalog.clone(),
+        pool,
+        state.events.clone(),
+    );
+    let state = Arc::new(AppState::with_categorization(state, categorization));
     // Nothing runs at boot, on purpose: the first scan is the user turning smart
     // categorization on, and until they do, the ordinary category tabs stand and
     // no checkpoint is fetched. All this does is say which state the machine is
-    // in, because "why did nothing happen" is otherwise a journal question.
-    if state.categorization.is_some() {
-        match state.settings.get().await {
-            Ok(settings) => info!(
-                enabled = settings.categorization_enabled,
-                "categorization is provided by this deployment"
-            ),
-            Err(error) => warn!(%error, "could not read the categorization preference"),
-        }
-    } else {
-        info!("categorization is not provided by this deployment");
+    // in, because "why did nothing happen" is otherwise a journal question — the
+    // binary path included, since a missing worker is the one thing that makes a
+    // click do nothing.
+    match state.settings.get().await {
+        Ok(settings) => info!(
+            enabled = settings.categorization_enabled,
+            binary = %categorizer_settings.binary.display(),
+            "categorization is available"
+        ),
+        Err(error) => warn!(%error, "could not read the categorization preference"),
     }
     let router = api::router(state.clone())
         .layer(DefaultBodyLimit::max(32 * 1024))
