@@ -5,7 +5,8 @@ use hearthdeck_protocol::ApplicationSession;
 use tokio::sync::broadcast;
 
 use crate::{
-    activity::ActivityStore, auth::AuthRepository, catalog::CatalogStore, config::Config,
+    activity::ActivityStore, auth::AuthRepository, catalog::CatalogStore,
+    categorizer::CategorizationService, collections::CollectionStore, config::Config,
     database::Database, discovery::DiscoveryService, enrichment::EnrichmentService,
     settings::SettingsRepository,
 };
@@ -16,9 +17,13 @@ pub struct AppState {
     pub auth: AuthRepository,
     pub activity: ActivityStore,
     pub catalog: CatalogStore,
+    pub collections: CollectionStore,
     pub settings: SettingsRepository,
     pub discovery: Option<DiscoveryService>,
     pub enrichment: Option<EnrichmentService>,
+    /// Absent unless `HEARTHDECK_CATEGORIZER_ENABLED` asked for it, the same way
+    /// a platform without a launcher has no discovery service.
+    pub categorization: Option<CategorizationService>,
     pub events: broadcast::Sender<ServerEvent>,
 }
 
@@ -106,9 +111,11 @@ impl AppState {
             auth: AuthRepository::new(database.pool().clone()),
             activity: ActivityStore::new(database.pool().clone()),
             catalog: CatalogStore::new(database.pool().clone()),
+            collections: CollectionStore::new(database.pool().clone()),
             settings: SettingsRepository::new(database.pool().clone()),
             discovery: None,
             enrichment: None,
+            categorization: None,
             events,
         }
     }
@@ -120,6 +127,11 @@ impl AppState {
 
     pub fn with_enrichment(mut self, enrichment: EnrichmentService) -> Self {
         self.enrichment = Some(enrichment);
+        self
+    }
+
+    pub fn with_categorization(mut self, categorization: CategorizationService) -> Self {
+        self.categorization = Some(categorization);
         self
     }
 }
@@ -138,6 +150,11 @@ pub enum ServerEvent {
     },
     ApplicationSessionChanged {
         session: Option<ApplicationSession>,
+    },
+    CategorizationChanged {
+        categorizer: String,
+        app_count: usize,
+        categories: usize,
     },
 }
 

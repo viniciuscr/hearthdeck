@@ -198,6 +198,33 @@ pub struct RetroGameDetails {
     pub backlogged: bool,
 }
 
+/// The curated collection a details screen toggles for favorites.
+pub const FAVORITES_COLLECTION: &str = "favorites";
+
+/// The curated collection a details screen toggles for play later.
+pub const PLAY_LATER_COLLECTION: &str = "play-later";
+
+/// One dashboard rail as the daemon composes it.
+///
+/// Only the fields this client reads are declared: serde ignores the rest, so the
+/// daemon's shape can grow without touching the frontend.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Collection {
+    pub slug: String,
+    #[serde(default)]
+    pub items: Vec<CollectionItem>,
+}
+
+/// One rail item, carrying the display name and icon the daemon stored with the
+/// membership so a rail can draw it without resolving the item itself.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CollectionItem {
+    pub item_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
 /// Response of the daemon's retro favorite write.
 #[derive(Debug, Deserialize)]
 struct FavoriteState {
@@ -703,6 +730,73 @@ impl DaemonClient {
             hero,
             screenshots,
         })
+    }
+
+    /// The dashboard's collections, in composition order.
+    pub async fn list_collections(&self) -> Result<Vec<Collection>, DaemonError> {
+        let response = self
+            .http
+            .get(self.api_url("/v1/collections"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    /// Adds one item to a curated collection, answering with the collection as it
+    /// now stands.
+    pub async fn add_collection_item(
+        &self,
+        slug: &str,
+        item: &CollectionItem,
+    ) -> Result<Collection, DaemonError> {
+        let response = self
+            .http
+            .post(self.api_url(&format!("/v1/collections/{slug}/items")))
+            .json(&serde_json::json!({
+                "item_id": item.item_id,
+                "name": item.name,
+                "icon": item.icon,
+            }))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    /// Removes one item from a curated collection, answering with the collection
+    /// as it now stands.
+    pub async fn remove_collection_item(
+        &self,
+        slug: &str,
+        item_id: &str,
+    ) -> Result<Collection, DaemonError> {
+        let response = self
+            .http
+            .delete(self.api_url(&format!("/v1/collections/{slug}/items")))
+            .json(&serde_json::json!({ "item_id": item_id }))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
     }
 
     /// Adds or removes one game from the user's RomM favorites, returning the

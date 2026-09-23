@@ -20,6 +20,18 @@ pub enum AppKind {
     Other,
 }
 
+impl AppKind {
+    /// Read the `kind` a discovery provider stored. Mirrors the `Deserialize`
+    /// impl, for callers that already have a `&str`.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "game" => Self::Game,
+            "application" => Self::Application,
+            _ => Self::Other,
+        }
+    }
+}
+
 /// A flattened application record.
 ///
 /// This is deliberately a superset of what any single source knows: discovery
@@ -40,9 +52,12 @@ pub struct AppProfile {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub developer: Option<String>,
-    /// The launch command line, when the source exposes one. Streaming services
-    /// ship as a browser `--app=<url>` window, so this is often the only place
-    /// the service is named.
+    /// What a launcher hands to the system to start this app.
+    ///
+    /// That is a command line when a source exposes one, and otherwise the
+    /// identifier the launcher itself resolves — a desktop file id, or
+    /// `runner:game` for a game launcher. It is only ever used as an identity
+    /// signal ([`AppProfile::signal_terms`]), never executed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exec: Option<String>,
     /// Store or launcher the record came from, e.g. `steam` or `flathub`.

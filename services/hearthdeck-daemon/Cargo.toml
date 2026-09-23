@@ -27,6 +27,9 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 hearthdeck-protocol = { path = "../hearthdeck-protocol" }
 hearthdeck-observability = { path = "../hearthdeck-observability" }
+# Only the report types and the library record cross this boundary: the scan
+# itself runs in the categorizer binary, so the daemon needs no checkpoint.
+hearthdeck-categorizer = { path = "../hearthdeck-categorizer", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.27.0"

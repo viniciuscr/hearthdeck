@@ -3,6 +3,8 @@ mod api;
 mod auth;
 mod bridge;
 mod catalog;
+mod categorizer;
+mod collections;
 mod config;
 mod database;
 mod diagnostics;
@@ -57,6 +59,9 @@ async fn main() -> Result<()> {
     let database = database::Database::connect(&config.database_path).await?;
     database.migrate().await?;
     info!("database ready");
+    // The categorizer service is built after the state, so the pool is kept here
+    // rather than reached for through `AppState`.
+    let pool = database.pool().clone();
 
     let state = AppState::new(config.clone(), database);
     let discovery = discovery::DiscoveryService::start(
@@ -76,13 +81,34 @@ async fn main() -> Result<()> {
         state.catalog.clone(),
         state.events.clone(),
     );
-    let state = Arc::new(AppState::with_enrichment(state, enrichment));
+    let state = AppState::with_enrichment(state, enrichment);
     state
         .enrichment
         .as_ref()
         .expect("enrichment service must be registered")
         .request_all()
         .await;
+    // Categorization is opt-in, and nothing here loads a checkpoint: a scan runs
+    // in the categorizer binary, which the service spawns on demand and lets
+    // exit when it is done.
+    let state = match categorizer::CategorizerSettings::load(&config.database_path) {
+        Some(settings) => {
+            let categorization = categorizer::CategorizationService::start(
+                settings,
+                state.catalog.clone(),
+                pool,
+                state.events.clone(),
+            );
+            AppState::with_categorization(state, categorization)
+        }
+        None => state,
+    };
+    let state = Arc::new(state);
+    if let Some(categorization) = &state.categorization {
+        // Produces the first version of the report, once: a boot that already has
+        // one reads it instead of paying for the model again.
+        categorization.scan_if_missing().await;
+    }
     let router = api::router(state.clone())
         .layer(DefaultBodyLimit::max(32 * 1024))
         .layer(RequestBodyLimitLayer::new(32 * 1024))

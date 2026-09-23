@@ -77,7 +77,8 @@ use crate::input_ownership::{
 };
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::providers::daemon::{
-    RetroDetails, RetroGameDetails, RetroRomVersion, retro_rom_versions, retro_version_label,
+    Collection, CollectionItem, FAVORITES_COLLECTION, PLAY_LATER_COLLECTION, RetroDetails,
+    RetroGameDetails, RetroRomVersion, retro_rom_versions, retro_version_label,
 };
 use crate::style::{
     DASHBOARD_GAME_ASPECT, DASHBOARD_RAIL_TILES, DETAILS_ACTION_WIDTH, DETAILS_FACT_LABEL_WIDTH,
@@ -381,6 +382,13 @@ struct HearthDeck {
     entry_path_input: Vec<Arc<DesktopEntryData>>,
     all_entries: Vec<Arc<DesktopEntryData>>,
     recent_entries: Vec<Arc<DesktopEntryData>>,
+    /// The dashboard's collections as the daemon composes them, reloaded at
+    /// startup and after every change.
+    collections: Vec<Collection>,
+    /// Cards for the favorites rail, rebuilt from those collections. The rail must
+    /// not depend on an item happening to be in memory, which is what used to lose
+    /// favorited RomM games whose console section was not loaded.
+    favorite_entries: Vec<Arc<DesktopEntryData>>,
     /// The action menu: whether it is open, on which entry, and which row the
     /// gamepad has highlighted.
     menu: menu::State,
@@ -492,6 +500,8 @@ impl Default for HearthDeck {
             entry_path_input: Default::default(),
             all_entries: Default::default(),
             recent_entries: Default::default(),
+            collections: Default::default(),
+            favorite_entries: Default::default(),
             menu: Default::default(),
             helper: Default::default(),
             config: Default::default(),
@@ -1092,6 +1102,8 @@ enum Message {
     WindowFocusChanged(bool),
     WindowResized(f32),
     DaemonLaunchResult(Result<(), String>),
+    /// The dashboard's collections, loaded at startup and after every change.
+    CollectionsLoaded(Result<Vec<Collection>, String>),
     /// Launch a specific RomM version (another disc/region/revision) chosen
     /// from the context menu, by the daemon's RomM rom ID.
     ActivateRomVariant {
@@ -1378,6 +1390,86 @@ impl HearthDeck {
                     .map_err(|error| error.to_string())
             },
             |result| cosmic::Action::App(Message::RecentEntries(result)),
+        )
+    }
+
+    /// Loads the dashboard's collections, which the rails are composed from.
+    fn load_collections(&self, delay: std::time::Duration) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                tokio::time::sleep(delay).await;
+                client
+                    .list_collections()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CollectionsLoaded(result)),
+        )
+    }
+
+    /// Whether the daemon's favorites collection holds `item_id`.
+    fn is_favorite(&self, item_id: &str) -> bool {
+        collection_items(&self.collections, FAVORITES_COLLECTION)
+            .any(|item| item.item_id == item_id)
+    }
+
+    /// Rebuilds the favorites rail's cards.
+    ///
+    /// An item this session already has loaded borrows that entry, so it keeps the
+    /// icon its provider resolved. One it has never loaded \u2014 a favorited RomM
+    /// game whose console section was never opened \u2014 falls back to the snapshot
+    /// the daemon stored with the membership, which is what makes the rail complete.
+    fn rebuild_favorite_entries(&mut self) {
+        let live: Vec<Arc<DesktopEntryData>> = self
+            .all_entries
+            .iter()
+            .chain(&self.recent_entries)
+            .cloned()
+            .collect();
+        self.favorite_entries = collection_items(&self.collections, FAVORITES_COLLECTION)
+            .map(|item| {
+                live.iter()
+                    .find(|entry| entry.id == item.item_id)
+                    .cloned()
+                    .unwrap_or_else(|| Arc::new(snapshot_entry(item)))
+            })
+            .collect();
+    }
+
+    /// Adds or removes one item in a curated collection, reloading the collections
+    /// afterwards so every rail reflects what the daemon actually stored.
+    fn write_collection_item(
+        &self,
+        slug: &str,
+        item: CollectionItem,
+        adding: bool,
+    ) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        let slug = slug.to_owned();
+        Task::perform(
+            async move {
+                if adding {
+                    client
+                        .add_collection_item(&slug, &item)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                } else {
+                    client
+                        .remove_collection_item(&slug, &item.item_id)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                client
+                    .list_collections()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CollectionsLoaded(result)),
         )
     }
 
@@ -1950,6 +2042,7 @@ impl HearthDeck {
             .all_entries
             .iter()
             .chain(&self.recent_entries)
+            .chain(&self.favorite_entries)
             .find(|entry| entry.id == id)
             .cloned();
         self.activate_entry(entry)
@@ -1970,12 +2063,22 @@ impl HearthDeck {
             })
             .take(DASHBOARD_RAIL_TILES)
             .collect::<Vec<_>>();
-        let favorites = self
-            .config
-            .favorite_entries(&self.all_entries)
-            .into_iter()
+        let mut favorites = self
+            .favorite_entries
+            .iter()
             .take(DASHBOARD_RAIL_TILES)
             .collect::<Vec<_>>();
+        // Favorites saved by a build that predates the collections table live only
+        // in the local config; keep resolving them so an upgrade cannot empty the
+        // rail.
+        for entry in self.config.favorite_entries(&self.all_entries) {
+            if favorites.len() >= DASHBOARD_RAIL_TILES {
+                break;
+            }
+            if !favorites.iter().any(|card| card.id == entry.id) {
+                favorites.push(entry);
+            }
+        }
         // Streaming service clients get their own shelf here rather than a
         // library section, so they are grouped without splitting the catalog.
         // Only shown when there is something to show, like the console rail.
@@ -2246,6 +2349,7 @@ impl HearthDeck {
             return Task::none();
         };
         let rom_id = details.rom_id;
+        let title = details.title.clone();
         let previous = details.favorite;
         let favorite = !previous.unwrap_or(false);
         details.favorite = Some(favorite);
@@ -2255,7 +2359,25 @@ impl HearthDeck {
                 client
                     .set_retro_favorite(rom_id, favorite)
                     .await
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| error.to_string())?;
+                // The dashboard rail is fed by our own collection, not by RomM, so
+                // the same press has to land there too.
+                let item = CollectionItem {
+                    item_id: format!("romm:{rom_id}"),
+                    name: title,
+                    icon: None,
+                };
+                if favorite {
+                    client
+                        .add_collection_item(FAVORITES_COLLECTION, &item)
+                        .await
+                } else {
+                    client
+                        .remove_collection_item(FAVORITES_COLLECTION, &item.item_id)
+                        .await
+                }
+                .map_err(|error| error.to_string())?;
+                Ok(favorite)
             },
             move |result| {
                 cosmic::Action::App(Message::DetailsFavorite {
@@ -2280,6 +2402,7 @@ impl HearthDeck {
             return Task::none();
         };
         let rom_id = details.rom_id;
+        let title = details.title.clone();
         let previous = details.backlogged;
         let backlogged = !previous.unwrap_or(false);
         details.backlogged = Some(backlogged);
@@ -2289,7 +2412,23 @@ impl HearthDeck {
                 client
                     .set_retro_backlogged(rom_id, backlogged)
                     .await
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| error.to_string())?;
+                let item = CollectionItem {
+                    item_id: format!("romm:{rom_id}"),
+                    name: title,
+                    icon: None,
+                };
+                if backlogged {
+                    client
+                        .add_collection_item(PLAY_LATER_COLLECTION, &item)
+                        .await
+                } else {
+                    client
+                        .remove_collection_item(PLAY_LATER_COLLECTION, &item.item_id)
+                        .await
+                }
+                .map_err(|error| error.to_string())?;
+                Ok(backlogged)
             },
             move |result| {
                 cosmic::Action::App(Message::DetailsBacklog {
@@ -2328,7 +2467,8 @@ impl HearthDeck {
         match result {
             Ok(state) => {
                 *slot = Some(state);
-                Task::none()
+                // The rail is fed by the collection this write just changed.
+                self.load_collections(std::time::Duration::ZERO)
             }
             Err(error) => {
                 *slot = previous;
@@ -3032,7 +3172,7 @@ impl HearthDeck {
             return Vec::new();
         };
         let is_pinned = self.app_list_config.favorites.contains(&entry.id);
-        let is_favorite = self.config.is_favorite(&entry.id);
+        let is_favorite = self.is_favorite(&entry.id);
         let compat_enabled = self.config.desktop_input_enabled(&entry.id);
         let mut rows = vec![
             Row::new(RUN.clone(), Message::ActivateApp(i)),
@@ -3825,6 +3965,19 @@ impl cosmic::Application for HearthDeck {
                 }
                 return Task::none();
             }
+            Message::CollectionsLoaded(result) => {
+                match result {
+                    Ok(collections) => {
+                        self.collections = collections;
+                        self.rebuild_favorite_entries();
+                    }
+                    Err(error) => {
+                        log::debug!("collections are not available yet: {error}");
+                        return self.load_collections(std::time::Duration::from_secs(5));
+                    }
+                }
+                return Task::none();
+            }
             Message::OpenSearch => {
                 self.switch_page(Page::Library);
                 return self.focus_text_input(SEARCH_ID.clone());
@@ -4293,19 +4446,33 @@ impl cosmic::Application for HearthDeck {
                 self.menu.close();
             }
             Message::ToggleFavorite(usize) => {
-                if let Some(id) = self
+                let Some((item_id, name)) = self
                     .entry_path_input
                     .get(usize)
-                    .map(|entry| entry.id.clone())
+                    .map(|entry| (entry.id.clone(), entry.name.clone()))
+                else {
+                    self.menu.close();
+                    return Task::none();
+                };
+                let adding = !self.is_favorite(&item_id);
+                // The local list stays in step so the menu label and the rail agree
+                // even before the collections reload lands.
+                self.config.toggle_favorite(&item_id);
+                if let Some(helper) = self.helper.as_ref()
+                    && let Err(error) = self.config.write_entry(helper)
                 {
-                    self.config.toggle_favorite(&id);
-                    if let Some(helper) = self.helper.as_ref()
-                        && let Err(error) = self.config.write_entry(helper)
-                    {
-                        error!("failed to save favorite: {error:?}");
-                    }
+                    error!("failed to save favorite: {error:?}");
                 }
                 self.menu.close();
+                return self.write_collection_item(
+                    FAVORITES_COLLECTION,
+                    CollectionItem {
+                        item_id,
+                        name,
+                        icon: None,
+                    },
+                    adding,
+                );
             }
             Message::AppListConfig(config) => {
                 self.app_list_config = config;
@@ -4876,6 +5043,7 @@ impl cosmic::Application for HearthDeck {
         let load_romm_platforms = self_.load_romm_platforms(std::time::Duration::ZERO);
         let load_system_status = Self::load_system_status(std::time::Duration::ZERO);
         let load_recent_activity = self_.load_recent_activity(std::time::Duration::ZERO);
+        let load_collections = self_.load_collections(std::time::Duration::ZERO);
         let load_dashboard_health = self_.load_dashboard_health(std::time::Duration::ZERO);
         (
             self_,
@@ -4887,6 +5055,7 @@ impl cosmic::Application for HearthDeck {
                 load_romm_platforms,
                 load_system_status,
                 load_recent_activity,
+                load_collections,
                 load_dashboard_health,
             ]),
         )
@@ -6158,6 +6327,37 @@ fn dashboard_console_id(index: usize) -> widget::Id {
 }
 
 /// Scrollable id of the dashboard rail with `key`.
+/// The items of one collection, empty until its collections have loaded.
+fn collection_items<'a>(
+    collections: &'a [Collection],
+    slug: &str,
+) -> impl Iterator<Item = &'a CollectionItem> {
+    collections
+        .iter()
+        .find(|collection| collection.slug == slug)
+        .into_iter()
+        .flat_map(|collection| collection.items.iter())
+}
+
+/// The smallest entry a rail card needs, built from the snapshot the daemon stored
+/// with a membership. `exec` mirrors what the provider sets for the id, so a
+/// favourite that was never loaded still launches.
+fn snapshot_entry(item: &CollectionItem) -> DesktopEntryData {
+    crate::providers::GameRecord {
+        id: item.item_id.clone(),
+        name: item.name.clone(),
+        exec: item.item_id.strip_prefix("romm:").map(str::to_owned),
+        icon: item.icon.clone(),
+        path: None,
+        categories: vec!["Game".to_owned()],
+        terminal: false,
+        prefers_dgpu: false,
+        source: "collection".to_owned(),
+        metadata: serde_json::Value::Null,
+    }
+    .into_desktop_entry()
+}
+
 fn dashboard_rail_id(key: &str) -> widget::Id {
     widget::Id::from(format!("dashboard-rail-{key}"))
 }
@@ -6390,6 +6590,24 @@ mod tests {
         assert_eq!(app.menu.selected(), 1);
     }
 
+    /// A favorites collection as the daemon would return it, for tests that need
+    /// the rail or a menu label to see a favorite.
+    fn favorites_collection(ids: &[&str]) -> crate::providers::daemon::Collection {
+        use crate::providers::daemon::{Collection, CollectionItem, FAVORITES_COLLECTION};
+
+        Collection {
+            slug: FAVORITES_COLLECTION.to_owned(),
+            items: ids
+                .iter()
+                .map(|id| CollectionItem {
+                    item_id: (*id).to_owned(),
+                    name: (*id).to_owned(),
+                    icon: None,
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn the_menu_rows_carry_their_own_state_and_action() {
         let mut app = HearthDeck {
@@ -6412,8 +6630,9 @@ mod tests {
         ));
 
         // A row reads as the action it performs, so turning a toggle on renames
-        // it as well as changing what it does.
-        app.config.toggle_favorite("org.example.App");
+        // it as well as changing what it does. The favorite row follows the
+        // daemon's collection, which is what a toggle now writes.
+        app.collections = vec![favorites_collection(&["org.example.App"])];
         app.config.toggle_desktop_input("org.example.App");
         let on = app.menu_rows(0);
         assert_eq!(on[2].label, fl!("unfavorite"));

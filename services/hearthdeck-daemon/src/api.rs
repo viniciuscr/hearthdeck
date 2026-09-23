@@ -9,6 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
+use hearthdeck_categorizer::ScanReport;
 use hearthdeck_protocol::{
     ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner, InputProfile,
 };
@@ -20,6 +21,8 @@ use uuid::Uuid;
 
 use crate::{
     activity::{ActivityEntry, RecentActivity},
+    categorizer::{CategorizationStatus, ScanRequest},
+    collections::{self, Collection, CollectionItem},
     diagnostics::{self, RommGame, RommPlatform, RommQueryError},
     retro::RetroLaunchError,
     settings::{
@@ -35,6 +38,11 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/pairing/complete", post(complete_pairing))
         .route("/v1/library", get(list_library))
         .route("/v1/activity/recent", get(list_recent_activity))
+        .route("/v1/collections", get(list_collections))
+        .route(
+            "/v1/collections/{slug}/items",
+            post(add_collection_item).delete(remove_collection_item),
+        )
         .route("/v1/retro/consoles", get(list_retro_consoles))
         .route("/v1/retro/roms", get(list_retro_roms))
         .route("/v1/retro/roms/{id}", get(retro_rom_details))
@@ -50,6 +58,8 @@ pub fn router(state: SharedState) -> Router {
                 .delete(clear_romm_settings),
         )
         .route("/v1/library/rescan", post(rescan_library))
+        .route("/v1/categorization", get(categorization))
+        .route("/v1/categorization/scan", post(start_categorization))
         .route("/v1/settings", get(get_settings).put(update_settings))
         .route("/v1/discovery/{source_id}/refresh", post(refresh_source))
         .route("/v1/metadata/{provider_id}/refresh", post(refresh_metadata))
@@ -440,6 +450,52 @@ async fn rescan_library(
     }
     info!("all discovery and metadata providers refresh requested");
     Ok(StatusCode::ACCEPTED)
+}
+
+/// The scan button's two questions: is a scan running (and did the last one
+/// work), and what did the last one conclude.
+#[derive(Serialize)]
+struct CategorizationResponse {
+    status: CategorizationStatus,
+    report: Option<ScanReport>,
+}
+
+async fn categorization(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<CategorizationResponse>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let service = state
+        .categorization
+        .as_ref()
+        .ok_or_else(ApiError::service_unavailable)?;
+    let status = service.status().await;
+    let report = service.latest_report().await.map_err(ApiError::internal)?;
+    Ok(Json(CategorizationResponse { status, report }))
+}
+
+/// Starts a scan. A scan takes minutes, so this answers `202` as soon as it is
+/// accepted; the result arrives on the event stream and in the next `GET`.
+/// Requesting one while another runs is not an error: it coalesces.
+async fn start_categorization(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    let service = state
+        .categorization
+        .as_ref()
+        .ok_or_else(ApiError::service_unavailable)?;
+    match service.request_scan().await {
+        ScanRequest::Started => {
+            info!("categorization scan started");
+            Ok(StatusCode::ACCEPTED)
+        }
+        ScanRequest::AlreadyRunning => {
+            info!("categorization scan coalesced");
+            Ok(StatusCode::ACCEPTED)
+        }
+    }
 }
 
 async fn get_settings(
@@ -1078,11 +1134,138 @@ struct ApiError {
     settings: Option<UserSettings>,
 }
 
+/// How many items a rule collection may contribute to a rail. Rails are a
+/// handful of tiles wide, so this is generous on purpose: the client decides
+/// what fits, not the daemon.
+const COLLECTION_RULE_ITEM_LIMIT: u32 = 20;
+
+/// The dashboard's collections, in composition order.
+///
+/// Rule collections are resolved here rather than stored: the daemon is the only
+/// place that knows where each rule's data lives.
+async fn list_collections(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<Collection>>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let mut collections = state.collections.list().await.map_err(ApiError::internal)?;
+    for collection in &mut collections {
+        if collection.kind == collections::KIND_RULE
+            && collection.rule.as_deref() == Some(collections::RULE_LAST_PLAYED)
+        {
+            collection.items = state
+                .activity
+                .recent(COLLECTION_RULE_ITEM_LIMIT)
+                .await
+                .map_err(ApiError::internal)?
+                .into_iter()
+                .map(|recent| CollectionItem {
+                    item_id: recent.entry.id,
+                    name: recent.entry.title,
+                    icon: recent.entry.icon,
+                })
+                .collect();
+        }
+    }
+    Ok(Json(collections))
+}
+
+#[derive(Deserialize)]
+struct CollectionItemRequest {
+    item_id: String,
+    name: String,
+    #[serde(default)]
+    icon: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CollectionItemRef {
+    item_id: String,
+}
+
+/// Adds an item to a curated collection, answering with the collection as it now
+/// stands.
+async fn add_collection_item(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(request): Json<CollectionItemRequest>,
+) -> Result<Json<Collection>, ApiError> {
+    authenticate(&state, &headers).await?;
+    ensure_curated(&state, &slug).await?;
+    let item = CollectionItem {
+        item_id: request.item_id,
+        name: request.name,
+        icon: request.icon,
+    };
+    state
+        .collections
+        .add_item(&slug, &item)
+        .await
+        .map_err(ApiError::internal)?;
+    info!(slug, item_id = %item.item_id, "collection item added");
+    curated_collection(&state, &slug).await
+}
+
+/// Removes an item from a curated collection, answering with the collection as it
+/// now stands. Removing one that is not there is not an error: the caller asked
+/// for it to be gone.
+async fn remove_collection_item(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(request): Json<CollectionItemRef>,
+) -> Result<Json<Collection>, ApiError> {
+    authenticate(&state, &headers).await?;
+    ensure_curated(&state, &slug).await?;
+    state
+        .collections
+        .remove_item(&slug, &request.item_id)
+        .await
+        .map_err(ApiError::internal)?;
+    curated_collection(&state, &slug).await
+}
+
+/// Rejects a slug that is unknown or whose contents are derived.
+async fn ensure_curated(state: &SharedState, slug: &str) -> Result<(), ApiError> {
+    match state
+        .collections
+        .accepts_items(slug)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        None => Err(ApiError::not_found()),
+        Some(false) => Err(ApiError::derived_collection()),
+        Some(true) => Ok(()),
+    }
+}
+
+async fn curated_collection(state: &SharedState, slug: &str) -> Result<Json<Collection>, ApiError> {
+    state
+        .collections
+        .collection(slug)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(ApiError::not_found)
+        .map(Json)
+}
+
 impl ApiError {
     fn unauthorized() -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
             message: "authentication required".to_owned(),
+            settings: None,
+        }
+    }
+
+    /// A collection whose contents are derived cannot be edited: an item added to
+    /// it would be recomputed away on the next read, so the write is refused
+    /// rather than silently lost.
+    fn derived_collection() -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: "collection contents are derived and cannot be edited".to_owned(),
             settings: None,
         }
     }

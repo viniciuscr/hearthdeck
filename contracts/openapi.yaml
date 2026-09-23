@@ -82,6 +82,84 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/RecentActivity'
+  /v1/collections:
+    get:
+      operationId: listCollections
+      security:
+        - bearerAuth: []
+      description: >-
+        The dashboard's collections in composition order. A membership
+        collection lists its stored items; a rule collection (currently
+        `last-played`) has its items derived by the daemon on every read.
+      responses:
+        '200':
+          description: The dashboard's collections
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Collection'
+  /v1/collections/{slug}/items:
+    post:
+      operationId: addCollectionItem
+      security:
+        - bearerAuth: []
+      description: >-
+        Adds an item to a curated collection, or refreshes the display name and
+        icon of one already there without moving it. Answers `404` for an
+        unknown collection and `400` for one whose contents are derived.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item_id, name]
+              properties:
+                item_id: { type: string }
+                name: { type: string }
+                icon: { type: [string, 'null'] }
+      responses:
+        '200':
+          description: The collection as it now stands
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+    delete:
+      operationId: removeCollectionItem
+      security:
+        - bearerAuth: []
+      description: >-
+        Removes an item from a curated collection. Removing one that is not there
+        is not an error: the caller asked for it to be gone.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item_id]
+              properties:
+                item_id: { type: string }
+      responses:
+        '200':
+          description: The collection as it now stands
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collection'
   /v1/library/rescan:
     post:
       operationId: rescanLibrary
@@ -90,6 +168,36 @@ paths:
       responses:
         '202':
           description: Discovery jobs accepted
+  /v1/categorization:
+    get:
+      operationId: getCategorization
+      security:
+        - bearerAuth: []
+      description: >-
+        The state of the categorization scan and the most recent report it
+        produced, which the client turns into the library's category tabs. A
+        `null` report means the library has never been scanned. Answers `503`
+        when the deployment has categorization switched off.
+      responses:
+        '200':
+          description: The scan status and the latest report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategorizationResponse'
+  /v1/categorization/scan:
+    post:
+      operationId: startCategorizationScan
+      security:
+        - bearerAuth: []
+      description: >-
+        Starts a scan. A scan runs for minutes in its own process, so this
+        answers as soon as it is accepted; the result arrives on the event
+        stream (`categorization_changed`) and in the next `GET`. Requesting a
+        scan while one runs coalesces into it rather than failing.
+      responses:
+        '202':
+          description: Scan accepted
   /v1/retro/consoles:
     get:
       operationId: listRetroConsoles
@@ -649,6 +757,31 @@ components:
         metadata: { type: object }
         last_launched_at: { type: string, format: date-time }
         launch_count: { type: integer, minimum: 1 }
+    CollectionItem:
+      type: object
+      required: [item_id, name]
+      properties:
+        item_id: { type: string }
+        name: { type: string }
+        icon: { type: [string, 'null'] }
+    Collection:
+      type: object
+      required: [slug, kind, role, position, items]
+      description: >-
+        One dashboard rail. `kind` is `membership` (items are curated and
+        stored) or `rule` (items are derived on read and the collection is
+        read-only). `role` is `favorite` or `play_later` for the collections a
+        screen can toggle by role, and `none` otherwise.
+      properties:
+        slug: { type: string }
+        kind: { type: string, enum: [membership, rule] }
+        rule: { type: [string, 'null'] }
+        role: { type: string, enum: [none, favorite, play_later] }
+        position: { type: integer }
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollectionItem'
     RetroConsole:
       type: object
       required: [id, name, rom_count]
@@ -798,3 +931,98 @@ components:
       properties:
         base_url: { type: string, format: uri, maxLength: 2048 }
         token: { type: string, minLength: 1, maxLength: 2048 }
+    CategorizationResponse:
+      type: object
+      required: [status, report]
+      properties:
+        status: { $ref: '#/components/schemas/CategorizationStatus' }
+        report:
+          oneOf:
+            - $ref: '#/components/schemas/ScanReport'
+            - type: 'null'
+    CategorizationStatus:
+      type: object
+      required: [running]
+      properties:
+        running: { type: boolean }
+        last_error: { type: [string, 'null'] }
+        last_completed_at: { type: [string, 'null'], format: date-time }
+    ScanReport:
+      type: object
+      required: [generated_at, categorizer, app_count, assignments, failures, categories, unclassified]
+      properties:
+        generated_at: { type: string, format: date-time }
+        categorizer: { type: string }
+        researcher: { type: [string, 'null'] }
+        app_count: { type: integer, minimum: 0 }
+        assignments:
+          type: array
+          items: { $ref: '#/components/schemas/AppCategorization' }
+        failures:
+          type: array
+          items: { $ref: '#/components/schemas/ScanFailure' }
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/CategoryProposal' }
+        unclassified:
+          type: array
+          items: { $ref: '#/components/schemas/UnclassifiedApp' }
+    AppCategorization:
+      type: object
+      required: [app_id, title, section, section_confidence, categories, needs_category, traits, provenance]
+      properties:
+        app_id: { type: string }
+        title: { type: string }
+        section: { type: string, enum: [pc_games, console_games, applications] }
+        section_confidence: { type: number, minimum: 0, maximum: 1 }
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/CategoryMatch' }
+        needs_category:
+          type: boolean
+          description: >-
+            The app belongs in Applications but no candidate category fit, so
+            the taxonomy is missing an entry for it.
+        traits: { $ref: '#/components/schemas/AppTraits' }
+        provenance: { type: string, enum: [laya, heuristic] }
+        rationale: { type: [string, 'null'] }
+    AppTraits:
+      type: object
+      required: [game, watch_service, emulator]
+      properties:
+        game: { type: [number, 'null'], minimum: 0, maximum: 1 }
+        watch_service: { type: [number, 'null'], minimum: 0, maximum: 1 }
+        emulator: { type: [number, 'null'], minimum: 0, maximum: 1 }
+    CategoryMatch:
+      type: object
+      required: [slug, name, confidence]
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+    CategoryProposal:
+      type: object
+      required: [slug, name, section, app_ids, mean_confidence, recommended]
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        section: { type: string, enum: [pc_games, console_games, applications] }
+        app_ids:
+          type: array
+          items: { type: string }
+        mean_confidence: { type: number, minimum: 0, maximum: 1 }
+        recommended:
+          type: boolean
+          description: The category cleared the membership and confidence bars, so it is worth a tab.
+    ScanFailure:
+      type: object
+      required: [app_id, error]
+      properties:
+        app_id: { type: string }
+        error: { type: string }
+    UnclassifiedApp:
+      type: object
+      required: [app_id, title]
+      properties:
+        app_id: { type: string }
+        title: { type: string }

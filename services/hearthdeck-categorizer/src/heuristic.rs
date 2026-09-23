@@ -153,33 +153,40 @@ impl Categorizer for HeuristicCategorizer {
             rationale.push("matched the streaming-service list".to_owned());
         }
 
-        if !is_game {
-            let slug = if watch {
-                Some("video_streaming")
-            } else {
-                app.categories
-                    .iter()
-                    .find_map(|category| slug_for(category))
-            };
-            match slug.and_then(|slug| taxonomy.by_slug(slug)) {
-                Some(category) if category.section == section => {
-                    categories.push(CategoryMatch {
-                        slug: category.slug.clone(),
-                        name: category.name.clone(),
-                        confidence: MAPPED,
-                    });
-                    if !watch {
-                        rationale.push(format!(
-                            "mapped from a freedesktop category to {}",
-                            category.slug
-                        ));
-                    }
-                }
-                _ => {
-                    needs_category = true;
-                    rationale.push("no freedesktop category mapped to a tab".to_owned());
+        // Only an application can be filed under a candidate category. A game or
+        // an emulator is grouped by store or console in the UI, and reporting it
+        // as "needs a category" would ask the taxonomy for a tab that the
+        // sections it belongs to do not draw from. The lookup still runs, so a
+        // taxonomy that does define game-section categories can use them.
+        let candidate = if watch {
+            Some("video_streaming")
+        } else {
+            app.categories
+                .iter()
+                .find_map(|category| slug_for(category))
+        };
+        match candidate
+            .and_then(|slug| taxonomy.by_slug(slug))
+            .filter(|category| category.section == section)
+        {
+            Some(category) => {
+                categories.push(CategoryMatch {
+                    slug: category.slug.clone(),
+                    name: category.name.clone(),
+                    confidence: MAPPED,
+                });
+                if !watch {
+                    rationale.push(format!(
+                        "mapped from a freedesktop category to {}",
+                        category.slug
+                    ));
                 }
             }
+            None if section == Section::Applications => {
+                needs_category = true;
+                rationale.push("no freedesktop category mapped to a tab".to_owned());
+            }
+            None => {}
         }
 
         Ok(AppCategorization {
@@ -244,7 +251,13 @@ mod tests {
             exec: Some("/usr/bin/retroarch".to_owned()),
             ..AppProfile::default()
         };
-        assert_eq!(categorize(&app).section, Section::ConsoleGames);
+        let result = categorize(&app);
+
+        assert_eq!(result.section, Section::ConsoleGames);
+        // Console games are grouped by console, so an emulator with no
+        // freedesktop categories must not be reported as needing one.
+        assert!(result.categories.is_empty());
+        assert!(!result.needs_category);
     }
 
     #[test]

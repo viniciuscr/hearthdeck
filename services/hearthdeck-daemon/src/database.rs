@@ -80,6 +80,36 @@ impl Database {
                             last_launched_at TEXT NOT NULL,
                             launch_count INTEGER NOT NULL DEFAULT 1
                         );
+            CREATE TABLE IF NOT EXISTS collections (
+              slug TEXT PRIMARY KEY,
+              kind TEXT NOT NULL,
+              rule TEXT,
+              role TEXT NOT NULL DEFAULT 'none',
+              position INTEGER NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS collection_items (
+              collection_slug TEXT NOT NULL REFERENCES collections(slug) ON DELETE CASCADE,
+              item_id TEXT NOT NULL,
+              name TEXT NOT NULL,
+              icon TEXT,
+              position INTEGER NOT NULL,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (collection_slug, item_id)
+            );
+            INSERT OR IGNORE INTO collections (slug, kind, rule, role, position, created_at) VALUES
+              ('last-played', 'rule', 'last_played', 'none', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+              ('favorites', 'membership', NULL, 'favorite', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+              ('play-later', 'membership', NULL, 'play_later', 2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            -- One row, the newest report: a categorization describes the library as
+            -- it stood when the scan ran, so a stale one is worthless.
+            CREATE TABLE IF NOT EXISTS categorization_reports (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              generated_at TEXT NOT NULL,
+              categorizer TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
             "#,
         )
         .execute(&self.pool)

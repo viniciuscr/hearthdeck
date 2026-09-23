@@ -58,6 +58,14 @@ pairing-code:
 refresh-metadata url token provider="appstream-local":
   curl --fail --silent --show-error -X POST {{url}}/v1/metadata/{{provider}}/refresh -H 'Authorization: Bearer {{token}}'
 
+# Request one categorization scan from a paired daemon.
+categorize url token:
+  curl --fail --silent --show-error -X POST {{url}}/v1/categorization/scan -H 'Authorization: Bearer {{token}}'
+
+# Show the categorization status and the latest report from a paired daemon.
+categorization url token:
+  curl --fail --silent --show-error {{url}}/v1/categorization -H 'Authorization: Bearer {{token}}'
+
 # Build the COSMIC frontend.
 build-frontend:
   mise exec -- cargo build --manifest-path {{services_manifest}} -p hearthdeck-frontend --release
@@ -138,6 +146,7 @@ install-services:
   cp services/target/release/hearthdeck-bridge "$HOME/.local/bin/"
   cp services/target/release/hearthdeck-daemon "$HOME/.local/bin/"
   cp services/target/release/hearthdeck-input "$HOME/.local/bin/"
+  cp services/target/release/hearthdeck-categorizer "$HOME/.local/bin/"
   systemctl --user daemon-reload
   systemctl --user enable --now hearthdeck.target
 

@@ -17,6 +17,7 @@ metal = ["laya-rs?/metal"]
 async-trait.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
+hearthdeck-observability = { path = "../hearthdeck-observability" }
 laya-rs = { version = "0.1", default-features = false, features = ["hub"], optional = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -25,4 +26,5 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+tempfile = "3"
 tokio.workspace = true
