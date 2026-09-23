@@ -1,0 +1,28 @@
+[package]
+name = "hearthdeck-categorizer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["laya"]
+# Laya-backed decision engine. Without it the crate still builds and ships the
+# deterministic `HeuristicCategorizer`, which is what the unit tests exercise.
+laya = ["dep:laya-rs"]
+# Pass-through GPU backends for the Laya checkpoints.
+cuda = ["laya-rs?/cuda"]
+metal = ["laya-rs?/metal"]
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+laya-rs = { version = "0.1", default-features = false, features = ["hub"], optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
