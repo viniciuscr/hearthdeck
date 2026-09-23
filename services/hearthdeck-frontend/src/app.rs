@@ -116,7 +116,7 @@ static FILTER_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter"));
 static DASHBOARD_HOME_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-home"));
 static DASHBOARD_LIBRARY_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-library"));
 static DASHBOARD_SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-search"));
-static DASHBOARD_CATEGORIZE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-categorize"));
+static DASHBOARD_SETTINGS_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-settings"));
 
 /// Rail key for the dashboard console list, which is not a shelved catalog
 /// section, so it needs its own stable scrollable id.
@@ -271,7 +271,7 @@ fn available_disk_bytes(path: &str) -> u64 {
 }
 
 /// Formats a byte count for humans, e.g. "128.4 GB".
-fn human_size(bytes: u64) -> String {
+pub(crate) fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = bytes as f64;
     let mut unit = 0;
@@ -451,6 +451,13 @@ struct HearthDeck {
     /// the scan it started reports that it has stopped.
     categorizing: bool,
     categorization_polls: u32,
+    /// The daemon's categorization state, for the settings screen to render.
+    /// `None` until it has been read once.
+    categorization: Option<CategorizationSnapshot>,
+    /// Whether this deployment provides categorization at all, from `/v1/health`.
+    /// `None` until that reply arrives; `Some(false)` hides the whole feature
+    /// rather than offering a button that fails.
+    categorization_capable: Option<bool>,
     /// Transient user-facing alerts, rendered with libcosmic's toaster so the
     /// dashboard stays a browsing surface instead of an alert log.
     toasts: Toasts<Message>,
@@ -551,6 +558,8 @@ impl Default for HearthDeck {
             system_status: SystemStatus::default(),
             categorizing: Default::default(),
             categorization_polls: Default::default(),
+            categorization: Default::default(),
+            categorization_capable: Default::default(),
             toasts: Toasts::new(Message::DismissToast),
             backend_available: None,
             degraded_providers: Vec::new(),
@@ -651,6 +660,9 @@ enum Page {
     #[default]
     Dashboard,
     Library,
+    /// Smart categorization's home: what it costs, whether it is on, and how to
+    /// get back to the categories Hearthdeck derives from the apps themselves.
+    Settings,
     /// One console game's details. Not part of the primary navigation: it is
     /// pushed on top of the Library by opening a game, and Back returns there.
     Details,
@@ -699,7 +711,7 @@ enum DashboardShelf {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum DashboardHealthError {
+pub(crate) enum DashboardHealthError {
     /// The daemon could not be reached at all (not running, wrong address, or a
     /// rejected pairing token).
     Unreachable,
@@ -988,14 +1000,14 @@ impl Details {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum GroupRowKey {
+pub(crate) enum GroupRowKey {
     AllApps,
     Custom(u64),
     NewGroup,
 }
 
 #[derive(Clone, Debug)]
-enum Message {
+pub(crate) enum Message {
     ProviderRecords(Vec<crate::providers::GameRecord>),
     UpdateFocused(Option<widget::Id>),
     InputChanged(String),
@@ -1146,6 +1158,19 @@ enum Message {
     CategorizationScanStarted(Result<(), String>),
     /// What the daemon said when asked how a running scan is getting on.
     CategorizationPolled(Result<CategorizationSnapshot, String>),
+    /// The daemon's categorization state after an action that changed it:
+    /// enabling, disabling, or removing the checkpoint.
+    CategorizationAction(Result<CategorizationSnapshot, String>),
+    /// The user pressed Settings in the dashboard's navigation.
+    OpenSettings,
+    /// The user turned smart categories on, which is what starts the download.
+    EnableCategorization,
+    /// The user turned them off, which restores the derived categories.
+    DisableCategorization,
+    /// The user asked for the downloaded checkpoint to be removed.
+    DeleteCategorizationModel,
+    /// The user asked for the scan's tabs to give way to the derived ones.
+    ResetCategorizationTabs,
     SystemStatus(SystemStatus),
     RommGames {
         generation: u64,
@@ -1220,7 +1245,7 @@ struct FilterCursor {
 /// What a context-menu row asks `Message::SelectAction` to do. Both act on the
 /// entry the menu is open on, which the handler reads from `HearthDeck::menu`.
 #[derive(Clone, Debug)]
-enum MenuAction {
+pub(crate) enum MenuAction {
     ToggleControllerCompatibility,
     Remove,
 }
@@ -1400,6 +1425,89 @@ impl HearthDeck {
         )
     }
 
+    /// Turns smart categories on, which is what fetches the model.
+    ///
+    /// The response is read straight back so the screen shows the download
+    /// starting rather than an idle state until the next poll.
+    fn enable_categorization(&mut self) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        self.categorizing = true;
+        self.categorization_polls = 0;
+        Task::perform(
+            async move {
+                client
+                    .enable_categorization()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                client
+                    .categorization()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CategorizationAction(result)),
+        )
+    }
+
+    /// Turns them off. The tabs go back to the ones Hearthdeck derives, because
+    /// "off" has to mean the same thing whether or not a scan ever ran.
+    fn disable_categorization(&mut self) -> Task<Message> {
+        self.restore_derived_categories();
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                client
+                    .disable_categorization()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                client
+                    .categorization()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CategorizationAction(result)),
+        )
+    }
+
+    /// Frees the downloaded checkpoint. The daemon refuses when the checkpoint is
+    /// a directory the deployment owns, and that refusal is what the user sees.
+    fn delete_categorization_model(&mut self) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                client
+                    .delete_categorization_model()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                client
+                    .categorization()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CategorizationAction(result)),
+        )
+    }
+
+    /// Hands the Applications tabs back to the ones derived from the entries.
+    ///
+    /// This is the way out of a scan the user does not want: their own folders
+    /// survive, because only the scan's tabs are dropped.
+    fn restore_derived_categories(&mut self) {
+        let selected_group = self.selected_group();
+        if !self.config.sync_categorization(&[]) {
+            return;
+        }
+        self.restore_selected_group(selected_group);
+        if let Some(helper) = AppLibraryConfig::helper() {
+            let _ = self.config.write_entry(&helper);
+        }
+    }
+
     /// Asks the daemon to categorize the library, then watches the scan.
     fn start_categorization(&mut self) -> Task<Message> {
         if self.categorizing {
@@ -1451,10 +1559,21 @@ impl HearthDeck {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 self.categorizing = false;
-                log::warn!("could not read the categorization scan status: {error}");
+                log::warn!("could not read the categorization status: {error}");
+                // A deployment that does not run the categorizer answers with
+                // "no service" rather than a status. The screen already says so
+                // in its own words, so there is nothing to alarm anybody about.
+                if self.categorization_capable != Some(true) {
+                    return Task::none();
+                }
                 return self.push_alert(fl!("categorization-failed", reason = error), true);
             }
         };
+        // Kept for the settings screen, which renders whatever the last read
+        // said — including part-way through a scan.
+        let enabled = snapshot.enabled;
+        let report = snapshot.report.clone();
+        self.categorization = Some(snapshot.clone());
 
         if snapshot.status.running {
             self.categorizing = true;
@@ -1467,18 +1586,24 @@ impl HearthDeck {
             return self.poll_categorization(CATEGORIZATION_POLL_INTERVAL);
         }
 
-        // The report is applied whether or not this session was watching: it can
-        // be newer than the tabs on disk whenever a scan ran while the frontend
-        // was not up, and a boot only ever polls once.
         let watching = std::mem::take(&mut self.categorizing);
         self.categorization_polls = 0;
-        let Some(report) = snapshot.report else {
+
+        // Off means off: a report made before the user turned the feature off
+        // must not quietly land on top of the derived categories.
+        if !enabled {
+            return Task::none();
+        }
+        let Some(report) = &report else {
             return Task::none();
         };
-        // Applying is a swap of the scan's own tabs, so it is written straight
-        // away: the tabs have to survive a restart, or the next boot would draw
-        // the derived ones while the daemon reports a scan's.
-        if self.apply_categorization(&report)
+        // Applied whenever it is on, whether or not this session was watching: a
+        // report can be newer than the tabs on disk whenever a scan ran while the
+        // frontend was not up, and a boot only ever reads once. Applying is a
+        // swap of the scan's own tabs, so it is written straight away: the tabs
+        // have to survive a restart, or the next boot would draw the derived
+        // ones while the daemon reports a scan's.
+        if self.apply_categorization(report)
             && let Some(helper) = AppLibraryConfig::helper()
         {
             let _ = self.config.write_entry(&helper);
@@ -3011,7 +3136,7 @@ impl HearthDeck {
             DASHBOARD_HOME_ID.clone(),
             DASHBOARD_LIBRARY_ID.clone(),
             DASHBOARD_SEARCH_ID.clone(),
-            DASHBOARD_CATEGORIZE_ID.clone(),
+            DASHBOARD_SETTINGS_ID.clone(),
         ];
         let focused = self.focused_id.as_ref();
         let entry_rows = self.dashboard_entry_rows();
@@ -3035,7 +3160,7 @@ impl HearthDeck {
             DASHBOARD_HOME_ID.clone(),
             DASHBOARD_LIBRARY_ID.clone(),
             DASHBOARD_SEARCH_ID.clone(),
-            DASHBOARD_CATEGORIZE_ID.clone(),
+            DASHBOARD_SETTINGS_ID.clone(),
         ];
         if focused.is_some_and(|id| nav_ids.contains(id)) {
             return if delta > 0 {
@@ -3857,6 +3982,9 @@ impl cosmic::Application for HearthDeck {
                 if let Some(task) = self.direction_to_overlay(Message::PrevRow) {
                     return task;
                 }
+                if self.page == Page::Settings {
+                    return self.settings_move(-1);
+                }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_vertical_target(-1) else {
                         return Task::none();
@@ -3903,6 +4031,9 @@ impl cosmic::Application for HearthDeck {
             Message::NextRow => {
                 if let Some(task) = self.direction_to_overlay(Message::NextRow) {
                     return task;
+                }
+                if self.page == Page::Settings {
+                    return self.settings_move(1);
                 }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_vertical_target(1) else {
@@ -3952,6 +4083,9 @@ impl cosmic::Application for HearthDeck {
                 if let Some(task) = self.direction_to_overlay(Message::PrevCol) {
                     return task;
                 }
+                if self.page == Page::Settings {
+                    return self.settings_move(-1);
+                }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_horizontal_target(-1) else {
                         return Task::none();
@@ -3975,6 +4109,9 @@ impl cosmic::Application for HearthDeck {
             Message::NextCol => {
                 if let Some(task) = self.direction_to_overlay(Message::NextCol) {
                     return task;
+                }
+                if self.page == Page::Settings {
+                    return self.settings_move(1);
                 }
                 if self.page == Page::Dashboard {
                     let Some(id) = self.dashboard_horizontal_target(1) else {
@@ -4193,6 +4330,9 @@ impl cosmic::Application for HearthDeck {
                     }
                     return self.update(Message::CloseDetails);
                 }
+                if self.page == Page::Settings {
+                    return self.update(Message::OpenDashboard);
+                }
                 if self.page == Page::Library {
                     // Back dismisses the topmost transient UI first: the filter
                     // sidebar closes before the screen is left.
@@ -4228,8 +4368,19 @@ impl cosmic::Application for HearthDeck {
                 if focused == *DASHBOARD_SEARCH_ID {
                     return self.update(Message::OpenSearch);
                 }
-                if focused == *DASHBOARD_CATEGORIZE_ID {
-                    return self.update(Message::StartCategorization);
+                if focused == *DASHBOARD_SETTINGS_ID {
+                    return self.update(Message::OpenSettings);
+                }
+                if let Some(action) = crate::settings::action(&focused) {
+                    // The row was drawn from the same list, so an action the list
+                    // does not hold (a scan that started since) is ignored.
+                    let panel = self.settings_panel();
+                    if crate::settings::actions(&panel).contains(&action)
+                        && crate::settings::pressable(action, &panel)
+                    {
+                        return self.update(action.message());
+                    }
+                    return Task::none();
                 }
                 if self.page == Page::Dashboard {
                     if let Some(index) = self.dashboard_console_id_for_widget(&focused) {
@@ -4733,6 +4884,24 @@ impl cosmic::Application for HearthDeck {
                             alerts = self.push_alert(fl!("backend-restored"), false);
                         }
                         self.backend_available = Some(true);
+                        // Whether the deployment provides categorization decides
+                        // whether the settings screen offers it at all.
+                        let was_capable = self.categorization_capable;
+                        self.categorization_capable = Some(health.capabilities.categorization);
+                        // The settings screen reads the status on the way in, but
+                        // that read is skipped while the deployment is still
+                        // unknown. Once it turns out to provide the service, take
+                        // the read that was skipped.
+                        if was_capable != Some(true)
+                            && self.categorization_capable == Some(true)
+                            && self.page == Page::Settings
+                            && self.categorization.is_none()
+                        {
+                            alerts = Task::batch([
+                                alerts,
+                                self.poll_categorization(std::time::Duration::ZERO),
+                            ]);
+                        }
                         let degraded = degraded_providers(&health);
                         if degraded != self.degraded_providers {
                             if !degraded.is_empty() {
@@ -4794,6 +4963,35 @@ impl cosmic::Application for HearthDeck {
                 return self.poll_categorization(CATEGORIZATION_POLL_INTERVAL);
             }
             Message::CategorizationPolled(result) => return self.settle_categorization(result),
+            Message::CategorizationAction(result) => {
+                return self.settle_categorization(result);
+            }
+            Message::OpenSettings => {
+                self.switch_page(Page::Settings);
+                // Nothing to read in a deployment that does not provide the
+                // service; it has already told us so on `/v1/health`.
+                if self.categorization_capable == Some(false) {
+                    return Task::none();
+                }
+                // Read on the way in: the screen has nothing to show until it
+                // knows whether a checkpoint is even on disk. Focusing here rather
+                // than in a reply keeps the pad on the screen the user just
+                // opened, whatever the read turns out to say.
+                let focus = self
+                    .settings_targets()
+                    .first()
+                    .cloned()
+                    .map(|id| self.settings_move_to(id))
+                    .unwrap_or_else(Task::none);
+                return Task::batch([focus, self.poll_categorization(std::time::Duration::ZERO)]);
+            }
+            Message::EnableCategorization => return self.enable_categorization(),
+            Message::DisableCategorization => return self.disable_categorization(),
+            Message::DeleteCategorizationModel => return self.delete_categorization_model(),
+            Message::ResetCategorizationTabs => {
+                self.restore_derived_categories();
+                return Task::none();
+            }
             Message::RecentEntries(result) => match result {
                 Ok(records) => {
                     self.recent_entries = records
@@ -4806,7 +5004,7 @@ impl cosmic::Application for HearthDeck {
                             DASHBOARD_HOME_ID.clone(),
                             DASHBOARD_LIBRARY_ID.clone(),
                             DASHBOARD_SEARCH_ID.clone(),
-                            DASHBOARD_CATEGORIZE_ID.clone(),
+                            DASHBOARD_SETTINGS_ID.clone(),
                         ];
                         let focus_is_valid = self.focused_id.as_ref().is_some_and(|focused| {
                             nav_ids.contains(focused) || entry_ids.contains(focused)
@@ -5264,8 +5462,66 @@ impl HearthDeck {
         match page {
             Page::Dashboard => self.view_dashboard(),
             Page::Library => self.view_main_content(),
+            Page::Settings => self.view_settings(),
             Page::Details => self.view_details(),
         }
+    }
+
+    /// The settings screen. It owns the categorization story, so the dashboard
+    /// does not have to: what it costs, whether it is on, and the way back.
+    fn view_settings(&self) -> Element<'_, Message> {
+        crate::settings::view(&self.settings_panel())
+    }
+
+    /// What the settings screen renders, gathered in one place so the screen and
+    /// the gamepad's focus are looking at the same state.
+    fn settings_panel(&self) -> crate::settings::Panel {
+        crate::settings::Panel {
+            capable: self.categorization_capable,
+            snapshot: self.categorization.clone(),
+        }
+    }
+
+    /// The settings buttons a controller may land on, left to right.
+    ///
+    /// A deployment without the feature has none, so the page is a statement with
+    /// nothing to press — which is why the whole feature stays behind
+    /// `capabilities.categorization` rather than needing to fail at a click.
+    fn settings_targets(&self) -> Vec<widget::Id> {
+        if self.categorization_capable != Some(true) {
+            return Vec::new();
+        }
+        let panel = self.settings_panel();
+        crate::settings::actions(&panel)
+            .into_iter()
+            .filter(|action| crate::settings::pressable(*action, &panel))
+            .map(|action| action.id().clone())
+            .collect()
+    }
+
+    /// The next settings button along, or `None` when the row has run out or the
+    /// focus is somewhere this screen does not own. Clamped rather than wrapping,
+    /// like the dashboard's own navigation.
+    fn settings_target(&self, delta: i32) -> Option<widget::Id> {
+        let targets = self.settings_targets();
+        let focused = self.focused_id.as_ref()?;
+        let current = targets.iter().position(|id| id == focused)?;
+        let next = (current as i32 + delta).clamp(0, targets.len() as i32 - 1) as usize;
+        targets.get(next).cloned()
+    }
+
+    fn settings_move(&mut self, delta: i32) -> Task<Message> {
+        let Some(id) = self.settings_target(delta) else {
+            return Task::none();
+        };
+        self.settings_move_to(id)
+    }
+
+    /// Puts the focus on one settings button by id.
+    fn settings_move_to(&mut self, id: widget::Id) -> Task<Message> {
+        self.focused_id = Some(id.clone());
+        iced_runtime::task::widget(focus(id))
+            .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id))))
     }
 
     fn view_dashboard<'a>(&'a self) -> Element<'a, Message> {
@@ -5363,18 +5619,12 @@ impl HearthDeck {
                 false,
                 Some(Message::OpenSearch),
             ),
-            // Disabled while a scan runs, so the only feedback needed is the
-            // icon: the scan itself is a progress-free few minutes in the daemon.
             nav_button(
-                DASHBOARD_CATEGORIZE_ID.clone(),
-                if self.categorizing {
-                    "emblem-synchronizing-symbolic"
-                } else {
-                    "folder-symbolic"
-                },
-                "Categorize",
+                DASHBOARD_SETTINGS_ID.clone(),
+                "preferences-system-symbolic",
+                "Settings",
                 false,
-                (!self.categorizing).then_some(Message::StartCategorization),
+                Some(Message::OpenSettings),
             ),
         ]
         .spacing(space_xs)
@@ -6653,13 +6903,16 @@ mod tests {
         VirtualKeyboard, degraded_providers, focused_entry_index, is_primary_window,
         next_romm_offset, rail_scroll_target, romm_page_is_current, selected_romm_platform_id,
     };
-    use crate::app_group::{AppGroup, AppLibraryConfig, FilterType, RommFacet, Section};
+    use crate::app_group::{
+        AppGroup, AppLibraryConfig, CategorizationGroup, FilterType, RommFacet, Section,
+    };
     use crate::fl;
     use crate::providers::GameRecord;
     use crate::providers::daemon::{
         CategorizationSnapshot, HealthResponse, HostCapabilities, ProviderHealthInfo, RetroConsole,
         RetroGameDetails, RetroRecordPage, RetroRomVersion,
     };
+    use crate::settings::Action;
     use cosmic::{
         desktop::{DesktopEntryData, fde::IconSource},
         iced::widget,
@@ -7186,6 +7439,136 @@ mod tests {
     }
 
     #[test]
+    fn settings_opens_from_the_dashboard_and_back_returns_to_it() {
+        let mut app = HearthDeck::default();
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSettings);
+        assert_eq!(app.page, super::Page::Settings);
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::Close);
+        assert_eq!(app.page, super::Page::Dashboard);
+    }
+
+    #[test]
+    fn a_status_read_in_an_unsupported_deployment_is_not_an_error() {
+        // No health reply has arrived, so the deployment is not known to provide
+        // categorization. Its 503 is an answer, not a failure to report.
+        let mut app = HearthDeck {
+            categorizing: true,
+            ..Default::default()
+        };
+
+        let _ =
+            app.settle_categorization(Err("this deployment does not provide that service".into()));
+
+        assert!(!app.categorizing, "the poll has to stop either way");
+        assert!(app.categorization.is_none());
+    }
+
+    #[test]
+    fn the_settings_view_builds_for_every_capability_state() {
+        // Building the view evaluates every localised label the screen uses, so
+        // a key missing from the fluent catalogue fails here instead of at
+        // runtime.
+        for capable in [None, Some(false), Some(true)] {
+            let panel = crate::settings::Panel {
+                capable,
+                snapshot: None,
+            };
+            let _ = crate::settings::view(&panel);
+        }
+
+        let idle: CategorizationSnapshot =
+            serde_json::from_value(snapshot_json(false, true)).unwrap();
+        let running: CategorizationSnapshot =
+            serde_json::from_value(snapshot_json(true, true)).unwrap();
+        for snapshot in [idle, running] {
+            let panel = crate::settings::Panel {
+                capable: Some(true),
+                snapshot: Some(snapshot),
+            };
+            let _ = crate::settings::view(&panel);
+        }
+    }
+
+    #[test]
+    fn the_pad_moves_along_the_settings_buttons() {
+        let mut app = HearthDeck {
+            categorization_capable: Some(true),
+            categorization: Some(serde_json::from_value(snapshot_json(false, true)).unwrap()),
+            ..Default::default()
+        };
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSettings);
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Rescan.id()));
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Disable.id()));
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Reset.id()));
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(app.focused_id.as_ref(), Some(Action::RemoveModel.id()));
+        // Clamped at the end, like the dashboard's own navigation.
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(app.focused_id.as_ref(), Some(Action::RemoveModel.id()));
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::PrevCol);
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Reset.id()));
+    }
+
+    #[test]
+    fn a_running_scan_is_not_a_settings_target() {
+        let mut app = HearthDeck {
+            categorization_capable: Some(true),
+            categorization: Some(serde_json::from_value(snapshot_json(true, true)).unwrap()),
+            ..Default::default()
+        };
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSettings);
+
+        // Rescan is drawn but unpressable while the scan it would replace is
+        // running, so the pad starts on the next button that does something.
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Disable.id()));
+    }
+
+    #[test]
+    fn confirming_a_settings_button_acts_on_it() {
+        let mut app = HearthDeck {
+            categorization_capable: Some(true),
+            categorization: Some(serde_json::from_value(snapshot_json(false, true)).unwrap()),
+            ..Default::default()
+        };
+        // A tab as a scan would have left it, so Reset has something to undo.
+        app.config.sync_categorization(&[CategorizationGroup {
+            name: "Streaming".into(),
+            entry_ids: Vec::new(),
+        }]);
+        assert!(!app.config.sections.applications.is_empty());
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::ConfirmFocused(Action::Reset.id().clone()),
+        );
+
+        assert!(app.config.sections.applications.is_empty());
+    }
+
+    #[test]
+    fn a_deployment_without_the_feature_has_no_settings_targets() {
+        let mut app = HearthDeck {
+            categorization_capable: Some(false),
+            categorization: Some(serde_json::from_value(snapshot_json(false, true)).unwrap()),
+            ..Default::default()
+        };
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSettings);
+        assert_eq!(app.page, super::Page::Settings);
+        assert_eq!(app.focused_id, None);
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(app.focused_id, None, "nothing on the page can be pressed");
+    }
+
+    #[test]
     fn dashboard_controller_moves_across_top_navigation() {
         let mut app = HearthDeck {
             focused_id: Some(super::DASHBOARD_HOME_ID.clone()),
@@ -7201,21 +7584,26 @@ mod tests {
             app.dashboard_horizontal_target(-1),
             Some(super::DASHBOARD_LIBRARY_ID.clone())
         );
-        // The categorize action sits after Search, so a controller can reach it
-        // and start a scan without a pointer.
+        // The settings screen sits after Search, so a controller can reach it
+        // and turn smart categories on without a pointer.
         assert_eq!(
             app.dashboard_horizontal_target(1),
-            Some(super::DASHBOARD_CATEGORIZE_ID.clone())
+            Some(super::DASHBOARD_SETTINGS_ID.clone())
         );
     }
 
     /// The daemon's `GET /v1/categorization` body, as the handler writes it. The
     /// UI only projects part of it, and this pins that the rest is tolerated
     /// instead of failing to parse the whole reply.
-    fn snapshot_json(running: bool) -> serde_json::Value {
+    fn snapshot_json(running: bool, enabled: bool) -> serde_json::Value {
         serde_json::json!({
+            "enabled": enabled,
             "status": {
                 "running": running,
+                "phase": if running { "scanning" } else { "idle" },
+                "completed": 3,
+                "total": 12,
+                "model": {"state": "downloaded", "bytes": 842609210, "path": "/models/hub/laya"},
                 "last_completed_at": "2026-09-23T10:00:00Z",
             },
             "report": {
@@ -7253,7 +7641,7 @@ mod tests {
     fn an_applied_report_maps_catalog_ids_onto_entry_ids() {
         let mut app = HearthDeck::default();
         let snapshot: CategorizationSnapshot =
-            serde_json::from_value(snapshot_json(false)).unwrap();
+            serde_json::from_value(snapshot_json(false, true)).unwrap();
         let report = snapshot.report.expect("report");
 
         assert!(app.apply_categorization(&report));
@@ -7277,7 +7665,8 @@ mod tests {
             categorizing: true,
             ..Default::default()
         };
-        let snapshot: CategorizationSnapshot = serde_json::from_value(snapshot_json(true)).unwrap();
+        let snapshot: CategorizationSnapshot =
+            serde_json::from_value(snapshot_json(true, true)).unwrap();
 
         let _ = app.settle_categorization(Ok(snapshot));
 
@@ -7286,6 +7675,10 @@ mod tests {
             "a running scan must keep the button disabled"
         );
         assert_eq!(app.categorization_polls, 1);
+        // The settings screen renders from this, so it has to be kept.
+        let status = app.categorization.expect("kept snapshot").status;
+        assert_eq!(status.completed, 3);
+        assert_eq!(status.total, 12);
     }
 
     #[test]
@@ -7296,12 +7689,31 @@ mod tests {
             ..Default::default()
         };
         let snapshot: CategorizationSnapshot =
-            serde_json::from_value(snapshot_json(false)).unwrap();
+            serde_json::from_value(snapshot_json(false, true)).unwrap();
 
         let _ = app.settle_categorization(Ok(snapshot));
 
         assert!(!app.categorizing, "the button must come back after a scan");
         assert_eq!(app.categorization_polls, 0);
+        // Enabled, so the report landed on the tabs.
+        assert_eq!(app.config.sections.applications.len(), 1);
+    }
+
+    #[test]
+    fn a_report_is_not_applied_while_the_feature_is_off() {
+        let mut app = HearthDeck {
+            categorizing: true,
+            ..Default::default()
+        };
+        let snapshot: CategorizationSnapshot =
+            serde_json::from_value(snapshot_json(false, false)).unwrap();
+
+        let _ = app.settle_categorization(Ok(snapshot));
+
+        assert!(
+            app.config.sections.applications.is_empty(),
+            "off means the derived categories stand"
+        );
     }
 
     #[test]
@@ -7455,6 +7867,7 @@ mod tests {
                 application_sessions: true,
                 install_requests: false,
                 retro_launch: true,
+                categorization: true,
             },
         };
         let provider = |id: &str, status: &str| ProviderHealthInfo {

@@ -1430,7 +1430,11 @@ impl ApiError {
     fn service_unavailable() -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
-            message: "discovery service is unavailable".to_owned(),
+            // Deliberately says "that service" rather than naming one: this is the
+            // 503 for every service a build may not have — discovery, metadata,
+            // and the opt-in categorization — and naming discovery made the
+            // message a lie for the other two.
+            message: "this deployment does not provide that service".to_owned(),
             settings: None,
         }
     }

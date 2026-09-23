@@ -54,6 +54,10 @@ env \
   > "$log_dir/bridge.log" 2>&1 &
 bridge_pid=$!
 
+# Smart categorization is offered in dev so the Settings screen has a button to
+# press. Nothing is downloaded or run until it is pressed, and the binary is the
+# one the workspace build just produced. HEARTHDECK_DEV_CATEGORIZER=false runs
+# without it, which is how the deployment looks when the feature is not shipped.
 env \
   XDG_RUNTIME_DIR="$runtime_dir/runtime" \
   XDG_DATA_HOME="$runtime_dir/data" \
@@ -61,6 +65,8 @@ env \
   HEARTHDECK_DATABASE_PATH="$runtime_dir/data/hearthdeck.db" \
   HEARTHDECK_BIND_ADDRESS="127.0.0.1:$api_port" \
   HEARTHDECK_LOCAL_ADMIN_ADDRESS="127.0.0.1:$admin_port" \
+  HEARTHDECK_CATEGORIZER_ENABLED="${HEARTHDECK_DEV_CATEGORIZER:-true}" \
+  HEARTHDECK_CATEGORIZER_BIN="$PWD/services/target/debug/hearthdeck-categorizer" \
   ./services/target/debug/hearthdeck-daemon \
   > "$log_dir/daemon.log" 2>&1 &
 daemon_pid=$!

@@ -84,6 +84,10 @@ pub struct HostCapabilities {
     pub application_sessions: bool,
     pub install_requests: bool,
     pub retro_launch: bool,
+    /// Whether this deployment provides categorization at all. Distinct from the
+    /// user's opt-in: false means the feature does not exist for this client.
+    #[serde(default)]
+    pub categorization: bool,
 }
 
 /// Catalog item returned by the daemon's /v1/library endpoint.
@@ -124,19 +128,54 @@ pub enum ServerEvent {
 /// what the last completed one concluded.
 #[derive(Clone, Debug, Deserialize)]
 pub struct CategorizationSnapshot {
+    /// The user's opt-in. Everything heavy — the download, the scan, replacing
+    /// the tabs — waits on it.
+    pub enabled: bool,
     pub status: CategorizationStatus,
     /// `None` until the library has been categorized once.
     pub report: Option<ScanReport>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct CategorizationStatus {
     pub running: bool,
+    pub phase: CategorizationPhase,
+    /// Applications decided so far, while `phase` is `scanning`.
+    #[serde(default)]
+    pub completed: usize,
+    #[serde(default)]
+    pub total: usize,
+    pub model: ModelStatus,
     #[serde(default)]
     pub last_error: Option<String>,
     #[serde(default)]
     pub last_completed_at: Option<String>,
+}
+
+/// Where a running scan has got to. `downloading` is the daemon's reading of the
+/// engine load when no checkpoint was on disk: fetching one happens in there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CategorizationPhase {
+    Idle,
+    Downloading,
+    Loading,
+    Scanning,
+}
+
+/// What the checkpoint costs, or that the deployment brought its own.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ModelStatus {
+    /// Nothing to run yet; the first scan will fetch one.
+    Absent,
+    /// A checkpoint in the daemon's own cache, and what it occupies.
+    Downloaded {
+        bytes: u64,
+        path: std::path::PathBuf,
+    },
+    /// A directory the deployment pointed at, which Hearthdeck never deletes.
+    External { path: std::path::PathBuf },
 }
 
 /// What one scan concluded. This is a projection: the daemon also sends the
@@ -552,9 +591,43 @@ impl DaemonClient {
     /// [`DaemonClient::categorization`]. Requesting a scan while one runs is not
     /// an error; the daemon coalesces the two.
     pub async fn start_categorization_scan(&self) -> Result<(), DaemonError> {
+        self.post_empty("/v1/categorization/scan").await
+    }
+
+    /// Turns smart categorization on, which is the action that fetches the
+    /// checkpoint when none is cached and produces the first report.
+    pub async fn enable_categorization(&self) -> Result<(), DaemonError> {
+        self.post_empty("/v1/categorization/enable").await
+    }
+
+    /// Turns it off. A scan already running is left to finish.
+    pub async fn disable_categorization(&self) -> Result<(), DaemonError> {
+        self.post_empty("/v1/categorization/disable").await
+    }
+
+    /// Frees the downloaded checkpoint. Surfaces the daemon's refusal when the
+    /// checkpoint is a directory the deployment owns, or a scan is reading it.
+    pub async fn delete_categorization_model(&self) -> Result<(), DaemonError> {
         let response = self
             .http
-            .post(self.api_url("/v1/categorization/scan"))
+            .delete(self.api_url("/v1/categorization/model"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        Ok(())
+    }
+
+    /// A POST that carries nothing and answers nothing.
+    async fn post_empty(&self, path: &str) -> Result<(), DaemonError> {
+        let response = self
+            .http
+            .post(self.api_url(path))
             .headers(self.auth_headers().await?)
             .send()
             .await

@@ -10,6 +10,7 @@ mod input_ownership;
 mod launch_state;
 mod localize;
 mod providers;
+mod settings;
 mod style;
 mod subscriptions;
 mod system_status;
