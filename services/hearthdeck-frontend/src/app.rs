@@ -69,7 +69,8 @@ use log::{error, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::app_group::{
-    AppGroup, AppLibraryConfig, RommFacet, RommFilters, Section, is_watch_entry,
+    AppGroup, AppLibraryConfig, CategorizationGroup, RommFacet, RommFilters, Section,
+    is_watch_entry,
 };
 use crate::fl;
 use crate::input_ownership::{
@@ -77,8 +78,9 @@ use crate::input_ownership::{
 };
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::providers::daemon::{
-    Collection, CollectionItem, FAVORITES_COLLECTION, PLAY_LATER_COLLECTION, RetroDetails,
-    RetroGameDetails, RetroRomVersion, retro_rom_versions, retro_version_label,
+    CATALOG_ENTRY_PREFIX, CategorizationSnapshot, Collection, CollectionItem, FAVORITES_COLLECTION,
+    PLAY_LATER_COLLECTION, RetroDetails, RetroGameDetails, RetroRomVersion, ScanReport,
+    retro_rom_versions, retro_version_label,
 };
 use crate::style::{
     DASHBOARD_GAME_ASPECT, DASHBOARD_RAIL_TILES, DETAILS_ACTION_WIDTH, DETAILS_FACT_LABEL_WIDTH,
@@ -114,6 +116,7 @@ static FILTER_ID: LazyLock<Id> = LazyLock::new(|| Id::new("filter"));
 static DASHBOARD_HOME_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-home"));
 static DASHBOARD_LIBRARY_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-library"));
 static DASHBOARD_SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-search"));
+static DASHBOARD_CATEGORIZE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard-categorize"));
 
 /// Rail key for the dashboard console list, which is not a shelved catalog
 /// section, so it needs its own stable scrollable id.
@@ -157,6 +160,14 @@ const SESSION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_sec
 const SYSTEM_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 const DASHBOARD_HEALTH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 const RECENT_ACTIVITY_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+const CATEGORIZATION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+/// The snakified `Section::Applications`, exactly as the daemon serializes it.
+/// Only a proposal the scan placed in this section becomes a tab here.
+const APPLICATIONS_SECTION: &str = "applications";
+/// Stop watching a scan after this many polls. A scan of a large library on CPU
+/// can run for a long time, so this is a generous backstop against polling a
+/// wedged daemon forever, not a timeout on the scan itself.
+const CATEGORIZATION_POLL_LIMIT: u32 = 800;
 const ROMM_PAGE_SIZE: u32 = 48;
 const ROMM_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 static REMOVE: LazyLock<String> = LazyLock::new(|| fl!("remove"));
@@ -436,6 +447,10 @@ struct HearthDeck {
     launch_state: LaunchState,
     input_ownership: InputOwnership,
     system_status: SystemStatus,
+    /// True from the moment the dashboard's Categorize button is pressed until
+    /// the scan it started reports that it has stopped.
+    categorizing: bool,
+    categorization_polls: u32,
     /// Transient user-facing alerts, rendered with libcosmic's toaster so the
     /// dashboard stays a browsing surface instead of an alert log.
     toasts: Toasts<Message>,
@@ -534,6 +549,8 @@ impl Default for HearthDeck {
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
             system_status: SystemStatus::default(),
+            categorizing: Default::default(),
+            categorization_polls: Default::default(),
             toasts: Toasts::new(Message::DismissToast),
             backend_available: None,
             degraded_providers: Vec::new(),
@@ -995,6 +1012,8 @@ enum Message {
     /// index within the Console Games tab strip.
     OpenConsole(usize),
     OpenSearch,
+    /// The user pressed the dashboard's Categorize button.
+    StartCategorization,
     /// Open the details screen for one entry of the current grid. Only RomM
     /// console games have one, so the caller checks the entry kind first.
     OpenDetails(usize),
@@ -1123,6 +1142,10 @@ enum Message {
     /// The user closed an alert, or its display duration elapsed.
     DismissToast(ToastId),
     DashboardRescanResult(Result<(), String>),
+    /// The daemon accepted, or refused, a categorization scan request.
+    CategorizationScanStarted(Result<(), String>),
+    /// What the daemon said when asked how a running scan is getting on.
+    CategorizationPolled(Result<CategorizationSnapshot, String>),
     SystemStatus(SystemStatus),
     RommGames {
         generation: u64,
@@ -1377,6 +1400,120 @@ impl HearthDeck {
         )
     }
 
+    /// Asks the daemon to categorize the library, then watches the scan.
+    fn start_categorization(&mut self) -> Task<Message> {
+        if self.categorizing {
+            return Task::none();
+        }
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        self.categorizing = true;
+        self.categorization_polls = 0;
+        Task::perform(
+            async move {
+                client
+                    .start_categorization_scan()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CategorizationScanStarted(result)),
+        )
+    }
+
+    /// One look at how a running scan is getting on.
+    ///
+    /// The next poll is scheduled by the reply rather than by a timer held
+    /// here, so exactly one poll is ever outstanding and a scan that finishes
+    /// while the app is elsewhere cannot leave one running.
+    fn poll_categorization(&self, delay: std::time::Duration) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                tokio::time::sleep(delay).await;
+                client
+                    .categorization()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CategorizationPolled(result)),
+        )
+    }
+
+    /// Settles one poll: keep watching, give up, or report the finished scan.
+    fn settle_categorization(
+        &mut self,
+        result: Result<CategorizationSnapshot, String>,
+    ) -> Task<Message> {
+        let snapshot = match result {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.categorizing = false;
+                log::warn!("could not read the categorization scan status: {error}");
+                return self.push_alert(fl!("categorization-failed", reason = error), true);
+            }
+        };
+
+        if snapshot.status.running {
+            self.categorizing = true;
+            self.categorization_polls += 1;
+            if self.categorization_polls > CATEGORIZATION_POLL_LIMIT {
+                log::warn!("stopped watching the categorization scan at the poll limit");
+                self.categorizing = false;
+                return self.push_alert(fl!("categorization-still-running"), true);
+            }
+            return self.poll_categorization(CATEGORIZATION_POLL_INTERVAL);
+        }
+
+        // The report is applied whether or not this session was watching: it can
+        // be newer than the tabs on disk whenever a scan ran while the frontend
+        // was not up, and a boot only ever polls once.
+        let watching = std::mem::take(&mut self.categorizing);
+        self.categorization_polls = 0;
+        let Some(report) = snapshot.report else {
+            return Task::none();
+        };
+        // Applying is a swap of the scan's own tabs, so it is written straight
+        // away: the tabs have to survive a restart, or the next boot would draw
+        // the derived ones while the daemon reports a scan's.
+        if self.apply_categorization(&report)
+            && let Some(helper) = AppLibraryConfig::helper()
+        {
+            let _ = self.config.write_entry(&helper);
+        }
+        if !watching {
+            return Task::none();
+        }
+
+        let categories = report
+            .categories
+            .iter()
+            .filter(|category| category.recommended)
+            .count();
+        log::info!(
+            "categorization finished: {categories} categories from {} apps, categorizer {}",
+            report.app_count,
+            report.categorizer
+        );
+        if !report.unclassified.is_empty() {
+            log::debug!(
+                "categorization left {} apps unclassified, starting with {:?}",
+                report.unclassified.len(),
+                report.unclassified.first().map(|app| app.title.as_str())
+            );
+        }
+        self.push_alert(
+            fl!(
+                "categorization-complete",
+                categories = categories,
+                unclassified = report.unclassified.len()
+            ),
+            false,
+        )
+    }
+
     fn load_recent_activity(&self, delay: std::time::Duration) -> Task<Message> {
         let Some(client) = self.daemon_client.clone() else {
             return Task::none();
@@ -1474,15 +1611,54 @@ impl HearthDeck {
     }
 
     fn sync_category_groups(&mut self) {
-        let selected_group = self
-            .cur_group
-            .and_then(|index| self.config.sections.get(self.cur_section).get(index))
-            .cloned();
+        let selected_group = self.selected_group();
         if !self.config.sync_category_groups(&self.all_entries) {
             return;
         }
+        self.restore_selected_group(selected_group);
+    }
 
-        self.cur_group = selected_group.and_then(|selected| {
+    /// Puts the tabs a scan proposed where the tabs it replaced were, and reports
+    /// whether anything changed.
+    ///
+    /// The report speaks in catalog item ids and a tab filters on library entry
+    /// ids, so the ids are prefixed on the way in — the same prefix
+    /// [`crate::providers::daemon::catalog_item_to_game_record`] applies.
+    fn apply_categorization(&mut self, report: &ScanReport) -> bool {
+        let groups: Vec<CategorizationGroup> = report
+            .categories
+            .iter()
+            .filter(|category| category.recommended && category.section == APPLICATIONS_SECTION)
+            .map(|category| CategorizationGroup {
+                name: category.name.clone(),
+                entry_ids: category
+                    .app_ids
+                    .iter()
+                    .map(|id| format!("{CATALOG_ENTRY_PREFIX}{id}"))
+                    .collect(),
+            })
+            .collect();
+
+        let selected_group = self.selected_group();
+        if !self.config.sync_categorization(&groups) {
+            return false;
+        }
+        self.restore_selected_group(selected_group);
+        true
+    }
+
+    /// The tab the user is looking at, so it can be found again after the tabs
+    /// have been rebuilt underneath it.
+    fn selected_group(&self) -> Option<AppGroup> {
+        self.cur_group
+            .and_then(|index| self.config.sections.get(self.cur_section).get(index))
+            .cloned()
+    }
+
+    /// Re-selects the tab that was selected before a rebuild, or nothing when it
+    /// no longer exists, and re-points the tab widget keys at the new list.
+    fn restore_selected_group(&mut self, selected: Option<AppGroup>) {
+        self.cur_group = selected.and_then(|selected| {
             self.config
                 .sections
                 .get(self.cur_section)
@@ -2835,6 +3011,7 @@ impl HearthDeck {
             DASHBOARD_HOME_ID.clone(),
             DASHBOARD_LIBRARY_ID.clone(),
             DASHBOARD_SEARCH_ID.clone(),
+            DASHBOARD_CATEGORIZE_ID.clone(),
         ];
         let focused = self.focused_id.as_ref();
         let entry_rows = self.dashboard_entry_rows();
@@ -2858,6 +3035,7 @@ impl HearthDeck {
             DASHBOARD_HOME_ID.clone(),
             DASHBOARD_LIBRARY_ID.clone(),
             DASHBOARD_SEARCH_ID.clone(),
+            DASHBOARD_CATEGORIZE_ID.clone(),
         ];
         if focused.is_some_and(|id| nav_ids.contains(id)) {
             return if delta > 0 {
@@ -4050,6 +4228,9 @@ impl cosmic::Application for HearthDeck {
                 if focused == *DASHBOARD_SEARCH_ID {
                     return self.update(Message::OpenSearch);
                 }
+                if focused == *DASHBOARD_CATEGORIZE_ID {
+                    return self.update(Message::StartCategorization);
+                }
                 if self.page == Page::Dashboard {
                     if let Some(index) = self.dashboard_console_id_for_widget(&focused) {
                         return self.open_console(index);
@@ -4602,6 +4783,17 @@ impl cosmic::Application for HearthDeck {
                 let health = self.load_dashboard_health(std::time::Duration::from_secs(1));
                 return Task::batch([alerts, health]);
             }
+            Message::StartCategorization => return self.start_categorization(),
+            Message::CategorizationScanStarted(result) => {
+                if let Err(error) = result {
+                    self.categorizing = false;
+                    log::warn!("categorization scan was not accepted: {error}");
+                    return self.push_alert(fl!("categorization-failed", reason = error), true);
+                }
+                log::info!("categorization scan accepted; watching it");
+                return self.poll_categorization(CATEGORIZATION_POLL_INTERVAL);
+            }
+            Message::CategorizationPolled(result) => return self.settle_categorization(result),
             Message::RecentEntries(result) => match result {
                 Ok(records) => {
                     self.recent_entries = records
@@ -4614,6 +4806,7 @@ impl cosmic::Application for HearthDeck {
                             DASHBOARD_HOME_ID.clone(),
                             DASHBOARD_LIBRARY_ID.clone(),
                             DASHBOARD_SEARCH_ID.clone(),
+                            DASHBOARD_CATEGORIZE_ID.clone(),
                         ];
                         let focus_is_valid = self.focused_id.as_ref().is_some_and(|focused| {
                             nav_ids.contains(focused) || entry_ids.contains(focused)
@@ -5045,6 +5238,9 @@ impl cosmic::Application for HearthDeck {
         let load_recent_activity = self_.load_recent_activity(std::time::Duration::ZERO);
         let load_collections = self_.load_collections(std::time::Duration::ZERO);
         let load_dashboard_health = self_.load_dashboard_health(std::time::Duration::ZERO);
+        // One read of the scan state, so a scan already running (the startup one)
+        // shows on the button instead of looking idle.
+        let load_categorization = self_.poll_categorization(std::time::Duration::ZERO);
         (
             self_,
             Task::batch([
@@ -5057,6 +5253,7 @@ impl cosmic::Application for HearthDeck {
                 load_recent_activity,
                 load_collections,
                 load_dashboard_health,
+                load_categorization,
             ]),
         )
     }
@@ -5089,7 +5286,7 @@ impl HearthDeck {
                           icon_name: &'static str,
                           label: &'static str,
                           selected: bool,
-                          message: Message|
+                          message: Option<Message>|
          -> Element<'_, Message> {
             tooltip(
                 button::custom(icon::icon(icon::from_name(icon_name).into()).size(ICON_BODY))
@@ -5097,7 +5294,7 @@ impl HearthDeck {
                     .width(Length::Fixed(nav_button_size))
                     .height(Length::Fixed(nav_button_size))
                     .class(dashboard_nav_button_class(selected))
-                    .on_press(message),
+                    .on_press_maybe(message),
                 text::body(label).size(TEXT_BODY),
                 tooltip::Position::Bottom,
             )
@@ -5150,21 +5347,34 @@ impl HearthDeck {
                 "go-home-symbolic",
                 "Home",
                 true,
-                Message::OpenDashboard,
+                Some(Message::OpenDashboard),
             ),
             nav_button(
                 DASHBOARD_LIBRARY_ID.clone(),
                 "view-grid-symbolic",
                 "Library",
                 false,
-                Message::OpenLibrary,
+                Some(Message::OpenLibrary),
             ),
             nav_button(
                 DASHBOARD_SEARCH_ID.clone(),
                 "system-search-symbolic",
                 "Search",
                 false,
-                Message::OpenSearch,
+                Some(Message::OpenSearch),
+            ),
+            // Disabled while a scan runs, so the only feedback needed is the
+            // icon: the scan itself is a progress-free few minutes in the daemon.
+            nav_button(
+                DASHBOARD_CATEGORIZE_ID.clone(),
+                if self.categorizing {
+                    "emblem-synchronizing-symbolic"
+                } else {
+                    "folder-symbolic"
+                },
+                "Categorize",
+                false,
+                (!self.categorizing).then_some(Message::StartCategorization),
             ),
         ]
         .spacing(space_xs)
@@ -6447,8 +6657,8 @@ mod tests {
     use crate::fl;
     use crate::providers::GameRecord;
     use crate::providers::daemon::{
-        HealthResponse, HostCapabilities, ProviderHealthInfo, RetroConsole, RetroGameDetails,
-        RetroRecordPage, RetroRomVersion,
+        CategorizationSnapshot, HealthResponse, HostCapabilities, ProviderHealthInfo, RetroConsole,
+        RetroGameDetails, RetroRecordPage, RetroRomVersion,
     };
     use cosmic::{
         desktop::{DesktopEntryData, fde::IconSource},
@@ -6991,6 +7201,119 @@ mod tests {
             app.dashboard_horizontal_target(-1),
             Some(super::DASHBOARD_LIBRARY_ID.clone())
         );
+        // The categorize action sits after Search, so a controller can reach it
+        // and start a scan without a pointer.
+        assert_eq!(
+            app.dashboard_horizontal_target(1),
+            Some(super::DASHBOARD_CATEGORIZE_ID.clone())
+        );
+    }
+
+    /// The daemon's `GET /v1/categorization` body, as the handler writes it. The
+    /// UI only projects part of it, and this pins that the rest is tolerated
+    /// instead of failing to parse the whole reply.
+    fn snapshot_json(running: bool) -> serde_json::Value {
+        serde_json::json!({
+            "status": {
+                "running": running,
+                "last_completed_at": "2026-09-23T10:00:00Z",
+            },
+            "report": {
+                "generated_at": "2026-09-23T10:00:00Z",
+                "categorizer": "laya",
+                "researcher": null,
+                "app_count": 12,
+                "assignments": [{
+                    "app_id": "desktop:netflix.desktop",
+                    "title": "Netflix",
+                    "section": "applications",
+                    "section_confidence": 0.98,
+                    "categories": [
+                        {"slug": "video_streaming", "name": "Video & Streaming", "confidence": 0.91}
+                    ],
+                    "needs_category": false,
+                    "traits": {"game": 0.02, "watch_service": 0.97, "emulator": 0.01},
+                    "provenance": "laya",
+                }],
+                "failures": [],
+                "categories": [{
+                    "slug": "video_streaming",
+                    "name": "Video & Streaming",
+                    "section": "applications",
+                    "app_ids": ["desktop:netflix.desktop"],
+                    "mean_confidence": 0.91,
+                    "recommended": true,
+                }],
+                "unclassified": [],
+            }
+        })
+    }
+
+    #[test]
+    fn an_applied_report_maps_catalog_ids_onto_entry_ids() {
+        let mut app = HearthDeck::default();
+        let snapshot: CategorizationSnapshot =
+            serde_json::from_value(snapshot_json(false)).unwrap();
+        let report = snapshot.report.expect("report");
+
+        assert!(app.apply_categorization(&report));
+
+        let applications = &app.config.sections.applications;
+        assert_eq!(applications.len(), 1);
+        assert_eq!(applications[0].name, "Video & Streaming");
+        // The report names the catalog row; the tab has to name the entry.
+        assert!(matches!(
+            &applications[0].filter,
+            FilterType::AppIds(ids) if ids == &["hearthdeck:desktop:netflix.desktop"]
+        ));
+        // Re-applying the same report is not a change, so a poll cannot churn
+        // the config every few seconds.
+        assert!(!app.apply_categorization(&report));
+    }
+
+    #[test]
+    fn a_running_scan_is_followed_until_it_stops() {
+        let mut app = HearthDeck {
+            categorizing: true,
+            ..Default::default()
+        };
+        let snapshot: CategorizationSnapshot = serde_json::from_value(snapshot_json(true)).unwrap();
+
+        let _ = app.settle_categorization(Ok(snapshot));
+
+        assert!(
+            app.categorizing,
+            "a running scan must keep the button disabled"
+        );
+        assert_eq!(app.categorization_polls, 1);
+    }
+
+    #[test]
+    fn a_finished_scan_clears_the_watch() {
+        let mut app = HearthDeck {
+            categorizing: true,
+            categorization_polls: 7,
+            ..Default::default()
+        };
+        let snapshot: CategorizationSnapshot =
+            serde_json::from_value(snapshot_json(false)).unwrap();
+
+        let _ = app.settle_categorization(Ok(snapshot));
+
+        assert!(!app.categorizing, "the button must come back after a scan");
+        assert_eq!(app.categorization_polls, 0);
+    }
+
+    #[test]
+    fn a_failed_scan_stops_watching_rather_than_polling_forever() {
+        let mut app = HearthDeck {
+            categorizing: true,
+            ..Default::default()
+        };
+
+        let _ = app.settle_categorization(Err("daemon is down".to_owned()));
+
+        assert!(!app.categorizing);
     }
 
     #[test]
@@ -7065,6 +7388,7 @@ mod tests {
             name: "My folder".into(),
             icon: String::new(),
             filter: FilterType::AppIds(vec!["x".into()]),
+            source: crate::app_group::GroupSource::Local,
         });
 
         let app = HearthDeck {

@@ -169,13 +169,16 @@ mod tests {
     use super::{CollectionItem, CollectionStore, KIND_MEMBERSHIP, KIND_RULE, RULE_LAST_PLAYED};
     use crate::database::Database;
 
-    async fn store() -> CollectionStore {
+    /// Returns the store along with the temporary directory its database lives
+    /// in. `SqlitePool` opens connections lazily, so the directory has to outlive
+    /// the store: drop it here and the next connection finds no database file.
+    async fn store() -> (CollectionStore, tempfile::TempDir) {
         let directory = tempdir().unwrap();
         let database = Database::connect(&directory.path().join("hearthdeck.db"))
             .await
             .unwrap();
         database.migrate().await.unwrap();
-        CollectionStore::new(database.pool().clone())
+        (CollectionStore::new(database.pool().clone()), directory)
     }
 
     fn item(id: &str, name: &str) -> CollectionItem {
@@ -188,7 +191,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_built_in_collections_are_seeded_in_composition_order() {
-        let collections = store().await.list().await.unwrap();
+        let (store, _directory) = store().await;
+        let collections = store.list().await.unwrap();
         let slugs: Vec<&str> = collections.iter().map(|one| one.slug.as_str()).collect();
 
         assert_eq!(slugs, vec!["last-played", "favorites", "play-later"]);
@@ -202,7 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn curated_items_round_trip_in_the_order_they_were_added() {
-        let store = store().await;
+        let (store, _directory) = store().await;
         store
             .add_item("favorites", &item("romm:4014", "Zoop"))
             .await
@@ -234,7 +238,7 @@ mod tests {
 
     #[tokio::test]
     async fn derived_collections_refuse_curated_items_and_unknown_ones_do_not_exist() {
-        let store = store().await;
+        let (store, _directory) = store().await;
 
         assert_eq!(store.accepts_items("favorites").await.unwrap(), Some(true));
         // A rule collection is read-only: its contents are recomputed on read.

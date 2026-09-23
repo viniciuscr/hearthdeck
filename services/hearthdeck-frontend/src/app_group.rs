@@ -13,6 +13,7 @@ static HOME: LazyLock<AppGroup> = LazyLock::new(|| AppGroup {
     name: "cosmic-library-home".to_string(),
     icon: "user-home-symbolic".to_string(),
     filter: FilterType::None,
+    source: GroupSource::Local,
 });
 
 const CONSOLE_CATEGORY_PREFIX: &str = "hearthdeck-console:";
@@ -203,12 +204,43 @@ impl PartialOrd for FilterType {
     }
 }
 
+/// Who owns a tab, which decides who is allowed to replace it.
+///
+/// The distinction exists so a library scan can swap out exactly what a previous
+/// scan put there, instead of guessing from tab names or wiping the user's own
+/// folders along with it.
+#[derive(Default, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupSource {
+    /// Made here: by the user, or derived from the entries by
+    /// [`AppLibraryConfig::sync_category_groups`] and
+    /// [`AppLibraryConfig::sync_console_groups`].
+    #[default]
+    Local,
+    /// Proposed by a library scan, and replaced by the next report.
+    Categorization,
+}
+
+/// One tab a scan proposed, already resolved to the entry ids it holds.
+///
+/// The scan speaks in catalog item ids and [`AppGroup`] filters in library entry
+/// ids, so the translation happens where the report is read rather than here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CategorizationGroup {
+    pub name: String,
+    pub entry_ids: Vec<String>,
+}
+
 // Object holding the state
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AppGroup {
     pub name: String,
     pub icon: String,
     pub filter: FilterType,
+    /// Defaulted, so a config written before scans existed loads every tab as
+    /// [`GroupSource::Local`] and nothing is mistaken for a scan's work.
+    #[serde(default)]
+    pub source: GroupSource,
     // pub popup: bool,
 }
 
@@ -551,6 +583,7 @@ impl AppLibraryConfig {
             name,
             icon: "folder-symbolic".to_string(),
             filter: FilterType::AppIds(Vec::new()),
+            source: GroupSource::Local,
         });
     }
 
@@ -648,6 +681,11 @@ impl AppLibraryConfig {
 
     /// Rebuild category tabs from the entries currently present while keeping
     /// user-created groups, which use explicit application IDs.
+    ///
+    /// A scan owns the Applications section once it has a report: when the tabs
+    /// it made are present, the derived ones are not rebuilt at all. They are
+    /// exactly what the scan replaced, so rebuilding them would quietly put the
+    /// freedesktop tabs back beside the scan's.
     pub fn sync_category_groups(&mut self, entries: &[Arc<DesktopEntryData>]) -> bool {
         const APPLICATION_CATEGORIES: &[&str] = &[
             "Audio",
@@ -687,10 +725,16 @@ impl AppLibraryConfig {
             }
 
             let existing = self.sections.get(section);
-            let custom_groups = existing
+            // The scan's own tabs are kept here too: they use explicit app ids,
+            // which is also what makes a user's folder survive a rebuild.
+            let kept_groups = existing
                 .iter()
                 .filter(|group| matches!(group.filter, FilterType::AppIds(_)))
                 .cloned();
+            let scanned = section == Section::Applications
+                && existing
+                    .iter()
+                    .any(|group| group.source == GroupSource::Categorization);
             let mut groups: Vec<_> = categories
                 .into_values()
                 .map(|category| AppGroup {
@@ -709,9 +753,13 @@ impl AppLibraryConfig {
                         include: Vec::new(),
                         exclude: Vec::new(),
                     },
+                    source: GroupSource::Local,
                 })
                 .collect();
-            groups.extend(custom_groups);
+            if scanned {
+                groups.clear();
+            }
+            groups.extend(kept_groups);
 
             if existing != &groups {
                 *self.sections.get_mut(section) = groups;
@@ -737,6 +785,7 @@ impl AppLibraryConfig {
                     include: Vec::new(),
                     exclude: Vec::new(),
                 },
+                source: GroupSource::Local,
             })
             .collect::<Vec<_>>();
         groups.extend(custom_groups);
@@ -747,13 +796,59 @@ impl AppLibraryConfig {
         self.sections.console_games = groups;
         true
     }
+
+    /// Replaces the Applications tabs with the ones a scan proposed, and nothing
+    /// else.
+    ///
+    /// This is a swap, not a merge: the tabs a previous scan made are dropped,
+    /// the user's own folders are kept, and an empty list removes the scan's tabs
+    /// entirely — which hands the section back to the tabs derived from the
+    /// entries. Tabs the user made are told apart from a scan's by
+    /// [`is_user_group`], never by name.
+    pub fn sync_categorization(&mut self, groups: &[CategorizationGroup]) -> bool {
+        let existing = &self.sections.applications;
+        let mut replacements: Vec<AppGroup> = groups
+            .iter()
+            .map(|group| AppGroup {
+                name: group.name.clone(),
+                icon: "folder-symbolic".to_string(),
+                filter: FilterType::AppIds(group.entry_ids.clone()),
+                source: GroupSource::Categorization,
+            })
+            .collect();
+        replacements.extend(
+            existing
+                .iter()
+                .filter(|group| is_user_group(group))
+                .cloned(),
+        );
+
+        if existing == &replacements {
+            return false;
+        }
+        self.sections.applications = replacements;
+        true
+    }
+}
+
+/// True for a tab the user made by hand, which nothing may replace.
+///
+/// A `Categories` filter can never be a user's: [`AppLibraryConfig::add`] and
+/// `add_entry` only ever produce `AppIds`, so a stored `Categories` group was
+/// derived by this module and is free to drop. Testing the filter as well as the
+/// source is what keeps a config written before [`GroupSource`] existed — where
+/// every tab loads as [`GroupSource::Local`] — from having its derived tabs
+/// mistaken for the user's own.
+fn is_user_group(group: &AppGroup) -> bool {
+    group.source == GroupSource::Local && matches!(group.filter, FilterType::AppIds(_))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AppGroup, AppLibraryConfig, FilterType, RommFacet, RommFilters, Section,
-        romm_console_category, romm_decade_category, romm_genre_category, romm_region_category,
+        AppGroup, AppLibraryConfig, CategorizationGroup, FilterType, GroupSource, RommFacet,
+        RommFilters, Section, romm_console_category, romm_decade_category, romm_genre_category,
+        romm_region_category,
     };
     use cosmic::desktop::{DesktopEntryData, fde::IconSource};
     use std::sync::Arc;
@@ -943,6 +1038,7 @@ mod tests {
             name: "Favorites".into(),
             icon: "folder-symbolic".into(),
             filter: FilterType::AppIds(vec!["writer".into()]),
+            source: GroupSource::Local,
         });
 
         config.sync_category_groups(&[entry("writer", &["Office"])]);
@@ -951,6 +1047,93 @@ mod tests {
             group.name == "Favorites"
                 && matches!(&group.filter, FilterType::AppIds(ids) if ids == &["writer"])
         }));
+    }
+
+    fn scan_group(name: &str, ids: &[&str]) -> CategorizationGroup {
+        CategorizationGroup {
+            name: name.into(),
+            entry_ids: ids.iter().map(|id| (*id).into()).collect(),
+        }
+    }
+
+    fn tab_names(config: &AppLibraryConfig) -> Vec<String> {
+        config
+            .sections
+            .applications
+            .iter()
+            .map(|group| group.name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_scan_replaces_the_derived_tabs() {
+        let mut config = AppLibraryConfig::default();
+        let entries = [entry("writer", &["Office"]), entry("vlc", &["Video"])];
+        config.sync_category_groups(&entries);
+        assert_eq!(tab_names(&config).len(), 2);
+
+        assert!(config.sync_categorization(&[scan_group("Media Center", &["vlc"])]));
+
+        assert_eq!(tab_names(&config), vec!["Media Center"]);
+        // A later rebuild must not put the freedesktop tabs back beside it.
+        assert!(!config.sync_category_groups(&entries));
+        assert_eq!(tab_names(&config), vec!["Media Center"]);
+        assert!(
+            config.sections.applications[0].matches(&entries[1]),
+            "the scan's tab must still narrow to the app it named"
+        );
+    }
+
+    #[test]
+    fn a_second_scan_swaps_only_the_tabs_a_scan_made() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_categorization(&[scan_group("Development", &["editor"])]);
+        // The user's own folder, made between the two scans.
+        config.add(Section::Applications, "Mine".into());
+
+        assert!(config.sync_categorization(&[scan_group("Media Center", &["vlc"])]));
+
+        assert_eq!(tab_names(&config), vec!["Media Center", "Mine"]);
+        assert_eq!(
+            config.sections.applications[0].source,
+            GroupSource::Categorization
+        );
+    }
+
+    #[test]
+    fn an_empty_report_hands_the_section_back_to_the_derived_tabs() {
+        let mut config = AppLibraryConfig::default();
+        let entries = [entry("writer", &["Office"])];
+        config.sync_categorization(&[scan_group("Development", &["editor"])]);
+
+        config.sync_categorization(&[]);
+        assert!(config.sections.applications.is_empty());
+
+        assert!(config.sync_category_groups(&entries));
+        assert_eq!(tab_names(&config), vec!["cosmic-office"]);
+    }
+
+    #[test]
+    fn a_scan_keeps_the_folders_the_user_made() {
+        let mut config = AppLibraryConfig::default();
+        config.add(Section::Applications, "Mine".into());
+        config.sections.applications[0].filter = FilterType::AppIds(vec!["writer".into()]);
+
+        config.sync_categorization(&[scan_group("Development", &["editor"])]);
+
+        assert_eq!(tab_names(&config), vec!["Development", "Mine"]);
+    }
+
+    #[test]
+    fn the_scan_is_idempotent_so_a_poll_does_not_churn_the_config() {
+        let mut config = AppLibraryConfig::default();
+        let groups = [scan_group("Development", &["editor"])];
+
+        assert!(config.sync_categorization(&groups));
+        assert!(
+            !config.sync_categorization(&groups),
+            "re-applying the same report must not report a change"
+        );
     }
 
     #[test]

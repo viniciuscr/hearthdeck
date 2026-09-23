@@ -16,6 +16,14 @@ use crate::app_group::{
     romm_console_category, romm_decade_category, romm_genre_category, romm_region_category,
 };
 
+/// Prefix a catalog item's id carries on its way into the library.
+///
+/// It is what ties a library entry back to the catalog row it came from, and it
+/// is the id space a categorization report's `app_id`s have to be mapped into
+/// before they can be used as a tab filter. `input_ownership` strips it again to
+/// route a launch.
+pub const CATALOG_ENTRY_PREFIX: &str = "hearthdeck:";
+
 /// Configuration for connecting to the HearthDeck daemon.
 #[derive(Clone, Debug)]
 pub struct DaemonConfig {
@@ -110,6 +118,60 @@ pub enum ServerEvent {
     LibraryChanged,
     ApplicationSessionChanged { session: Option<ApplicationSession> },
     InstallRequested { item_id: String },
+}
+
+/// The daemon's view of the categorization scan: whether one is running, and
+/// what the last completed one concluded.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CategorizationSnapshot {
+    pub status: CategorizationStatus,
+    /// `None` until the library has been categorized once.
+    pub report: Option<ScanReport>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct CategorizationStatus {
+    pub running: bool,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub last_completed_at: Option<String>,
+}
+
+/// What one scan concluded. This is a projection: the daemon also sends the
+/// per-app assignments, which the UI does not read yet, and unknown fields are
+/// ignored on the way in.
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct ScanReport {
+    pub categorizer: String,
+    pub app_count: usize,
+    /// Candidate tabs, best first, with the members each one found.
+    pub categories: Vec<CategoryProposal>,
+    /// Apps that fit no candidate category: the taxonomy is missing an entry.
+    pub unclassified: Vec<UnclassifiedApp>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct CategoryProposal {
+    pub name: String,
+    /// Snakified `Section`. A proposal only becomes a tab in the section it was
+    /// placed in; the daemon's baseline taxonomy is all applications, but a
+    /// broader one would otherwise offer a tab whose apps the section filter
+    /// then hides.
+    pub section: String,
+    pub app_ids: Vec<String>,
+    /// Cleared the membership and confidence bars, so it is worth a tab.
+    pub recommended: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct UnclassifiedApp {
+    pub app_id: String,
+    pub title: String,
 }
 
 /// Retro game from the daemon's /v1/retro/roms endpoint.
@@ -454,6 +516,45 @@ impl DaemonClient {
         let response = self
             .http
             .post(self.api_url("/v1/library/rescan"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        Ok(())
+    }
+
+    /// Reads the categorization scan's state and its last report.
+    pub async fn categorization(&self) -> Result<CategorizationSnapshot, DaemonError> {
+        let response = self
+            .http
+            .get(self.api_url("/v1/categorization"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    /// Asks the daemon to categorize the library.
+    ///
+    /// This returns as soon as the scan is accepted, because the scan itself
+    /// runs for minutes in the daemon's own process: follow it with
+    /// [`DaemonClient::categorization`]. Requesting a scan while one runs is not
+    /// an error; the daemon coalesces the two.
+    pub async fn start_categorization_scan(&self) -> Result<(), DaemonError> {
+        let response = self
+            .http
+            .post(self.api_url("/v1/categorization/scan"))
             .headers(self.auth_headers().await?)
             .send()
             .await
@@ -989,7 +1090,7 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
         .unwrap_or(false);
 
     GameRecord {
-        id: format!("hearthdeck:{}", item.id),
+        id: format!("{CATALOG_ENTRY_PREFIX}{}", item.id),
         name: item.title,
         exec: item.launch_id,
         icon: item.icon,
