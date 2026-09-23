@@ -1172,12 +1172,14 @@ impl VirtualKeyboard {
     }
 }
 
-/// Which facet the open console filter sidebar's cursor is on. The value a row
-/// shows is that facet's current selection, so the cursor only has to name the
-/// row; its presence is also the sidebar's open/closed flag.
+/// Which row of the open console filter sidebar's cursor is on. Rows `0..`
+/// are the facet rows - each showing that facet's current selection - and the
+/// last row, index `filter_facets().len()`, is the footer's clear button.
+/// The cursor therefore only has to name the row; its presence is also the
+/// sidebar's open/closed flag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FilterCursor {
-    facet: usize,
+    row: usize,
 }
 
 /// What a context-menu row asks `Message::SelectAction` to do. Both act on the
@@ -1490,20 +1492,17 @@ impl HearthDeck {
             .unwrap_or(0)
     }
 
-    /// Keeps the cursor on a facet that exists. Facets come and go as records
-    /// load, so a cursor set while the row existed has to be pulled back before
-    /// the view indexes into the list.
+    /// Keeps the cursor on a row that exists. Facets come and go as records
+    /// load, so a cursor set while a row existed has to be pulled back before
+    /// the view indexes into the list. The footer's clear button is always the
+    /// last row, so even a section with no facets keeps one reachable row.
     fn clamp_filter_cursor(&mut self) {
         let Some(cursor) = self.filter_cursor else {
             return;
         };
-        let facets = self.filter_facets();
+        let last_row = self.filter_facets().len();
         self.filter_cursor = Some(FilterCursor {
-            facet: if facets.is_empty() {
-                0
-            } else {
-                cursor.facet.min(facets.len() - 1)
-            },
+            row: cursor.row.min(last_row),
         });
     }
 
@@ -1514,44 +1513,49 @@ impl HearthDeck {
         if self.cur_section != Section::ConsoleGames {
             return Task::none();
         }
-        self.filter_cursor = Some(FilterCursor { facet: 0 });
+        self.filter_cursor = Some(FilterCursor { row: 0 });
         self.clamp_filter_cursor();
         // Opening the sidebar is not a text-input gesture: drop the on-screen
         // keyboard if the search box was focused.
         self.request_virtual_keyboard(false)
     }
 
-    /// One D-pad step inside the open sidebar. `row` moves between facet rows
-    /// (wrapping, there are only three); `column` steps the row under the cursor
-    /// through its values, which is what the left/right arrows do too.
+    /// One D-pad step inside the open sidebar. `row` walks the facet rows and
+    /// then the footer's clear button, wrapping at both ends; `column` steps the
+    /// row under the cursor through its values, which is what the left/right
+    /// arrows do too.
     fn step_filter_cursor(&mut self, column: i32, row: i32) -> Task<Message> {
         let Some(cursor) = self.filter_cursor else {
             return Task::none();
         };
         let facets = self.filter_facets();
-        if facets.is_empty() || cursor.facet >= facets.len() {
-            return Task::none();
-        }
+        // The walkable rows are the facets plus the footer's clear button, so
+        // there is always one row more than there are facets.
+        let rows = facets.len() + 1;
         if row != 0 {
-            let facet = (cursor.facet as i32 + row).rem_euclid(facets.len() as i32) as usize;
-            self.filter_cursor = Some(FilterCursor { facet });
+            let next = (cursor.row as i32 + row).rem_euclid(rows as i32) as usize;
+            self.filter_cursor = Some(FilterCursor { row: next });
             return Task::none();
         }
-        if column != 0 {
-            return self.cycle_filter(facets[cursor.facet], column);
+        // Only a facet row has a value to step; the clear row has none.
+        if column != 0 && cursor.row < facets.len() {
+            return self.cycle_filter(facets[cursor.row], column);
         }
         Task::none()
     }
 
-    /// The confirm button steps the cursor's facet forward, so a controller with
-    /// no usable left/right can still change the value.
+    /// The confirm button acts on the row under the cursor: it steps that
+    /// facet's value forward, so a controller with no usable left/right can
+    /// still change it, or clears every filter when the cursor is on the
+    /// footer's clear button.
     fn apply_filter_cursor(&mut self) -> Task<Message> {
         let Some(cursor) = self.filter_cursor else {
             return Task::none();
         };
         let facets = self.filter_facets();
-        let Some(facet) = facets.get(cursor.facet).copied() else {
-            return Task::none();
+        let Some(facet) = facets.get(cursor.row).copied() else {
+            // No facet on this row, so the cursor is on the clear button.
+            return self.update(Message::ClearFilters);
         };
         self.cycle_filter(facet, 1)
     }
@@ -2879,8 +2883,8 @@ impl HearthDeck {
         }
         if self.filter_cursor.is_some() {
             // The filter sidebar is the same idea: its cursor owns the D-pad,
-            // with up/down walking the option list and left/right switching
-            // facet.
+            // with up/down walking its rows (the facets, then the clear button)
+            // and left/right stepping the focused facet's value.
             return match msg {
                 Message::PrevRow => self.step_filter_cursor(0, -1),
                 Message::NextRow => self.step_filter_cursor(0, 1),
@@ -3965,7 +3969,7 @@ impl cosmic::Application for HearthDeck {
                 let tasks = vec![self.reload_console_grid()];
                 // Point the still-open sidebar back at the first facet.
                 if self.filter_cursor.is_some() {
-                    self.filter_cursor = Some(FilterCursor { facet: 0 });
+                    self.filter_cursor = Some(FilterCursor { row: 0 });
                     self.clamp_filter_cursor();
                 }
                 return Task::batch(tasks);
@@ -6050,7 +6054,7 @@ impl HearthDeck {
             let narrowed = self.filters.selected(*facet).is_some();
             let cursor = self
                 .filter_cursor
-                .is_some_and(|cursor| cursor.facet == facet_index);
+                .is_some_and(|cursor| cursor.row == facet_index);
             let value = self
                 .filters
                 .selected(*facet)
@@ -6114,13 +6118,25 @@ impl HearthDeck {
     }
 
     /// The filter sidebar's footer: one action, dropping every chosen facet.
+    ///
+    /// It is a cursor row like the facets - the last one - so the wrapper wears
+    /// the same focus ring `filter_row` gives them: without it the controller
+    /// could reach the button but nothing would show it was there.
     fn filter_drawer_footer(&self) -> Element<'_, Message> {
         let space = theme::spacing();
-        button::custom(text::body(fl!("filter-clear")).size(TEXT_BODY))
-            .class(Button::Destructive)
-            .on_press(Message::ClearFilters)
-            .padding([space.space_xs, space.space_l])
-            .into()
+        let focused = self
+            .filter_cursor
+            .is_some_and(|cursor| cursor.row >= self.filter_facets().len());
+        container(
+            button::custom(text::body(fl!("filter-clear")).size(TEXT_BODY))
+                .class(Button::Destructive)
+                .on_press(Message::ClearFilters)
+                .padding([space.space_xs, space.space_l]),
+        )
+        .class(theme::Container::Custom(Box::new(filter_row(
+            false, focused,
+        ))))
+        .into()
     }
 }
 
@@ -7906,7 +7922,7 @@ mod tests {
             super::Message::ToggleFilterPanel,
         );
         // The cursor opens on the first facet row.
-        assert_eq!(app.filter_cursor, Some(super::FilterCursor { facet: 0 }));
+        assert_eq!(app.filter_cursor, Some(super::FilterCursor { row: 0 }));
 
         // Every other button would act on the screen behind the open sidebar.
         let _ = <HearthDeck as cosmic::Application>::update(
@@ -7935,6 +7951,36 @@ mod tests {
     }
 
     #[test]
+    fn the_pad_reaches_the_clear_button_below_the_facets() {
+        let mut app = console_app();
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::ToggleFilterPanel,
+        );
+        // The cursor opens on the one facet row.
+        assert_eq!(app.filter_cursor, Some(super::FilterCursor { row: 0 }));
+
+        // Narrow the facet, then step down past the facet rows: the last row is
+        // the footer's clear button.
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextCol);
+        assert_eq!(app.filters.selected(RommFacet::Genre), Some("Action"));
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(app.filter_cursor, Some(super::FilterCursor { row: 1 }));
+
+        // Confirm on that row drops every filter and pulls the cursor back to
+        // the first facet row.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::GamepadEvent(super::GamepadEvent::Confirm),
+        );
+        assert!(app.filters.selected(RommFacet::Genre).is_none());
+        assert_eq!(grid_names(&app), ["Mario", "Chrono"]);
+        assert_eq!(app.filter_cursor, Some(super::FilterCursor { row: 0 }));
+    }
+
+    #[test]
     fn opening_the_filter_sidebar_does_not_pull_the_whole_library() {
         let mut app = console_app();
 
@@ -7960,7 +8006,7 @@ mod tests {
             &mut app,
             super::Message::ConfirmFocused(super::FILTER_ID.clone()),
         );
-        assert_eq!(app.filter_cursor, Some(super::FilterCursor { facet: 0 }));
+        assert_eq!(app.filter_cursor, Some(super::FilterCursor { row: 0 }));
 
         // Confirming it again closes the sidebar.
         let _ = <HearthDeck as cosmic::Application>::update(
