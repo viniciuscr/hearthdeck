@@ -4962,9 +4962,13 @@ impl cosmic::Application for HearthDeck {
                 log::info!("categorization scan accepted; watching it");
                 return self.poll_categorization(CATEGORIZATION_POLL_INTERVAL);
             }
-            Message::CategorizationPolled(result) => return self.settle_categorization(result),
-            Message::CategorizationAction(result) => {
-                return self.settle_categorization(result);
+            Message::CategorizationPolled(result) | Message::CategorizationAction(result) => {
+                let settle = self.settle_categorization(result);
+                // The reply decides which buttons the settings row has, so the
+                // pad is re-pointed before the row is drawn without the one it
+                // was on.
+                let focus = self.refresh_settings_focus();
+                return Task::batch([settle, focus]);
             }
             Message::OpenSettings => {
                 self.switch_page(Page::Settings);
@@ -5522,6 +5526,28 @@ impl HearthDeck {
         self.focused_id = Some(id.clone());
         iced_runtime::task::widget(focus(id))
             .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id))))
+    }
+
+    /// Keeps the pad on the settings row when a reply changes which buttons the
+    /// row has. The button under the focus can be one of the ones that goes:
+    /// Enable becomes Rescan once the feature is on, and the last model is
+    /// removed from the very button that asks for it.
+    fn refresh_settings_focus(&mut self) -> Task<Message> {
+        if self.page != Page::Settings {
+            return Task::none();
+        }
+        let targets = self.settings_targets();
+        if self
+            .focused_id
+            .as_ref()
+            .is_some_and(|focused| targets.contains(focused))
+        {
+            return Task::none();
+        }
+        match targets.first().cloned() {
+            Some(id) => self.settings_move_to(id),
+            None => Task::none(),
+        }
     }
 
     fn view_dashboard<'a>(&'a self) -> Element<'a, Message> {
@@ -7550,6 +7576,30 @@ mod tests {
         );
 
         assert!(app.config.sections.applications.is_empty());
+    }
+
+    #[test]
+    fn the_settings_focus_follows_a_row_that_changed_under_it() {
+        let mut app = HearthDeck {
+            categorization_capable: Some(true),
+            categorization: Some(serde_json::from_value(snapshot_json(false, false)).unwrap()),
+            ..Default::default()
+        };
+
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSettings);
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Enable.id()));
+
+        // The user pressed Enable and the first poll already finds a scan
+        // running: Enable is no longer a button the row has.
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::CategorizationPolled(Ok(serde_json::from_value(snapshot_json(
+                true, true,
+            ))
+            .unwrap())),
+        );
+
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Disable.id()));
     }
 
     #[test]
