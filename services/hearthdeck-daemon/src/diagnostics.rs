@@ -1,23 +1,22 @@
 use std::{
     collections::VecDeque,
+    path::Path,
     process::Stdio,
     sync::{Mutex, OnceLock},
 };
 
 use chrono::{DateTime, Datelike, Utc};
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::debug;
 
+use crate::config::RommPaths;
 use crate::settings::{RommCredentials, SettingsRepository};
 
 const LOG_LINE_LIMIT: usize = 200;
 const LOG_MESSAGE_LIMIT: usize = 600;
 const ROMM_LOG_LIMIT: usize = 40;
-const MAX_ROM_DOWNLOAD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
 /// Anything above this is a `first_release_date` in milliseconds, not seconds.
 /// RomM's merged `metadatum` reports timestamps in milliseconds while its raw
@@ -114,11 +113,17 @@ pub struct RommGame {
     pub name: Option<String>,
     #[serde(default)]
     pub fs_name_no_tags: String,
-    /// Filename actually stored on RomM's disk, including tags/extension.
-    /// Used to build the ROM content download URL for a RetroArch launch;
-    /// distinct from `fs_name_no_tags`, which is only for display.
+    /// The leaf name on RomM's disk, including tags/extension: a file name for a
+    /// single-file rom, a folder name for a multi-file one. Distinct from
+    /// `fs_name_no_tags`, which is only for display.
     #[serde(default)]
     pub fs_name: Option<String>,
+    /// Directory of the rom inside RomM's library, relative to RomM's own
+    /// `LIBRARY_BASE_PATH`. Joined with `fs_name` it is the file to launch; the
+    /// daemon maps it onto the host's library root (see
+    /// [`crate::config::RommPaths`]).
+    #[serde(default)]
+    pub fs_path: Option<String>,
     #[serde(default)]
     pub summary: Option<String>,
     #[serde(default)]
@@ -605,105 +610,32 @@ pub async fn romm_set_backlogged(
     Ok(backlogged)
 }
 
-/// Downloads a ROM into a temporary cache file ahead of a RetroArch launch.
-/// A multi-disc set is handled one disc at a time: RomM exposes each disc as
-/// its own rom and the client launches the chosen sibling, so this only ever
-/// fetches a single content file. An `.m3u` playlist spanning several on-disk
-/// files is still out of scope.
-pub async fn download_rom_content(
-    settings: &SettingsRepository,
-    rom_id: i64,
-    fs_name: &str,
-    destination: &std::path::Path,
-) -> std::result::Result<(), RommQueryError> {
-    let credentials = settings
-        .romm_credentials()
-        .await
-        .map_err(RommQueryError::Failed)?
-        .ok_or(RommQueryError::NotConfigured)?;
-    let url = rom_content_url(&credentials.base_url, rom_id, fs_name)?;
-    let response = reqwest::Client::new()
-        .get(url)
-        .bearer_auth(&credentials.token)
-        .timeout(std::time::Duration::from_secs(120))
-        .send()
-        .await
-        .map_err(|error| RommQueryError::Failed(error.into()))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(RommQueryError::Failed(anyhow::anyhow!(
-            "RomM returned {status} downloading rom content"
-        )));
-    }
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_ROM_DOWNLOAD_BYTES)
-    {
-        return Err(RommQueryError::Failed(anyhow::anyhow!(
-            "RomM content exceeds the 16 GiB download limit"
-        )));
-    }
+/// RomM serves per-ROM artwork from this URL prefix, with everything after it
+/// being the file's path under `RESOURCES_BASE_PATH`.
+const ROMM_RESOURCES_URL_PREFIX: &str = "/assets/romm/resources/";
 
-    let mut file = tokio::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(destination)
-        .await
-        .map_err(|error| RommQueryError::Failed(error.into()))?;
-    let mut downloaded = 0_u64;
-    let chunks = response.bytes_stream();
-    tokio::pin!(chunks);
-    while let Some(chunk) = chunks.next().await {
-        let chunk = chunk.map_err(|error| RommQueryError::Failed(error.into()))?;
-        downloaded = downloaded
-            .checked_add(chunk.len() as u64)
-            .filter(|length| *length <= MAX_ROM_DOWNLOAD_BYTES)
-            .ok_or_else(|| {
-                RommQueryError::Failed(anyhow::anyhow!(
-                    "RomM content exceeds the 16 GiB download limit"
-                ))
-            })?;
-        file.write_all(&chunk)
-            .await
-            .map_err(|error| RommQueryError::Failed(error.into()))?;
-    }
-    file.sync_all()
-        .await
-        .map_err(|error| RommQueryError::Failed(error.into()))
-}
-
-/// Builds the RomM content-download URL for a rom. Kept as a separate
-/// function so the exact path shape is unit-testable without a network call:
-/// the RetroArch launch path depends on this matching RomM's
-/// `/api/roms/{id}/content/{file_name}` route exactly.
-///
-/// The base path deliberately has no trailing slash after `content`: the url
-/// crate's `path_segments_mut().push` keeps an existing empty final segment,
-/// which would serialize the path as `/content//<file>` and 404 against
-/// RomM's single-slash route.
-fn rom_content_url(
-    base_url: &str,
-    rom_id: i64,
-    fs_name: &str,
-) -> std::result::Result<reqwest::Url, RommQueryError> {
-    let mut url = reqwest::Url::parse(&format!("{base_url}/api/roms/{rom_id}/content"))
-        .map_err(|error| RommQueryError::Failed(error.into()))?;
-    url.path_segments_mut()
-        .map_err(|_| RommQueryError::Failed(anyhow::anyhow!("invalid RomM content URL")))?
-        .push(fs_name);
-    Ok(url)
-}
+/// RomM's bundled per-platform console art. Unlike per-ROM artwork this is not
+/// on any mounted path: it ships inside RomM's own container image.
+const ROMM_PLATFORM_ART_URL_PREFIX: &str = "/assets/platforms/";
 
 pub async fn romm_asset(
     settings: &SettingsRepository,
+    paths: &RommPaths,
     path: &str,
 ) -> std::result::Result<RommAsset, RommQueryError> {
+    let path = normalized_romm_asset_path(path).map_err(RommQueryError::Failed)?;
+    // Per-ROM artwork is read straight off the host's resources mount: RomM
+    // serves those same bytes from that same disk, so going through its HTTP
+    // API only adds a round trip and a dependency on the container being up.
+    if let Some(relative) = resources_relative_path(&path) {
+        return read_resources_asset(paths, relative).await;
+    }
+    // What is left is the bundled console art, which only RomM can serve.
     let credentials = settings
         .romm_credentials()
         .await
         .map_err(RommQueryError::Failed)?
         .ok_or(RommQueryError::NotConfigured)?;
-    let path = normalized_romm_asset_path(path).map_err(RommQueryError::Failed)?;
     let response = reqwest::Client::new()
         .get(format!("{}{}", credentials.base_url, path))
         .bearer_auth(&credentials.token)
@@ -733,6 +665,60 @@ pub async fn romm_asset(
         .await
         .map_err(|error| RommQueryError::Failed(error.into()))?
         .to_vec();
+    Ok(RommAsset {
+        content_type,
+        bytes,
+    })
+}
+
+/// The file path behind a RomM resources URL, relative to the resources root.
+///
+/// RomM reports artwork as `/assets/romm/resources/<relative>?ts=<updated_at>`;
+/// the query string only exists to bust a cache, so it is dropped here. `None`
+/// for anything else, which after normalization is the bundled console art.
+fn resources_relative_path(path: &str) -> Option<&str> {
+    let relative = path.strip_prefix(ROMM_RESOURCES_URL_PREFIX)?;
+    Some(relative.split('?').next().unwrap_or_default())
+}
+
+/// Reads one artwork file off RomM's resources mount. The extension decides the
+/// content type, and a non-image extension is refused rather than served as an
+/// image, mirroring the check the API path applies to RomM's own answer.
+fn artwork_content_type(file: &Path) -> Option<&'static str> {
+    let extension = file.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        _ => return None,
+    })
+}
+
+async fn read_resources_asset(
+    paths: &RommPaths,
+    relative: &str,
+) -> std::result::Result<RommAsset, RommQueryError> {
+    let file = paths.resources_root.join(relative);
+    let not_an_image = || {
+        RommQueryError::Failed(anyhow::anyhow!(
+            "RomM artwork {} is not an image",
+            file.display()
+        ))
+    };
+    let content_type = artwork_content_type(&file)
+        .ok_or_else(not_an_image)?
+        .to_owned();
+    let bytes = tokio::fs::read(&file).await.map_err(|error| {
+        RommQueryError::Failed(anyhow::anyhow!(
+            "could not read RomM artwork {}: {error}",
+            file.display()
+        ))
+    })?;
     Ok(RommAsset {
         content_type,
         bytes,
@@ -893,8 +879,8 @@ fn normalized_romm_asset_path(value: &str) -> anyhow::Result<String> {
     // `/assets/romm/resources/` and the bundled per-platform console art under
     // `/assets/platforms/`. Everything else is rejected so the proxy cannot be
     // walked into arbitrary server paths.
-    let allowed =
-        path.starts_with("/assets/romm/resources/") || path.starts_with("/assets/platforms/");
+    let allowed = path.starts_with(ROMM_RESOURCES_URL_PREFIX)
+        || path.starts_with(ROMM_PLATFORM_ART_URL_PREFIX);
     if !allowed || path.contains("..") || path.contains('#') || path.contains("//") {
         anyhow::bail!("invalid RomM artwork path");
     }
@@ -1428,6 +1414,53 @@ mod tests {
     }
 
     #[test]
+    fn resources_urls_map_to_the_resources_mount_and_console_art_does_not() {
+        // The `?ts=` suffix is a cache-buster RomM adds to the URL, not part of
+        // the file's path, so it is dropped on the way to the disk.
+        assert_eq!(
+            super::resources_relative_path("/assets/romm/resources/roms/1/cover/big.png?ts=1"),
+            Some("roms/1/cover/big.png")
+        );
+        assert_eq!(
+            super::resources_relative_path("/assets/romm/resources/roms/1/cover/big.png"),
+            Some("roms/1/cover/big.png")
+        );
+        // Bundled console art lives in RomM's image, so it has no disk path.
+        assert_eq!(
+            super::resources_relative_path("/assets/platforms/snes.svg"),
+            None
+        );
+    }
+
+    #[test]
+    fn artwork_content_type_comes_from_the_file_extension() {
+        use std::path::Path;
+
+        assert_eq!(
+            super::artwork_content_type(Path::new("a.png")),
+            Some("image/png")
+        );
+        assert_eq!(
+            super::artwork_content_type(Path::new("a.jpeg")),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            super::artwork_content_type(Path::new("a.PNG")),
+            Some("image/png")
+        );
+        assert_eq!(
+            super::artwork_content_type(Path::new("a.webp")),
+            Some("image/webp")
+        );
+        assert_eq!(
+            super::artwork_content_type(Path::new("a.ico")),
+            Some("image/x-icon")
+        );
+        assert_eq!(super::artwork_content_type(Path::new("a.txt")), None);
+        assert_eq!(super::artwork_content_type(Path::new("a")), None);
+    }
+
+    #[test]
     fn allows_platform_artwork_under_the_asset_proxy() {
         // RomM's bundled console art lives under a different root than per-ROM
         // artwork, so the proxy allowlist has to include it explicitly.
@@ -1484,24 +1517,6 @@ mod tests {
                 "/assets/platforms/gb.ico",
                 "/assets/platforms/default.ico",
             ]
-        );
-    }
-
-    #[test]
-    fn content_url_has_a_single_slash_between_content_and_the_rom_file() {
-        // Regression: the download URL used to serialize as
-        // `/api/roms/{id}/content//<file>` (an empty path segment kept by
-        // `path_segments_mut().push` after a trailing slash), which RomM
-        // answers with 404 because its route is `/content/{file_name}`.
-        let url = super::rom_content_url(
-            "http://127.0.0.1:8080",
-            289,
-            "Advance Guardian Heroes (NA).gba",
-        )
-        .unwrap();
-        assert_eq!(
-            url.as_str(),
-            "http://127.0.0.1:8080/api/roms/289/content/Advance%20Guardian%20Heroes%20(NA).gba"
         );
     }
 

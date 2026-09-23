@@ -309,7 +309,7 @@ async fn launch_retro_rom(
     if !host_capabilities().retro_launch {
         return Err(ApiError::capability_unavailable("retro game launch"));
     }
-    let plan = crate::retro::prepare_launch(&state.settings, rom_id)
+    let plan = crate::retro::prepare_launch(&state.settings, &state.config.romm, rom_id)
         .await
         .map_err(ApiError::retro_launch)?;
     let activity = retro_activity_entry(&plan.game);
@@ -360,7 +360,7 @@ async fn retro_asset(
     axum::extract::Query(query): axum::extract::Query<RommAssetQuery>,
 ) -> Result<Response, ApiError> {
     authenticate(&state, &headers).await?;
-    let asset = diagnostics::romm_asset(&state.settings, &query.path)
+    let asset = diagnostics::romm_asset(&state.settings, &state.config.romm, &query.path)
         .await
         .map_err(ApiError::romm_query)?;
     let content_type = HeaderValue::from_str(&asset.content_type)
@@ -1183,7 +1183,7 @@ impl ApiError {
                     settings: None,
                 }
             }
-            RetroLaunchError::Cache(_) => Self::internal(message),
+            RetroLaunchError::RomNotOnDisk { .. } => Self::not_found(),
         }
     }
 
@@ -1346,7 +1346,7 @@ mod tests {
                 bridge_socket_path: temporary.path().join("bridge.sock"),
                 lan_enabled: false,
                 tls: None,
-                rom_cache_max_age: crate::retro::DEFAULT_ROM_CACHE_MAX_AGE,
+                romm: crate::config::RommPaths::resolve(None, None, None),
             },
             database,
         );
@@ -1714,6 +1714,7 @@ mod tests {
             languages: Vec::new(),
             tags: Vec::new(),
             fs_size_bytes: None,
+            fs_path: None,
             is_favorite: None,
             rom_user: crate::diagnostics::RommRomUser::default(),
         })
@@ -1753,6 +1754,7 @@ mod tests {
             languages: Vec::new(),
             tags: vec!["NA".to_owned()],
             fs_size_bytes: Some(524_288),
+            fs_path: None,
             is_favorite: Some(true),
             rom_user: crate::diagnostics::RommRomUser { backlogged: true },
         };

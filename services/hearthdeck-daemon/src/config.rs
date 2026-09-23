@@ -1,4 +1,8 @@
-use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    env,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 use directories::ProjectDirs;
@@ -11,15 +15,59 @@ pub struct Config {
     pub bridge_socket_path: PathBuf,
     pub lan_enabled: bool,
     pub tls: Option<TlsConfig>,
-    /// How long a downloaded RomM rom may sit unused in the cache before the
-    /// daemon's janitor evicts it. See `crate::retro::start_cache_janitor`.
-    pub rom_cache_max_age: Duration,
+    /// Host roots of the RomM deployment, so the daemon reads roms and artwork
+    /// off disk instead of downloading them through the API.
+    pub romm: RommPaths,
 }
 
 #[derive(Clone, Debug)]
 pub struct TlsConfig {
     pub certificate_path: PathBuf,
     pub private_key_path: PathBuf,
+}
+
+/// Host roots of the RomM deployment on this machine.
+///
+/// RomM reports every path relative to its own base paths (`LIBRARY_BASE_PATH`,
+/// `RESOURCES_BASE_PATH`; both `/romm/...` inside its container), so those
+/// paths are useless to a client on its own. All the daemon needs is the host
+/// directory each mount was bound to. RomM's compose file sits at the root of
+/// its data directory, beside the `library/` and `resources/` mounts, so that
+/// directory is derived from `ROMM_COMPOSE_FILE` and the roots follow from it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RommPaths {
+    /// Host path of RomM's library (`LIBRARY_BASE_PATH`), holding the ROMs.
+    pub library_root: PathBuf,
+    /// Host path of RomM's resources (`RESOURCES_BASE_PATH`), holding covers.
+    pub resources_root: PathBuf,
+}
+
+/// Where the packaged `romm.service` expects the deployment by default (its
+/// unit hardcodes `Environment=ROMM_COMPOSE_FILE=...` at this path).
+const DEFAULT_ROMM_DATA_ROOT: &str = "/mnt/external/romM";
+
+impl RommPaths {
+    /// Resolves the host roots from the deployment layout.
+    ///
+    /// `compose_file` is `ROMM_COMPOSE_FILE`; the two explicit roots are the
+    /// escape hatch for a deployment that mounts them somewhere other than
+    /// beside the compose file.
+    pub fn resolve(
+        compose_file: Option<PathBuf>,
+        library_root: Option<PathBuf>,
+        resources_root: Option<PathBuf>,
+    ) -> Self {
+        let data_root = compose_file
+            .as_deref()
+            .and_then(Path::parent)
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_ROMM_DATA_ROOT));
+        Self {
+            library_root: library_root.unwrap_or_else(|| data_root.join("library")),
+            resources_root: resources_root.unwrap_or_else(|| data_root.join("resources")),
+        }
+    }
 }
 
 impl Config {
@@ -69,20 +117,17 @@ impl Config {
         } else {
             None
         };
-        let rom_cache_max_age = match env::var("HEARTHDECK_ROM_CACHE_MAX_AGE_DAYS") {
-            Ok(value) => {
-                let days: u64 = value
-                    .trim()
-                    .parse()
-                    .context("HEARTHDECK_ROM_CACHE_MAX_AGE_DAYS must be a whole number of days")?;
-                Duration::from_secs(
-                    days.checked_mul(24 * 60 * 60)
-                        .context("HEARTHDECK_ROM_CACHE_MAX_AGE_DAYS is too large")?,
-                )
-            }
-            Err(env::VarError::NotPresent) => crate::retro::DEFAULT_ROM_CACHE_MAX_AGE,
-            Err(error) => bail!("HEARTHDECK_ROM_CACHE_MAX_AGE_DAYS is not valid unicode: {error}"),
-        };
+        // RomM reports paths relative to its own container base paths, so the
+        // daemon resolves the host roots those mounts were bound to itself.
+        let romm = RommPaths::resolve(
+            env::var_os("ROMM_COMPOSE_FILE").map(PathBuf::from),
+            env::var_os("HEARTHDECK_ROMM_LIBRARY_ROOT")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from),
+            env::var_os("HEARTHDECK_ROMM_RESOURCES_ROOT")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from),
+        );
         Ok(Self {
             bind_address,
             local_admin_address,
@@ -95,7 +140,63 @@ impl Config {
                 .unwrap_or_else(|| runtime_dir.join("hearthdeck/bridge.sock")),
             lan_enabled,
             tls,
-            rom_cache_max_age,
+            romm,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_ROMM_DATA_ROOT, RommPaths};
+    use std::path::PathBuf;
+
+    #[test]
+    fn romm_roots_derive_from_the_compose_file_directory() {
+        let paths = RommPaths::resolve(
+            Some(PathBuf::from("/mnt/external/romM/podman-compose.yaml")),
+            None,
+            None,
+        );
+        assert_eq!(
+            paths.library_root,
+            PathBuf::from("/mnt/external/romM/library")
+        );
+        assert_eq!(
+            paths.resources_root,
+            PathBuf::from("/mnt/external/romM/resources")
+        );
+    }
+
+    #[test]
+    fn romm_roots_fall_back_to_the_packaged_default() {
+        let paths = RommPaths::resolve(None, None, None);
+        assert_eq!(
+            paths.library_root,
+            PathBuf::from(DEFAULT_ROMM_DATA_ROOT).join("library")
+        );
+        assert_eq!(
+            paths.resources_root,
+            PathBuf::from(DEFAULT_ROMM_DATA_ROOT).join("resources")
+        );
+    }
+
+    #[test]
+    fn explicit_romm_roots_win_over_the_derived_ones() {
+        let paths = RommPaths::resolve(
+            Some(PathBuf::from("/srv/romm/podman-compose.yaml")),
+            Some(PathBuf::from("/data/roms")),
+            Some(PathBuf::from("/data/art")),
+        );
+        assert_eq!(paths.library_root, PathBuf::from("/data/roms"));
+        assert_eq!(paths.resources_root, PathBuf::from("/data/art"));
+    }
+
+    #[test]
+    fn a_compose_file_with_no_directory_still_resolves_roots() {
+        let paths = RommPaths::resolve(Some(PathBuf::from("podman-compose.yaml")), None, None);
+        assert_eq!(
+            paths.library_root,
+            PathBuf::from(DEFAULT_ROMM_DATA_ROOT).join("library")
+        );
     }
 }

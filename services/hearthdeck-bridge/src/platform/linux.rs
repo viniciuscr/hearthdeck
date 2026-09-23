@@ -534,14 +534,32 @@ fn retro_config_directory() -> PathBuf {
 /// The directory Hearthdeck caches ROMs fetched from RomM into. The bridge
 /// only launches ROM files that resolve under this directory; the nested
 /// layout inside it is the daemon's concern.
-fn retro_rom_cache_directory() -> PathBuf {
-    let cache_home = env::var_os("XDG_CACHE_HOME")
+/// Where RomM keeps the roms it serves, on this host.
+///
+/// Deliberately mirrors the daemon's `config::RommPaths` derivation instead of
+/// taking a root over the socket: the bridge re-checks the rom it is asked to
+/// launch against a root it resolves itself, so a mismatch between the two
+/// fails safe as a rejected launch rather than widening what can be launched.
+/// RomM's compose file sits at the root of its data directory, beside the
+/// `library/` and `resources/` mounts.
+fn retro_rom_library_root() -> PathBuf {
+    if let Some(overridden) =
+        env::var_os("HEARTHDECK_ROMM_LIBRARY_ROOT").filter(|path| !path.is_empty())
+    {
+        return PathBuf::from(overridden);
+    }
+    // The same default the packaged `romm.service` hardcodes.
+    const DEFAULT_ROMM_COMPOSE_FILE: &str = "/mnt/external/romM/podman-compose.yaml";
+    let compose_file = env::var_os("ROMM_COMPOSE_FILE")
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|path| PathBuf::from(path).join(".cache")));
-    cache_home
-        .unwrap_or_else(|| PathBuf::from(".cache"))
-        .join("hearthdeck/romm")
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_ROMM_COMPOSE_FILE));
+    compose_file
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("/mnt/external/romM"))
+        .join("library")
 }
 
 fn validate_retro_core_path(core_path: &str) -> Result<PathBuf> {
@@ -570,9 +588,9 @@ fn validate_retro_core_path_in(core_path: &str, allowed_directories: &[&Path]) -
 }
 
 fn validate_retro_rom_path(rom_path: &str) -> Result<PathBuf> {
-    let cache_root = fs::canonicalize(retro_rom_cache_directory())
-        .context("Hearthdeck rom cache directory does not exist")?;
-    validate_retro_rom_path_in(rom_path, &cache_root)
+    let library_root = fs::canonicalize(retro_rom_library_root())
+        .context("RomM library directory does not exist")?;
+    validate_retro_rom_path_in(rom_path, &library_root)
 }
 
 fn validate_retro_rom_path_in(rom_path: &str, cache_root: &Path) -> Result<PathBuf> {
@@ -1216,35 +1234,36 @@ mod tests {
     }
 
     #[test]
-    fn accepts_a_rom_inside_the_hearthdeck_cache_directory() {
-        let cache_directory = tempfile::tempdir().unwrap();
-        let rom_path = cache_directory.path().join("42.sfc");
+    fn accepts_a_rom_inside_romms_library() {
+        let library_root = tempfile::tempdir().unwrap();
+        let rom_path = library_root.path().join("42.sfc");
         std::fs::write(&rom_path, b"").unwrap();
-        let cache_root = std::fs::canonicalize(cache_directory.path()).unwrap();
+        let library_root = std::fs::canonicalize(library_root.path()).unwrap();
 
-        let resolved = validate_retro_rom_path_in(rom_path.to_str().unwrap(), &cache_root).unwrap();
+        let resolved =
+            validate_retro_rom_path_in(rom_path.to_str().unwrap(), &library_root).unwrap();
 
         assert_eq!(resolved, std::fs::canonicalize(&rom_path).unwrap());
     }
 
     #[test]
-    fn rejects_a_rom_outside_the_hearthdeck_cache_directory() {
-        let cache_directory = tempfile::tempdir().unwrap();
+    fn rejects_a_rom_outside_romms_library() {
+        let library_root = tempfile::tempdir().unwrap();
         let other_directory = tempfile::tempdir().unwrap();
         let rom_path = other_directory.path().join("42.sfc");
         std::fs::write(&rom_path, b"").unwrap();
-        let cache_root = std::fs::canonicalize(cache_directory.path()).unwrap();
+        let library_root = std::fs::canonicalize(library_root.path()).unwrap();
 
-        assert!(validate_retro_rom_path_in(rom_path.to_str().unwrap(), &cache_root).is_err());
+        assert!(validate_retro_rom_path_in(rom_path.to_str().unwrap(), &library_root).is_err());
     }
 
     #[test]
     fn rejects_a_rom_path_that_does_not_exist() {
-        let cache_directory = tempfile::tempdir().unwrap();
-        let rom_path = cache_directory.path().join("missing.sfc");
-        let cache_root = std::fs::canonicalize(cache_directory.path()).unwrap();
+        let library_root = tempfile::tempdir().unwrap();
+        let rom_path = library_root.path().join("missing.sfc");
+        let library_root = std::fs::canonicalize(library_root.path()).unwrap();
 
-        assert!(validate_retro_rom_path_in(rom_path.to_str().unwrap(), &cache_root).is_err());
+        assert!(validate_retro_rom_path_in(rom_path.to_str().unwrap(), &library_root).is_err());
     }
 
     #[test]

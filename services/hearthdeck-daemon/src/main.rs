@@ -42,8 +42,17 @@ async fn main() -> Result<()> {
         bind_address = %config.bind_address,
         local_admin_address = %config.local_admin_address,
         lan_enabled = config.lan_enabled,
-        rom_cache_max_age_days = config.rom_cache_max_age.as_secs() / 86_400,
         "daemon configuration loaded"
+    );
+    // Logged, with a existence flag each, so a deployment whose compose file is
+    // not where the packaged unit puts it is obvious from the journal instead
+    // of surfacing later as "RomM has no roms on disk".
+    info!(
+        library_root = %config.romm.library_root.display(),
+        library_root_exists = config.romm.library_root.is_dir(),
+        resources_root = %config.romm.resources_root.display(),
+        resources_root_exists = config.romm.resources_root.is_dir(),
+        "RomM host paths resolved"
     );
     let database = database::Database::connect(&config.database_path).await?;
     database.migrate().await?;
@@ -74,10 +83,6 @@ async fn main() -> Result<()> {
         .expect("enrichment service must be registered")
         .request_all()
         .await;
-    // Bounds the RomM rom cache: evicts roms not played within
-    // `rom_cache_max_age`. The task runs for the process lifetime, so the
-    // handle is deliberately dropped.
-    let _rom_cache_janitor = retro::start_cache_janitor(config.rom_cache_max_age);
     let router = api::router(state.clone())
         .layer(DefaultBodyLimit::max(32 * 1024))
         .layer(RequestBodyLimitLayer::new(32 * 1024))
