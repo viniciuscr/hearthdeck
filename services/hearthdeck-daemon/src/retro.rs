@@ -24,7 +24,6 @@ use crate::{
 /// security hole.
 const CORE_DIRECTORY: &str = "/usr/lib/libretro";
 
-
 /// Platform `fs_slug` (RomM's on-disk-folder-naming slug, e.g. "snes",
 /// "ngc") to libretro core filename.
 ///
@@ -145,13 +144,19 @@ const CORE_BY_PLATFORM_SLUG: &[(&str, &str)] = &[
 pub enum RetroLaunchError {
     Romm(RommQueryError),
     PlatformNotFound,
-    UnsupportedPlatform { fs_slug: String },
-    CoreNotInstalled { core_path: PathBuf },
+    UnsupportedPlatform {
+        fs_slug: String,
+    },
+    CoreNotInstalled {
+        core_path: PathBuf,
+    },
     RomHasNoContentFile,
     InvalidContentFileName,
     /// The rom is not where RomM's metadata says it is: the library mount is
     /// missing or unreadable, or RomM's own index is stale.
-    RomNotOnDisk { path: PathBuf },
+    RomNotOnDisk {
+        path: PathBuf,
+    },
 }
 
 impl std::fmt::Display for RetroLaunchError {
@@ -294,7 +299,6 @@ fn validate_content_filename(fs_name: &str) -> Result<(), RetroLaunchError> {
         Err(RetroLaunchError::InvalidContentFileName)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
