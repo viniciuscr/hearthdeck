@@ -51,12 +51,12 @@ sudo pacman -U hearthdeck-*.pkg.tar.zst
 The Hearthdeck launchers and sessions start `hearthdeck.target` for the active
 user. The package deliberately does not enable it globally: fixed API ports
 cannot be shared by every user manager, including display-manager greeter
-accounts. To run the daemon before opening the client, use:
+accounts.
 
-```sh
-systemctl --user daemon-reload
-systemctl --user start hearthdeck.target
-```
+Nothing is left to run after an install or an upgrade. `hearthdeck.install`
+reloads the invoking user's manager and restarts what it owns, for the reasons in
+[After an upgrade](#after-an-upgrade): a manager keeps the unit definitions it
+already loaded, and a running service keeps executing the old binary.
 
 Installation adds the managed `/etc/pacman.d/hearthdeck.conf` and an include in
 `/etc/pacman.conf`. Future Hearthdeck packages therefore arrive with the normal
@@ -71,11 +71,13 @@ It is currently unsigned and uses `SigLevel = Optional TrustAll`. Installing
 the initial package accepts GitHub Pages over HTTPS as the package trust
 boundary; package signing can replace this later.
 
-Pacman cannot safely start a logged-in user's manager during a root package
-transaction. The launcher handles activation on demand. The units retain
-`NoNewPrivileges`, but do not use mount-namespace sandboxing:
-Arch systemd user units cannot reliably support directives such as
-`ProtectSystem`, `ReadWritePaths`, or `PrivateTmp`.
+A root package transaction cannot use a logged-in user's manager directly, so
+`hearthdeck.install` reaches it through that manager's own runtime directory
+(`runuser` plus `systemctl --user` with `XDG_RUNTIME_DIR` set). It is skipped,
+silently and harmlessly, when no session is logged in - the next session start
+reads the new units by itself. The units retain `NoNewPrivileges`, but do not use
+mount-namespace sandboxing: Arch systemd user units cannot reliably support
+directives such as `ProtectSystem`, `ReadWritePaths`, or `PrivateTmp`.
 
 `hearthdeck.target` starts the API daemon, owns the
 `hearthdeck-bridge.socket`, and attempts the optional `romm.service` (with
@@ -86,29 +88,38 @@ installations without RomM are unaffected. The bridge process is
 socket-activated on its first typed request. Future network and Bluetooth
 bridges will follow the same target-plus-socket lifecycle.
 
-If you previously used `just install-services`, its copies in
-`~/.config/systemd/user/` override the package units. Move
-`hearthdeck-bridge.service` and `hearthdeck-daemon.service` aside before
-enabling the packaged target, then preserve any local customization in a
-systemd drop-in.
+If you previously used `just install-services` or copied units by hand, those
+copies in `~/.config/systemd/user/` override the package units and keep unit
+fixes from reaching the session. The package names the files it finds there at
+the end of an install; delete them (or move the differences into a systemd
+drop-in) to run the packaged units.
 
 ### After an upgrade
 
-A root package transaction cannot reload a logged-in user's manager, so an
-upgrade replaces the unit files on disk while the running manager keeps the
+An upgrade replaces the unit files on disk, but a running manager keeps the
 definitions it already loaded - including a `hearthdeck.target` from before
-RomM existed, which wants no `romm.service` at all. New units therefore take
-effect only once the manager re-reads them. The session script and the
-launcher each run `systemctl --user daemon-reload` before starting the target,
-so signing out and back in is enough. To apply an upgrade
-in the current session instead:
+RomM existed, which wants no `romm.service` at all - and a running service keeps
+executing the old binary. The package therefore applies its own upgrade, for the
+user that ran it, with nothing left to do by hand:
 
-```sh
-systemctl --user daemon-reload
-systemctl --user restart hearthdeck.target
-```
+- `systemctl --user daemon-reload`, then `try-restart` of
+  `hearthdeck-daemon.service` and `hearthdeck-bridge.service`. `try-restart`
+  leaves a unit the user never started alone, and
+  `hearthdeck-input.service` is deliberately not restarted: it only lives inside
+  a managed launch, where that would drop the controller mapping it is applying.
+- `start romm.path` and `start romm.service`. Starting rather than restarting is
+  deliberate - a stack an earlier session already has running must not be torn
+  down and rebuilt by an upgrade, so `start` is a no-op on a unit that is up, runs
+  `podman-compose up -d` on one that is not, and skips cleanly when there is no
+  compose file. This is what brings RomM back after an upgrade without a
+  sign-out.
 
-Then confirm the stack actually came up with the session rather than assuming
+A session that has never been started, or a machine with no session logged in,
+is the one case the transaction cannot cover; the session script and the launcher
+each run `systemctl --user daemon-reload` before starting the target, so a
+sign-out and back in (or the next boot) is always enough.
+
+Confirm the stack actually came up with the session rather than assuming
 it did:
 
 ```sh

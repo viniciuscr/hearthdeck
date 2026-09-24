@@ -1323,6 +1323,24 @@ mod tests {
         assert!(package.contains("deploy/systemd/hearthdeck-log.service"));
         assert!(package.contains("deploy/systemd/romm.service"));
         assert!(package.contains("deploy/systemd/romm.path"));
+        // An install or an upgrade has to apply itself. A running manager keeps
+        // the unit definitions it already loaded - including a target from
+        // before RomM existed - so the transaction is what reloads it and puts
+        // the services, RomM included, back where a session start would have
+        // them. Leaving the user a command to run is the failure this asserts
+        // against.
+        assert!(install.contains("refresh_user_services"));
+        assert!(install.contains("user_systemctl"));
+        assert!(install.contains("XDG_RUNTIME_DIR"));
+        assert!(install.contains("daemon-reload"));
+        assert!(install.contains("try-restart"));
+        assert!(install.contains("hearthdeck-daemon.service hearthdeck-bridge.service"));
+        assert!(install.contains("start romm.path"));
+        assert!(install.contains("start romm.service"));
+        assert!(
+            !install.contains("systemctl --user start hearthdeck.target"),
+            "an install must not hand the user a command to activate the target"
+        );
         assert!(package.contains("deploy/systemd/romm.env.example"));
         assert!(package.contains("scripts/linux-acceptance"));
         assert!(acceptance.contains("systemctl --user restart hearthdeck.target"));
@@ -1338,6 +1356,53 @@ mod tests {
         assert!(justfile.contains("cp deploy/systemd/hearthdeck-log.service"));
         assert!(justfile.contains("cp deploy/systemd/romm.service"));
         assert!(justfile.contains("cp deploy/systemd/romm.path"));
+    }
+
+    /// A packaged unit is the deploy unit it is derived from, with one difference:
+    /// it runs the installed binary under `/usr/lib` instead of the source
+    /// checkout's `~/.local/bin`. Restating a unit in two files is how the packaged
+    /// bridge silently lost the `EnvironmentFile` that tells it where RomM keeps
+    /// its roms, so the two copies are pinned to each other here: nothing but that
+    /// path may drift, which is also what lets a package upgrade be trusted to
+    /// install the unit the source tree is testing.
+    #[test]
+    fn packaged_units_differ_from_their_deploy_source_only_in_the_binary_path() {
+        let pairs = [
+            (
+                "hearthdeck.target",
+                include_str!("../../../deploy/systemd/hearthdeck.target"),
+                include_str!("../../../packaging/arch/hearthdeck.target"),
+            ),
+            (
+                "hearthdeck-bridge.socket",
+                include_str!("../../../deploy/systemd/hearthdeck-bridge.socket"),
+                include_str!("../../../packaging/arch/hearthdeck-bridge.socket"),
+            ),
+            (
+                "hearthdeck-bridge.service",
+                include_str!("../../../deploy/systemd/hearthdeck-bridge.service"),
+                include_str!("../../../packaging/arch/hearthdeck-bridge.service"),
+            ),
+            (
+                "hearthdeck-daemon.service",
+                include_str!("../../../deploy/systemd/hearthdeck-daemon.service"),
+                include_str!("../../../packaging/arch/hearthdeck-daemon.service"),
+            ),
+            (
+                "hearthdeck-input.service",
+                include_str!("../../../deploy/systemd/hearthdeck-input.service"),
+                include_str!("../../../packaging/arch/hearthdeck-input.service"),
+            ),
+        ];
+
+        let as_packaged = |unit: &str| unit.replace("%h/.local/bin/", "/usr/lib/hearthdeck/");
+        for (name, deploy, packaged) in pairs {
+            assert_eq!(
+                as_packaged(deploy),
+                as_packaged(packaged),
+                "{name} drifted from its deploy/systemd copy"
+            );
+        }
     }
 
     #[test]
