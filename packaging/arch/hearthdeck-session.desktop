@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=Hearthdeck Kiosk
-Comment=Minimal fullscreen Hearthdeck session with no desktop shell
+Name=Hearthdeck
+Comment=Hearthdeck session: cosmic-comp with Hearthdeck fullscreen as its only client
 Exec=/usr/lib/hearthdeck/hearthdeck-session
 Type=Application
 DesktopNames=hearthdeck

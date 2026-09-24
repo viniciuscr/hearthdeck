@@ -3,15 +3,15 @@
 The `hearthdeck` package targets `x86_64` Arch Linux derivatives, including
 CachyOS. It installs:
 
-- `/usr/bin/hearthdeck`: the desktop and kiosk launcher command.
+- `/usr/bin/hearthdeck`: the launcher command that starts the local services and the COSMIC frontend.
 - `/usr/bin/hearthdeck-frontend`: the COSMIC (libcosmic) frontend.
 - `/usr/lib/hearthdeck/linux-acceptance`: target-host service, RomM, API, and
   aggregate-log acceptance checks.
 - `/usr/lib/hearthdeck/hearthdeck-autologin`: enables or disables greetd
-  autologin into the Kiosk session, so a keyboardless box boots past the login
-  screen; see `docs/kiosk-session.md`.
+  autologin into the Hearthdeck session, so a keyboardless box boots past the
+  login screen; see `docs/kiosk-session.md`.
 - `/usr/lib/hearthdeck/`: the local bridge, daemon, controller compatibility
-  broker, and Kiosk session script.
+  broker, and Hearthdeck session script.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, API
   daemon, input broker, aggregate log collector, and optional Podman Compose
   RomM user units.
@@ -24,12 +24,12 @@ CachyOS. It installs:
 - `~/hearthdeck.log`: recreated at each Hearthdeck session start with combined
   session, daemon, bridge, input broker, overlay, and RomM output.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
-- `/usr/share/wayland-sessions/hearthdeck.desktop`: the minimal Hearthdeck
-  Kiosk session shown by compatible display managers.
+- `/usr/share/wayland-sessions/hearthdeck.desktop`: the Hearthdeck session
+  (cosmic-comp with the frontend fullscreen) shown by compatible display
+  managers.
 - `/usr/lib/hearthdeck/hearthdeck-overlay` and
   `/usr/lib/systemd/user/hearthdeck-overlay.service`: Guide-button-toggled
-  quick-menu overlay, started only by the separate **COSMIC (Test)** session;
-  it is never started in the Hearthdeck Kiosk (Gamescope) session. The session
+  quick-menu overlay, started only by the Hearthdeck session. The session
   installs a COSMIC custom shortcut, `Super+Shift+H`, which runs
   `hearthdeck-overlay --toggle`. It does not replace an existing user binding.
 - The COSMIC frontend was migrated from `../cosmic-app-library` and provides
@@ -93,9 +93,9 @@ A root package transaction cannot reload a logged-in user's manager, so an
 upgrade replaces the unit files on disk while the running manager keeps the
 definitions it already loaded - including a `hearthdeck.target` from before
 RomM existed, which wants no `romm.service` at all. New units therefore take
-effect only once the manager re-reads them. The Kiosk and COSMIC session
-scripts and the launcher each run `systemctl --user daemon-reload` before
-starting the target, so signing out and back in is enough. To apply an upgrade
+effect only once the manager re-reads them. The session script and the
+launcher each run `systemctl --user daemon-reload` before starting the target,
+so signing out and back in is enough. To apply an upgrade
 in the current session instead:
 
 ```sh
@@ -119,26 +119,23 @@ installed and - unless the deployment uses host networking - podman's default
 networking to be able to open `/dev/net/tun` (see `docs/retroarch-integration.md`
 for the `ROMM_COMPOSE_ARGS` override and why the unit has no restart policy).
 
-## Kiosk session
+## Hearthdeck session
 
-See `docs/kiosk-session.md` for the full startup sequence, an incident
-writeup of exactly how this session broke once already (and how not to
-repeat it), and what not to change.
+See `docs/kiosk-session.md` for the startup history and the "do not" lessons;
+note that document now describes the retired Gamescope session.
 
-**Hearthdeck Kiosk** is a plain Gamescope session with no desktop shell: no
-panel, launcher, wallpaper, notifications, or settings daemon. Select it in the
-display manager, or make it the autologin session - which is what a keyboardless
-TV box needs, and what `hearthdeck-autologin enable` sets up (see
-`docs/kiosk-session.md`) - to boot straight into Hearthdeck fullscreen with the
-lowest possible memory and CPU footprint.
+**Hearthdeck** is a minimal COSMIC session: `cosmic-comp` runs with the
+Hearthdeck frontend fullscreen as its only app client, and no panel, launcher,
+wallpaper, notifications, or settings daemon. Select it in the display manager,
+or leave it as the autologin session - which is what a keyboardless TV box needs,
+and what the package sets up automatically (or `hearthdeck-autologin enable`
+does by hand) - to boot straight into Hearthdeck fullscreen.
 
-The session script (`/usr/lib/hearthdeck/hearthdeck-session`) starts
-`hearthdeck.target` for the current user and then execs Gamescope directly on
-the DRM/KMS seat with Hearthdeck as its only child (`gamescope --backend drm
---fullscreen -- /usr/bin/hearthdeck`). There is no intermediate desktop
-compositor to initialize first, and no other process for Gamescope to share
-the seat with. Exiting Hearthdeck ends Gamescope and returns to the display
-manager's login screen; there is no underlying desktop to fall back to.
+The session script (`/usr/lib/hearthdeck/hearthdeck-session`) imports the
+session environment into the systemd user manager, starts `hearthdeck.target`
+(and the overlay) for the current user, and then execs `cosmic-comp` with the
+frontend as its single client. Exiting Hearthdeck ends `cosmic-comp` and
+returns to the display manager's login screen.
 
 Hearthdeck launches registered desktop applications and RetroArch games as
 direct clients of that same outer Kiosk session compositor - its embedded

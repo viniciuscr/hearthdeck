@@ -1,5 +1,5 @@
-// Bare-minimum quick-menu overlay for the "COSMIC (Test)" session (see
-// packaging/arch/cosmic-test-session). A full-screen, semi-transparent
+// Bare-minimum quick-menu overlay for the Hearthdeck session (see
+// packaging/arch/hearthdeck-session). A full-screen, semi-transparent
 // wlr-layer-shell surface, toggled by COSMIC's global shortcut or a gamepad's
 // Guide/Mode button, listing session actions - starting with "Close App".
 //

@@ -1,5 +1,14 @@
 # Kiosk Session: How It Works, and How Not to Break It
 
+> **Historical: this describes the retired Gamescope "Hearthdeck Kiosk"
+> session.** Hearthdeck now ships a single graphical session,
+> `/usr/lib/hearthdeck/hearthdeck-session`, which runs `cosmic-comp` with the
+> Hearthdeck frontend as its only client (`packaging/arch/hearthdeck-session`).
+> The Gamescope Kiosk session, its `hearthdeck-kiosk.target`, and the old
+> "COSMIC (Test)" session have all been removed. This document is kept for its
+> incident history and the lessons that still hold; its Gamescope-specific
+> descriptions no longer match the shipped session.
+
 This document exists because this session broke, got "fixed" three different
 ways by three different guesses at which commit actually worked, and each
 guess was wrong in a way that took real time to untangle. Read this fully

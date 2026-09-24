@@ -5,18 +5,16 @@ edition.workspace = true
 license.workspace = true
 publish = false
 description = """
-Quick-menu overlay for the "COSMIC (Test)" session (see
-packaging/arch/cosmic-test-session): a full-screen, semi-transparent
+Quick-menu overlay for the Hearthdeck session (see
+packaging/arch/hearthdeck-session): a full-screen, semi-transparent
 wlr-layer-shell surface built with libcosmic, toggled by a gamepad's
-Guide/Mode button (evdev BTN_MODE). Not used by, and has no effect on, the
-Hearthdeck Kiosk (Gamescope) session - see docs/kiosk-session.md's "Do not"
-list for why a second compositor client is unsafe there specifically;
-cosmic-comp is a different, real multi-surface Wayland compositor (the same
-mechanism cosmic-panel/cosmic-launcher themselves use) where this is
-architecturally sound. UNTESTED against a real Linux/Wayland toolchain -
-first build must happen on real hardware.
+Guide/Mode button (evdev BTN_MODE). cosmic-comp is a real multi-surface
+Wayland compositor (the same mechanism cosmic-panel/cosmic-launcher
+themselves use), so the overlay is architecturally sound there. UNTESTED
+against a real Linux/Wayland toolchain - first build must happen on real
+hardware.
 
-PKGBUILD builds and installs it only for the COSMIC (Test) session.
+PKGBUILD builds and installs it for the Hearthdeck session.
 """
 
 [target.'cfg(target_os = "linux")'.dependencies]

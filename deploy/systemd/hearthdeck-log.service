@@ -8,7 +8,7 @@ Type=simple
 UMask=0077
 ExecStartPre=/usr/bin/truncate --size=0 %h/hearthdeck.log
 ExecStartPre=/usr/bin/chmod 600 %h/hearthdeck.log
-ExecStart=/usr/bin/journalctl --user --follow --since=-30s --output=short-iso --identifier=hearthdeck-session --identifier=cosmic-test-session --identifier=hearthdeck-daemon --identifier=hearthdeck-bridge --identifier=hearthdeck-input --identifier=hearthdeck-overlay --identifier=romm
+ExecStart=/usr/bin/journalctl --user --follow --since=-30s --output=short-iso --identifier=hearthdeck-session --identifier=hearthdeck-daemon --identifier=hearthdeck-bridge --identifier=hearthdeck-input --identifier=hearthdeck-overlay --identifier=romm
 StandardOutput=append:%h/hearthdeck.log
 StandardError=append:%h/hearthdeck.log
 

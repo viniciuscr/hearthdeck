@@ -20,26 +20,32 @@ Include = /etc/pacman.d/hearthdeck.conf
 EOF
   fi
 
+  # Autologin is the intended mode for a TV box, not a personal desktop. Point
+  # greetd at the Hearthdeck session for the user who ran the install so a
+  # keyboardless machine boots straight into Hearthdeck. Non-fatal: a host with
+  # no cosmic-greeter (or no discoverable invoking user) must still finish the
+  # package transaction.
+  if [ -f /etc/greetd/cosmic-greeter.toml ]; then
+    /usr/lib/hearthdeck/hearthdeck-autologin enable || true
+  fi
+
   cat <<'EOF'
 Hearthdeck installs systemd user units for its API daemon and host bridge, and
-a minimal "Hearthdeck Kiosk" Wayland session with no desktop shell.
+a "Hearthdeck" Wayland session (cosmic-comp with Hearthdeck fullscreen as its
+only client).
 
-The Hearthdeck launchers and sessions start the local-service target for the
-active user. Select Hearthdeck Kiosk in the display manager to run Gamescope
-with Hearthdeck as its only child. To start the services immediately without
-launching Hearthdeck, run as that user:
+The Hearthdeck launchers and session start the local-service target for the
+active user. To start the services immediately without launching Hearthdeck,
+run as that user:
 
   systemctl --user daemon-reload
   systemctl --user start hearthdeck.target
 
-To skip the login screen entirely - the usual setup for a box under a TV with
-no keyboard - on a greetd-based display manager:
-
-  sudo /usr/lib/hearthdeck/hearthdeck-autologin enable
-
-It adds greetd's [initial_session] to the config the running display manager
-uses; run it with --help for other users, other session commands, or to get the
-login screen back with `disable`. See KIOSK-SESSION.md for what it changes.
+On a greetd host (cosmic-greeter), autologin into the Hearthdeck session was
+enabled in /etc/greetd/cosmic-greeter.toml. A reboot, or
+`sudo rm -f /run/greetd.run && sudo systemctl restart display-manager`, makes
+greetd use it. Run `/usr/lib/hearthdeck/hearthdeck-autologin disable` to get the
+login screen back; `--help` covers other users and session commands.
 
 The launcher pairs with the loopback daemon automatically. Optional LAN/TLS
 configuration belongs in ~/.config/hearthdeck/daemon.env; see

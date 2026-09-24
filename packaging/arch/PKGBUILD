@@ -34,7 +34,7 @@ optdepends=(
   'libretro-mame: RetroArch core for arcade/Neo Geo'
   'libretro-scummvm: RetroArch core for ScummVM adventure games'
   'libretro-shaders-slang: Slang shader presets Hearthdeck applies per console'
-  'cosmic-comp: bare-minimum "COSMIC (Test)" session, unrelated to the Hearthdeck Kiosk session'
+  'cosmic-comp: the Hearthdeck session\'s compositor'
   'podman-compose: start an optional local RomM stack with the Hearthdeck session'
 )
 install="${pkgname}.install"
@@ -66,7 +66,6 @@ package() {
   install -Dm755 services/target/release/hearthdeck-input "$pkgdir/usr/lib/hearthdeck/hearthdeck-input"
   install -Dm755 services/target/release/hearthdeck-overlay "$pkgdir/usr/lib/hearthdeck/hearthdeck-overlay"
   install -Dm644 packaging/arch/hearthdeck.target "$pkgdir/usr/lib/systemd/user/hearthdeck.target"
-  install -Dm644 packaging/arch/hearthdeck-kiosk.target "$pkgdir/usr/lib/systemd/user/hearthdeck-kiosk.target"
   install -Dm644 packaging/arch/hearthdeck-bridge.socket "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.socket"
   install -Dm644 packaging/arch/hearthdeck-bridge.service "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.service"
   install -Dm644 packaging/arch/hearthdeck-daemon.service "$pkgdir/usr/lib/systemd/user/hearthdeck-daemon.service"
@@ -88,13 +87,7 @@ package() {
   install -Dm644 packaging/arch/hearthdeck.desktop "$pkgdir/usr/share/applications/io.github.viniciuscr.hearthdeck.desktop"
   install -Dm644 packaging/arch/hearthdeck-session.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck.desktop"
   install -Dm755 packaging/arch/hearthdeck-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-session"
-  # Bare-minimum "COSMIC (Test)" session: independent of, and not required by,
-  # the Hearthdeck Kiosk session above. See packaging/arch/cosmic-test-session
-  # for what it does and does not do.
-  install -Dm644 packaging/arch/cosmic-test-session.desktop "$pkgdir/usr/share/wayland-sessions/cosmic-test.desktop"
-  install -Dm755 packaging/arch/cosmic-test-session "$pkgdir/usr/lib/hearthdeck/cosmic-test-session"
   install -Dm755 services/target/release/hearthdeck-frontend "$pkgdir/usr/bin/hearthdeck-frontend"
-  install -Dm644 deploy/systemd/hearthdeck-cosmic-test.target "$pkgdir/usr/lib/systemd/user/hearthdeck-cosmic-test.target"
   install -Dm644 packaging/arch/hearthdeck-overlay.service "$pkgdir/usr/lib/systemd/user/hearthdeck-overlay.service"
   install -Dm644 services/hearthdeck-frontend/data/icons/org.hearthdeck.HearthDeck.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.viniciuscr.hearthdeck.svg"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

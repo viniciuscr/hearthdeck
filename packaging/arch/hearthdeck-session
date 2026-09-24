@@ -1,86 +1,59 @@
 #!/usr/bin/bash
-# Minimal Hearthdeck kiosk session: no desktop shell, no window manager, no
-# panels or applets. Gamescope is the only compositor and it owns DRM/logind
-# directly. Hearthdeck is its one and only child; closing Hearthdeck ends
-# the session.
+# The Hearthdeck session: runs cosmic-comp directly (no cosmic-session or
+# settings daemon), launching the hearthdeck-frontend COSMIC app (the migrated
+# cosmic-app-library UI) as its client. This is the one graphical Hearthdeck
+# session; on a TV box greetd autologins into it (scripts/hearthdeck-autologin).
 set -Euo pipefail
 
-# Keep Gamescope, Hearthdeck, and session startup output in the user journal.
+# Preserve all session, compositor, and frontend output even after the app
+# covers the greeter terminal. Find it with: journalctl -b -t hearthdeck-session
 exec > >(systemd-cat -t hearthdeck-session) 2>&1
 
-export XDG_CURRENT_DESKTOP=hearthdeck
+log() {
+  printf '[hearthdeck-session] %s\n' "$1"
+}
+
+log "starting"
+
+export XDG_CURRENT_DESKTOP=hearthdeck:COSMIC
 export XDG_SESSION_DESKTOP=hearthdeck
 export XDG_SESSION_TYPE=wayland
 
-# A plain shell `export` only changes this script's own process environment.
-# It does NOT reach the systemd --user manager's own activation environment,
-# which is what every unit it starts (including hearthdeck-bridge.service,
-# lazily socket-activated on the first launch request) actually inherits.
-# hearthdeck-bridge's is_kiosk_session() check reads XDG_CURRENT_DESKTOP from
-# its own process environment (see linux.rs's current_desktops()), so without
-# this import it would see the systemd user manager's original login
-# environment - almost certainly missing XDG_CURRENT_DESKTOP entirely - and
-# would incorrectly conclude every launch is happening outside the Kiosk
-# session. That silently breaks Kiosk-specific launch behavior in
-# launch_with_systemd (linux.rs): the `hearthdeck-kiosk.slice` cgroup
-# assignment for every launched app/game.
+# This session starts its own local daemon and pairs with it at runtime.
+unset HEARTHDECK_BACKEND_URL HEARTHDECK_PAIRING_TOKEN
+
 systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE || true
 
-# The local API daemon and Linux bridge are lightweight background services,
-# not a desktop shell. Starting them here guarantees they are owned by the
-# active user and ready before Hearthdeck makes its first request, even on a
-# from-cold-boot autologin.
-#
-# hearthdeck-kiosk.target is this session's single, dedicated hook for
-# everything it needs started before Hearthdeck launches (see that unit's own
-# description for why it exists separately from hearthdeck.target). Real
-# failures must stay visible in the journal here: do not redirect this
-# output to /dev/null. The trailing `|| true` is intentional and different
-# from hiding the failure - Hearthdeck still launches either way so its own
-# system-health screen can show the user what's wrong, rather than the whole
-# session refusing to start on a backend hiccup.
+# Critical: daemon-reload must come after import-environment to make systemd re-read
+# units with the new environment. Without it, hearthdeck.target and its services
+# won't see XDG_CURRENT_DESKTOP and XDG_SESSION_TYPE, breaking environment-dependent
+# logic like is_kiosk_session() (hearthdeck-bridge's kiosk slice assignment).
 systemctl --user daemon-reload || true
-systemctl --user start hearthdeck-kiosk.target || true
-
-# hearthdeck-bridge.service is socket-activated and normally hasn't started
-# yet at this point in a cold boot, so it will pick up the environment
-# imported above the first time a launch request activates it. Restarting it
-# here too (a no-op if it isn't running) is cheap insurance against it
-# somehow having started earlier with the stale pre-import environment.
+log "starting hearthdeck.target"
+if ! systemctl --user start hearthdeck.target; then
+  log "hearthdeck.target failed; continuing so Hearthdeck can show diagnostics"
+fi
+systemctl --user try-restart hearthdeck-daemon.service || true
 systemctl --user try-restart hearthdeck-bridge.service || true
 
-# --backend drm:     run directly on the DRM/KMS seat; no outer Wayland/X11
-#                     session required.
-# --fullscreen:      cover the full output mode.
-# --force-grab-cursor: keep the cursor confined to Hearthdeck's surface.
-#
-# --force-windows-fullscreen was added here to make direct-connected apps
-# that don't manage their own fullscreen state (e.g. a plain `xterm`) fill
-# the screen automatically. REVERTED: caused a black screen after login on
-# real hardware, not caught before pushing because this flag's own
-# documentation talks about "the nested display", suggesting it may not
-# behave the same way against `--backend drm` standalone mode as it does in
-# genuinely nested mode. Hearthdeck itself never needed this flag - it
-# already requests its own fullscreen via GTK (see
-# linux/runner/my_application.cc) - so removing it from this outer instance
-# does not affect Hearthdeck's own display. Apps that don't request their
-# own fullscreen will go back to opening at whatever size they ask for until
-# this is investigated and fixed properly on real hardware; that's a real
-# regression, but a much smaller one than an unusable black screen.
-#
-# Desktop apps and RetroArch launches connect directly to this same
-# instance (see launch_with_systemd/launch_application/launch_retro_game in
-# hearthdeck-bridge's linux.rs) rather than getting their own nested
-# Gamescope: a second Gamescope process joining this session as a native
-# Wayland client was confirmed, on real hardware, to never get shown by this
-# outer compositor (see docs/kiosk-session.md); a plain client connecting
-# through this session's own DISPLAY/WAYLAND_DISPLAY is shown correctly, the
-# same way Hearthdeck itself is. Heroic keeps a nested Gamescope instance of
-# its own (SDL backend, connecting through this session's DISPLAY rather
-# than joining as a Wayland peer) specifically so its games can still get
-# their own internal resolution/upscaling - see launch_heroic_game.
-exec gamescope \
-  --backend drm \
-  --fullscreen \
-  --force-grab-cursor \
-  -- /usr/bin/hearthdeck
+# Add the default COSMIC custom shortcut once. The helper is idempotent and
+# refuses to replace a binding the user already assigned.
+/usr/lib/hearthdeck/hearthdeck-overlay --install-shortcut || log "could not install overlay shortcut"
+
+# The overlay is a COSMIC layer-shell client, so it is valid only in this
+# session. Its restart policy absorbs the compositor's initial
+# activation-environment race.
+systemctl --user start hearthdeck-overlay.service || true
+
+launch_app="/usr/bin/hearthdeck-frontend"
+if [[ ! -x "$launch_app" && -x /usr/bin/hearthdeck_cosmic ]]; then
+  launch_app="/usr/bin/hearthdeck_cosmic"
+fi
+
+if [[ ! -x "$launch_app" ]]; then
+  log "hearthdeck-frontend binary missing: expected /usr/bin/hearthdeck-frontend"
+  exit 1
+fi
+
+log "exec cosmic-comp ($launch_app)"
+exec cosmic-comp "$launch_app"

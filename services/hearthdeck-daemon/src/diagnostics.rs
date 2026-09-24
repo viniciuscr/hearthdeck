@@ -1253,7 +1253,7 @@ mod tests {
         let log_service = include_str!("../../../deploy/systemd/hearthdeck-log.service");
         let deploy_target = include_str!("../../../deploy/systemd/hearthdeck.target");
         let package_target = include_str!("../../../packaging/arch/hearthdeck.target");
-        let kiosk_session = include_str!("../../../packaging/arch/hearthdeck-session");
+        let session = include_str!("../../../packaging/arch/hearthdeck-session");
         let acceptance = include_str!("../../../scripts/linux-acceptance");
         let package = include_str!("../../../packaging/arch/PKGBUILD");
         let install = include_str!("../../../packaging/arch/hearthdeck.install");
@@ -1297,13 +1297,12 @@ mod tests {
         assert!(log_service.contains("ExecStartPre=/usr/bin/truncate --size=0 %h/hearthdeck.log"));
         assert!(log_service.contains("ExecStartPre=/usr/bin/chmod 600 %h/hearthdeck.log"));
         assert!(log_service.contains("--identifier=hearthdeck-session"));
-        assert!(log_service.contains("--identifier=cosmic-test-session"));
         assert!(log_service.contains("--identifier=hearthdeck-daemon"));
         assert!(log_service.contains("--identifier=hearthdeck-bridge"));
         assert!(log_service.contains("--identifier=hearthdeck-input"));
         assert!(log_service.contains("--identifier=hearthdeck-overlay"));
         assert!(log_service.contains("--identifier=romm"));
-        assert!(kiosk_session.contains("systemd-cat -t hearthdeck-session"));
+        assert!(session.contains("systemd-cat -t hearthdeck-session"));
         assert!(
             deploy_target.contains(
                 "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service"

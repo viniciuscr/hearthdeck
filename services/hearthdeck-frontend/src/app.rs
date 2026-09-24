@@ -8166,8 +8166,8 @@ mod tests {
     }
 
     #[test]
-    fn cosmic_session_does_not_start_or_configure_a_panel() {
-        let session = include_str!("../../../packaging/arch/cosmic-test-session");
+    fn hearthdeck_session_does_not_start_or_configure_a_panel() {
+        let session = include_str!("../../../packaging/arch/hearthdeck-session");
         let package = include_str!("../../../packaging/arch/PKGBUILD");
 
         assert!(!session.contains(".config/cosmic"));

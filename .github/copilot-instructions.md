@@ -93,8 +93,7 @@ just logs-errors      # error-only journal
 
 ## Sessions / deployment
 
-- **Kiosk**: Gamescope on DRM/KMS, Hearthdeck as sole child.
-- **COSMIC (Test)**: cosmic-comp + Hearthdeck overlay.
+- **Hearthdeck session**: cosmic-comp + Hearthdeck frontend fullscreen; greetd autologin by default.
 - `hearthdeck.target` = systemd user root; owns daemon + bridge socket.
 
 ## Validation rule

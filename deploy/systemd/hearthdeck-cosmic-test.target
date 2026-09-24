@@ -1,7 +1,0 @@
-[Unit]
-Description=Hearthdeck COSMIC (Test) session prerequisites
-Documentation=file:///usr/share/doc/hearthdeck/KIOSK-SESSION.md
-# Requiring the shared target here starts the fixed-port services only for the
-# active COSMIC session user. Mirror hearthdeck-kiosk.target's structure.
-Requires=hearthdeck.target
-After=hearthdeck.target
