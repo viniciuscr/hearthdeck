@@ -56,7 +56,8 @@ RetroArch's menu, and confirm **Guide/Home** does not open it - Guide is
 Hearthdeck's, so RetroArch's menu must be out of its way (decision 9 in
 `docs/retroarch-integration.md`). Stop `hearthdeck.target` and confirm the Compose
 stack is stopped. Temporarily move the compose file away and confirm
-`romm.service` is skipped while the rest of `hearthdeck.target` still starts.
+`romm.service` logs that it has nothing to start (and does not fail) while the
+rest of `hearthdeck.target` still starts.
 
 ## Library Scan
 

@@ -147,8 +147,9 @@ design and phased roadmap for this integration is tracked in
 
 The Arch package installs an optional `romm.service` that starts an existing
 Podman Compose deployment alongside the Hearthdeck session. It uses
-`/mnt/external/romM/podman-compose.yaml` by default and skips cleanly when that
-file is absent. `romm.path` watches that path and starts the stack when the file
+`/mnt/external/romM/podman-compose.yaml` by default and logs that there is nothing
+to start when that file is absent, rather than failing or skipping silently.
+`romm.path` watches that path and starts the stack when the file
 appears, so a compose file on an external mount that is not ready at session
 start is still picked up. `~/.config/hearthdeck/romm.env` can override the path. Its
 status appears in Settings' service status view next to the daemon and bridge.

@@ -23,8 +23,8 @@ EnvironmentFile=-%h/.config/hearthdeck/romm.env
 # from "the mount is not up yet" - the failure this replaced. The driver logs the
 # real reason instead (no compose file, podman missing, podman not running) and
 # the unit fails only when a deployment exists and could not be started.
-ExecStart=%h/.local/bin/hearthdeck-romm up
-ExecStop=%h/.local/bin/hearthdeck-romm down
+ExecStart=/usr/lib/hearthdeck/hearthdeck-romm up
+ExecStop=/usr/lib/hearthdeck/hearthdeck-romm down
 TimeoutStartSec=900
 TimeoutStopSec=300
 # Deliberately no restart policy here. This unit wraps `podman-compose up -d`,

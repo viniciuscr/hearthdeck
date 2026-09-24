@@ -1,11 +1,7 @@
 [Unit]
 Description=Hearthdeck local API daemon
-After=hearthdeck-bridge.socket hearthdeck-romm-discover.service
+After=hearthdeck-bridge.socket
 Requires=hearthdeck-bridge.socket
-# This unit reads ROMM_COMPOSE_FILE from romm.env, so the discovery step has to
-# have run first - and pulling it in from here is what makes that true on a host
-# whose hearthdeck.target gets its dependencies from a drop-in.
-Wants=hearthdeck-romm-discover.service
 PartOf=hearthdeck.target
 
 [Service]

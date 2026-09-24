@@ -175,11 +175,11 @@ if [[ -f "$romm_compose_file" ]]; then
 elif $require_romm; then
   fail "required RomM compose file is missing: $romm_compose_file"
 else
-  skip "RomM compose file is absent; romm.service should be skipped"
-  if systemctl --user is-active --quiet romm.service; then
-    fail "romm.service is active without its compose file"
+  skip "RomM compose file is absent; romm.service should log and no-op"
+  if systemctl --user is-failed --quiet romm.service; then
+    fail "romm.service failed without its compose file"
   else
-    pass "romm.service skipped cleanly"
+    pass "romm.service handled the missing compose file"
   fi
 fi
 
@@ -202,7 +202,7 @@ if [[ -s "$log_file" ]]; then
     fail "$log_file does not contain daemon output"
   fi
   if $romm_expected; then
-    if grep -q 'Starting RomM Podman Compose stack' "$log_file"; then
+    if grep -q 'hearthdeck-romm: starting the stack from' "$log_file"; then
       pass "$log_file contains RomM startup output"
     else
       fail "$log_file does not contain RomM startup output"

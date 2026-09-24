@@ -12,10 +12,9 @@ CachyOS. It installs:
   login screen; see `docs/kiosk-session.md`.
 - `/usr/lib/hearthdeck/`: the local bridge, daemon, controller compatibility
   broker, and Hearthdeck session script.
-- `/usr/lib/hearthdeck/hearthdeck-romm`: the `ready`/`up`/`down` driver
-  `romm.service` runs; it holds the `podman-compose` argv and the "is there a
-  RomM deployment on this host" decision, which the unit cannot express as a
-  condition without also skipping a compose file that is merely late.
+- `/usr/lib/hearthdeck/hearthdeck-romm`: the `up`/`down` driver `romm.service`
+  runs; it holds the `podman-compose` argv and the prerequisite checks (compose
+  file, podman, podman-compose, podman running), logging every outcome.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, API
   daemon, input broker, aggregate log collector, and optional Podman Compose
   RomM user units.
@@ -27,16 +26,15 @@ CachyOS. It installs:
   unit starts what, in what order, and why — is in
   `/usr/share/doc/hearthdeck/ROMM.md`, "Starting the RomM server itself"; that is
   the file `systemctl --user status romm.service` and `Documentation=` point at.
-  `/usr/lib/hearthdeck/hearthdeck-romm-discover`
-  runs at session start and finds the compose file itself (configured path, likely
-  locations, then a running stack's podman labels), writing it to
-  `~/.config/hearthdeck/romm.env`, which both `romm.service` and the daemon read.
-  The service defaults to `/mnt/external/romM/podman-compose.yaml`; its
-  `ExecCondition` skips only when there is no deployment at all, and `up` reports
-  a missing file instead of failing the session.
-  `romm.path` watches that default path and starts the stack when the file
-  appears, so a compose file on an external mount that is not ready at session
-  start is still picked up rather than skipped for the whole session.
+  `romm.service` and the daemon both read `~/.config/hearthdeck/romm.env`, so
+  `ROMM_COMPOSE_FILE` there is the one place the path is set; with nothing set it
+  defaults to `/mnt/external/romM/podman-compose.yaml`.
+  `/usr/lib/hearthdeck/hearthdeck-romm` checks podman, podman-compose and podman's
+  service before running `podman-compose up -d`, logs every outcome to
+  `~/hearthdeck.log`, and reports a missing compose file instead of skipping
+  silently. `romm.path` watches the default path and starts the stack when the
+  file appears, so a compose file on an external mount that is not ready at
+  session start is still picked up rather than skipped for the whole session.
 - `~/hearthdeck.log`: recreated at each Hearthdeck session start with combined
   session, daemon, bridge, input broker, overlay, and RomM output, plus systemd's
   own messages about those units (skipped conditions, start timeouts, failures).
@@ -98,9 +96,8 @@ directives such as `ProtectSystem`, `ReadWritePaths`, or `PrivateTmp`.
 `hearthdeck.target` starts the API daemon, owns the
 `hearthdeck-bridge.socket`, and attempts the optional `romm.service` (with
 `romm.path` starting it if its compose file appears only after the session is
-up). The RomM
-unit is skipped (cleanly, not failed) unless its compose file exists, so
-installations without RomM are unaffected. The bridge process is
+up). With no compose file the RomM unit logs that there is nothing to start and
+succeeds, so installations without RomM are unaffected. The bridge process is
 socket-activated on its first typed request. Future network and Bluetooth
 bridges will follow the same target-plus-socket lifecycle.
 
@@ -126,7 +123,7 @@ user that ran it, with nothing left to do by hand:
 - `start romm.path` and `start romm.service`. Starting rather than restarting is
   deliberate - a stack an earlier session already has running must not be torn
   down and rebuilt by an upgrade, so `start` is a no-op on a unit that is up, runs
-  `podman-compose up -d` on one that is not, and skips cleanly when there is no
+  `podman-compose up -d` on one that is not, and logs-and-no-ops when there is no
   compose file. This is what brings RomM back after an upgrade without a
   sign-out.
 
@@ -141,7 +138,7 @@ it did:
 ```sh
 systemctl --user status romm.service        # active (exited): RemainAfterExit
 podman-compose -f "$ROMM_COMPOSE_FILE" ps   # containers running
-grep 'RomM' ~/hearthdeck.log                # "Starting RomM Podman Compose stack"
+grep 'hearthdeck-romm' ~/hearthdeck.log     # "hearthdeck-romm: stack is up"
 ```
 
 `systemctl --user status romm.service` reporting `could not be found` means the

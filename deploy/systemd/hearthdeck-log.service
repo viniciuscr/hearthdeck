@@ -1,14 +1,14 @@
 [Unit]
 Description=Hearthdeck session log collector
 PartOf=hearthdeck.target
-Before=hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service hearthdeck-romm-discover.service
+Before=hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service
 
 [Service]
 Type=simple
 UMask=0077
 ExecStartPre=/usr/bin/truncate --size=0 %h/hearthdeck.log
 ExecStartPre=/usr/bin/chmod 600 %h/hearthdeck.log
-ExecStart=/bin/sh -c 'journalctl --user --follow --since=-30s --identifier=hearthdeck-session & exec journalctl --user --follow --since=-30s -u hearthdeck-bridge.service -u hearthdeck-daemon.service -u hearthdeck-input.service -u hearthdeck-overlay.service -u romm.service -u romm.path -u hearthdeck-romm-discover.service'
+ExecStart=/bin/sh -c 'journalctl --user --follow --since=-30s --identifier=hearthdeck-session & exec journalctl --user --follow --since=-30s -u hearthdeck-bridge.service -u hearthdeck-daemon.service -u hearthdeck-input.service -u hearthdeck-overlay.service -u romm.service -u romm.path'
 StandardOutput=append:%h/hearthdeck.log
 StandardError=append:%h/hearthdeck.log
 

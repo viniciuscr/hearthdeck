@@ -1305,6 +1305,7 @@ mod tests {
     #[test]
     fn romm_compose_service_is_optional_and_session_managed() {
         let service = include_str!("../../../deploy/systemd/romm.service");
+        let packaged_service = include_str!("../../../packaging/arch/romm.service");
         let romm_path = include_str!("../../../deploy/systemd/romm.path");
         let log_service = include_str!("../../../deploy/systemd/hearthdeck-log.service");
         let deploy_target = include_str!("../../../deploy/systemd/hearthdeck.target");
@@ -1320,19 +1321,28 @@ mod tests {
                 .contains("Environment=ROMM_COMPOSE_FILE=/mnt/external/romM/podman-compose.yaml")
         );
         assert!(service.contains("EnvironmentFile=-%h/.config/hearthdeck/romm.env"));
-        // The unit delegates to the packaged driver, which is where the argv and
-        // the "is there a deployment here" decision live. A condition over a
-        // transient fact (is the file there *yet*) is the bug this replaced.
-        assert!(service.contains("ExecCondition=/usr/lib/hearthdeck/hearthdeck-romm ready"));
-        assert!(service.contains("ExecStart=/usr/lib/hearthdeck/hearthdeck-romm up"));
-        assert!(service.contains("ExecStop=/usr/lib/hearthdeck/hearthdeck-romm down"));
+        // Neither copy may carry an ExecCondition: a condition that is not met is
+        // a silent skip, which cannot tell "no RomM here" from "the mount is
+        // late" - the failure the driver was written to make visible
+        // (docs/units-and-logs.md Rule 1). The driver logs every outcome instead.
         assert!(
             !service
                 .lines()
-                .any(|line| line.trim_start().starts_with("ExecCondition=/usr/bin/test")),
-            "romm.service must not skip on a transient filesystem fact (docs/units-and-logs.md Rule 1)"
+                .any(|line| line.trim_start().starts_with("ExecCondition=")),
+            "romm.service must not silently skip on a condition (docs/units-and-logs.md Rule 1)"
         );
-        assert!(service.contains("ExecStopPost=/usr/bin/echo RomM Podman Compose stack stopped"));
+        assert!(
+            !packaged_service
+                .lines()
+                .any(|line| line.trim_start().starts_with("ExecCondition=")),
+            "the packaged romm.service must not silently skip on a condition"
+        );
+        // The checkout copy runs the driver from ~/.local/bin, the package from
+        // /usr/lib, exactly like the daemon and bridge units.
+        assert!(service.contains("ExecStart=%h/.local/bin/hearthdeck-romm up"));
+        assert!(service.contains("ExecStop=%h/.local/bin/hearthdeck-romm down"));
+        assert!(packaged_service.contains("ExecStart=/usr/lib/hearthdeck/hearthdeck-romm up"));
+        assert!(packaged_service.contains("ExecStop=/usr/lib/hearthdeck/hearthdeck-romm down"));
         assert!(service.contains("SyslogIdentifier=romm"));
         assert!(service.contains("PartOf=hearthdeck.target"));
         // The watcher is armed from the service too, so it works with an older
@@ -1375,20 +1385,19 @@ mod tests {
         assert!(log_service.contains("-u hearthdeck-overlay.service"));
         assert!(log_service.contains("-u romm.service"));
         assert!(log_service.contains("-u romm.path"));
-        assert!(log_service.contains("-u hearthdeck-romm-discover.service"));
         assert!(session.contains("systemd-cat -t hearthdeck-session"));
         assert!(
             deploy_target.contains(
-                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service romm.path hearthdeck-romm-discover.service"
+                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service romm.path"
             )
         );
         assert!(
             package_target.contains(
-                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service romm.path hearthdeck-romm-discover.service"
+                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service romm.path"
             )
         );
         assert!(package.contains("deploy/systemd/hearthdeck-log.service"));
-        assert!(package.contains("deploy/systemd/romm.service"));
+        assert!(package.contains("packaging/arch/romm.service"));
         assert!(package.contains("deploy/systemd/romm.path"));
         // An install or an upgrade has to apply itself. A running manager keeps
         // the unit definitions it already loaded - including a target from
@@ -1460,6 +1469,11 @@ mod tests {
                 include_str!("../../../deploy/systemd/hearthdeck-input.service"),
                 include_str!("../../../packaging/arch/hearthdeck-input.service"),
             ),
+            (
+                "romm.service",
+                include_str!("../../../deploy/systemd/romm.service"),
+                include_str!("../../../packaging/arch/romm.service"),
+            ),
         ];
 
         let as_packaged = |unit: &str| unit.replace("%h/.local/bin/", "/usr/lib/hearthdeck/");
@@ -1518,22 +1532,36 @@ mod tests {
     }
 
     #[test]
-    fn romm_discovery_runs_before_its_consumers_and_is_pulled_in_by_them() {
-        let discover = include_str!("../../../deploy/systemd/hearthdeck-romm-discover.service");
-        let romm = include_str!("../../../deploy/systemd/romm.service");
-        let daemon = include_str!("../../../packaging/arch/hearthdeck-daemon.service");
+    fn the_romm_driver_checks_its_prerequisites_and_logs_every_outcome() {
+        let driver = include_str!("../../../packaging/arch/hearthdeck-romm");
         let package = include_str!("../../../packaging/arch/PKGBUILD");
+        let daemon = include_str!("../../../packaging/arch/hearthdeck-daemon.service");
+        let log_service = include_str!("../../../deploy/systemd/hearthdeck-log.service");
 
-        // Discovery must finish before anything that reads romm.env starts...
-        assert!(discover.contains("Before=hearthdeck-daemon.service romm.service"));
-        // ...and it must be pulled in by those consumers, not only by the target,
-        // or a host whose hearthdeck.target predates it never runs it.
-        assert!(romm.contains("Wants=romm.path hearthdeck-romm-discover.service"));
-        assert!(daemon.contains("Wants=hearthdeck-romm-discover.service"));
-        assert!(daemon.contains("After=hearthdeck-bridge.socket hearthdeck-romm-discover.service"));
-        // And the script it runs has to be what the package installs.
-        assert!(package.contains("packaging/arch/hearthdeck-romm-discover"));
-        assert!(package.contains("deploy/systemd/hearthdeck-romm-discover.service"));
+        // The checks worth doing before a compose up, each one naming what is
+        // missing: podman installed, podman-compose installed, the podman service
+        // actually answering, and the compose file present.
+        for check in [
+            "command -v podman",
+            "command -v podman-compose",
+            "podman info",
+            "no compose file at",
+        ] {
+            assert!(driver.contains(check), "the driver lost its {check} check");
+        }
+        // `up` runs the real thing and reports both outcomes instead of staying
+        // silent.
+        assert!(driver.contains("podman-compose -f \"$compose\" ${ROMM_COMPOSE_ARGS:-} up -d"));
+        assert!(driver.contains("stack is up"));
+        assert!(driver.contains("podman-compose up failed"));
+
+        // A separate discovery unit used to write the compose path into romm.env
+        // before every session. It is gone: the path comes from romm.env (which
+        // both romm.service and the daemon read) or the packaged default, and
+        // nothing may still reference the removed unit.
+        assert!(!package.contains("hearthdeck-romm-discover"));
+        assert!(!daemon.contains("hearthdeck-romm-discover"));
+        assert!(!log_service.contains("hearthdeck-romm-discover"));
     }
 
     #[test]
@@ -1559,17 +1587,22 @@ mod tests {
     #[test]
     fn romm_service_delegates_to_the_packaged_driver() {
         let service = include_str!("../../../deploy/systemd/romm.service");
+        let packaged_service = include_str!("../../../packaging/arch/romm.service");
         let driver = include_str!("../../../packaging/arch/hearthdeck-romm");
         let package = include_str!("../../../packaging/arch/PKGBUILD");
 
-        // The script the unit names is the one the package installs at that path.
-        // The destination, not just the source name, so a `hearthdeck-romm`
-        // install line cannot be satisfied by the `-discover` one.
+        // The script the package installs at /usr/lib is the one the packaged unit
+        // names, and the checkout unit names the ~/.local/bin copy the justfile
+        // installs. The destination, not just the source name, is asserted.
         assert!(package.contains("$pkgdir/usr/lib/hearthdeck/hearthdeck-romm\""));
-        for verb in ["ready", "up", "down"] {
+        for verb in ["up", "down"] {
             assert!(
-                service.contains(&format!("/usr/lib/hearthdeck/hearthdeck-romm {verb}")),
-                "romm.service must invoke the driver's `{verb}`"
+                packaged_service.contains(&format!("/usr/lib/hearthdeck/hearthdeck-romm {verb}")),
+                "the packaged romm.service must invoke the driver's `{verb}`"
+            );
+            assert!(
+                service.contains(&format!("%h/.local/bin/hearthdeck-romm {verb}")),
+                "the checkout romm.service must invoke the driver's `{verb}`"
             );
             assert!(
                 driver.contains(&format!("\n{verb})")),
@@ -1591,7 +1624,7 @@ mod tests {
             "the driver must not block session start; a late compose file is the watcher's job"
         );
         assert!(
-            driver.contains("romm.path will start the stack when it appears"),
+            driver.contains("romm.path retries when it appears"),
             "`up` must name who starts a not-yet-present stack"
         );
 
@@ -1602,11 +1635,10 @@ mod tests {
 
     /// The RomM runbook (`docs/retroarch-integration.md`, shipped as
     /// `/usr/share/doc/hearthdeck/ROMM.md`) is what `systemctl status romm.service`
-    /// points a stuck operator at. It went stale once — it still described the
-    /// `ExecCondition=/usr/bin/test -f` skip and knew nothing about discovery or
-    /// the driver — which is why the same bug was re-derived and re-fixed. Keep
-    /// the doc naming the design it documents so drift fails the build instead of
-    /// someone's evening.
+    /// points a stuck operator at. It went stale once — it still described the old
+    /// `ExecCondition` silent-skip design — which is why the same bug was
+    /// re-derived and re-fixed. Keep the doc naming the design it documents so
+    /// drift fails the build instead of someone's evening.
     #[test]
     fn the_romm_runbook_stays_true_to_the_units_it_documents() {
         let doc = include_str!("../../../docs/retroarch-integration.md");
@@ -1619,9 +1651,8 @@ mod tests {
 
         // Every moving part of the chain has to be in there...
         for artifact in [
-            "hearthdeck-romm-discover",
-            "hearthdeck-romm ready",
             "hearthdeck-romm up",
+            "podman info",
             "romm.path",
             "TimeoutStartSec=900",
         ] {
@@ -1633,7 +1664,7 @@ mod tests {
 
         // ...and the mechanism that was replaced is described as replaced, so a
         // reader does not take the old silent-skip design as current.
-        assert!(doc.contains("Why the condition is `ready`, not `test -f`"));
+        assert!(doc.contains("Why there is no `ExecCondition`"));
         assert!(doc.contains("Why `up` never waits"));
     }
 

@@ -294,34 +294,22 @@ stack itself.
 ```
 hearthdeck-session
   └─ systemctl --user start hearthdeck.target
-       ├─ hearthdeck-romm-discover.service        (oneshot, Before= the two below)
-       │    └─ /usr/lib/hearthdeck/hearthdeck-romm-discover
-       │         resolves the compose file, prints every candidate it checks,
-       │         writes ROMM_COMPOSE_FILE into ~/.config/hearthdeck/romm.env
        ├─ romm.service                            (oneshot, RemainAfterExit=yes)
        │    Environment=ROMM_COMPOSE_FILE=<packaged default>
        │    EnvironmentFile=-~/.config/hearthdeck/romm.env   (overrides it)
-       │    ExecCondition=/usr/lib/hearthdeck/hearthdeck-romm ready
-       │    ExecStart    =/usr/lib/hearthdeck/hearthdeck-romm up     # podman-compose ... up -d
-       │    ExecStop     =/usr/lib/hearthdeck/hearthdeck-romm down
-       │    Wants=romm.path hearthdeck-romm-discover.service
+       │    ExecStart=/usr/lib/hearthdeck/hearthdeck-romm up   # checks, then podman-compose up -d
+       │    ExecStop =/usr/lib/hearthdeck/hearthdeck-romm down
+       │    Wants=romm.path
        ├─ romm.path                               (watches the *default* path)
        │    Unit=romm.service  -> starts the stack when a late file appears
        └─ hearthdeck-daemon.service
             loads the same romm.env, so the RomM library and resource roots
-            follow the resolved path instead of the packaged default
+            follow the configured path instead of the packaged default
 ```
 
-Every edge in that graph was a bug before it existed, so none of it is
-incidental:
-
-- **Discovery runs first** (`Before=hearthdeck-daemon.service romm.service`).
-  `EnvironmentFile=` is only read when a unit starts, so a consumer that was
-  already running keeps its old value; ordering is the only thing that makes both
-  readers agree on the same deployment.
-- **`romm.service` wants discovery and `romm.path` itself**, not only the target.
-  A host running an older package has an older `hearthdeck.target` whose `Wants=`
-  line predates them; arming a helper from the unit that is actually wanted is
+- **`romm.service` wants `romm.path` itself**, not only the target. A host
+  running an older package has an older `hearthdeck.target` whose `Wants=` line
+  predates it; arming a helper from the unit that is actually wanted is
   `docs/units-and-logs.md` Rule 3.
 - **`romm.path` watches only the hardcoded default path.** A `.path` unit cannot
   read an `EnvironmentFile`, so an override in `romm.env` is not watched. That is
@@ -330,38 +318,28 @@ incidental:
 
 ### Where the compose file comes from
 
-Which compose file exists, and whether the mount holding it is up yet, is *host*
-state: it cannot be decided at package install, and a production box will not
-"just export the right variable". So the session resolves it every time, in this
-order (`packaging/arch/hearthdeck-romm-discover`):
+`romm.service` and the daemon both load `~/.config/hearthdeck/romm.env` with
+`EnvironmentFile=`, so `ROMM_COMPOSE_FILE` in that file is the single place the
+deployment path is configured, and both processes agree on it. With nothing set,
+the packaged default is `/mnt/external/romM/podman-compose.yaml`. Copy
+`/usr/share/doc/hearthdeck/romm.env.example` there to point at a deployment
+somewhere else.
 
-1. the path already in `~/.config/hearthdeck/romm.env`, if it is still a file;
-2. a list of likely locations (`$HOME/Games/romM`, `$HOME/romM`, `$HOME/romm`,
-   `/mnt/external/romM`, `/srv/romM`, `/opt/romM`);
-3. the compose file an existing stack names in its podman container labels — the
-   case no fixed list can cover.
+### Why there is no `ExecCondition`
 
-Every candidate is printed, found or not, and the winner is written back to
-`romm.env`. One paste of `~/hearthdeck.log` then answers "where did it look"
-without anyone running a command. When nothing is found, discovery says so and
-exits 0: not finding RomM is a normal outcome on most hosts, not a failure of the
-session.
+The unit used to carry `ExecCondition=`. A non-zero `ExecCondition=` is *not* a
+failure: it leaves the unit `inactive`, retries nothing, and — because condition
+results are only logged at debug — writes nothing useful to `~/hearthdeck.log`.
+"The external drive is two seconds late" and "this host has no RomM" were
+indistinguishable, and on a host whose compose file was not where the condition
+looked, it failed on every boot, silently, forever. That silence is why no
+condition is used at all (`docs/units-and-logs.md` Rule 1).
 
-### Why the condition is `ready`, not `test -f`
-
-The unit used to carry `ExecCondition=/usr/bin/test -f ${ROMM_COMPOSE_FILE}`. A
-non-zero `ExecCondition=` is *not* a failure: it leaves the unit `inactive` and
-retries nothing, while `ExecStopPost=` still runs — so `~/hearthdeck.log` showed
-only `RomM Podman Compose stack stopped`. "The external drive is two seconds
-late" and "this host has no RomM" were therefore indistinguishable, and on a host
-whose compose file was not at the packaged default the condition failed on every
-boot, silently, forever.
-
-`hearthdeck-romm ready` skips only when there is genuinely no deployment here: no
-resolved file, no discovery result, and no deployment directory. A file that is
-merely late is `up`'s business, and `up` logs that it is late instead of failing
-the session. The general rule is `docs/units-and-logs.md` Rule 1: only a
-*permanent* fact may go in a condition.
+Instead the driver does its checks and reports what it found on every run: no
+compose file (a normal no-op that `romm.path` retries), podman missing,
+podman-compose missing, or podman not running (`podman info` is what decides
+that last one). A file that is merely late is `up`'s business, and `up` says so
+rather than staying quiet.
 
 ### Why `up` never waits
 
@@ -369,10 +347,9 @@ the session. The general rule is `docs/units-and-logs.md` Rule 1: only a
 waits for its oneshot dependencies to exit**. Any wait inside `up` — for the
 mount, for the file — is a wait before `cosmic-comp` launches, with a blank
 screen as the symptom. Waiting is unnecessary anyway: `romm.path` fires
-`romm.service` the moment the file appears, and because the discovery oneshot has
-no `RemainAfterExit`, starting the service again re-runs discovery, which finds
-and records the file. `TimeoutStartSec=900` covers the one thing allowed to make
-the session wait: `podman-compose up -d` actually converging the stack.
+`romm.service` the moment the file appears. `TimeoutStartSec=900` covers the one
+thing allowed to make the session wait: `podman-compose up -d` actually
+converging the stack (a cold first `up` may need to pull images).
 
 ### Two details of `romm.service` are deliberate and easy to get wrong
 
@@ -395,7 +372,7 @@ the session wait: `podman-compose up -d` actually converging the stack.
   `romm.env` line:
 
   ```sh
-  ROMM_COMPOSE_ARGS=-f %h/.config/hearthdeck/romm-hostnet.yaml
+  ROMM_COMPOSE_ARGS=-f /home/you/.config/hearthdeck/romm-hostnet.yaml
   ```
 
 **"A place in the UI to do this kind of stuff":** rather than build a new

@@ -1,73 +1,86 @@
 #!/usr/bin/sh
-# Drive the RomM Compose deployment for the session.
+# Bring the RomM Podman Compose stack up or down for this session.
 #
-# The unit could inline `podman-compose ... up -d`, and that is all this really
-# does. The reason for a script is the two decisions the unit cannot express:
+# One job, done plainly: check that podman, podman-compose and the compose file
+# are actually there, run `podman-compose up -d`, and say out loud what happened.
+# Every line goes to the unit's journal, which hearthdeck-log.service mirrors into
+# ~/hearthdeck.log, so a stack that did not come up explains itself without
+# anyone reaching for journalctl first.
 #
-#   * whether this host has a RomM deployment at all (a *permanent* fact, safe to
-#     skip on), versus a compose file that is merely not visible yet (which must
-#     not be a skip - see docs/units-and-logs.md, Rule 1);
-#   * which podman-compose argv to run, including the optional ROMM_COMPOSE_ARGS
-#     override, in one place the acceptance check can also read.
-#
-# `up` deliberately does not wait for the file. hearthdeck.target Wants= this
-# service, and a target's start waits for a oneshot dependency to exit, so any
-# wait here is a wait before the compositor starts. A late mount is romm.path's
-# job: it fires romm.service the moment the file lands.
+# There is deliberately no ExecCondition on the unit: a condition that is not met
+# is a *silent* skip (docs/units-and-logs.md, Rule 1), which is the failure this
+# replaced. Every outcome is logged here instead.
 set -eu
 
 env_file=${XDG_CONFIG_HOME:-"$HOME/.config"}/hearthdeck/romm.env
 default_path=/mnt/external/romM/podman-compose.yaml
 
+# The path the unit resolved for us: `Environment=ROMM_COMPOSE_FILE=` plus the
+# `EnvironmentFile=-%h/.config/hearthdeck/romm.env` on romm.service.
+compose=${ROMM_COMPOSE_FILE:-$default_path}
+
 say() { printf 'hearthdeck-romm: %s\n' "$*"; }
 
-# The path the unit resolved for us: `Environment=ROMM_COMPOSE_FILE=` plus the
-# `EnvironmentFile=-%h/.config/hearthdeck/romm.env` that discovery writes.
-target() { printf '%s' "${ROMM_COMPOSE_FILE:-$default_path}"; }
+# Is the deployment runnable at all? Podman must be installed *and* its service
+# actually answering - `podman info` talks to the socket/API, so it fails when
+# the daemon is down or the user is not in the rootless socket's group.
+require_tools() {
+  if ! command -v podman >/dev/null 2>&1; then
+    say "podman is not installed; cannot manage the stack at $compose"
+    return 1
+  fi
+  if ! command -v podman-compose >/dev/null 2>&1; then
+    say "podman-compose is not installed; cannot manage the stack at $compose"
+    return 1
+  fi
+  if ! timeout 15 podman info >/dev/null 2>&1; then
+    say "podman is installed but not running; start it and retry ($compose)"
+    return 1
+  fi
+  return 0
+}
 
 case ${1:-} in
-ready)
-  # ExecCondition. Skip only a host that has no RomM anywhere: the resolved
-  # compose file, a discovery result, and the usual deployment directory all
-  # absent. This is what keeps a machine without RomM quiet. A path that exists
-  # but whose file is not there yet belongs to `up`, which says so out loud.
-  if [ -f "$(target)" ] || [ -f "$env_file" ] || [ -d "$(dirname "$(target)")" ]; then
-    exit 0
-  fi
-  say "no RomM deployment on this host: neither $(target) nor $env_file exists; skipping"
-  exit 1
-  ;;
 up)
-  compose=$(target)
+  # No compose file is not an error: it is either a host without RomM or an
+  # external mount that has not landed yet, and romm.path re-runs `up` the moment
+  # it appears. Say so rather than skipping silently.
   if [ ! -f "$compose" ]; then
-    # Reached when `ready` saw a deployment directory but the file is not in it.
-    # Not an error: romm.path starts this service again when the file appears.
-    say "no compose file at $compose yet; romm.path will start the stack when it appears"
+    say "no compose file at $compose; nothing to start (romm.path retries when it appears)"
     exit 0
-  fi
-  if [ ! -x /usr/bin/podman-compose ]; then
-    say "podman-compose is not installed, so the stack cannot start; install it or stop romm.service" >&2
-    exit 1
   fi
   say "starting the stack from $compose"
+  if ! require_tools; then
+    exit 1
+  fi
   # $ROMM_COMPOSE_ARGS is argv (extra `-f` overrides, a hostnet switch), so it
   # must be split into words - and must vanish when unset. Unquoted expansion is
   # exactly that; a `${ROMM_COMPOSE_ARGS}` spelling passes one empty argument and
   # breaks the common no-override case.
   # shellcheck disable=SC2086
-  exec /usr/bin/podman-compose -f "$compose" ${ROMM_COMPOSE_ARGS:-} up -d
+  if podman-compose -f "$compose" ${ROMM_COMPOSE_ARGS:-} up -d; then
+    say "stack is up"
+  else
+    status=$?
+    say "podman-compose up failed (status $status); the stack did not start"
+    exit "$status"
+  fi
   ;;
 down)
-  compose=$(target)
   if [ ! -f "$compose" ]; then
     say "nothing to stop: $compose is gone"
     exit 0
   fi
+  if ! require_tools; then
+    exit 1
+  fi
+  say "stopping the stack from $compose"
   # shellcheck disable=SC2086
-  exec /usr/bin/podman-compose -f "$compose" ${ROMM_COMPOSE_ARGS:-} down
+  podman-compose -f "$compose" ${ROMM_COMPOSE_ARGS:-} down ||
+    say "podman-compose down reported a failure"
   ;;
 *)
-  say "usage: hearthdeck-romm ready|up|down" >&2
+  say "usage: hearthdeck-romm up|down" >&2
   exit 2
   ;;
 esac

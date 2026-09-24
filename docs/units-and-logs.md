@@ -38,11 +38,12 @@ there is no compose file"). A fact that can become true later — a mount still
 coming up, a file not written yet, a socket not listening — must **not** be a
 condition. Give it ordering, or a `.path` watcher.
 
-`romm.service` is the worked example: `ExecCondition=/usr/lib/hearthdeck/hearthdeck-romm
-ready` skips only when the resolved compose file, the discovery result, and the
-deployment directory are *all* absent, and `ExecStart=... up` logs a missing file
-and returns instead of waiting. Nothing in `up` blocks, because the unit is
-wanted by `hearthdeck.target` and a target's start waits for its oneshot
+`romm.service` is the worked example: it has **no** `ExecCondition` at all.
+`ExecStart=/usr/lib/hearthdeck/hearthdeck-romm up` does the checks (compose file,
+podman installed, podman running), logs the answer — including the "no compose
+file, nothing to start" no-op that `romm.path` retries — and only fails when a
+deployment exists but could not be started. Nothing in `up` blocks, because the
+unit is wanted by `hearthdeck.target` and a target's start waits for its oneshot
 dependencies — a wait there is a wait before the compositor starts.
 
 Check: `systemctl --user show <unit> -p ConditionResult`.
@@ -122,30 +123,28 @@ library and resource roots silently pointed at a directory that did not exist.
 When you add or move a setting, grep every consumer and give each one the same
 `EnvironmentFile=`.
 
-## Rule 8 — host state is discovered at session start, never assumed at install
+## Rule 8 — an optional service must say what it decided
 
 Whether RomM's compose file exists, and where, is host state: it depends on a
-mount being up and on where the operator put the deployment. An install-time
-decision cannot know it, and a user who is told to "just export the right
-variable" on a production box will not do it.
+mount being up and on where the operator put the deployment. It cannot be decided
+at install, and it must not be decided silently at session start either.
 
-So the session runs `hearthdeck-romm-discover.service`
-(`packaging/arch/hearthdeck-romm-discover`) before its consumers start. It checks
-the configured path, a list of likely locations, and finally the compose file
-recorded in an existing stack's podman container labels, then writes the answer to
-`~/.config/hearthdeck/romm.env` -
-which both `romm.service` and `hearthdeck-daemon` load. Every candidate it checks
-is printed, found or not, so one paste of `~/hearthdeck.log` answers "where did it
-look" without anyone running a command.
+So the path is configuration, read from one file every consumer loads
+(`~/.config/hearthdeck/romm.env`, via `EnvironmentFile=`), and `romm.service` runs
+`/usr/lib/hearthdeck/hearthdeck-romm up`, which resolves the path, does its checks
+(compose file present, podman installed, podman's service answering), runs
+`podman-compose up -d`, and prints the outcome either way. "No RomM on this
+host" is a logged no-op, not a silent skip, so `~/hearthdeck.log` always answers
+why the stack is or is not running.
 
-Two rules follow for anything similar: resolve host state at session start, and
-print the search, not just the result.
+Two rules follow for anything similar: read shared state from the one file every
+reader loads, and log the decision, not just the result.
 
 The end-to-end trigger chain for the RomM deployment — which unit starts what, in
 what order, and why each edge exists — is documented where the unit itself points:
 `docs/retroarch-integration.md`, "Starting the RomM server itself" (shipped as
 `/usr/share/doc/hearthdeck/ROMM.md`). Read it before changing `romm.service`,
-`romm.path`, or either `/usr/lib/hearthdeck/hearthdeck-romm*` script.
+`romm.path`, or `/usr/lib/hearthdeck/hearthdeck-romm`.
 
 ## Rule 9 — a bare compositor session must supply what a desktop session would
 

@@ -34,15 +34,13 @@ Display manager (SDDM/GDM/greetd/...)
        -> systemctl --user start hearthdeck.target
             -> Wants= hearthdeck-log.service, hearthdeck-bridge.socket,
                 hearthdeck-daemon.service, hearthdeck-input.service,
-                hearthdeck-romm-discover.service, romm.service, romm.path
-                 -> hearthdeck-romm-discover.service resolves the RomM compose
-                     file and writes ~/.config/hearthdeck/romm.env *before* its
-                     consumers start
-                 -> romm.service  -> `hearthdeck-romm up` -> podman-compose up -d
+                romm.service, romm.path
+                 -> romm.service  -> `hearthdeck-romm up`: checks podman and the
+                     compose file, then podman-compose up -d, logging every outcome
                  -> romm.path     -> re-starts romm.service if the compose file
                      lands after login (external mount still coming up)
                  -> hearthdeck-daemon.service loads the same romm.env, so the
-                     RomM library/resource roots follow the resolved path
+                     RomM library/resource roots follow the configured path
        -> systemctl --user try-restart hearthdeck-daemon.service /-bridge.service
        -> systemctl --user start hearthdeck-overlay.service
        -> exec cosmic-comp /usr/bin/hearthdeck-frontend
