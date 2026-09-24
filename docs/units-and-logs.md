@@ -174,3 +174,6 @@ grep -i <unit> ~/hearthdeck.log
       real host, not assumed.
 - [ ] The deployed binary contains the change (Rule 5).
 - [ ] `bash -n packaging/arch/PKGBUILD` and `cargo test -p hearthdeck-daemon` pass.
+- [ ] `just format` has been run. CI (`just ci-check`) begins with
+      `cargo fmt --all -- --check` and fails the entire run on a single diff, even
+      when the code is otherwise correct. `just check` covers it locally.

@@ -1419,8 +1419,11 @@ mod tests {
 
         // Not followed on purpose: the target and the socket emit nothing useful
         // of their own, and following the collector from itself is pointless.
-        const NOT_COLLECTED: &[&str] =
-            &["hearthdeck.target", "hearthdeck-bridge.socket", "hearthdeck-log.service"];
+        const NOT_COLLECTED: &[&str] = &[
+            "hearthdeck.target",
+            "hearthdeck-bridge.socket",
+            "hearthdeck-log.service",
+        ];
 
         let mut checked = 0;
         for line in package.lines() {
@@ -1449,9 +1452,8 @@ mod tests {
         // The watcher cannot read an EnvironmentFile, so it can only ever be right
         // about the default. Pin the two paths together so they cannot drift.
         assert!(
-            service.contains(
-                "Environment=ROMM_COMPOSE_FILE=/mnt/external/romM/podman-compose.yaml"
-            )
+            service
+                .contains("Environment=ROMM_COMPOSE_FILE=/mnt/external/romM/podman-compose.yaml")
         );
         assert!(watcher.contains("PathExists=/mnt/external/romM/podman-compose.yaml"));
     }
