@@ -105,7 +105,9 @@ impl Database {
               rule TEXT,
               role TEXT NOT NULL DEFAULT 'none',
               position INTEGER NOT NULL,
-              created_at TEXT NOT NULL
+              created_at TEXT NOT NULL,
+              owner TEXT NOT NULL DEFAULT 'user',
+              name TEXT
             );
             CREATE TABLE IF NOT EXISTS collection_items (
               collection_slug TEXT NOT NULL REFERENCES collections(slug) ON DELETE CASCADE,
@@ -116,10 +118,10 @@ impl Database {
               created_at TEXT NOT NULL,
               PRIMARY KEY (collection_slug, item_id)
             );
-            INSERT OR IGNORE INTO collections (slug, kind, rule, role, position, created_at) VALUES
-              ('last-played', 'rule', 'last_played', 'none', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-              ('favorites', 'membership', NULL, 'favorite', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-              ('play-later', 'membership', NULL, 'play_later', 2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            INSERT OR IGNORE INTO collections (slug, kind, rule, role, position, created_at, owner, name) VALUES
+              ('last-played', 'rule', 'last_played', 'none', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'system', NULL),
+              ('favorites', 'membership', NULL, 'favorite', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'user', NULL),
+              ('play-later', 'membership', NULL, 'play_later', 2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'user', NULL);
             -- One row, the newest report: a categorization describes the library as
             -- it stood when the scan ran, so a stale one is worthless.
             CREATE TABLE IF NOT EXISTS categorization_reports (
@@ -149,6 +151,19 @@ impl Database {
         )
         .execute(&self.pool)
         .await;
+        // Collections gained an owner: who may edit one. The seeded rows predate
+        // it, and their owner is the only thing about them that is not already
+        // implied by their slug and role.
+        let _ =
+            sqlx::query("ALTER TABLE collections ADD COLUMN owner TEXT NOT NULL DEFAULT 'user'")
+                .execute(&self.pool)
+                .await;
+        let _ = sqlx::query("ALTER TABLE collections ADD COLUMN name TEXT")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("UPDATE collections SET owner = 'system' WHERE slug = 'last-played'")
+            .execute(&self.pool)
+            .await;
         let migration =
             sqlx::query("INSERT OR IGNORE INTO hearthdeck_schema_migrations (version) VALUES (1)")
                 .execute(&self.pool)

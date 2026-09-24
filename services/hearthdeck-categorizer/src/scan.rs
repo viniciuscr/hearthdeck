@@ -110,6 +110,31 @@ pub struct ScanReport {
 }
 
 impl ScanReport {
+    /// The apps this report put in the categories that share a dashboard rail.
+    ///
+    /// The one place that knows how a rail's members are worked out, so the thing
+    /// that writes the rail and the thing that resolves it cannot disagree.
+    pub fn rail_app_ids(&self, taxonomy: &Taxonomy, rail_id: &str) -> Vec<String> {
+        let slugs: Vec<&str> = taxonomy
+            .on_rail(rail_id)
+            .map(|category| category.slug.as_str())
+            .collect();
+        let mut app_ids: Vec<String> = Vec::new();
+        for category in &self.categories {
+            if !slugs.contains(&category.slug.as_str()) {
+                continue;
+            }
+            for app_id in &category.app_ids {
+                // An app two categories of one rail both claim still belongs on
+                // that rail once.
+                if !app_ids.iter().any(|known| known == app_id) {
+                    app_ids.push(app_id.clone());
+                }
+            }
+        }
+        app_ids
+    }
+
     /// The categories worth creating a tab for, in recommendation order.
     pub fn recommended_categories(&self) -> impl Iterator<Item = &CategoryProposal> {
         self.categories
@@ -408,6 +433,30 @@ mod tests {
                 ..AppProfile::default()
             },
         ]
+    }
+
+    #[tokio::test]
+    async fn a_rail_is_the_categories_that_share_it() {
+        let scanner = LibraryScanner::new(Arc::new(HeuristicCategorizer::new()));
+        let report = scanner.scan(library()).await.unwrap();
+        let taxonomy = crate::taxonomy::Taxonomy::baseline();
+
+        // Netflix is Video & Streaming and VLC is Media Center: two tabs, one
+        // rail, because "what is there to watch" is one question to a person.
+        let mut on_rail = report.rail_app_ids(&taxonomy, "watch");
+        on_rail.sort();
+        assert_eq!(
+            on_rail,
+            vec![
+                "netflix.desktop".to_owned(),
+                "org.videolan.VLC.desktop".to_owned()
+            ]
+        );
+        // The development category is on no rail, so its app is not dragged in:
+        // a rail is not "everything the scan decided".
+        assert!(!on_rail.contains(&"org.gnome.Builder.desktop".to_owned()));
+        // A rail nobody declares has no members.
+        assert!(report.rail_app_ids(&taxonomy, "listen").is_empty());
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -80,8 +80,8 @@ use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchSt
 use crate::providers::GameRecord;
 use crate::providers::daemon::{
     CATALOG_ENTRY_PREFIX, CategorizationSnapshot, Collection, CollectionItem, FAVORITES_COLLECTION,
-    LAST_PLAYED_COLLECTION, PLAY_LATER_COLLECTION, RetroDetails, RetroGameDetails, RetroRomVersion,
-    ScanReport, retro_rom_versions, retro_version_label,
+    LAST_PLAYED_COLLECTION, MODEL_OWNER, PLAY_LATER_COLLECTION, RetroDetails, RetroGameDetails,
+    RetroRomVersion, ScanReport, WATCH_RAIL, retro_rom_versions, retro_version_label,
 };
 use crate::style::{
     DASHBOARD_GAME_ASPECT, DASHBOARD_RAIL_TILES, DETAILS_ACTION_WIDTH, DETAILS_FACT_LABEL_WIDTH,
@@ -164,13 +164,6 @@ const CATEGORIZATION_POLL_INTERVAL: std::time::Duration = std::time::Duration::f
 /// The snakified `Section::Applications`, exactly as the daemon serializes it.
 /// Only a proposal the scan placed in this section becomes a tab here.
 const APPLICATIONS_SECTION: &str = "applications";
-/// The scan's categories that mean "something to watch on".
-///
-/// Streaming clients and local media libraries are one shelf on the dashboard
-/// and two tabs in the library, because they are the same activity to a person
-/// sitting on a couch. Slugs, not names: the daemon owns these strings and the
-/// frontend only recognises them.
-const WATCH_RAIL_CATEGORY_SLUGS: [&str; 2] = ["video_streaming", "media_center"];
 /// Stop watching a scan after this many polls. A scan of a large library on CPU
 /// can run for a long time, so this is a generous backstop against polling a
 /// wedged daemon forever, not a timeout on the scan itself.
@@ -403,6 +396,10 @@ struct HearthDeck {
     /// The dashboard's collections as the daemon composes them, reloaded at
     /// startup and after every change.
     collections: Vec<Collection>,
+    /// Cards for the Watch rail, rebuilt from the model's own collection. The
+    /// rail must draw entries, not ids, so the collection is resolved against the
+    /// loaded library when it lands.
+    watch_entries: Vec<Arc<DesktopEntryData>>,
     /// Cards for the favorites rail, rebuilt from those collections. The rail must
     /// not depend on an item happening to be in memory, which is what used to lose
     /// favorited RomM games whose console section was not loaded.
@@ -529,6 +526,7 @@ impl Default for HearthDeck {
             entry_path_input: Default::default(),
             all_entries: Default::default(),
             recent_entries: Default::default(),
+            watch_entries: Default::default(),
             collections: Default::default(),
             favorite_entries: Default::default(),
             menu: Default::default(),
@@ -2404,59 +2402,42 @@ impl HearthDeck {
 
     /// The Watch shelf.
     ///
-    /// What belongs on it is a judgement about what an application *is*, and the
-    /// scan already made that judgement — so when smart categorization is on this
-    /// shelf is the scan's answer, and the name matching it used to use is only
-    /// the fallback. A name is a guess: it can miss a service that is a browser
-    /// window with a hand-written desktop entry, and it can pull in a local player
-    /// that happens to share a word with one.
+    /// The daemon decides what belongs here — a rail the categorization scan
+    /// created, whose members are the categories that share it — so this shelf is
+    /// composed data like the other rails. The name matching below is what is
+    /// left for a machine that has never run the scan, which is every machine
+    /// until somebody turns the feature on.
     fn watch_rail_entries(&self) -> Vec<&Arc<DesktopEntryData>> {
-        let Some(scanned) = self.scanned_watch_ids() else {
+        if !self.watch_entries.is_empty() {
             return self
-                .all_entries
+                .watch_entries
                 .iter()
-                .filter(|entry| is_watch_entry(entry))
                 .take(DASHBOARD_RAIL_TILES)
                 .collect();
-        };
+        }
         self.all_entries
             .iter()
-            .filter(|entry| scanned.contains(&entry.id))
+            .filter(|entry| is_watch_entry(entry))
             .take(DASHBOARD_RAIL_TILES)
             .collect()
     }
 
-    /// The entry ids the last scan filed under the categories that mean watching
-    /// something, or `None` when the scan has no answer to give.
+    /// Rebuilds the Watch rail's cards from the model's own collection.
     ///
-    /// `None` covers off, unread, and "the scan saw no applications at all" — the
-    /// last one because a report that never saw the library would empty a working
-    /// shelf, which is worse than the guess it replaces. A report that did see the
-    /// library and found nothing to watch is an answer, and the shelf goes away.
-    fn scanned_watch_ids(&self) -> Option<HashSet<String>> {
-        let snapshot = self.categorization.as_ref()?;
-        if !snapshot.enabled {
-            return None;
-        }
-        let report = snapshot.report.as_ref()?;
-        if report.app_count == 0 {
-            return None;
-        }
-        Some(
-            report
-                .categories
-                .iter()
-                .filter(|category| {
-                    category.section == APPLICATIONS_SECTION
-                        && WATCH_RAIL_CATEGORY_SLUGS.contains(&category.slug.as_str())
-                })
-                // Any of the categories is enough. Deliberately not gated on
-                // `recommended`, which is the bar for a *tab*: a shelf with two
-                // services on it is a shelf worth having.
-                .flat_map(|category| category.app_ids.iter())
-                .map(|id| format!("{CATALOG_ENTRY_PREFIX}{id}"))
-                .collect(),
-        )
+    /// A card borrows the entry this session already has, so it keeps the icon
+    /// and categories its provider resolved. One it has never loaded falls back
+    /// to what the daemon sent with the item, which for a derived rail it filled
+    /// in from the catalog.
+    fn rebuild_watch_entries(&mut self) {
+        self.watch_entries = model_collection_items(&self.collections, WATCH_RAIL)
+            .map(|item| {
+                self.all_entries
+                    .iter()
+                    .find(|entry| entry.id == item.item_id)
+                    .cloned()
+                    .unwrap_or_else(|| Arc::new(snapshot_entry(item)))
+            })
+            .collect();
     }
 
     fn dashboard_shelves(&self) -> Vec<(DashboardShelf, Vec<&Arc<DesktopEntryData>>)> {
@@ -4393,6 +4374,7 @@ impl cosmic::Application for HearthDeck {
                     Ok(collections) => {
                         self.collections = collections;
                         self.rebuild_favorite_entries();
+                        self.rebuild_watch_entries();
                         // A rail's cards are drawn from the collection's own items,
                         // so a rail that just arrived has to be redrawn from them.
                         return self.load_recent_plays();
@@ -6897,6 +6879,23 @@ fn dashboard_console_id(index: usize) -> widget::Id {
 }
 
 /// Scrollable id of the dashboard rail with `key`.
+/// The items of a collection a feature owns, by the rail id inside its slug.
+///
+/// The slug is the rule for these collections — the daemon names a rail after
+/// what it is — so matching on it is the client saying which rail it knows how to
+/// place. A rail whose id it has never heard of is left alone rather than drawn
+/// in the wrong slot.
+fn model_collection_items<'a>(
+    collections: &'a [Collection],
+    rail_id: &str,
+) -> impl Iterator<Item = &'a CollectionItem> {
+    let slug = format!("{MODEL_OWNER}:{rail_id}");
+    collections
+        .iter()
+        .filter(move |collection| collection.owner == MODEL_OWNER && collection.slug == slug)
+        .flat_map(|collection| collection.items.iter())
+}
+
 /// The items of one collection, empty until its collections have loaded.
 fn collection_items<'a>(
     collections: &'a [Collection],
@@ -7174,6 +7173,7 @@ mod tests {
 
         Collection {
             slug: LAST_PLAYED_COLLECTION.to_owned(),
+            owner: "system".to_owned(),
             items: plays
                 .iter()
                 .map(|(id, title, kind)| CollectionItem {
@@ -7279,6 +7279,7 @@ mod tests {
 
         Collection {
             slug: FAVORITES_COLLECTION.to_owned(),
+            owner: "user".to_owned(),
             items: ids
                 .iter()
                 .map(|id| CollectionItem {
@@ -8361,30 +8362,44 @@ mod tests {
         );
     }
 
-    /// The fixture's report, with the streaming category claiming `members`
-    /// instead and a report that covered `app_count` applications.
-    fn scan_of(members: &[&str], app_count: usize) -> CategorizationSnapshot {
-        let mut value = snapshot_json(false, true);
-        let report = value["report"].as_object_mut().expect("report");
-        report.insert("app_count".into(), serde_json::json!(app_count));
-        report["categories"][0]["app_ids"] = serde_json::json!(members);
-        serde_json::from_value(value).expect("scan snapshot")
+    /// A `laya:<rail>` collection as the daemon writes one: owned by the model,
+    /// its members the ids the scan decided on.
+    fn model_collection(rail: &str, ids: &[&str]) -> crate::providers::daemon::Collection {
+        use crate::providers::daemon::{Collection, CollectionItem, MODEL_OWNER};
+
+        Collection {
+            slug: format!("{MODEL_OWNER}:{rail}"),
+            owner: MODEL_OWNER.to_owned(),
+            items: ids
+                .iter()
+                .map(|id| CollectionItem {
+                    item_id: (*id).to_owned(),
+                    name: (*id).to_owned(),
+                    icon: None,
+                    played: None,
+                })
+                .collect(),
+        }
     }
 
     #[test]
-    fn the_watch_shelf_is_the_scans_answer_when_it_has_one() {
+    fn the_watch_shelf_is_the_models_answer_when_it_has_one() {
         // Two applications, one word each way: a name the guess would take and
-        // the scan did not place, and an opaque name the scan did place. The
-        // shelf has to follow the scan in both directions, or the guess is still
+        // the model did not place, and an opaque name the model did place. The
+        // shelf has to follow the model in both directions, or the guess is still
         // the thing deciding what the shelf holds.
-        let app = HearthDeck {
+        let mut app = HearthDeck {
             all_entries: vec![
                 entry("com.stremio.Stremio.desktop"),
                 entry("hearthdeck:desktop:big-screen.desktop"),
             ],
-            categorization: Some(scan_of(&["desktop:big-screen.desktop"], 12)),
+            collections: vec![model_collection(
+                "watch",
+                &["hearthdeck:desktop:big-screen.desktop"],
+            )],
             ..Default::default()
         };
+        app.rebuild_watch_entries();
 
         let ids: Vec<&str> = app
             .watch_rail_entries()
@@ -8403,61 +8418,49 @@ mod tests {
     }
 
     #[test]
-    fn the_watch_shelf_keeps_its_guess_while_smart_categories_are_off() {
-        let app = HearthDeck {
+    fn the_watch_shelf_falls_back_to_the_guess_without_a_model_collection() {
+        // The state every machine is in until somebody turns the model on, and
+        // the state it is left in when they turn it off — the daemon removes its
+        // rails, and the shelf goes back to what the names say.
+        let mut app = HearthDeck {
             all_entries: vec![
                 entry("com.stremio.Stremio.desktop"),
                 entry("hearthdeck:desktop:big-screen.desktop"),
             ],
-            categorization: Some(
-                serde_json::from_value(snapshot_json(false, false)).expect("snapshot"),
-            ),
             ..Default::default()
         };
 
-        // Off means off: the stored scan is not what decides the shelf.
-        let ids: Vec<&str> = app
+        let guessed: Vec<&str> = app
             .watch_rail_entries()
             .iter()
             .map(|entry| entry.id.as_str())
             .collect();
-        assert_eq!(ids, vec!["com.stremio.Stremio.desktop"]);
+        assert_eq!(guessed, vec!["com.stremio.Stremio.desktop"]);
+
+        // A collection with nothing on it is not an answer either: a rail the
+        // model has nothing for is a rail the daemon does not create, and the
+        // guess stands.
+        app.collections = vec![model_collection("watch", &[])];
+        app.rebuild_watch_entries();
+        assert_eq!(app.watch_rail_entries().len(), 1);
     }
 
     #[test]
-    fn a_scan_that_saw_no_applications_leaves_the_watch_shelf_alone() {
-        let app = HearthDeck {
-            all_entries: vec![
-                entry("com.stremio.Stremio.desktop"),
-                entry("hearthdeck:desktop:big-screen.desktop"),
-            ],
-            // A report that covered nothing is not an answer, and acting on it
-            // would empty a shelf the name matching still fills.
-            categorization: Some(scan_of(&[], 0)),
-            ..Default::default()
-        };
-
-        let ids: Vec<&str> = app
-            .watch_rail_entries()
-            .iter()
-            .map(|entry| entry.id.as_str())
-            .collect();
-        assert_eq!(ids, vec!["com.stremio.Stremio.desktop"]);
-    }
-
-    #[test]
-    fn a_scan_that_saw_applications_and_no_watching_ones_drops_the_shelf() {
-        let app = HearthDeck {
+    fn a_model_rail_the_client_does_not_know_is_left_alone() {
+        let mut app = HearthDeck {
             all_entries: vec![entry("com.stremio.Stremio.desktop")],
-            categorization: Some(scan_of(&[], 12)),
+            collections: vec![model_collection(
+                "listen",
+                &["hearthdeck:desktop:big-screen.desktop"],
+            )],
             ..Default::default()
         };
+        app.rebuild_watch_entries();
 
-        assert!(
-            app.dashboard_shelves()
-                .iter()
-                .all(|(shelf, _)| *shelf != DashboardShelf::Watch)
-        );
+        // Nothing claims the Watch slot, so the guess stands rather than the
+        // unknown rail being drawn in the wrong place.
+        assert!(app.watch_entries.is_empty());
+        assert_eq!(app.watch_rail_entries().len(), 1);
     }
 
     #[test]

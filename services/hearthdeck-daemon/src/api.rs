@@ -9,7 +9,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
-use hearthdeck_categorizer::ScanReport;
+use hearthdeck_categorizer::{ScanReport, Taxonomy};
 use hearthdeck_protocol::{
     ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner, InputProfile,
 };
@@ -547,6 +547,18 @@ async fn disable_categorization(
         .set_categorization_enabled(false)
         .await
         .map_err(ApiError::internal)?;
+    // The rails the model created go with it. A person's collections and the
+    // built-in ones are not this feature's to touch, and the dashboard is left
+    // with exactly what it had before the feature was ever turned on.
+    match state
+        .collections
+        .remove_owned(collections::OWNER_LAYA)
+        .await
+    {
+        Ok(0) => {}
+        Ok(count) => info!(count, "categorization rails removed"),
+        Err(error) => warn!(%error, "could not remove the categorization rails"),
+    }
     info!("categorization disabled");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1267,7 +1279,9 @@ async fn list_collections(
     authenticate(&state, &headers).await?;
     let mut collections = state.collections.list().await.map_err(ApiError::internal)?;
     for collection in &mut collections {
-        if collection.kind == collections::KIND_RULE
+        if collection.owner == collections::OWNER_LAYA {
+            collection.items = modeled_rail_items(&state, collection).await?;
+        } else if collection.owner == collections::OWNER_SYSTEM
             && collection.rule.as_deref() == Some(collections::RULE_LAST_PLAYED)
         {
             collection.items = state
@@ -1281,6 +1295,57 @@ async fn list_collections(
         }
     }
     Ok(Json(collections))
+}
+
+/// The entry-id prefix a client draws its items with. The daemon echoes it for
+/// the items it composes, so a rail a feature created and a rail the client
+/// curated are addressed the same way.
+const ENTRY_ID_PREFIX: &str = "hearthdeck:";
+
+/// The items of a rail the model's scan implied.
+///
+/// Resolved from the stored report, because that is where the decision lives —
+/// the collection only says *which* rail it is. The name and icon come from the
+/// catalog when the item is still in it, so a client can draw the card without
+/// having that application loaded.
+async fn modeled_rail_items(
+    state: &SharedState,
+    collection: &Collection,
+) -> Result<Vec<CollectionItem>, ApiError> {
+    let Some(rail_id) = collection
+        .rule
+        .as_deref()
+        .and_then(|rule| collections::owned_rule_id(collections::OWNER_LAYA, rule))
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(categorization) = state.categorization.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let Some(report) = categorization
+        .latest_report()
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut items = Vec::new();
+    for app_id in report.rail_app_ids(&Taxonomy::baseline(), rail_id) {
+        let (name, icon) = match state.catalog.get(&app_id).await {
+            Ok(Some(item)) => (item.title, item.icon),
+            // Gone from the catalog since the scan: the client resolves the id
+            // against what it has, which is why the id is sent either way.
+            _ => (String::new(), None),
+        };
+        items.push(CollectionItem {
+            item_id: format!("{ENTRY_ID_PREFIX}{app_id}"),
+            name,
+            icon,
+            played: None,
+        });
+    }
+    Ok(items)
 }
 
 /// One play, as a collection item.

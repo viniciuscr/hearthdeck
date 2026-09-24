@@ -27,14 +27,15 @@ use std::{
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
-use hearthdeck_categorizer::{AppKind, AppProfile, ScanReport};
+use hearthdeck_categorizer::{AppKind, AppProfile, ScanReport, Taxonomy};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use tokio::sync::{Mutex, broadcast};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     catalog::{CatalogItem, CatalogStore},
+    collections::{self, CollectionStore, OwnedCollection},
     state::ServerEvent,
 };
 
@@ -214,6 +215,33 @@ fn default_binary() -> PathBuf {
         .ok()
         .map(|daemon| sibling_of(&daemon))
         .unwrap_or_else(|| PathBuf::from(CATEGORIZER_BINARY))
+}
+
+/// The collections a scan implies: one per dashboard rail the taxonomy declares,
+/// for the rails this scan put something on.
+///
+/// The members are not written — the report is already stored, and the rails are
+/// resolved from it on read. So this is a list of *definitions*, which is what
+/// lets a rail disappear on its own: nothing refers to a rail that no longer
+/// applies, so nothing has to delete it.
+fn rail_collections(report: &ScanReport) -> Vec<OwnedCollection> {
+    let taxonomy = Taxonomy::baseline();
+    taxonomy
+        .rails()
+        .into_iter()
+        .filter(|rail| !report.rail_app_ids(&taxonomy, &rail.id).is_empty())
+        .map(|rail| {
+            // The slug and the rule are the same string: a rail is addressed by
+            // what it is, and re-creating one under a new slug would orphan the
+            // old one rather than replacing it.
+            let rule = collections::owned_rule(collections::OWNER_LAYA, &rail.id);
+            OwnedCollection {
+                slug: rule.clone(),
+                name: Some(rail.name.clone()),
+                rule,
+            }
+        })
+        .collect()
 }
 
 /// Runs one scan over a library.
@@ -546,6 +574,10 @@ struct CategorizationInner {
     settings: CategorizerSettings,
     catalog: CatalogStore,
     store: CategorizationStore,
+    /// Where a finished scan writes the rails it implies. This service is a
+    /// writer of collections, not a special case inside them: it owns what it
+    /// writes, and the collections it writes are rows like any other.
+    collections: CollectionStore,
     events: broadcast::Sender<ServerEvent>,
     runner: Arc<dyn ScanRunner>,
     state: Mutex<ScanState>,
@@ -580,7 +612,8 @@ impl CategorizationService {
             inner: Arc::new(CategorizationInner {
                 settings,
                 catalog,
-                store: CategorizationStore::new(pool),
+                store: CategorizationStore::new(pool.clone()),
+                collections: CollectionStore::new(pool),
                 events,
                 runner,
                 state: Mutex::new(ScanState::default()),
@@ -682,6 +715,7 @@ impl CategorizationService {
         }
         match outcome {
             Ok(report) => {
+                self.write_rail_collections(&report).await;
                 let _ = self.inner.events.send(ServerEvent::CategorizationChanged {
                     categorizer: report.categorizer.clone(),
                     app_count: report.app_count,
@@ -690,6 +724,30 @@ impl CategorizationService {
             }
             Err(error) => error!(%error, "categorization scan failed"),
         }
+    }
+
+    /// Replaces this feature's rails with the ones this report implies.
+    ///
+    /// Replacement, not merging: a rail the scan no longer has anything for is
+    /// gone on the next scan, without anybody deleting it by hand. A failure here
+    /// is not a failed scan — the report is stored either way, and the tabs come
+    /// from that — so it is a warning, not an error the caller sees.
+    async fn write_rail_collections(&self, report: &ScanReport) {
+        let collections = rail_collections(report);
+        if let Err(error) = self
+            .inner
+            .collections
+            .replace_owned(collections::OWNER_LAYA, &collections)
+            .await
+        {
+            warn!(
+                %error,
+                count = collections.len(),
+                "could not write the collections this scan implies"
+            );
+            return;
+        }
+        info!(count = collections.len(), "scan rails written");
     }
 
     async fn run_scan(&self) -> anyhow::Result<ScanReport> {
@@ -751,7 +809,7 @@ mod tests {
     use super::{
         CategorizationPhase, CategorizationService, CategorizerSettings, ModelStatus,
         ProcessScanRunner, ScanEngine, ScanModel, ScanRequest, ScanRunner, model_status,
-        profile_from_item, sibling_of,
+        profile_from_item, rail_collections, sibling_of,
     };
     use crate::{
         catalog::{CatalogItem, CatalogStore},
@@ -760,6 +818,7 @@ mod tests {
     };
     use async_trait::async_trait;
     use hearthdeck_categorizer::{AppKind, AppProfile, ScanReport};
+    use hearthdeck_categorizer::{CategoryProposal, Section};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -773,6 +832,17 @@ mod tests {
             failures: Vec::new(),
             categories: Vec::new(),
             unclassified: Vec::new(),
+        }
+    }
+
+    fn proposal(slug: &str, app_ids: &[&str]) -> CategoryProposal {
+        CategoryProposal {
+            slug: slug.to_owned(),
+            name: slug.to_owned(),
+            section: Section::Applications,
+            app_ids: app_ids.iter().map(|id| (*id).to_owned()).collect(),
+            mean_confidence: 0.9,
+            recommended: true,
         }
     }
 
@@ -949,6 +1019,32 @@ mod tests {
 
     fn bare_binary() -> std::path::PathBuf {
         std::path::PathBuf::from("hearthdeck-categorizer")
+    }
+
+    #[test]
+    fn a_scan_implies_one_rail_per_rail_the_taxonomy_declares() {
+        let mut report = report();
+        report.categories = vec![
+            proposal("video_streaming", &["desktop:netflix.desktop"]),
+            // A category on no rail contributes a tab and nothing else.
+            proposal("development", &["desktop:builder.desktop"]),
+        ];
+
+        let rails = rail_collections(&report);
+        assert_eq!(rails.len(), 1);
+        assert_eq!(rails[0].slug, "laya:watch");
+        assert_eq!(rails[0].name.as_deref(), Some("Watch"));
+        // The rule is what the resolver reads, and it is the slug: a rail is
+        // addressed by what it is.
+        assert_eq!(rails[0].rule, rails[0].slug);
+    }
+
+    #[test]
+    fn a_scan_with_nothing_on_a_rail_implies_no_rails() {
+        let mut report = report();
+        report.categories = vec![proposal("development", &["desktop:builder.desktop"])];
+
+        assert!(rail_collections(&report).is_empty());
     }
 
     #[test]

@@ -838,18 +838,32 @@ components:
             came from.
     Collection:
       type: object
-      required: [slug, kind, role, position, items]
+      required: [slug, kind, role, position, owner, items]
       description: >-
         One dashboard rail. `kind` is `membership` (items are curated and
-        stored) or `rule` (items are derived on read and the collection is
-        read-only). `role` is `favorite` or `play_later` for the collections a
-        screen can toggle by role, and `none` otherwise.
+        stored) or `rule` (items are derived on read). `owner` is who may edit
+        it: `system` for the built-in rules, `user` for a person's own
+        collections, or the id of the feature that created and regenerates it —
+        a feature reaches its own rows and nobody else's, so turning it off
+        removes its rails and leaves the rest. `role` is `favorite` or
+        `play_later` for the collections a screen can toggle by role, and `none`
+        otherwise.
       properties:
         slug: { type: string }
         kind: { type: string, enum: [membership, rule] }
         rule: { type: [string, 'null'] }
         role: { type: string, enum: [none, favorite, play_later] }
         position: { type: integer }
+        owner:
+          type: string
+          description: >-
+            `system`, `user`, or the feature that owns it. Only a `user`
+            collection takes items through the API.
+        name:
+          type: [string, 'null']
+          description: >-
+            The label to show when the client does not know the slug: a feature's
+            category is one nobody translated when the client shipped.
         items:
           type: array
           items:

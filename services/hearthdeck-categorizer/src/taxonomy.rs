@@ -78,6 +78,34 @@ pub struct CategoryDef {
     pub summary: String,
     /// Section this category can appear in.
     pub section: Section,
+    /// The dashboard rail this category belongs on, when it belongs on one.
+    ///
+    /// A tab is per category; a rail is not. Streaming clients and local media
+    /// libraries are one thing to a person on a couch — "something to watch" —
+    /// so they share a rail while staying two tabs. Declared here, with the
+    /// categories, because this is the only place that knows what the categories
+    /// mean; everything downstream just groups by the id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rail: Option<Rail>,
+}
+
+/// A dashboard rail a category can contribute to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rail {
+    /// Stable id, e.g. `watch`. The daemon names the collection it creates after
+    /// it, and a client that knows the id can label it in its own language.
+    pub id: String,
+    /// Label for a client that does not know the id.
+    pub name: String,
+}
+
+impl Rail {
+    pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+        }
+    }
 }
 
 impl CategoryDef {
@@ -92,7 +120,14 @@ impl CategoryDef {
             name: name.into(),
             summary: summary.into(),
             section,
+            rail: None,
         }
+    }
+
+    /// The same category, on a dashboard rail.
+    pub fn on_rail(mut self, rail: Option<Rail>) -> Self {
+        self.rail = rail;
+        self
     }
 
     /// The exact string used as a `choice` criterion. Keeping the description in
@@ -148,19 +183,27 @@ impl Taxonomy {
     /// invent there. The list is the "purpose of this project" made explicit —
     /// what a living-room library of installed Linux apps should look like.
     pub fn baseline() -> Self {
+        /// The dashboard rail for things there are to watch. One rail, two
+        /// categories: a person on a couch does not distinguish "my streaming
+        /// subscriptions" from "my own media server" when deciding what to put on.
+        fn watch() -> Rail {
+            Rail::new("watch", "Watch")
+        }
         Self::new(vec![
             CategoryDef::new(
                 "video_streaming",
                 "Video & Streaming",
                 "Apps for watching streaming services such as Netflix, Disney+, Prime Video, Max, Crunchyroll or Hulu.",
                 Section::Applications,
-            ),
+            )
+            .on_rail(Some(watch())),
             CategoryDef::new(
                 "media_center",
                 "Media Center",
                 "Local or self-hosted media libraries and players such as Plex, Jellyfin, Emby, Kodi, VLC or mpv.",
                 Section::Applications,
-            ),
+            )
+            .on_rail(Some(watch())),
             CategoryDef::new(
                 "music_audio",
                 "Music & Audio",
@@ -215,6 +258,29 @@ impl Taxonomy {
 
     pub fn categories(&self) -> &[CategoryDef] {
         &self.categories
+    }
+
+    /// The categories that contribute to the rail with this id, in declaration
+    /// order.
+    pub fn on_rail(&self, rail_id: &str) -> impl Iterator<Item = &CategoryDef> {
+        self.categories.iter().filter(move |category| {
+            category
+                .rail
+                .as_ref()
+                .is_some_and(|rail| rail.id == rail_id)
+        })
+    }
+
+    /// Every dashboard rail the taxonomy knows, once each, in the order the
+    /// categories that use it are declared.
+    pub fn rails(&self) -> Vec<&Rail> {
+        let mut rails: Vec<&Rail> = Vec::new();
+        for rail in self.categories.iter().filter_map(|one| one.rail.as_ref()) {
+            if !rails.iter().any(|known| known.id == rail.id) {
+                rails.push(rail);
+            }
+        }
+        rails
     }
 
     pub fn is_empty(&self) -> bool {
