@@ -38,6 +38,13 @@ there is no compose file"). A fact that can become true later — a mount still
 coming up, a file not written yet, a socket not listening — must **not** be a
 condition. Give it ordering, or a `.path` watcher.
 
+`romm.service` is the worked example: `ExecCondition=/usr/lib/hearthdeck/hearthdeck-romm
+ready` skips only when the resolved compose file, the discovery result, and the
+deployment directory are *all* absent, and `ExecStart=... up` logs a missing file
+and returns instead of waiting. Nothing in `up` blocks, because the unit is
+wanted by `hearthdeck.target` and a target's start waits for its oneshot
+dependencies — a wait there is a wait before the compositor starts.
+
 Check: `systemctl --user show <unit> -p ConditionResult`.
 
 ## Rule 2 — a user unit cannot order itself after a system mount

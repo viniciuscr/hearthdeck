@@ -12,6 +12,10 @@ CachyOS. It installs:
   login screen; see `docs/kiosk-session.md`.
 - `/usr/lib/hearthdeck/`: the local bridge, daemon, controller compatibility
   broker, and Hearthdeck session script.
+- `/usr/lib/hearthdeck/hearthdeck-romm`: the `ready`/`up`/`down` driver
+  `romm.service` runs; it holds the `podman-compose` argv and the "is there a
+  RomM deployment on this host" decision, which the unit cannot express as a
+  condition without also skipping a compose file that is merely late.
 - `/usr/lib/systemd/user/`: the Hearthdeck target, bridge socket, bridge, API
   daemon, input broker, aggregate log collector, and optional Podman Compose
   RomM user units.
@@ -23,8 +27,9 @@ CachyOS. It installs:
   runs at session start and finds the compose file itself (configured path, likely
   locations, then a running stack's podman labels), writing it to
   `~/.config/hearthdeck/romm.env`, which both `romm.service` and the daemon read.
-  The service defaults to `/mnt/external/romM/podman-compose.yaml` and skips when
-  that file is absent.
+  The service defaults to `/mnt/external/romM/podman-compose.yaml`; its
+  `ExecCondition` skips only when there is no deployment at all, and `up` reports
+  a missing file instead of failing the session.
   `romm.path` watches that default path and starts the stack when the file
   appears, so a compose file on an external mount that is not ready at session
   start is still picked up rather than skipped for the whole session.

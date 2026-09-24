@@ -7,10 +7,10 @@ PartOf=hearthdeck.target
 # it looks like it provides is not real. What this unit actually needs to wait for
 # is the mount holding the compose file, and a user unit cannot order after a
 # system mount - see romm.path, which starts the stack when the file appears.
+#
 # Arms the watcher from here, not only from hearthdeck.target's own Wants=, so
 # that whichever target pulls this unit in - including an older packaged one
-# with the romm Wants= supplied by a drop-in - also arms romm.path. Without this
-# a box whose compose file appears after the session starts is never retried.
+# with the romm Wants= supplied by a drop-in - also arms it.
 Wants=romm.path hearthdeck-romm-discover.service
 
 [Service]
@@ -18,20 +18,17 @@ Type=oneshot
 RemainAfterExit=yes
 Environment=ROMM_COMPOSE_FILE=/mnt/external/romM/podman-compose.yaml
 EnvironmentFile=-%h/.config/hearthdeck/romm.env
-ExecCondition=/usr/bin/test -f ${ROMM_COMPOSE_FILE}
-ExecStartPre=/usr/bin/echo Starting RomM Podman Compose stack
-# $ROMM_COMPOSE_ARGS is whitespace-split by systemd into separate arguments and
-# expands to nothing when unset, so romm.env can add override compose files
-# without touching the base one - e.g. `-f %h/.config/hearthdeck/romm-hostnet.yaml`
-# on a host where podman's default pasta networking cannot open /dev/net/tun.
-ExecStart=/usr/bin/podman-compose -f ${ROMM_COMPOSE_FILE} $ROMM_COMPOSE_ARGS up -d
-ExecStop=/usr/bin/podman-compose -f ${ROMM_COMPOSE_FILE} $ROMM_COMPOSE_ARGS down
+# `ready` is the only thing allowed to skip, and only when there is no RomM
+# deployment on this host. That is a permanent fact, which is what makes it safe
+# to skip on - unlike the old `ExecCondition=/usr/bin/test -f`, which skipped the
+# same way for a missing file and for a mount that was simply not up yet, and
+# retried nothing. A late file is `romm.path`'s job now, not a wait here: this
+# service is wanted by hearthdeck.target, and a target waits for its oneshot
+# dependencies, so any wait in `up` would delay the compositor itself.
+ExecCondition=/usr/lib/hearthdeck/hearthdeck-romm ready
+ExecStart=/usr/lib/hearthdeck/hearthdeck-romm up
+ExecStop=/usr/lib/hearthdeck/hearthdeck-romm down
 ExecStopPost=/usr/bin/echo RomM Podman Compose stack stopped
-# A first `up` may need to pull the stack's images. 300s was observed to time out
-# on a cold machine - the unit's own journal shows a start that failed after
-# exactly 300s and then succeeded on the next attempt. The session does not wait
-# on this unit, so a longer bound only lets a slow pull finish instead of failing
-# the start and leaving a half-created stack behind.
 TimeoutStartSec=900
 TimeoutStopSec=300
 # Deliberately no restart policy here. This unit wraps `podman-compose up -d`,

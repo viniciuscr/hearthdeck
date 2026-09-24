@@ -1,0 +1,73 @@
+#!/usr/bin/sh
+# Drive the RomM Compose deployment for the session.
+#
+# The unit could inline `podman-compose ... up -d`, and that is all this really
+# does. The reason for a script is the two decisions the unit cannot express:
+#
+#   * whether this host has a RomM deployment at all (a *permanent* fact, safe to
+#     skip on), versus a compose file that is merely not visible yet (which must
+#     not be a skip - see docs/units-and-logs.md, Rule 1);
+#   * which podman-compose argv to run, including the optional ROMM_COMPOSE_ARGS
+#     override, in one place the acceptance check can also read.
+#
+# `up` deliberately does not wait for the file. hearthdeck.target Wants= this
+# service, and a target's start waits for a oneshot dependency to exit, so any
+# wait here is a wait before the compositor starts. A late mount is romm.path's
+# job: it fires romm.service the moment the file lands.
+set -eu
+
+env_file=${XDG_CONFIG_HOME:-"$HOME/.config"}/hearthdeck/romm.env
+default_path=/mnt/external/romM/podman-compose.yaml
+
+say() { printf 'hearthdeck-romm: %s\n' "$*"; }
+
+# The path the unit resolved for us: `Environment=ROMM_COMPOSE_FILE=` plus the
+# `EnvironmentFile=-%h/.config/hearthdeck/romm.env` that discovery writes.
+target() { printf '%s' "${ROMM_COMPOSE_FILE:-$default_path}"; }
+
+case ${1:-} in
+ready)
+  # ExecCondition. Skip only a host that has no RomM anywhere: the resolved
+  # compose file, a discovery result, and the usual deployment directory all
+  # absent. This is what keeps a machine without RomM quiet. A path that exists
+  # but whose file is not there yet belongs to `up`, which says so out loud.
+  if [ -f "$(target)" ] || [ -f "$env_file" ] || [ -d "$(dirname "$(target)")" ]; then
+    exit 0
+  fi
+  say "no RomM deployment on this host: neither $(target) nor $env_file exists; skipping"
+  exit 1
+  ;;
+up)
+  compose=$(target)
+  if [ ! -f "$compose" ]; then
+    # Reached when `ready` saw a deployment directory but the file is not in it.
+    # Not an error: romm.path starts this service again when the file appears.
+    say "no compose file at $compose yet; romm.path will start the stack when it appears"
+    exit 0
+  fi
+  if [ ! -x /usr/bin/podman-compose ]; then
+    say "podman-compose is not installed, so the stack cannot start; install it or stop romm.service" >&2
+    exit 1
+  fi
+  say "starting the stack from $compose"
+  # $ROMM_COMPOSE_ARGS is argv (extra `-f` overrides, a hostnet switch), so it
+  # must be split into words - and must vanish when unset. Unquoted expansion is
+  # exactly that; a `${ROMM_COMPOSE_ARGS}` spelling passes one empty argument and
+  # breaks the common no-override case.
+  # shellcheck disable=SC2086
+  exec /usr/bin/podman-compose -f "$compose" ${ROMM_COMPOSE_ARGS:-} up -d
+  ;;
+down)
+  compose=$(target)
+  if [ ! -f "$compose" ]; then
+    say "nothing to stop: $compose is gone"
+    exit 0
+  fi
+  # shellcheck disable=SC2086
+  exec /usr/bin/podman-compose -f "$compose" ${ROMM_COMPOSE_ARGS:-} down
+  ;;
+*)
+  say "usage: hearthdeck-romm ready|up|down" >&2
+  exit 2
+  ;;
+esac

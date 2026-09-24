@@ -91,6 +91,7 @@ package() {
   install -Dm644 packaging/arch/hearthdeck-session.desktop "$pkgdir/usr/share/wayland-sessions/hearthdeck.desktop"
   install -Dm755 packaging/arch/hearthdeck-session "$pkgdir/usr/lib/hearthdeck/hearthdeck-session"
   install -Dm755 packaging/arch/hearthdeck-romm-discover "$pkgdir/usr/lib/hearthdeck/hearthdeck-romm-discover"
+  install -Dm755 packaging/arch/hearthdeck-romm "$pkgdir/usr/lib/hearthdeck/hearthdeck-romm"
   install -Dm755 services/target/release/hearthdeck-frontend "$pkgdir/usr/bin/hearthdeck-frontend"
   install -Dm644 packaging/arch/hearthdeck-overlay.service "$pkgdir/usr/lib/systemd/user/hearthdeck-overlay.service"
   install -Dm644 services/hearthdeck-frontend/data/icons/org.hearthdeck.HearthDeck.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.viniciuscr.hearthdeck.svg"

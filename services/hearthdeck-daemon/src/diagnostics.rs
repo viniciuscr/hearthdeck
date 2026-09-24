@@ -1265,29 +1265,33 @@ mod tests {
                 .contains("Environment=ROMM_COMPOSE_FILE=/mnt/external/romM/podman-compose.yaml")
         );
         assert!(service.contains("EnvironmentFile=-%h/.config/hearthdeck/romm.env"));
-        assert!(service.contains("ExecCondition=/usr/bin/test -f ${ROMM_COMPOSE_FILE}"));
-        assert!(service.contains("Starting RomM Podman Compose stack"));
+        // The unit delegates to the packaged driver, which is where the argv and
+        // the "is there a deployment here" decision live. A condition over a
+        // transient fact (is the file there *yet*) is the bug this replaced.
+        assert!(service.contains("ExecCondition=/usr/lib/hearthdeck/hearthdeck-romm ready"));
+        assert!(service.contains("ExecStart=/usr/lib/hearthdeck/hearthdeck-romm up"));
+        assert!(service.contains("ExecStop=/usr/lib/hearthdeck/hearthdeck-romm down"));
         assert!(
-            service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} $ROMM_COMPOSE_ARGS up -d")
+            !service
+                .lines()
+                .any(|line| line.trim_start().starts_with("ExecCondition=/usr/bin/test")),
+            "romm.service must not skip on a transient filesystem fact (docs/units-and-logs.md Rule 1)"
         );
-        assert!(service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} $ROMM_COMPOSE_ARGS down"));
+        assert!(service.contains("ExecStopPost=/usr/bin/echo RomM Podman Compose stack stopped"));
         assert!(service.contains("SyslogIdentifier=romm"));
         assert!(service.contains("PartOf=hearthdeck.target"));
         // The watcher is armed from the service too, so it works with an older
         // target that only knows `Wants=romm.service`.
         assert!(service.contains("Wants=romm.path"));
+        // A compose stack that takes minutes to come up must not be killed at the
+        // 90s/300s defaults; the observed real start exceeded 300s.
+        assert!(service.contains("TimeoutStartSec=900"));
         // The compose file is often on an external mount that is not ready when
         // the session starts, and a user unit cannot order itself after a system
         // mount. The watcher is what starts the stack once the mount shows up.
         assert!(romm_path.contains("PartOf=hearthdeck.target"));
         assert!(romm_path.contains("PathExists=/mnt/external/romM/podman-compose.yaml"));
         assert!(romm_path.contains("Unit=romm.service"));
-        // `$ROMM_COMPOSE_ARGS` (no braces) is what makes systemd split the value
-        // into separate arguments, and drop the argument entirely when the
-        // variable is unset - a `${ROMM_COMPOSE_ARGS}` spelling would pass one
-        // empty argument and break the no-override case.
-        assert!(service.contains("$ROMM_COMPOSE_ARGS"));
-        assert!(!service.contains("${ROMM_COMPOSE_ARGS}"));
         // No restart policy: `podman-compose up` recreates containers to converge,
         // so retrying a failed up tears down a stack that was already running.
         // Asserted on whole lines so the explanatory comment above is allowed to
@@ -1489,6 +1493,56 @@ mod tests {
                 .contains("Environment=ROMM_COMPOSE_FILE=/mnt/external/romM/podman-compose.yaml")
         );
         assert!(watcher.contains("PathExists=/mnt/external/romM/podman-compose.yaml"));
+    }
+
+    /// The RomM unit is a thin wrapper now: everything that decides *what* to run
+    /// lives in `packaging/arch/hearthdeck-romm`, because a systemd condition
+    /// cannot tell "this host has no RomM" (safe to skip on) apart from "the
+    /// compose file is not visible yet" (must not be a skip). Pin the unit, the
+    /// driver, and the package that installs the driver together, so a fix to one
+    /// cannot miss the others.
+    #[test]
+    fn romm_service_delegates_to_the_packaged_driver() {
+        let service = include_str!("../../../deploy/systemd/romm.service");
+        let driver = include_str!("../../../packaging/arch/hearthdeck-romm");
+        let package = include_str!("../../../packaging/arch/PKGBUILD");
+
+        // The script the unit names is the one the package installs at that path.
+        // The destination, not just the source name, so a `hearthdeck-romm`
+        // install line cannot be satisfied by the `-discover` one.
+        assert!(package.contains("$pkgdir/usr/lib/hearthdeck/hearthdeck-romm\""));
+        for verb in ["ready", "up", "down"] {
+            assert!(
+                service.contains(&format!("/usr/lib/hearthdeck/hearthdeck-romm {verb}")),
+                "romm.service must invoke the driver's `{verb}`"
+            );
+            assert!(
+                driver.contains(&format!("\n{verb})")),
+                "the driver must implement `{verb}`"
+            );
+        }
+
+        // The argv lives in the driver, overrides included: an unquoted
+        // `${ROMM_COMPOSE_ARGS:-}` is what splits it into words and drops it
+        // entirely when unset, which a bare `${ROMM_COMPOSE_ARGS}` would not.
+        assert!(driver.contains("podman-compose -f \"$compose\" ${ROMM_COMPOSE_ARGS:-} up -d"));
+        assert!(driver.contains("podman-compose -f \"$compose\" ${ROMM_COMPOSE_ARGS:-} down"));
+
+        // `up` must not wait. hearthdeck.target Wants= this oneshot, and a target
+        // waits for its oneshot dependencies to exit, so a wait here is a wait
+        // before the compositor starts. A late compose file is romm.path's job.
+        assert!(
+            !driver.contains("ROMM_WAIT_SECONDS") && !driver.contains("sleep"),
+            "the driver must not block session start; a late compose file is the watcher's job"
+        );
+        assert!(
+            driver.contains("romm.path will start the stack when it appears"),
+            "`up` must name who starts a not-yet-present stack"
+        );
+
+        // podman-compose arrives through optdepends, so its absence is the one
+        // failure worth a plain-English line rather than a bare exit 127.
+        assert!(driver.contains("podman-compose is not installed"));
     }
 
     #[test]

@@ -62,10 +62,13 @@ refresh_user_services() {
   return 0
 }
 
-# Names the units whose copies in the user's own config directory shadow the ones
-# this package installs. A copy there wins over /usr/lib/systemd/user, so an
-# upgrade that fixes a unit has no effect until that copy is gone - which is worth
-# saying out loud at the moment it happens, and only then.
+# Names the units whose copies in the user's own config directory still shadow
+# the ones this package installs, after clear_checkout_units has moved ours
+# aside. A copy there wins over /usr/lib/systemd/user, so an upgrade that fixes a
+# unit has no effect until that copy is gone - which is worth saying out loud at
+# the moment it happens, and only then. What survives clear_checkout_units is a
+# copy that does not look like ours, i.e. one the user wrote, which is not the
+# package's to move.
 shadowing_units() {
   local user home unit
   user=$(invoking_user)
@@ -81,7 +84,37 @@ shadowing_units() {
   done
 }
 
+# A source-checkout install (`just install-services`) copies whole units into
+# ~/.config/systemd/user, where they shadow the package's own for good: every
+# later fix lands in /usr/lib/systemd/user and never takes effect, and nothing on
+# the machine says so. This is the documented remedy - "move those copied unit
+# files out of ~/.config/systemd/user" - done by the package, because a production
+# box is not going to do it by hand.
+clear_checkout_units() {
+  local user home dir unit file
+  user=$(invoking_user)
+  [ -n "$user" ] && [ "$user" != root ] || return 0
+  home=$(getent passwd "$user" | cut -d: -f6)
+  [ -n "$home" ] && [ -d "$home/.config/systemd/user" ] || return 0
+  dir=$home/.config/systemd/user
+  for unit in \
+    hearthdeck.target hearthdeck-bridge.socket hearthdeck-bridge.service \
+    hearthdeck-daemon.service hearthdeck-input.service hearthdeck-log.service \
+    hearthdeck-overlay.service romm.service romm.path \
+    hearthdeck-romm-discover.service
+  do
+    file=$dir/$unit
+    [ -f "$file" ] || continue
+    # Only our own copies: a unit the user wrote themselves that happens to share
+    # the name is left alone.
+    grep -qi hearthdeck "$file" || continue
+    mv "$file" "$file.pre-package.bak"
+    printf 'hearthdeck: moved a stale checkout unit aside: %s\n' "$file"
+  done
+}
+
 post_install() {
+  clear_checkout_units
   # Fixed loopback ports cannot be shared by every user manager (including
   # display-manager greeter accounts). Hearthdeck launchers start this target
   # explicitly for the active user.
@@ -128,21 +161,28 @@ any session that was already running. Nothing needs to be started or reloaded by
 hand. The RomM unit starts with the session too.
 
 On a greetd host (cosmic-greeter), autologin into the Hearthdeck session was
-enabled in /etc/greetd/cosmic-greeter.toml. A reboot, or
-`sudo rm -f /run/greetd.run && sudo systemctl restart display-manager`, makes
-greetd use it. Run `/usr/lib/hearthdeck/hearthdeck-autologin disable` to get the
-login screen back; `--help` covers other users and session commands.
+enabled in /etc/greetd/cosmic-greeter.toml, so the next boot goes straight into
+Hearthdeck with nothing to run by hand. greetd only rewrites its runfile on a
+restart of the display manager, and this package already restarted it when a
+session was up; otherwise the next reboot applies it.
+`/usr/lib/hearthdeck/hearthdeck-autologin disable` is the escape hatch back to
+the login screen; `--help` covers other users and session commands.
 
 The launcher pairs with the loopback daemon automatically. Optional LAN/TLS
 configuration belongs in ~/.config/hearthdeck/daemon.env; see
 /usr/share/doc/hearthdeck/daemon.env.example.
 
-The Hearthdeck session starts the Podman Compose RomM deployment at
-/mnt/external/romM/podman-compose.yaml when that file exists, and starts it later
-in the session if an external mount brings the file in after login. To point it
-at a deployment somewhere else, copy
+The Hearthdeck session starts the Podman Compose RomM deployment at session
+start. Which compose file to use is host state, so the session resolves it every
+time: the configured path in ~/.config/hearthdeck/romm.env, then a list of likely
+locations, then the file an existing stack names in its podman container labels.
+The result is written back to ~/.config/hearthdeck/romm.env, which both the RomM
+service and the daemon read, and every candidate that was checked is printed to
+~/hearthdeck.log. To point it at a deployment somewhere else, copy
 /usr/share/doc/hearthdeck/romm.env.example to ~/.config/hearthdeck/romm.env and
-edit ROMM_COMPOSE_FILE.
+edit ROMM_COMPOSE_FILE; the search then starts from that path. A compose file on
+an external mount that is not ready at session start is started as soon as it
+appears, rather than skipped for the whole session.
 
 Combined session logs are written to ~/hearthdeck.log; the packaged
 /usr/lib/hearthdeck/linux-acceptance re-checks the installed services, RomM
@@ -157,8 +197,8 @@ EOF
   if [ -n "$shadowing" ]; then
     cat <<EOF
 
-This account still has its own copies of Hearthdeck units, left by an older
-`just install-services` or by hand. A copy in ~/.config/systemd/user overrides
+This account still has its own copies of Hearthdeck units that this package did
+not install, so it left them alone. A copy in ~/.config/systemd/user overrides
 the packaged one, so unit fixes in this package do not reach the session while
 they exist:
 
