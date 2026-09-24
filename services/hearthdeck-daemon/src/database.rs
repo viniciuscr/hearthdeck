@@ -118,10 +118,6 @@ impl Database {
               created_at TEXT NOT NULL,
               PRIMARY KEY (collection_slug, item_id)
             );
-            INSERT OR IGNORE INTO collections (slug, kind, rule, role, position, created_at, owner, name) VALUES
-              ('last-played', 'rule', 'last_played', 'none', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'system', NULL),
-              ('favorites', 'membership', NULL, 'favorite', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'user', NULL),
-              ('play-later', 'membership', NULL, 'play_later', 2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'user', NULL);
             -- One row, the newest report: a categorization describes the library as
             -- it stood when the scan ran, so a stale one is worthless.
             CREATE TABLE IF NOT EXISTS categorization_reports (
@@ -161,6 +157,21 @@ impl Database {
         let _ = sqlx::query("ALTER TABLE collections ADD COLUMN name TEXT")
             .execute(&self.pool)
             .await;
+        // Seeded only now, after `owner` and `name` exist. On a database whose
+        // `collections` table predates those columns, the `CREATE TABLE IF NOT
+        // EXISTS` above is a no-op, so a seed INSERT earlier in this function
+        // would name columns the table does not have and fail the whole
+        // migration (SQLite has no `ADD COLUMN IF NOT EXISTS`).
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO collections (slug, kind, rule, role, position, created_at, owner, name) VALUES
+              ('last-played', 'rule', 'last_played', 'none', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'system', NULL),
+              ('favorites', 'membership', NULL, 'favorite', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'user', NULL),
+              ('play-later', 'membership', NULL, 'play_later', 2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'user', NULL);
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
         let _ = sqlx::query("UPDATE collections SET owner = 'system' WHERE slug = 'last-played'")
             .execute(&self.pool)
             .await;
@@ -231,5 +242,58 @@ impl Database {
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Database;
+
+    /// A database whose `collections` table predates the `owner`/`name` columns
+    /// must still migrate. `CREATE TABLE IF NOT EXISTS` cannot add columns to a
+    /// table it finds, so the seed INSERT has to run after the ALTERs, not with
+    /// the CREATE batch.
+    #[tokio::test]
+    async fn migrates_a_legacy_collections_table_without_owner_or_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE collections (\
+             slug TEXT PRIMARY KEY, kind TEXT NOT NULL, rule TEXT, \
+             role TEXT NOT NULL DEFAULT 'none', position INTEGER NOT NULL, \
+             created_at TEXT NOT NULL)",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO collections (slug, kind, rule, role, position, created_at) \
+             VALUES ('last-played', 'rule', 'last_played', 'none', 0, '2020-01-01T00:00:00Z')",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+
+        database.migrate().await.unwrap();
+
+        let (owner, name): (String, Option<String>) =
+            sqlx::query_as::<_, (String, Option<String>)>(
+                "SELECT owner, name FROM collections WHERE slug = 'last-played'",
+            )
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(owner, "system");
+        assert_eq!(name, None);
+
+        // The two other built-ins are seeded alongside the pre-existing row.
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM collections")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, 3);
     }
 }
