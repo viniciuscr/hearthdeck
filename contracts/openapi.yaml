@@ -827,6 +827,15 @@ components:
         item_id: { type: string }
         name: { type: string }
         icon: { type: [string, 'null'] }
+        played:
+          allOf:
+            - $ref: '#/components/schemas/RecentActivity'
+          description: >-
+            Present on an item a `rule` collection derived from a play, absent on
+            a curated one. It is the play record the activity endpoint serves, so
+            a client renders and launches the card with the code it already has
+            for a play, and needs to know nothing about where the rule's data
+            came from.
     Collection:
       type: object
       required: [slug, kind, role, position, items]

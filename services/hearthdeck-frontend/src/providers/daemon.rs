@@ -102,16 +102,55 @@ pub struct CatalogItem {
     pub metadata: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize)]
-struct RecentActivityItem {
-    id: String,
-    title: String,
-    icon: Option<String>,
-    categories: Vec<String>,
-    source: String,
+#[derive(Clone, Debug, Deserialize)]
+pub struct RecentActivityItem {
+    pub id: String,
+    pub title: String,
+    pub icon: Option<String>,
+    pub categories: Vec<String>,
+    pub source: String,
     #[serde(default)]
-    kind: Option<String>,
-    metadata: serde_json::Value,
+    pub kind: Option<String>,
+    pub metadata: serde_json::Value,
+}
+
+impl RecentActivityItem {
+    /// This play as a record the app can draw, with `icon` already resolved.
+    ///
+    /// The daemon classifies catalog items by `kind` rather than by their raw
+    /// categories (a Heroic Epic game has genre categories but no `Game` entry).
+    /// Re-apply that signal here so "Recently Played" can tell games from apps
+    /// without special-casing providers.
+    pub fn into_record(mut self, icon: Option<String>) -> GameRecord {
+        let prefers_dgpu = self
+            .metadata
+            .get("prefers_dgpu")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if self
+            .kind
+            .as_deref()
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("game"))
+            && !self
+                .categories
+                .iter()
+                .any(|category| category.eq_ignore_ascii_case("game"))
+        {
+            self.categories.push("Game".to_string());
+        }
+        GameRecord {
+            id: self.id,
+            name: self.title,
+            exec: None,
+            icon,
+            path: None,
+            categories: self.categories,
+            terminal: false,
+            prefers_dgpu,
+            source: self.source,
+            metadata: self.metadata,
+        }
+    }
 }
 
 /// Server event received via WebSocket.
@@ -310,6 +349,9 @@ pub const FAVORITES_COLLECTION: &str = "favorites";
 /// The curated collection a details screen toggles for play later.
 pub const PLAY_LATER_COLLECTION: &str = "play-later";
 
+/// The built-in collection whose items are the most recent plays.
+pub const LAST_PLAYED_COLLECTION: &str = "last-played";
+
 /// One dashboard rail as the daemon composes it.
 ///
 /// Only the fields this client reads are declared: serde ignores the rest, so the
@@ -321,14 +363,18 @@ pub struct Collection {
     pub items: Vec<CollectionItem>,
 }
 
-/// One rail item, carrying the display name and icon the daemon stored with the
-/// membership so a rail can draw it without resolving the item itself.
+/// One rail item, carrying the display name and icon stored with it so a rail can
+/// draw it without resolving the item itself.
 #[derive(Clone, Debug, Deserialize)]
 pub struct CollectionItem {
     pub item_id: String,
     pub name: String,
     #[serde(default)]
     pub icon: Option<String>,
+    /// The play a rule derived this item from, in the same shape the activity
+    /// endpoint serves. Absent on a curated item.
+    #[serde(default)]
+    pub played: Option<RecentActivityItem>,
 }
 
 /// Response of the daemon's retro favorite write.
@@ -521,24 +567,20 @@ impl DaemonClient {
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
-    pub async fn recent_records(&self, limit: u32) -> Result<Vec<GameRecord>, DaemonError> {
-        let response = self
-            .http
-            .get(self.api_url("/v1/activity/recent"))
-            .query(&[("limit", limit)])
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-        let items: Vec<RecentActivityItem> = response
-            .json()
-            .await
-            .map_err(DaemonError::Deserialization)?;
-
-        Ok(stream::iter(items.into_iter().map(|item| {
+    /// The plays the given collections' items carry, as records the dashboard can
+    /// draw.
+    ///
+    /// The same conversion a play fetched from the activity endpoint goes through,
+    /// icon resolution included: a rule item carries the record itself, so a rail
+    /// composed from a collection is drawn by the code the rail already used.
+    /// Nothing here can fail — a cover that will not resolve leaves the card with
+    /// no icon, as it always has.
+    pub async fn played_records(&self, items: &[CollectionItem]) -> Vec<GameRecord> {
+        let plays: Vec<RecentActivityItem> = items
+            .iter()
+            .filter_map(|item| item.played.clone())
+            .collect();
+        stream::iter(plays.into_iter().map(|item| {
             let client = self.clone();
             async move {
                 let icon = if item.source == "romm" {
@@ -546,12 +588,12 @@ impl DaemonClient {
                 } else {
                     item.icon.clone()
                 };
-                recent_activity_to_game_record(item, icon)
+                item.into_record(icon)
             }
         }))
         .buffered(8)
         .collect()
-        .await)
+        .await
     }
 
     /// Triggers a rescan of all discovery and enrichment providers.
@@ -1256,41 +1298,6 @@ pub fn retro_version_label(metadata: &serde_json::Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn recent_activity_to_game_record(item: RecentActivityItem, icon: Option<String>) -> GameRecord {
-    let prefers_dgpu = item
-        .metadata
-        .get("prefers_dgpu")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    // The daemon classifies catalog items by `kind` rather than by their raw
-    // categories (a Heroic Epic game has genre categories but no `Game` entry).
-    // Re-apply that signal here so "Recently Played" can tell games from apps
-    // without special-casing providers.
-    let mut categories = item.categories;
-    if item
-        .kind
-        .as_deref()
-        .is_some_and(|kind| kind.eq_ignore_ascii_case("game"))
-        && !categories
-            .iter()
-            .any(|category| category.eq_ignore_ascii_case("game"))
-    {
-        categories.push("Game".to_string());
-    }
-    GameRecord {
-        id: item.id,
-        name: item.title,
-        exec: None,
-        icon,
-        path: None,
-        categories,
-        terminal: false,
-        prefers_dgpu,
-        source: item.source,
-        metadata: item.metadata,
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("connection failed: {0}")]
@@ -1507,8 +1514,8 @@ pub struct RetroRecordPage {
 mod tests {
     use super::{
         CatalogItem, DaemonError, RecentActivityItem, RetroGame, RetroRomVersion,
-        catalog_item_to_game_record, daemon_error_from_body, recent_activity_to_game_record,
-        retro_game_to_game_record, retro_rom_versions, retro_version_label,
+        catalog_item_to_game_record, daemon_error_from_body, retro_game_to_game_record,
+        retro_rom_versions, retro_version_label,
     };
 
     #[test]
@@ -1685,18 +1692,16 @@ mod tests {
 
     #[test]
     fn recent_activity_keeps_its_launchable_frontend_id() {
-        let record = recent_activity_to_game_record(
-            RecentActivityItem {
-                id: "romm:42".into(),
-                title: "Example ROM".into(),
-                icon: Some("/assets/example.jpg".into()),
-                categories: vec!["Game".into(), "hearthdeck-console:7".into()],
-                source: "romm".into(),
-                kind: Some("game".into()),
-                metadata: serde_json::json!({"release_year": 1994}),
-            },
-            Some("/tmp/example.jpg".into()),
-        );
+        let record = RecentActivityItem {
+            id: "romm:42".into(),
+            title: "Example ROM".into(),
+            icon: Some("/assets/example.jpg".into()),
+            categories: vec!["Game".into(), "hearthdeck-console:7".into()],
+            source: "romm".into(),
+            kind: Some("game".into()),
+            metadata: serde_json::json!({"release_year": 1994}),
+        }
+        .into_record(Some("/tmp/example.jpg".into()));
 
         assert_eq!(record.id, "romm:42");
         assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
@@ -1705,18 +1710,16 @@ mod tests {
 
     #[test]
     fn recent_activity_marks_kind_game_entries_as_games() {
-        let record = recent_activity_to_game_record(
-            RecentActivityItem {
-                id: "heroic:epic:example".into(),
-                title: "Epic game".into(),
-                icon: None,
-                categories: vec!["games/action".into()],
-                source: "heroic".into(),
-                kind: Some("game".into()),
-                metadata: serde_json::Value::Null,
-            },
-            None,
-        );
+        let record = RecentActivityItem {
+            id: "heroic:epic:example".into(),
+            title: "Epic game".into(),
+            icon: None,
+            categories: vec!["games/action".into()],
+            source: "heroic".into(),
+            kind: Some("game".into()),
+            metadata: serde_json::Value::Null,
+        }
+        .into_record(None);
 
         assert!(
             record

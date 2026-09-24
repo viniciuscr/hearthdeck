@@ -354,7 +354,7 @@ async fn launch_retro_rom(
         BridgeResponse::Error { message, .. } => return Err(ApiError::bad_gateway(message)),
         _ => return Err(ApiError::bad_gateway("bridge rejected retro game launch")),
     };
-    if let Err(error) = state.activity.record_launch(activity).await {
+    if let Err(error) = state.activity.session_started(activity, &session).await {
         warn!(%error, rom_id, "failed to record retro launch activity");
     }
     info!(rom_id, "retro game launch accepted");
@@ -748,7 +748,7 @@ async fn launch_app(
     };
     if let Err(error) = state
         .activity
-        .record_launch(catalog_activity_entry(&item))
+        .session_started(catalog_activity_entry(&item), &session)
         .await
     {
         warn!(%error, item_id = %id, "failed to record catalog launch activity");
@@ -869,6 +869,15 @@ async fn stop_application_session(
         return Err(ApiError::bad_gateway(
             "bridge rejected application-session stop",
         ));
+    }
+    // A stop the user asked for knows when the play ended, so it does not wait for
+    // the watcher's next tick.
+    if let Err(error) = state
+        .activity
+        .session_ended(&id, crate::activity::SessionOutcome::Closed)
+        .await
+    {
+        warn!(%error, session_id = %id, "failed to close the stopped play");
     }
     let _ = state
         .events
@@ -1267,15 +1276,27 @@ async fn list_collections(
                 .await
                 .map_err(ApiError::internal)?
                 .into_iter()
-                .map(|recent| CollectionItem {
-                    item_id: recent.entry.id,
-                    name: recent.entry.title,
-                    icon: recent.entry.icon,
-                })
+                .map(played_collection_item)
                 .collect();
         }
     }
     Ok(Json(collections))
+}
+
+/// One play, as a collection item.
+///
+/// The record rides along whole, exactly as the activity endpoint sends it, so a
+/// rail composed from the collection draws the card the same way whether the
+/// client asked for the play or for the collection it landed in. The duplicate
+/// name and icon are for curated items' sake: every item carries those two, and a
+/// client should not have to know which kind of collection it is looking at.
+fn played_collection_item(play: RecentActivity) -> CollectionItem {
+    CollectionItem {
+        item_id: play.entry.id.clone(),
+        name: play.entry.title.clone(),
+        icon: play.entry.icon.clone(),
+        played: Some(play),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1305,6 +1326,9 @@ async fn add_collection_item(
         item_id: request.item_id,
         name: request.name,
         icon: request.icon,
+        // A curated item is what the client added, not a play: the rule items are
+        // the only ones that carry a record.
+        played: None,
     };
     state
         .collections
@@ -2164,5 +2188,35 @@ mod tests {
         let game = romm_game_with_siblings(Vec::new());
         assert!(game.version_label.is_none());
         assert!(game.sibling_roms.is_empty());
+    }
+
+    #[test]
+    fn a_resolved_play_rides_along_with_its_collection_item() {
+        use crate::activity::{ActivityEntry, RecentActivity};
+
+        let item = super::played_collection_item(RecentActivity {
+            entry: ActivityEntry {
+                id: "romm:7".into(),
+                title: "Chrono Trigger".into(),
+                icon: Some("/covers/chrono.png".into()),
+                categories: vec!["Game".into()],
+                kind: Some("game".into()),
+                source: "romm".into(),
+                metadata: serde_json::json!({"release_year": 1995}),
+            },
+            last_launched_at: "2026-09-23T10:00:00Z".into(),
+            launch_count: 3,
+        });
+
+        // The two fields every item carries, so a client can draw it without
+        // knowing which kind of collection it came from...
+        assert_eq!(item.item_id, "romm:7");
+        assert_eq!(item.name, "Chrono Trigger");
+        // ...and the play, so it can classify and launch it the way it already
+        // does for a play it fetched from the activity endpoint.
+        let played = item.played.expect("the play travels with the item");
+        assert_eq!(played.entry.kind.as_deref(), Some("game"));
+        assert_eq!(played.entry.source, "romm");
+        assert_eq!(played.launch_count, 3);
     }
 }

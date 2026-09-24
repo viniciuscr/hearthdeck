@@ -80,6 +80,25 @@ impl Database {
                             last_launched_at TEXT NOT NULL,
                             launch_count INTEGER NOT NULL DEFAULT 1
                         );
+            -- One row per play, not per item. `launch_activity` above is a cache of
+            -- this for the dashboard's shelf; this is the record, and the only place
+            -- a duration can come from. `duration_seconds` is NULL, not 0, for a play
+            -- whose end was never observed: a gap in a total beats a wrong number.
+            CREATE TABLE IF NOT EXISTS play_sessions (
+              session_id TEXT PRIMARY KEY,
+              item_id TEXT NOT NULL,
+              source_id TEXT NOT NULL,
+              started_at TEXT NOT NULL,
+              ended_at TEXT,
+              outcome TEXT NOT NULL CHECK (outcome IN ('running', 'closed', 'unclosed')),
+              duration_seconds INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS play_sessions_by_item
+              ON play_sessions (item_id, started_at DESC);
+            -- Partial, because this table grows and the running rows are never more
+            -- than the one play the bridge allows at a time.
+            CREATE INDEX IF NOT EXISTS play_sessions_running
+              ON play_sessions (outcome) WHERE outcome = 'running';
             CREATE TABLE IF NOT EXISTS collections (
               slug TEXT PRIMARY KEY,
               kind TEXT NOT NULL,

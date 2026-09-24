@@ -14,6 +14,8 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 
+use crate::activity::RecentActivity;
+
 /// Items are curated by a user or a service; they live in `collection_items`.
 pub const KIND_MEMBERSHIP: &str = "membership";
 /// Items are derived from other data on every read; the table holds no rows for
@@ -45,6 +47,14 @@ pub struct CollectionItem {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// The play a rule derived this item from, in the same shape the activity
+    /// endpoint serves. A client draws, classifies and launches it with the code
+    /// it already has for a play, so a rail built from a collection needs no
+    /// second lookup and no knowledge of where the rule's data came from.
+    ///
+    /// Absent for a curated item, which has only what it was added with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub played: Option<RecentActivity>,
 }
 
 #[derive(Clone)]
@@ -85,6 +95,7 @@ impl CollectionStore {
                     item_id: row.get("item_id"),
                     name: row.get("name"),
                     icon: row.get("icon"),
+                    played: None,
                 });
         }
 
@@ -186,6 +197,7 @@ mod tests {
             item_id: id.to_owned(),
             name: name.to_owned(),
             icon: None,
+            played: None,
         }
     }
 

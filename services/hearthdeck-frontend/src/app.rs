@@ -77,10 +77,11 @@ use crate::input_ownership::{
     Event as InputEvent, InputOwnership, LaunchTarget, managed_launch_target,
 };
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
+use crate::providers::GameRecord;
 use crate::providers::daemon::{
     CATALOG_ENTRY_PREFIX, CategorizationSnapshot, Collection, CollectionItem, FAVORITES_COLLECTION,
-    PLAY_LATER_COLLECTION, RetroDetails, RetroGameDetails, RetroRomVersion, ScanReport,
-    retro_rom_versions, retro_version_label,
+    LAST_PLAYED_COLLECTION, PLAY_LATER_COLLECTION, RetroDetails, RetroGameDetails, RetroRomVersion,
+    ScanReport, retro_rom_versions, retro_version_label,
 };
 use crate::style::{
     DASHBOARD_GAME_ASPECT, DASHBOARD_RAIL_TILES, DETAILS_ACTION_WIDTH, DETAILS_FACT_LABEL_WIDTH,
@@ -159,7 +160,6 @@ const LAUNCH_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_mill
 const SESSION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 const SYSTEM_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 const DASHBOARD_HEALTH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
-const RECENT_ACTIVITY_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 const CATEGORIZATION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 /// The snakified `Section::Applications`, exactly as the daemon serializes it.
 /// Only a proposal the scan placed in this section becomes a tab here.
@@ -1150,7 +1150,9 @@ pub(crate) enum Message {
     },
     ActiveSessionResult(Result<bool, String>),
     RommPlatforms(Result<Vec<crate::providers::daemon::RetroConsole>, String>),
-    RecentEntries(Result<Vec<crate::providers::GameRecord>, String>),
+    /// Cards for the Recently Played rail, built from the plays the collections
+    /// carry rather than fetched as a list of their own.
+    RecentPlaysLoaded(Vec<GameRecord>),
     DashboardHealth {
         generation: u64,
         result: Result<crate::providers::daemon::HealthResponse, DashboardHealthError>,
@@ -1646,20 +1648,64 @@ impl HearthDeck {
         )
     }
 
-    fn load_recent_activity(&self, delay: std::time::Duration) -> Task<Message> {
+    /// The plays the `last-played` collection carries, which is where the
+    /// Recently Played rail's cards come from.
+    fn recent_play_items(&self) -> Vec<CollectionItem> {
+        collection_items(&self.collections, LAST_PLAYED_COLLECTION)
+            .cloned()
+            .collect()
+    }
+
+    /// Builds the Recently Played rail's cards from the `last-played` collection.
+    ///
+    /// That collection is the daemon's composed view of the play journal, so this
+    /// rail is composed data like the Favorites one — and when the model starts
+    /// creating rails of its own, they arrive through this same path.
+    fn load_recent_plays(&self) -> Task<Message> {
         let Some(client) = self.daemon_client.clone() else {
             return Task::none();
         };
+        let items = self.recent_play_items();
         Task::perform(
-            async move {
-                tokio::time::sleep(delay).await;
-                client
-                    .recent_records(DASHBOARD_RAIL_TILES as u32)
-                    .await
-                    .map_err(|error| error.to_string())
-            },
-            |result| cosmic::Action::App(Message::RecentEntries(result)),
+            async move { client.played_records(&items).await },
+            |records| cosmic::Action::App(Message::RecentPlaysLoaded(records)),
         )
+    }
+
+    /// Rebuilds the Recently Played rail's cards from the plays the collections
+    /// carry.
+    fn settle_recent_plays(&mut self, records: Vec<GameRecord>) {
+        self.recent_entries = records
+            .into_iter()
+            .map(|record| Arc::new(record.into_desktop_entry()))
+            .collect();
+    }
+
+    /// Moves the focus to the first rail card when the one it was on no longer
+    /// exists, which is what a rail list arriving asynchronously needs.
+    fn settle_dashboard_focus(&mut self) -> Task<Message> {
+        if self.page != Page::Dashboard {
+            return Task::none();
+        }
+        let entry_ids = self.dashboard_entry_ids();
+        let nav_ids = [
+            DASHBOARD_HOME_ID.clone(),
+            DASHBOARD_LIBRARY_ID.clone(),
+            DASHBOARD_SEARCH_ID.clone(),
+            DASHBOARD_SETTINGS_ID.clone(),
+        ];
+        let focus_is_valid = self
+            .focused_id
+            .as_ref()
+            .is_some_and(|focused| nav_ids.contains(focused) || entry_ids.contains(focused));
+        if focus_is_valid {
+            return Task::none();
+        }
+        let id = entry_ids
+            .first()
+            .cloned()
+            .unwrap_or_else(|| DASHBOARD_HOME_ID.clone());
+        self.focus_dashboard_id(id)
     }
 
     /// Loads the dashboard's collections, which the rails are composed from.
@@ -2727,6 +2773,7 @@ impl HearthDeck {
                     item_id: format!("romm:{rom_id}"),
                     name: title,
                     icon: None,
+                    played: None,
                 };
                 if favorite {
                     client
@@ -2778,6 +2825,7 @@ impl HearthDeck {
                     item_id: format!("romm:{rom_id}"),
                     name: title,
                     icon: None,
+                    played: None,
                 };
                 if backlogged {
                     client
@@ -4345,13 +4393,15 @@ impl cosmic::Application for HearthDeck {
                     Ok(collections) => {
                         self.collections = collections;
                         self.rebuild_favorite_entries();
+                        // A rail's cards are drawn from the collection's own items,
+                        // so a rail that just arrived has to be redrawn from them.
+                        return self.load_recent_plays();
                     }
                     Err(error) => {
                         log::debug!("collections are not available yet: {error}");
                         return self.load_collections(std::time::Duration::from_secs(5));
                     }
                 }
-                return Task::none();
             }
             Message::OpenSearch => {
                 self.switch_page(Page::Library);
@@ -4862,6 +4912,7 @@ impl cosmic::Application for HearthDeck {
                         item_id,
                         name,
                         icon: None,
+                        played: None,
                     },
                     adding,
                 );
@@ -4907,7 +4958,9 @@ impl cosmic::Application for HearthDeck {
                 };
                 let mut tasks = Vec::new();
                 if refresh_recent {
-                    tasks.push(self.load_recent_activity(std::time::Duration::ZERO));
+                    // The launch just recorded a play, and the collection is what
+                    // carries it to the rail.
+                    tasks.push(self.load_collections(std::time::Duration::ZERO));
                 }
                 if effect == LaunchEffect::DelayDismiss {
                     tasks.push(Task::perform(
@@ -5056,37 +5109,10 @@ impl cosmic::Application for HearthDeck {
                 self.restore_derived_categories();
                 return Task::none();
             }
-            Message::RecentEntries(result) => match result {
-                Ok(records) => {
-                    self.recent_entries = records
-                        .into_iter()
-                        .map(|record| Arc::new(record.into_desktop_entry()))
-                        .collect();
-                    if self.page == Page::Dashboard {
-                        let entry_ids = self.dashboard_entry_ids();
-                        let nav_ids = [
-                            DASHBOARD_HOME_ID.clone(),
-                            DASHBOARD_LIBRARY_ID.clone(),
-                            DASHBOARD_SEARCH_ID.clone(),
-                            DASHBOARD_SETTINGS_ID.clone(),
-                        ];
-                        let focus_is_valid = self.focused_id.as_ref().is_some_and(|focused| {
-                            nav_ids.contains(focused) || entry_ids.contains(focused)
-                        });
-                        if !focus_is_valid {
-                            let id = entry_ids
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| DASHBOARD_HOME_ID.clone());
-                            return self.focus_dashboard_id(id);
-                        }
-                    }
-                }
-                Err(error) => {
-                    log::debug!("recent activity is not available yet: {error}");
-                    return self.load_recent_activity(RECENT_ACTIVITY_RETRY_INTERVAL);
-                }
-            },
+            Message::RecentPlaysLoaded(records) => {
+                self.settle_recent_plays(records);
+                return self.settle_dashboard_focus();
+            }
             Message::DismissLaunch => {
                 self.launch_state.update(LaunchEvent::Dismiss);
             }
@@ -5497,7 +5523,6 @@ impl cosmic::Application for HearthDeck {
         let poll_active_session = self_.poll_active_session(std::time::Duration::ZERO);
         let load_romm_platforms = self_.load_romm_platforms(std::time::Duration::ZERO);
         let load_system_status = Self::load_system_status(std::time::Duration::ZERO);
-        let load_recent_activity = self_.load_recent_activity(std::time::Duration::ZERO);
         let load_collections = self_.load_collections(std::time::Duration::ZERO);
         let load_dashboard_health = self_.load_dashboard_health(std::time::Duration::ZERO);
         // One read of the scan state, so a scan already running (the startup one)
@@ -5512,7 +5537,6 @@ impl cosmic::Application for HearthDeck {
                 poll_active_session,
                 load_romm_platforms,
                 load_system_status,
-                load_recent_activity,
                 load_collections,
                 load_dashboard_health,
                 load_categorization,
@@ -7139,6 +7163,115 @@ mod tests {
         assert_eq!(app.menu.selected(), 1);
     }
 
+    /// A `last-played` collection as the daemon returns it: one item per play,
+    /// each carrying the record it was played from.
+    fn last_played_collection(
+        plays: &[(&str, &str, &str)],
+    ) -> crate::providers::daemon::Collection {
+        use crate::providers::daemon::{
+            Collection, CollectionItem, LAST_PLAYED_COLLECTION, RecentActivityItem,
+        };
+
+        Collection {
+            slug: LAST_PLAYED_COLLECTION.to_owned(),
+            items: plays
+                .iter()
+                .map(|(id, title, kind)| CollectionItem {
+                    item_id: (*id).to_owned(),
+                    name: (*title).to_owned(),
+                    icon: None,
+                    played: Some(RecentActivityItem {
+                        id: (*id).to_owned(),
+                        title: (*title).to_owned(),
+                        icon: None,
+                        categories: Vec::new(),
+                        source: "desktop-apps".to_owned(),
+                        kind: Some((*kind).to_owned()),
+                        metadata: serde_json::Value::Null,
+                    }),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_recently_played_rail_is_drawn_from_the_last_played_collection() {
+        let mut app = HearthDeck {
+            collections: vec![
+                last_played_collection(&[
+                    ("hearthdeck:desktop:first.desktop", "First", "game"),
+                    ("hearthdeck:desktop:second.desktop", "Second", "application"),
+                ]),
+                favorites_collection(&["org.example.App"]),
+            ],
+            ..Default::default()
+        };
+
+        let items = app.recent_play_items();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].item_id, "hearthdeck:desktop:first.desktop");
+        // A curated collection's items are not plays and do not belong here.
+        assert!(items.iter().all(|item| item.played.is_some()));
+
+        // ...and the rail shows the games among them, the app being filtered out
+        // the way it always was.
+        let records = items
+            .iter()
+            .filter_map(|item| item.played.clone())
+            .map(|play| play.into_record(None))
+            .collect();
+        app.settle_recent_plays(records);
+
+        let (_, rail) = app
+            .dashboard_shelves()
+            .into_iter()
+            .find(|(shelf, _)| *shelf == DashboardShelf::Recent)
+            .expect("a recently played rail");
+        assert_eq!(
+            rail.iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hearthdeck:desktop:first.desktop"]
+        );
+    }
+
+    #[test]
+    fn a_play_that_is_not_a_game_does_not_reach_the_recently_played_rail() {
+        let mut app = HearthDeck::default();
+        let game = crate::providers::GameRecord {
+            id: "hearthdeck:desktop:game.desktop".into(),
+            name: "A game".into(),
+            exec: None,
+            icon: None,
+            path: None,
+            categories: vec!["Game".into()],
+            terminal: false,
+            prefers_dgpu: false,
+            source: "desktop-apps".into(),
+            metadata: serde_json::Value::Null,
+        };
+        let app_played = crate::providers::GameRecord {
+            categories: Vec::new(),
+            name: "An app".into(),
+            id: "hearthdeck:desktop:app.desktop".into(),
+            ..game.clone()
+        };
+
+        app.settle_recent_plays(vec![game, app_played]);
+
+        let (_, rail) = app
+            .dashboard_shelves()
+            .into_iter()
+            .find(|(shelf, _)| *shelf == DashboardShelf::Recent)
+            .expect("a recently played rail");
+        assert_eq!(
+            rail.iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hearthdeck:desktop:game.desktop"]
+        );
+    }
+
     /// A favorites collection as the daemon would return it, for tests that need
     /// the rail or a menu label to see a favorite.
     fn favorites_collection(ids: &[&str]) -> crate::providers::daemon::Collection {
@@ -7152,6 +7285,7 @@ mod tests {
                     item_id: (*id).to_owned(),
                     name: (*id).to_owned(),
                     icon: None,
+                    played: None,
                 })
                 .collect(),
         }

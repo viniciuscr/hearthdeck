@@ -101,6 +101,22 @@ async fn main() -> Result<()> {
         state.events.clone(),
     );
     let state = Arc::new(AppState::with_categorization(state, categorization));
+    // A play still open in the journal belongs to a daemon that is gone: the
+    // machine slept, the service was restarted, the power went. When it ended is
+    // not knowable, so it is closed without a duration rather than with a guess.
+    match state.activity.sweep_running_sessions().await {
+        Ok(0) => {}
+        Ok(count) => info!(count, "closed plays left running by a previous run"),
+        Err(error) => warn!(%error, "could not close plays left running by a previous run"),
+    }
+    // Nothing else asks the bridge whether a play has ended once the frontend's
+    // overlay is gone, so a game closed from the couch would never be recorded as
+    // finished. Dropping the handle detaches the watcher, which is what a daemon
+    // that wants it for its whole life should do.
+    let _session_watcher = activity::spawn_session_watcher(
+        state.activity.clone(),
+        state.config.bridge_socket_path.clone(),
+    );
     // Nothing runs at boot, on purpose: the first scan is the user turning smart
     // categorization on, and until they do, the ordinary category tabs stand and
     // no checkpoint is fetched. All this does is say which state the machine is
