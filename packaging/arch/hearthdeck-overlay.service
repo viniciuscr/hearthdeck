@@ -1,6 +1,13 @@
 [Unit]
 Description=Hearthdeck quick-menu overlay for the Hearthdeck session
 Documentation=file:///usr/share/doc/hearthdeck/KIOSK-SESSION.md
+# Every other service here is tied to the session's target, and this one has no
+# other owner: nothing wants it and nothing stops it. Without this it outlives
+# the compositor it is drawn on - a user manager that stays up across a
+# sign-out keeps it running as a client of a display that is gone, which is a
+# process left spinning on a dead Wayland connection until the manager itself
+# exits. Tied to the target, a session boundary stops it instead.
+PartOf=hearthdeck.target
 
 [Service]
 Type=exec

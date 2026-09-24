@@ -35,6 +35,13 @@ const APP_ID: &str = "io.github.viniciuscr.hearthdeck.Overlay";
 const TOGGLE_MESSAGE: &[u8] = b"toggle";
 const INPUT_RELEASE_DELAY: Duration = Duration::from_millis(300);
 
+/// How often the compositor this process is drawn on is checked, and how many
+/// consecutive failed checks mean it is gone. Three one-second misses make a
+/// spurious failure on a loaded machine (a full socket backlog) unable to end a
+/// working overlay.
+const COMPOSITOR_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const COMPOSITOR_CHECK_MISSES: u32 = 3;
+
 pub fn main() -> Result<(), Box<dyn Error>> {
     match std::env::args().nth(1).as_deref() {
         None => run().map_err(Into::into),
@@ -47,6 +54,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
 fn run() -> cosmic::iced::Result {
     init_logging();
     info!("hearthdeck-overlay ({APP_ID})");
+    watch_compositor();
 
     cosmic::app::run::<Overlay>(
         Settings::default()
@@ -54,6 +62,65 @@ fn run() -> cosmic::iced::Result {
             .exit_on_close(false),
         (),
     )
+}
+
+/// Ends this process once the compositor it is drawn on is gone.
+///
+/// The session starts this service before cosmic-comp is listening, and the
+/// unit's `Restart=always` retries until the compositor publishes
+/// `WAYLAND_DISPLAY` (`packaging/arch/hearthdeck-overlay.service`). The other
+/// direction has no such retry: once that compositor dies, libcosmic's Wayland
+/// dispatch reports `Broken pipe` on every iteration and never returns, so the
+/// process spins - and floods the journal with those errors, burying whatever
+/// ended the session - until the user manager exits. A user manager that
+/// outlives the session therefore leaves it behind as a client of a display
+/// that is gone.
+///
+/// Connecting to the socket libcosmic is using is the only handle this crate
+/// has on that: it stops accepting connections when the compositor does.
+/// Exiting lets systemd start a fresh one, which is what a session that comes
+/// back needs; a session that does not is stopped by the unit's
+/// `PartOf=hearthdeck.target`.
+///
+/// Cost is one `connect` per interval on a Unix socket - the shape the unit
+/// already relies on for its startup retries.
+fn watch_compositor() {
+    let Some(display) = std::env::var_os("WAYLAND_DISPLAY").filter(|value| !value.is_empty())
+    else {
+        // Started before the compositor published it; the unit retries.
+        return;
+    };
+    let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let path = wayland_socket_path(&runtime_dir, &display);
+
+    thread::spawn(move || {
+        let mut misses = 0;
+        loop {
+            thread::sleep(COMPOSITOR_CHECK_INTERVAL);
+            if StdUnixStream::connect(&path).is_ok() {
+                misses = 0;
+                continue;
+            }
+            misses += 1;
+            if misses >= COMPOSITOR_CHECK_MISSES {
+                warn!(
+                    "{} is gone; exiting so the session can serve a new one",
+                    path.display()
+                );
+                std::process::exit(0);
+            }
+        }
+    });
+}
+
+/// `WAYLAND_DISPLAY` is a socket name inside `XDG_RUNTIME_DIR` (`wayland-0`) in
+/// the usual case, and a full path in the others. `join` keeps an absolute
+/// value as it is, so both resolve the same way libcosmic resolves them.
+fn wayland_socket_path(runtime_dir: &std::ffi::OsStr, display: &std::ffi::OsStr) -> PathBuf {
+    Path::new(runtime_dir).join(display)
 }
 
 fn toggle() -> io::Result<()> {
@@ -507,7 +574,10 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::{UnixDatagram, UnixListener};
 
-    use super::{TOGGLE_MESSAGE, is_toggle_message, send_toggle_to, stop_active_application};
+    use super::{
+        TOGGLE_MESSAGE, is_toggle_message, send_toggle_to, stop_active_application,
+        wayland_socket_path,
+    };
 
     #[test]
     fn toggle_command_reaches_the_overlay_control_socket() {
@@ -538,11 +608,35 @@ mod tests {
         let service = include_str!("../../../packaging/arch/hearthdeck-overlay.service");
         assert!(service.contains("ExecStart=/usr/lib/hearthdeck/hearthdeck-overlay"));
         assert!(service.contains("Restart=always"));
+        // Nothing else owns this unit, so without the session tie it survives
+        // the compositor it draws on. That is how a sign-out leaves a process
+        // spamming a dead Wayland connection instead of a stopped service.
+        assert!(service.contains("PartOf=hearthdeck.target"));
 
         let package = include_str!("../../../packaging/arch/PKGBUILD");
         assert!(package.contains(
             "install -Dm755 services/target/release/hearthdeck-overlay \"$pkgdir/usr/lib/hearthdeck/hearthdeck-overlay\""
         ));
+    }
+
+    #[test]
+    fn resolves_both_wayland_display_forms_against_the_runtime_dir() {
+        use std::ffi::OsStr;
+        use std::path::Path;
+
+        // The socket name inside the runtime directory is what cosmic-comp's
+        // own import of the variable produces, and the absolute form is what a
+        // nested or exported display uses. The watcher and libcosmic have to
+        // agree on which file the connection is on, or the watcher would watch
+        // a file nobody is drawing on and end a working overlay.
+        assert_eq!(
+            wayland_socket_path(OsStr::new("/run/user/1000"), OsStr::new("wayland-0")),
+            Path::new("/run/user/1000/wayland-0")
+        );
+        assert_eq!(
+            wayland_socket_path(OsStr::new("/run/user/1000"), OsStr::new("/tmp/wayland-9")),
+            Path::new("/tmp/wayland-9")
+        );
     }
 
     #[test]
