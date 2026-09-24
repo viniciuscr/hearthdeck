@@ -1,0 +1,21 @@
+[Unit]
+Description=Start the RomM stack when its compose file appears
+Documentation=file:///usr/share/doc/hearthdeck/ROMM.md
+PartOf=hearthdeck.target
+# The compose file usually lives on an external mount that may not be ready when
+# the session starts. romm.service skips in that case rather than failing (see
+# its ExecCondition), and a `systemd --user` unit cannot order itself after a
+# system mount, so nothing would ever bring the stack up on that boot. This
+# watches for the file instead and starts romm.service the moment the mount
+# shows up, turning "the drive was a few seconds late" back into a started stack.
+#
+# Only the default path is watched. An override in
+# ~/.config/hearthdeck/romm.env is normally under the user's home, which is
+# already mounted before the session starts, so there is no race to close.
+
+[Path]
+PathExists=/mnt/external/romM/podman-compose.yaml
+Unit=romm.service
+
+[Install]
+WantedBy=hearthdeck.target
