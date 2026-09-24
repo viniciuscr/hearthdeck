@@ -1273,6 +1273,9 @@ mod tests {
         assert!(service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} $ROMM_COMPOSE_ARGS down"));
         assert!(service.contains("SyslogIdentifier=romm"));
         assert!(service.contains("PartOf=hearthdeck.target"));
+        // The watcher is armed from the service too, so it works with an older
+        // target that only knows `Wants=romm.service`.
+        assert!(service.contains("Wants=romm.path"));
         // The compose file is often on an external mount that is not ready when
         // the session starts, and a user unit cannot order itself after a system
         // mount. The watcher is what starts the stack once the mount shows up.
@@ -1303,12 +1306,16 @@ mod tests {
         assert!(log_service.contains("StandardOutput=append:%h/hearthdeck.log"));
         assert!(log_service.contains("ExecStartPre=/usr/bin/truncate --size=0 %h/hearthdeck.log"));
         assert!(log_service.contains("ExecStartPre=/usr/bin/chmod 600 %h/hearthdeck.log"));
+        // The session's own lines are not a unit's, so they are matched by
+        // identifier; everything with a unit is matched by unit, which is the
+        // only way systemd's own messages about them reach this file.
         assert!(log_service.contains("--identifier=hearthdeck-session"));
-        assert!(log_service.contains("--identifier=hearthdeck-daemon"));
-        assert!(log_service.contains("--identifier=hearthdeck-bridge"));
-        assert!(log_service.contains("--identifier=hearthdeck-input"));
-        assert!(log_service.contains("--identifier=hearthdeck-overlay"));
-        assert!(log_service.contains("--identifier=romm"));
+        assert!(log_service.contains("-u hearthdeck-bridge.service"));
+        assert!(log_service.contains("-u hearthdeck-daemon.service"));
+        assert!(log_service.contains("-u hearthdeck-input.service"));
+        assert!(log_service.contains("-u hearthdeck-overlay.service"));
+        assert!(log_service.contains("-u romm.service"));
+        assert!(log_service.contains("-u romm.path"));
         assert!(session.contains("systemd-cat -t hearthdeck-session"));
         assert!(
             deploy_target.contains(

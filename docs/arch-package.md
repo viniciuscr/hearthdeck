@@ -25,7 +25,8 @@ CachyOS. It installs:
   appears, so a compose file on an external mount that is not ready at session
   start is still picked up rather than skipped for the whole session.
 - `~/hearthdeck.log`: recreated at each Hearthdeck session start with combined
-  session, daemon, bridge, input broker, overlay, and RomM output.
+  session, daemon, bridge, input broker, overlay, and RomM output, plus systemd's
+  own messages about those units (skipped conditions, start timeouts, failures).
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck.desktop`: the Hearthdeck session
   (cosmic-comp with the frontend fullscreen) shown by compatible display
