@@ -181,8 +181,12 @@ fn init_logging() {
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::{EnvFilter, fmt};
 
+    // `hearthdeck_overlay=info`, not `=debug`: the Guide-button rescan runs every
+    // few seconds and would otherwise write a line to the session log on every
+    // pass. `RUST_LOG=hearthdeck_overlay=debug` turns the detail back on when it is
+    // actually wanted.
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(format!("warn,{}=debug", env!("CARGO_CRATE_NAME"))));
+        .unwrap_or_else(|_| EnvFilter::new(format!("warn,{}=info", env!("CARGO_CRATE_NAME"))));
 
     tracing_subscriber::registry()
         .with(fmt::layer().with_target(false))

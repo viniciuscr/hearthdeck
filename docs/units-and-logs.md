@@ -105,6 +105,16 @@ zero — "create the dashboard collections" with a report that implies none — 
 the outcome (a count) and let the caller say "nothing to create". `204 No Content`
 for a no-op is a lie the UI will repeat.
 
+## Rule 7 — one config file, but every reader has to load it
+
+A setting is only as unified as the `EnvironmentFile=` lines that carry it.
+`hearthdeck-daemon.service` read `ROMM_COMPOSE_FILE` from its own environment but
+loaded only `daemon.env`, while `romm.service` loaded `romm.env`. Putting the path
+in `romm.env` moved the service and left the daemon on the packaged default, so the
+library and resource roots silently pointed at a directory that did not exist.
+When you add or move a setting, grep every consumer and give each one the same
+`EnvironmentFile=`.
+
 ## Logging: how `~/hearthdeck.log` is built, and how to add a source
 
 `hearthdeck-log.service` truncates the file at session start and runs

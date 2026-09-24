@@ -8,6 +8,10 @@ PartOf=hearthdeck.target
 Type=notify
 NotifyAccess=main
 EnvironmentFile=-%h/.config/hearthdeck/daemon.env
+# Same file romm.service reads. Without this the daemon resolves its RomM roots
+# from the packaged default while the service uses the configured compose file,
+# so `ROMM_COMPOSE_FILE` in romm.env quietly only half-applies.
+EnvironmentFile=-%h/.config/hearthdeck/romm.env
 Environment=HEARTHDECK_LOG_FORMAT=json
 Environment=RUST_LOG=hearthdeck_daemon=info,tower_http=info
 ExecStart=%h/.local/bin/hearthdeck-daemon

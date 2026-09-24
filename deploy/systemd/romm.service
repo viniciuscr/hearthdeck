@@ -2,8 +2,11 @@
 Description=RomM Podman Compose stack
 Documentation=file:///usr/share/doc/hearthdeck/ROMM.md
 PartOf=hearthdeck.target
-After=network-online.target
-Wants=network-online.target
+# No `After=network-online.target`: that target does not exist in the user manager
+# (`systemctl --user show network-online.target` -> `not-found`), so the ordering
+# it looks like it provides is not real. What this unit actually needs to wait for
+# is the mount holding the compose file, and a user unit cannot order after a
+# system mount - see romm.path, which starts the stack when the file appears.
 # Arms the watcher from here, not only from hearthdeck.target's own Wants=, so
 # that whichever target pulls this unit in - including an older packaged one
 # with the romm Wants= supplied by a drop-in - also arms romm.path. Without this

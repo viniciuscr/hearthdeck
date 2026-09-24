@@ -293,7 +293,8 @@ boot/session integration.
 package installs it and `hearthdeck.target` wants it. It defaults to
 `/mnt/external/romM/podman-compose.yaml`, skips cleanly when that file is absent,
 and accepts an optional `ROMM_COMPOSE_FILE` override from
-`~/.config/hearthdeck/romm.env`. This starts RomM with the active Hearthdeck
+`~/.config/hearthdeck/romm.env`. The daemon loads the same file, so the RomM
+library and resource roots follow the override instead of the packaged default. This starts RomM with the active Hearthdeck
 user session rather than system boot, and avoids putting host command
 construction in the daemon.
 

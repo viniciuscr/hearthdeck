@@ -50,9 +50,19 @@ if [[ ! -x "$launch_app" && -x /usr/bin/hearthdeck_cosmic ]]; then
   launch_app="/usr/bin/hearthdeck_cosmic"
 fi
 
+# What the session inherited matters as much as what the units do: a stale
+# WAYLAND_DISPLAY/DISPLAY from the greeter is one way the client connects to the
+# wrong socket. This line is what makes that visible instead of a bare "session
+# ended immediately".
+log "env WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<unset>} DISPLAY=${DISPLAY:-<unset>} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-<unset>}"
+
 if [[ ! -x "$launch_app" ]]; then
-  log "hearthdeck-frontend binary missing: expected /usr/bin/hearthdeck-frontend"
-  exit 1
+  # Never end the session over a missing client. cosmic-comp exits when its child
+  # exits, so exiting here would bounce the user straight back to the greeter with
+  # no way in - a login loop caused by a packaging mistake. Start the compositor
+  # anyway and leave the reason in the log.
+  log "no client at /usr/bin/hearthdeck-frontend; starting cosmic-comp with no client"
+  exec cosmic-comp
 fi
 
 log "exec cosmic-comp ($launch_app)"
