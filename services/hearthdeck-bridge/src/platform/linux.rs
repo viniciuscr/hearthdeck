@@ -548,18 +548,14 @@ fn retro_rom_library_root() -> PathBuf {
     {
         return PathBuf::from(overridden);
     }
-    // The same default the packaged `romm.service` hardcodes.
-    const DEFAULT_ROMM_COMPOSE_FILE: &str = "/mnt/external/romM/podman-compose.yaml";
+    // Derive the root exactly as the daemon does rather than re-implementing it:
+    // the bridge re-checks a rom against this root, and the two must agree on where
+    // RomM's library is, not merely each be plausible.
     let compose_file = env::var_os("ROMM_COMPOSE_FILE")
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_ROMM_COMPOSE_FILE));
-    compose_file
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("/mnt/external/romM"))
-        .join("library")
+        .unwrap_or_else(|| PathBuf::from(hearthdeck_protocol::paths::DEFAULT_ROMM_COMPOSE_FILE));
+    hearthdeck_protocol::paths::romm_data_root(Some(&compose_file)).join("library")
 }
 
 fn validate_retro_core_path(core_path: &str) -> Result<PathBuf> {

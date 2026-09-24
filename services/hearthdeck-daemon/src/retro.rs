@@ -306,36 +306,78 @@ mod tests {
         CORE_BY_PLATFORM_SLUG, RetroLaunchError, resolve_core_path, validate_content_filename,
     };
 
+    /// Every libretro core the PKGBUILD packages must be reachable from at least
+    /// one platform slug, or a user who installed that core cannot launch its
+    /// games.
+    ///
+    /// The list is read from the PKGBUILD rather than restated here, so adding a
+    /// core package upstream is caught — the previous version iterated a
+    /// hand-maintained copy of the list and could not notice.
     #[test]
     fn every_pkgbuild_optdepend_core_has_a_platform_mapping() {
         let cores_with_mappings: std::collections::HashSet<&str> = CORE_BY_PLATFORM_SLUG
             .iter()
             .map(|(_, core)| *core)
             .collect();
-        for core in [
-            "fceumm_libretro.so",
-            "snes9x_libretro.so",
-            "genesis_plus_gx_libretro.so",
-            "picodrive_libretro.so",
-            "mgba_libretro.so",
-            "mupen64plus_next_libretro.so",
-            "mednafen_psx_libretro.so",
-            "play_libretro.so",
-            "ppsspp_libretro.so",
-            "desmume_libretro.so",
-            "dolphin_libretro.so",
-            "flycast_libretro.so",
-            "kronos_libretro.so",
-            "mednafen_pce_fast_libretro.so",
-            "mednafen_supergrafx_libretro.so",
-            "mame_libretro.so",
-            "scummvm_libretro.so",
-        ] {
+
+        let pkgbuild = include_str!("../../../packaging/arch/PKGBUILD");
+        let packages = packaged_libretro_cores(pkgbuild);
+        assert!(
+            !packages.is_empty(),
+            "found no libretro cores in the PKGBUILD optdepends"
+        );
+        for package in packages {
+            let core = core_file_for_package(&package);
             assert!(
-                cores_with_mappings.contains(core),
-                "{core} is packaged in PKGBUILD but has no platform slug mapped to it"
+                cores_with_mappings.contains(core.as_str()),
+                "PKGBUILD packages {package} (core {core}) but no platform slug maps to it"
             );
         }
+    }
+
+    /// The `libretro-*` core packages in a PKGBUILD's `optdepends`, minus the ones
+    /// that are not emulator cores.
+    fn packaged_libretro_cores(pkgbuild: &str) -> Vec<String> {
+        let mut packages = Vec::new();
+        let mut in_optdepends = false;
+        for line in pkgbuild.lines() {
+            let line = line.trim();
+            if line.starts_with("optdepends=(") {
+                in_optdepends = true;
+                continue;
+            }
+            if !in_optdepends {
+                continue;
+            }
+            if line == ")" {
+                break;
+            }
+            // Each entry is `'libretro-name: description'`. The shader preset
+            // package shares the prefix but is not an emulator core.
+            if let Some(rest) = line.strip_prefix('\'')
+                && let Some((name, _)) = rest.split_once(':')
+                && name.starts_with("libretro-")
+                && !name.contains("shaders")
+            {
+                packages.push(name.to_owned());
+            }
+        }
+        packages
+    }
+
+    /// The `.so` file Arch installs for a `libretro-<name>` package: `<name>` with
+    /// dashes as underscores and `_libretro.so` appended, except the `beetle-*`
+    /// packages, which bundle the upstream `mednafen_*` cores under a different
+    /// name.
+    fn core_file_for_package(package: &str) -> String {
+        let name = package.strip_prefix("libretro-").unwrap_or(package);
+        let name = match name {
+            "beetle-psx" => "mednafen_psx",
+            "beetle-pce-fast" => "mednafen_pce_fast",
+            "beetle-supergrafx" => "mednafen_supergrafx",
+            other => other,
+        };
+        format!("{}_libretro.so", name.replace('-', "_"))
     }
 
     #[tokio::test]

@@ -11,7 +11,6 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use hearthdeck_protocol::{BridgeErrorCode, BridgeRequest, BridgeResponse, InputProfile};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -28,7 +27,7 @@ const HEROIC_SESSION_ID: &str = "heroic";
 #[tokio::main]
 async fn main() -> Result<()> {
     hearthdeck_observability::init("hearthdeck-bridge", "hearthdeck_bridge=info");
-    let socket_path = bridge_socket_path()?;
+    let socket_path = hearthdeck_protocol::paths::bridge_socket_path();
     let (listener, socket_activated) = bridge_listener(&socket_path).await?;
     let session_directory = bridge_session_directory(&socket_path);
     let sessions = Arc::new(Mutex::new(load_managed_sessions(&session_directory).await?));
@@ -595,18 +594,6 @@ fn valid_session_id(session_id: &str) -> bool {
         && session_id
             .bytes()
             .all(|character| character.is_ascii_alphanumeric() || character == b'-')
-}
-
-fn bridge_socket_path() -> Result<PathBuf> {
-    if let Some(path) = env::var_os("HEARTHDECK_BRIDGE_SOCKET") {
-        return Ok(PathBuf::from(path));
-    }
-    let project_dirs = ProjectDirs::from("dev", "hearthdeck", "hearthdeck")
-        .context("could not determine Hearthdeck data directories")?;
-    let runtime_dir = env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| project_dirs.data_local_dir().join("runtime"));
-    Ok(runtime_dir.join("hearthdeck/bridge.sock"))
 }
 
 #[cfg(test)]

@@ -15,6 +15,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod paths;
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BridgeRequest {

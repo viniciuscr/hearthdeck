@@ -455,28 +455,12 @@ fn toggle_subscription() -> Subscription<()> {
     })
 }
 
-/// Path to the bridge's Unix control socket. Mirrors
-/// `hearthdeck-bridge::bridge_socket_path()`'s primary branch; skips its
-/// `ProjectDirs` fallback (needs the `directories` crate) since that only
-/// matters when `XDG_RUNTIME_DIR` is unset, which doesn't happen in a real
-/// systemd user session. Keep in sync if the bridge's default ever changes.
-fn bridge_socket_path() -> PathBuf {
-    std::env::var_os("HEARTHDECK_BRIDGE_SOCKET")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join("hearthdeck/bridge.sock")
-        })
-}
-
 /// Sends one JSON-lines request to the bridge and reads its response.
 /// Mirrors `hearthdeck-daemon::bridge::request`, using a blocking
 /// `UnixStream` instead of tokio's since this runs on a plain spawned
 /// thread, not inside an async runtime.
 fn bridge_request(request: &BridgeRequest) -> io::Result<BridgeResponse> {
-    let mut stream = StdUnixStream::connect(bridge_socket_path())?;
+    let mut stream = StdUnixStream::connect(hearthdeck_protocol::paths::bridge_socket_path())?;
     let payload = serde_json::to_string(request).map_err(io::Error::other)?;
     stream.write_all(payload.as_bytes())?;
     stream.write_all(b"\n")?;

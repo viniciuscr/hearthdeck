@@ -1,8 +1,4 @@
-use std::{
-    env,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-};
+use std::{env, net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use directories::ProjectDirs;
@@ -42,10 +38,6 @@ pub struct RommPaths {
     pub resources_root: PathBuf,
 }
 
-/// Where the packaged `romm.service` expects the deployment by default (its
-/// unit hardcodes `Environment=ROMM_COMPOSE_FILE=...` at this path).
-const DEFAULT_ROMM_DATA_ROOT: &str = "/mnt/external/romM";
-
 impl RommPaths {
     /// Resolves the host roots from the deployment layout.
     ///
@@ -57,12 +49,10 @@ impl RommPaths {
         library_root: Option<PathBuf>,
         resources_root: Option<PathBuf>,
     ) -> Self {
-        let data_root = compose_file
-            .as_deref()
-            .and_then(Path::parent)
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_ROMM_DATA_ROOT));
+        // The default root and the way it follows from the compose file are shared
+        // with the bridge (see `hearthdeck_protocol::paths`), which re-derives the
+        // same root to re-check a launch.
+        let data_root = hearthdeck_protocol::paths::romm_data_root(compose_file.as_deref());
         Self {
             library_root: library_root.unwrap_or_else(|| data_root.join("library")),
             resources_root: resources_root.unwrap_or_else(|| data_root.join("resources")),
@@ -75,10 +65,6 @@ impl Config {
         let project_dirs = ProjectDirs::from("dev", "hearthdeck", "hearthdeck")
             .context("could not determine Hearthdeck data directories")?;
         let data_dir = project_dirs.data_local_dir();
-        let runtime_dir = env::var_os("XDG_RUNTIME_DIR")
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| data_dir.join("runtime"));
 
         let lan_enabled = env::var("HEARTHDECK_LAN_ENABLED")
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
@@ -134,10 +120,7 @@ impl Config {
             database_path: env::var_os("HEARTHDECK_DATABASE_PATH")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| data_dir.join("hearthdeck.db")),
-            bridge_socket_path: env::var_os("HEARTHDECK_BRIDGE_SOCKET")
-                .filter(|path| !path.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| runtime_dir.join("hearthdeck/bridge.sock")),
+            bridge_socket_path: hearthdeck_protocol::paths::bridge_socket_path(),
             lan_enabled,
             tls,
             romm,
@@ -147,7 +130,8 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_ROMM_DATA_ROOT, RommPaths};
+    use super::RommPaths;
+    use hearthdeck_protocol::paths::DEFAULT_ROMM_DATA_ROOT;
     use std::path::PathBuf;
 
     #[test]
