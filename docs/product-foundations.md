@@ -288,9 +288,9 @@ is `starting`, `refreshing`, `ready`, or `degraded`; `ready` with zero records
 is valid, while `degraded` preserves previously successful catalog data.
 
 Current schedules are intentionally modest: Linux desktop entries every 15
-minutes, Heroic every 5 minutes, local AppStream every hour, and macOS bundles
-every 30 minutes. Startup queues each registered provider. No provider should
-poll a filesystem, network endpoint, or client request in a tight loop.
+minutes, Heroic every 5 minutes, and local AppStream every hour. Startup queues
+each registered provider. No provider should poll a filesystem, network endpoint,
+or client request in a tight loop.
 
 ## Resource Discipline
 

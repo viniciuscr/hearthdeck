@@ -58,10 +58,9 @@ component ID and all declared desktop/launchable IDs. The enrichment payload
 includes summary, description, developer, project license, categories, URLs,
 icon reference, screenshot source URLs, and `provenance: appstream-local`.
 
-`appstream-local` is Linux-only. macOS bundle discovery intentionally provides
-identity and launch capability only; it does not guess metadata by application
-name. A future macOS metadata adapter can be introduced as its own provider
-once an authoritative bundle-linked source is selected.
+`appstream-local` reads the host's AppStream cache and is the only metadata
+provider for discovered applications. A source without an authoritative metadata
+feed is left unenriched rather than guessing metadata from the application's name.
 
 The daemon stores screenshot URLs as metadata only. A future asset-cache module
 must download, validate, resize, evict, and serve cached media; frontend code

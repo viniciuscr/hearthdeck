@@ -55,7 +55,7 @@ Gamescope with the smallest possible memory/CPU footprint.
   Hearthdeck's own config directory. `libretro-shaders-slang` is optional and
   supplies the per-console shader presets the bridge applies (decision 8).
 - Discovery/catalog: RomM is *not* a `DiscoveryProvider`/`CatalogRecord`
-  source (only Heroic and desktop/macOS apps are). It is a separate
+  source (only Heroic and desktop apps are). It is a separate
   direct-proxy surface.
 - Install requests: the host advertises `install_requests: false`, and
   `POST /v1/install-requests` returns `501` until a privileged approval path
@@ -445,7 +445,7 @@ Each phase is scoped to be doable in one sitting and independently useful.
   `BridgeRequest::LaunchRetroGame { core_path, rom_path, session_id }` to
   `hearthdeck-protocol` (no command/URL field, matching the crate's own
   test discipline). Added `retro_launch` to `HostCapabilities`
-  (`true` on Linux, `false` on macOS/other, matching
+  (`true` on Linux, matching
   `application_sessions`'s pattern), threaded through `openapi.yaml` and the
   frontend `DaemonClient`. Implemented the bridge side ahead of schedule since the
   match on `BridgeRequest` is exhaustive: `launch_retro_game` in

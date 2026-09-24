@@ -141,17 +141,6 @@ fn host_capabilities() -> HostCapabilities {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn host_capabilities() -> HostCapabilities {
-    HostCapabilities {
-        launch: true,
-        application_sessions: false,
-        install_requests: false,
-        retro_launch: false,
-        categorization: false,
-    }
-}
-
 async fn create_pairing(
     State(state): State<SharedState>,
 ) -> Result<Json<PairingResponse>, ApiError> {

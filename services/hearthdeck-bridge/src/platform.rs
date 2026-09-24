@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(target_os = "linux"))]
 use hearthdeck_protocol::DiscoveredApplication;
 #[cfg(all(not(target_os = "linux"), not(test)))]
 use hearthdeck_protocol::HeroicRunner;
@@ -8,8 +8,6 @@ use std::collections::BTreeSet;
 
 #[cfg(any(target_os = "linux", test))]
 pub const DESKTOP_APPS_SOURCE: &str = "desktop-apps";
-#[cfg(all(target_os = "macos", not(test)))]
-pub const MACOS_APPS_SOURCE: &str = "macos-apps";
 
 #[cfg(any(target_os = "linux", test))]
 mod linux;
@@ -18,11 +16,6 @@ pub use linux::{
     discover_applications, launch_application, launch_heroic_game, launch_retro_game,
     set_input_profile,
 };
-
-#[cfg(all(target_os = "macos", not(test)))]
-mod macos;
-#[cfg(all(target_os = "macos", not(test)))]
-pub use macos::{discover_applications, launch_application};
 
 #[cfg(all(not(target_os = "linux"), not(test)))]
 pub async fn set_input_profile(
@@ -250,12 +243,12 @@ pub async fn launch_retro_game(
     anyhow::bail!("RetroArch game launch is unsupported on this platform")
 }
 
-#[cfg(all(not(any(target_os = "linux", target_os = "macos")), not(test)))]
+#[cfg(all(not(target_os = "linux"), not(test)))]
 pub async fn discover_applications(_source_id: &str) -> Result<Vec<DiscoveredApplication>> {
     anyhow::bail!("application discovery is unsupported on this platform")
 }
 
-#[cfg(all(not(any(target_os = "linux", target_os = "macos")), not(test)))]
+#[cfg(all(not(target_os = "linux"), not(test)))]
 pub async fn launch_application(
     _source_id: &str,
     _application_id: &str,

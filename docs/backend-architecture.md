@@ -29,21 +29,23 @@ target.
 
 ## Platform Adaptation Rules
 
-Platform-specific behavior must terminate at an adapter boundary. Shared API,
-database, catalog, discovery scheduling, and frontend client code must not
-branch on macOS, Linux, or Android.
+Hearthdeck targets Linux only. Platform-specific behavior still terminates at an
+adapter boundary — the bridge's `platform` module is the single place that
+launches a host process — but with no second host target to stay portable for,
+shared API, database, catalog, discovery scheduling, and frontend client code has
+no platform branches at all.
 
-| Concern | Linux host | macOS development host | Android client |
-| --- | --- | --- | --- |
-| Application discovery | `desktop-apps` provider | `macos-apps` provider | None |
-| Application launch | Supervised systemd user scope | LaunchServices `open -b` adapter | Never launches host apps directly |
-| Backend transport | Local daemon | Local integration daemon | Paired HTTPS daemon |
-| Client platform code | No Linux-specific discovery code | macOS entitlements only | Android network/security config only |
+| Concern | Linux host |
+| --- | --- |
+| Application discovery | `desktop-apps` (desktop entries) and `heroic` providers |
+| Application launch | Supervised systemd user scope |
+| Backend transport | Local daemon over the user-only bridge socket |
+| Client platform code | None — the client speaks only the paired HTTP API |
 
-The daemon chooses providers with compile-time target guards. A provider emits
-the same `CatalogRecord` shape on every host. The frontend groups sources by
-the backend `source_id`, not by platform names. This keeps future Steam, GOG, Epic,
-emulator, movie, and streaming providers portable at the contract level.
+A provider emits the same `CatalogRecord` shape regardless of source. The frontend
+groups sources by the backend `source_id`, not by platform names. This keeps future
+Steam, GOG, Epic, emulator, movie, and streaming providers portable at the contract
+level.
 
 ## Discovery Providers
 
@@ -126,20 +128,6 @@ kind, status, record count, last successful refresh, and safe error summary.
 committed a snapshot, and `degraded` means the last run failed while prior
 catalog rows remain untouched. Clients must distinguish `ready` with zero
 records from `degraded`; an empty catalog is not a bridge health signal.
-
-## macOS Integration
-
-The `macos-apps` provider discovers bundles from `/Applications` and
-`~/Applications`, reads `CFBundleIdentifier` from each bundle's `Info.plist`,
-and launches only a re-discovered bundle through `open -b <bundle-id>`. It is
-the macOS equivalent of Linux `desktop-apps`; both produce the same bridge
-`DiscoveredApplication` protocol record and catalog schema.
-
-Run a real macOS discovery scan without launching applications:
-
-```sh
-just macos-discovery-check
-```
 
 ## Trust Boundaries
 

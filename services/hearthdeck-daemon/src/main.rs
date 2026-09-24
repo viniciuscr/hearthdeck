@@ -204,13 +204,6 @@ fn discovery_providers(config: &Config) -> Vec<Arc<dyn discovery::DiscoveryProvi
     ]
 }
 
-#[cfg(target_os = "macos")]
-fn discovery_providers(config: &Config) -> Vec<Arc<dyn discovery::DiscoveryProvider>> {
-    vec![Arc::new(
-        discovery::providers::macos_apps::MacosAppsProvider::new(config.bridge_socket_path.clone()),
-    )]
-}
-
 #[cfg(target_os = "linux")]
 fn enrichment_providers() -> Vec<Arc<dyn enrichment::MetadataProvider>> {
     vec![Arc::new(

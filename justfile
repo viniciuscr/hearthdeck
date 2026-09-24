@@ -46,10 +46,6 @@ bridge:
 daemon:
   mise exec -- cargo run --manifest-path {{services_manifest}} -p hearthdeck-daemon
 
-# Scan installed macOS application bundles through the real provider.
-macos-discovery-check: build-services-debug
-  ./scripts/macos-discovery-check
-
 # Request a one-time pairing code from the loopback admin listener.
 pairing-code:
   curl --fail --silent --show-error -X POST http://127.0.0.1:38401/v1/pairing
