@@ -1545,6 +1545,43 @@ mod tests {
         assert!(driver.contains("podman-compose is not installed"));
     }
 
+    /// The RomM runbook (`docs/retroarch-integration.md`, shipped as
+    /// `/usr/share/doc/hearthdeck/ROMM.md`) is what `systemctl status romm.service`
+    /// points a stuck operator at. It went stale once — it still described the
+    /// `ExecCondition=/usr/bin/test -f` skip and knew nothing about discovery or
+    /// the driver — which is why the same bug was re-derived and re-fixed. Keep
+    /// the doc naming the design it documents so drift fails the build instead of
+    /// someone's evening.
+    #[test]
+    fn the_romm_runbook_stays_true_to_the_units_it_documents() {
+        let doc = include_str!("../../../docs/retroarch-integration.md");
+        let service = include_str!("../../../deploy/systemd/romm.service");
+        let package = include_str!("../../../packaging/arch/PKGBUILD");
+
+        // The doc the unit points at is the doc the package ships.
+        assert!(service.contains("Documentation=file:///usr/share/doc/hearthdeck/ROMM.md"));
+        assert!(package.contains("docs/retroarch-integration.md"));
+
+        // Every moving part of the chain has to be in there...
+        for artifact in [
+            "hearthdeck-romm-discover",
+            "hearthdeck-romm ready",
+            "hearthdeck-romm up",
+            "romm.path",
+            "TimeoutStartSec=900",
+        ] {
+            assert!(
+                doc.contains(artifact),
+                "ROMM.md no longer names {artifact}; the runbook has drifted from the units"
+            );
+        }
+
+        // ...and the mechanism that was replaced is described as replaced, so a
+        // reader does not take the old silent-skip design as current.
+        assert!(doc.contains("Why the condition is `ready`, not `test -f`"));
+        assert!(doc.contains("Why `up` never waits"));
+    }
+
     #[test]
     fn renders_structured_journal_messages_for_the_diagnostics_view() {
         let entry = super::parse_journal_entry(

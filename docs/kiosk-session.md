@@ -10,7 +10,9 @@
 > descriptions no longer match the shipped session.
 >
 > For the current session, unit, and logging traps — and the checklist to avoid
-> them — read `docs/units-and-logs.md` instead.
+> them — read `docs/units-and-logs.md` instead. "What actually runs, in order"
+> below is kept current; the incident narrative and the Gamescope-launching
+> sections are the historical part, kept for the lessons.
 
 This document exists because this session broke, got "fixed" three different
 ways by three different guesses at which commit actually worked, and each
@@ -26,66 +28,73 @@ Display manager (SDDM/GDM/greetd/...)
   -> reads /usr/share/wayland-sessions/hearthdeck.desktop
   -> Exec = /usr/lib/hearthdeck/hearthdeck-session
        -> export XDG_CURRENT_DESKTOP/XDG_SESSION_DESKTOP/XDG_SESSION_TYPE
-       -> systemctl --user import-environment (same three variables)
+       -> systemctl --user start dbus.socket        (cosmic-session is not run)
+       -> systemctl --user import-environment (those three plus DBUS_SESSION_BUS_ADDRESS)
        -> systemctl --user daemon-reload
-       -> systemctl --user start hearthdeck-kiosk.target
-            -> Requires=/After= hearthdeck.target
-                -> Wants= hearthdeck-bridge.socket, hearthdeck-daemon.service,
-                    hearthdeck-input.service
-       -> systemctl --user try-restart hearthdeck-bridge.service
-       -> exec gamescope --backend drm --fullscreen --force-grab-cursor -- \
-          /usr/bin/hearthdeck
-            -> Hearthdeck is Gamescope's ONLY child process
-          -> The Hearthdeck launcher imports
-               DISPLAY/WAYLAND_DISPLAY into systemd --user too, and
-               try-restarts hearthdeck-bridge.service again - this can only
-               happen here, not in the script above, because Gamescope only
-               assigns these once it starts, after the script's `exec` has
-               already handed off control
+       -> systemctl --user start hearthdeck.target
+            -> Wants= hearthdeck-log.service, hearthdeck-bridge.socket,
+                hearthdeck-daemon.service, hearthdeck-input.service,
+                hearthdeck-romm-discover.service, romm.service, romm.path
+                 -> hearthdeck-romm-discover.service resolves the RomM compose
+                     file and writes ~/.config/hearthdeck/romm.env *before* its
+                     consumers start
+                 -> romm.service  -> `hearthdeck-romm up` -> podman-compose up -d
+                 -> romm.path     -> re-starts romm.service if the compose file
+                     lands after login (external mount still coming up)
+                 -> hearthdeck-daemon.service loads the same romm.env, so the
+                     RomM library/resource roots follow the resolved path
+       -> systemctl --user try-restart hearthdeck-daemon.service /-bridge.service
+       -> systemctl --user start hearthdeck-overlay.service
+       -> exec cosmic-comp /usr/bin/hearthdeck-frontend
+            -> the Hearthdeck frontend is cosmic-comp's ONLY client
 ```
 
-`hearthdeck-kiosk.target` exists as this session's single, dedicated,
-documented hook for everything it needs started before Gamescope launches
-Hearthdeck — see that unit file's own description. `hearthdeck.target`
-stays the general-purpose target started explicitly by each Hearthdeck
-launcher or session; the Kiosk session's own additional startup dependencies
-(network/Bluetooth adapters, etc.) get added to
-`hearthdeck-kiosk.target`, never to the session script itself. The session
-script's `systemctl --user start` call intentionally still ends in `|| true`
-— Hearthdeck launches either way so its own system-health screen can report
-a backend problem, rather than the whole session refusing to start over a
-service hiccup — but its output must never be redirected to `/dev/null`; see
-"Do not" below.
+`hearthdeck.target` is this session's single, dedicated, documented hook for
+everything that has to be started before `cosmic-comp` launches the frontend —
+see that unit's own `Wants=` line for the current list. Anything the session
+needs started belongs there (or behind one of the units it wants), **never** in
+the session script itself. RomM is the newest member and the most involved: its
+full trigger chain, why the discovery step must run first, and why its service is
+never allowed to wait for a slow mount are documented in
+`docs/retroarch-integration.md`, "Starting the RomM server itself" (shipped as
+`/usr/share/doc/hearthdeck/ROMM.md`, the file `romm.service`'s own
+`Documentation=` points at).
 
-The `import-environment`/`try-restart` pair exists because a plain shell
-`export` only changes this script's own process environment — it never
-reaches the systemd `--user` manager's own activation environment, which is
-what every unit it starts actually inherits. `hearthdeck-bridge` reads
-`XDG_CURRENT_DESKTOP` from its own process environment to decide whether
-it's running inside the Kiosk session at all (`is_kiosk_session()` in
-`services/hearthdeck-bridge/src/platform/linux.rs`), which controls whether
-a launched app/game is assigned to `hearthdeck-kiosk.slice`. Without the
-import, the bridge would silently believe it's running outside the Kiosk
-session — even while genuinely inside it — and skip that assignment.
+The session script's `systemctl --user start hearthdeck.target` deliberately does
+not abort the session when it fails — Hearthdeck launches anyway so its own
+system-health view can report the backend problem, rather than the whole login
+refusing to start over one service. Its output must never be sent to
+`/dev/null`.
 
-The same import happens a second time, for different variables, from a
-different place: Hearthdeck's own native startup imports
-`DISPLAY`/`WAYLAND_DISPLAY` into systemd `--user` too. This has to
-happen there and not in the session script, because Gamescope only assigns
-those two once it starts — which is after the script has already `exec`'d
-into it and lost the ability to run anything else. Without this second
-import, every launched app/game would have no display to connect to at all
-(confirmed on real hardware: `hearthdeck-bridge` had no `WAYLAND_DISPLAY` in
-its own environment during the Kiosk session, at all, until this was added).
+The `import-environment` step exists because a plain shell `export` only changes
+this script's own process environment — it never reaches the systemd `--user`
+manager's activation environment, which is what every unit it starts actually
+inherits. `dbus.socket` is started here for the same family of reason and one
+more: this session does not run `cosmic-session`, so nothing else starts a
+session bus, and without it every `cosmic_config` watcher fails in a loop (see
+`docs/units-and-logs.md` Rule 9).
 
-That's the whole session: one script, one `exec`, three gamescope flags, one
-app. Nothing else runs *as the outer compositor* — no desktop compositor, no
-panel/dock/launcher. Launched apps, RetroArch, and every other current
-launcher connect directly to this same session as ordinary clients (see
-"Launching apps and games" below for why that's different from, and safer
-than, adding a second compositor process); nothing new joins this outer
-Gamescope instance as *another Gamescope process*, which is the specific
-thing that caused the incident below and remains the hard rule.
+The display environment reaches launched apps a second way, and not from this
+script: `cosmic-comp` assigns `WAYLAND_DISPLAY`/`DISPLAY` when it starts — after
+the script has already `exec`'d into it and lost the ability to run anything else
+— so `hearthdeck-bridge` reads them from its own process environment and forwards
+them, with the session-identity variables, explicitly on every `systemd-run`
+launch (`systemd-run` does not inherit the caller's environment). That forwarding
+is correct inside and outside Hearthdeck, so it does not branch on the session.
+
+`hearthdeck-bridge` also reads `XDG_CURRENT_DESKTOP`, which this script sets to
+`hearthdeck:COSMIC`. When it names `hearthdeck`, a launched app or game is placed
+in `hearthdeck-kiosk.slice` (`is_kiosk_session()` in
+`services/hearthdeck-bridge/src/platform/linux.rs`). The `hearthdeck-kiosk` in
+that slice name is a leftover of an earlier session design; the slice is still
+real and still assigned — only the name is historical.
+
+That's the whole session: one script, one `exec`, `cosmic-comp` with the
+Hearthdeck frontend as its only client. Nothing else runs *as the outer
+compositor* — no panel, dock, or launcher. Launched apps, RetroArch, and every
+other launcher connect directly to this same compositor as ordinary Wayland
+clients (see "Launching apps and games" below for why that is different from,
+and safer than, adding a second compositor process).
 
 ## Autologin: getting into this session without a keyboard
 

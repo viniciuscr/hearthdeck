@@ -273,39 +273,108 @@ disagrees.
 ## Starting the RomM server itself
 
 RomM is an external self-hosted server (here a Podman Compose stack), not
-something Hearthdeck packages. Its optional Compose lifecycle is managed by a
-systemd user unit when configured.
-Whoever runs it needs it started before it's useful — at session start or at
-boot, not by hand after every login.
+something Hearthdeck packages. Its optional Compose lifecycle is managed by
+`systemd --user` units, and it has to be up whenever a Hearthdeck session is — a
+TV box has no shell to run `podman-compose up` in by hand.
 
 **Decided: this is a systemd unit, not daemon code.** Every other
-"start/stop/supervise a host process" concern in this project is a systemd
-unit (`hearthdeck.target`, `hearthdeck-bridge.socket`, the Kiosk session
-scripts) — never an imperative shell-out embedded in the daemon or bridge.
+"start/stop/supervise a host process" concern in this project is a systemd unit
+(`hearthdeck.target`, `hearthdeck-bridge.socket`, the session script) — never an
+imperative shell-out embedded in the daemon or bridge.
 `docs/product-foundations.md`'s own rule is explicit: "the daemon... must not
-contain host-specific command construction." Wrapping `podman-compose up -d`
-in a daemon startup routine would be exactly that, plus it would reinvent
-what systemd already does correctly for free: proper start/stop ordering and
-boot/session integration.
+contain host-specific command construction." Wrapping `podman-compose up -d` in a
+daemon startup routine would be exactly that, plus it would reinvent what systemd
+already does correctly for free: start/stop ordering and session integration. So
+the daemon *reports* RomM's status and can ask systemd to restart it
+(`diagnostics::restart_romm_service`, a fixed unit constant); it never starts the
+stack itself.
 
-`deploy/systemd/romm.service` is an optional `systemd --user` oneshot unit
-(`RemainAfterExit=yes`) wrapping `podman-compose up -d`/`down`. The Arch
-package installs it and `hearthdeck.target` wants it. It defaults to
-`/mnt/external/romM/podman-compose.yaml`, skips cleanly when that file is absent,
-and accepts an optional `ROMM_COMPOSE_FILE` override from
-`~/.config/hearthdeck/romm.env`. The daemon loads the same file, so the RomM
-library and resource roots follow the override instead of the packaged default. This starts RomM with the active Hearthdeck
-user session rather than system boot, and avoids putting host command
-construction in the daemon.
+### What triggers what, in order
 
-`deploy/systemd/romm.path` closes the one gap in that: the compose file is often
-on an external mount that is not ready when the session starts, and a
-`systemd --user` unit cannot order itself after a system mount. The unit above
-would skip and never retry; the path unit watches the default path and starts
-romm.service the moment it appears. On a machine with no RomM the file never
-appears, so the watcher is inert.
+```
+hearthdeck-session
+  └─ systemctl --user start hearthdeck.target
+       ├─ hearthdeck-romm-discover.service        (oneshot, Before= the two below)
+       │    └─ /usr/lib/hearthdeck/hearthdeck-romm-discover
+       │         resolves the compose file, prints every candidate it checks,
+       │         writes ROMM_COMPOSE_FILE into ~/.config/hearthdeck/romm.env
+       ├─ romm.service                            (oneshot, RemainAfterExit=yes)
+       │    Environment=ROMM_COMPOSE_FILE=<packaged default>
+       │    EnvironmentFile=-~/.config/hearthdeck/romm.env   (overrides it)
+       │    ExecCondition=/usr/lib/hearthdeck/hearthdeck-romm ready
+       │    ExecStart    =/usr/lib/hearthdeck/hearthdeck-romm up     # podman-compose ... up -d
+       │    ExecStop     =/usr/lib/hearthdeck/hearthdeck-romm down
+       │    Wants=romm.path hearthdeck-romm-discover.service
+       ├─ romm.path                               (watches the *default* path)
+       │    Unit=romm.service  -> starts the stack when a late file appears
+       └─ hearthdeck-daemon.service
+            loads the same romm.env, so the RomM library and resource roots
+            follow the resolved path instead of the packaged default
+```
 
-Two details of that unit are deliberate and easy to get wrong:
+Every edge in that graph was a bug before it existed, so none of it is
+incidental:
+
+- **Discovery runs first** (`Before=hearthdeck-daemon.service romm.service`).
+  `EnvironmentFile=` is only read when a unit starts, so a consumer that was
+  already running keeps its old value; ordering is the only thing that makes both
+  readers agree on the same deployment.
+- **`romm.service` wants discovery and `romm.path` itself**, not only the target.
+  A host running an older package has an older `hearthdeck.target` whose `Wants=`
+  line predates them; arming a helper from the unit that is actually wanted is
+  `docs/units-and-logs.md` Rule 3.
+- **`romm.path` watches only the hardcoded default path.** A `.path` unit cannot
+  read an `EnvironmentFile`, so an override in `romm.env` is not watched. That is
+  acceptable because a configured path is normally under the home directory,
+  which is mounted before the session starts — there is no race to close.
+
+### Where the compose file comes from
+
+Which compose file exists, and whether the mount holding it is up yet, is *host*
+state: it cannot be decided at package install, and a production box will not
+"just export the right variable". So the session resolves it every time, in this
+order (`packaging/arch/hearthdeck-romm-discover`):
+
+1. the path already in `~/.config/hearthdeck/romm.env`, if it is still a file;
+2. a list of likely locations (`$HOME/Games/romM`, `$HOME/romM`, `$HOME/romm`,
+   `/mnt/external/romM`, `/srv/romM`, `/opt/romM`);
+3. the compose file an existing stack names in its podman container labels — the
+   case no fixed list can cover.
+
+Every candidate is printed, found or not, and the winner is written back to
+`romm.env`. One paste of `~/hearthdeck.log` then answers "where did it look"
+without anyone running a command. When nothing is found, discovery says so and
+exits 0: not finding RomM is a normal outcome on most hosts, not a failure of the
+session.
+
+### Why the condition is `ready`, not `test -f`
+
+The unit used to carry `ExecCondition=/usr/bin/test -f ${ROMM_COMPOSE_FILE}`. A
+non-zero `ExecCondition=` is *not* a failure: it leaves the unit `inactive` and
+retries nothing, while `ExecStopPost=` still runs — so `~/hearthdeck.log` showed
+only `RomM Podman Compose stack stopped`. "The external drive is two seconds
+late" and "this host has no RomM" were therefore indistinguishable, and on a host
+whose compose file was not at the packaged default the condition failed on every
+boot, silently, forever.
+
+`hearthdeck-romm ready` skips only when there is genuinely no deployment here: no
+resolved file, no discovery result, and no deployment directory. A file that is
+merely late is `up`'s business, and `up` logs that it is late instead of failing
+the session. The general rule is `docs/units-and-logs.md` Rule 1: only a
+*permanent* fact may go in a condition.
+
+### Why `up` never waits
+
+`hearthdeck.target` lists `romm.service` in `Wants=`, and **starting a target
+waits for its oneshot dependencies to exit**. Any wait inside `up` — for the
+mount, for the file — is a wait before `cosmic-comp` launches, with a blank
+screen as the symptom. Waiting is unnecessary anyway: `romm.path` fires
+`romm.service` the moment the file appears, and because the discovery oneshot has
+no `RemainAfterExit`, starting the service again re-runs discovery, which finds
+and records the file. `TimeoutStartSec=900` covers the one thing allowed to make
+the session wait: `podman-compose up -d` actually converging the stack.
+
+### Two details of `romm.service` are deliberate and easy to get wrong
 
 - **It has no restart policy.** `podman-compose up -d` converges a stack by
   *recreating* any container whose config differs from the compose files —
@@ -315,11 +384,11 @@ Two details of that unit are deliberate and easy to get wrong:
   here turned one failed start into a loop that tore down a running stack and
   left its containers `Created`. A failure now stays failed and visible.
 - **`ROMM_COMPOSE_ARGS` carries extra argv, not a file path.** It holds
-  additional `podman-compose` arguments (typically extra `-f` override files)
-  and relies on systemd's *unbraced* `$VAR` expansion, which splits the value
-  on whitespace and drops the argument entirely when unset — so the
-  no-override case passes exactly `-f <base>` and nothing else. A `${VAR}`
-  spelling would pass one empty argument and break it. Compose overrides are
+  additional `podman-compose` arguments (typically extra `-f` override files).
+  The driver passes it *unquoted* — `${ROMM_COMPOSE_ARGS:-}` — so the value is
+  split on whitespace and dropped entirely when unset or empty. The no-override
+  case therefore passes exactly `-f <base>` and nothing else; a quoted
+  `"${VAR}"` would pass one empty argument and break it. Compose overrides are
   how a host whose podman cannot open `/dev/net/tun` (podman's default `pasta`
   networking needs it; `tun` is a module on most kernels) switches the stack to
   `network_mode: host` without forking the base compose file. Example

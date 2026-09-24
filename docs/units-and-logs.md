@@ -141,6 +141,12 @@ look" without anyone running a command.
 Two rules follow for anything similar: resolve host state at session start, and
 print the search, not just the result.
 
+The end-to-end trigger chain for the RomM deployment — which unit starts what, in
+what order, and why each edge exists — is documented where the unit itself points:
+`docs/retroarch-integration.md`, "Starting the RomM server itself" (shipped as
+`/usr/share/doc/hearthdeck/ROMM.md`). Read it before changing `romm.service`,
+`romm.path`, or either `/usr/lib/hearthdeck/hearthdeck-romm*` script.
+
 ## Rule 9 — a bare compositor session must supply what a desktop session would
 
 This session runs `cosmic-comp` directly instead of `cosmic-session`, so anything

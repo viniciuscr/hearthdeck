@@ -23,7 +23,11 @@ CachyOS. It installs:
   `/usr/lib/modules-load.d/hearthdeck-uinput.conf`: active-seat access to the
   virtual input device and boot-time loading of the `uinput` kernel module.
 - `/usr/share/doc/hearthdeck/romm.env.example`: optional path override for the
-  external RomM Compose deployment. `/usr/lib/hearthdeck/hearthdeck-romm-discover`
+  external RomM Compose deployment. The end-to-end session trigger chain — which
+  unit starts what, in what order, and why — is in
+  `/usr/share/doc/hearthdeck/ROMM.md`, "Starting the RomM server itself"; that is
+  the file `systemctl --user status romm.service` and `Documentation=` point at.
+  `/usr/lib/hearthdeck/hearthdeck-romm-discover`
   runs at session start and finds the compose file itself (configured path, likely
   locations, then a running stack's podman labels), writing it to
   `~/.config/hearthdeck/romm.env`, which both `romm.service` and the daemon read.
