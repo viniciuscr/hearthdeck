@@ -22,7 +22,20 @@ export XDG_SESSION_TYPE=wayland
 # This session starts its own local daemon and pairs with it at runtime.
 unset HEARTHDECK_BACKEND_URL HEARTHDECK_PAIRING_TOKEN
 
-systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE || true
+# A full COSMIC session gets its D-Bus from cosmic-session, which this session
+# deliberately does not run. Without a session bus every cosmic_config watcher
+# fails: the frontend and the overlay both loop on "Failed to create watcher for
+# com.system76.*", the XDG Settings Portal never answers, and anything that needs
+# the bus breaks. systemd --user ships dbus.socket for exactly this, and starting
+# it also sets DBUS_SESSION_BUS_ADDRESS in the manager's own environment.
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+  systemctl --user start dbus.socket || log "could not start the user D-Bus socket"
+fi
+# `set-environment` only reaches the manager. cosmic-comp and its client are this
+# process's children, so they need it exported here too.
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus}"
+
+systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE DBUS_SESSION_BUS_ADDRESS || true
 
 # Critical: daemon-reload must come after import-environment to make systemd re-read
 # units with the new environment. Without it, hearthdeck.target and its services
@@ -54,7 +67,7 @@ fi
 # WAYLAND_DISPLAY/DISPLAY from the greeter is one way the client connects to the
 # wrong socket. This line is what makes that visible instead of a bare "session
 # ended immediately".
-log "env WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<unset>} DISPLAY=${DISPLAY:-<unset>} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-<unset>}"
+log "env WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<unset>} DISPLAY=${DISPLAY:-<unset>} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-<unset>} DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-<unset>}"
 
 if [[ ! -x "$launch_app" ]]; then
   # Never end the session over a missing client. cosmic-comp exits when its child

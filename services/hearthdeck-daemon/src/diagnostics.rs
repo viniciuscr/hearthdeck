@@ -1446,6 +1446,19 @@ mod tests {
     }
 
     #[test]
+    fn the_session_starts_the_user_session_bus() {
+        let session = include_str!("../../../packaging/arch/hearthdeck-session");
+
+        // cosmic-session is not run, so nothing else starts the session bus. Without
+        // it every cosmic_config watcher fails in a loop, and a client that exits
+        // over it takes the compositor (and so the whole login) with it.
+        assert!(session.contains("systemctl --user start dbus.socket"));
+        assert!(session.contains(
+            "import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE DBUS_SESSION_BUS_ADDRESS"
+        ));
+    }
+
+    #[test]
     fn romm_discovery_runs_before_its_consumers_and_is_pulled_in_by_them() {
         let discover = include_str!("../../../deploy/systemd/hearthdeck-romm-discover.service");
         let romm = include_str!("../../../deploy/systemd/romm.service");

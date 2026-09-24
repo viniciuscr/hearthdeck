@@ -134,6 +134,22 @@ look" without anyone running a command.
 Two rules follow for anything similar: resolve host state at session start, and
 print the search, not just the result.
 
+## Rule 9 — a bare compositor session must supply what a desktop session would
+
+This session runs `cosmic-comp` directly instead of `cosmic-session`, so anything
+`cosmic-session` would have started is this script's job. The one that bit us is
+the **session D-Bus**: without it every `cosmic_config` watcher fails in a loop
+(`Failed to create watcher for com.system76.*`), the XDG Settings Portal never
+answers, and a client that gives up because of it takes the compositor down with
+it — which is a login that bounces straight back to the greeter, since cosmic-comp
+exits when its child exits. `systemctl --user start dbus.socket` then
+`import-environment DBUS_SESSION_BUS_ADDRESS` is the fix; the export is needed as
+well because `set-environment` only reaches the manager, not this process's
+children.
+
+When something behaves as if a desktop service is missing, check what
+`cosmic-session` starts and decide deliberately whether this session needs it.
+
 ## Logging: how `~/hearthdeck.log` is built, and how to add a source
 
 `hearthdeck-log.service` truncates the file at session start and runs
