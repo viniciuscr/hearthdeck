@@ -133,30 +133,32 @@ impl Database {
         .await?;
         // Existing development databases predate source ownership. SQLite has
         // no `ADD COLUMN IF NOT EXISTS`, so a duplicate-column error is the
-        // expected no-op case after the first migration.
-        let _ = sqlx::query(
+        // expected no-op case after the first migration; `add_column` tolerates
+        // exactly that error and propagates every other one.
+        add_column(
+            &self.pool,
             "ALTER TABLE library_items ADD COLUMN source_id TEXT NOT NULL DEFAULT 'legacy'",
         )
-        .execute(&self.pool)
-        .await;
-        let _ = sqlx::query("ALTER TABLE library_items ADD COLUMN launch_id TEXT")
-            .execute(&self.pool)
-            .await;
-        let _ = sqlx::query(
+        .await?;
+        add_column(
+            &self.pool,
+            "ALTER TABLE library_items ADD COLUMN launch_id TEXT",
+        )
+        .await?;
+        add_column(
+            &self.pool,
             "ALTER TABLE user_settings ADD COLUMN backdrop_mode TEXT NOT NULL DEFAULT 'solid' CHECK (backdrop_mode IN ('solid', 'edge_wash', 'quiet_grid'))",
         )
-        .execute(&self.pool)
-        .await;
+        .await?;
         // Collections gained an owner: who may edit one. The seeded rows predate
         // it, and their owner is the only thing about them that is not already
         // implied by their slug and role.
-        let _ =
-            sqlx::query("ALTER TABLE collections ADD COLUMN owner TEXT NOT NULL DEFAULT 'user'")
-                .execute(&self.pool)
-                .await;
-        let _ = sqlx::query("ALTER TABLE collections ADD COLUMN name TEXT")
-            .execute(&self.pool)
-            .await;
+        add_column(
+            &self.pool,
+            "ALTER TABLE collections ADD COLUMN owner TEXT NOT NULL DEFAULT 'user'",
+        )
+        .await?;
+        add_column(&self.pool, "ALTER TABLE collections ADD COLUMN name TEXT").await?;
         // Seeded only now, after `owner` and `name` exist. On a database whose
         // `collections` table predates those columns, the `CREATE TABLE IF NOT
         // EXISTS` above is a no-op, so a seed INSERT earlier in this function
@@ -172,9 +174,9 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
-        let _ = sqlx::query("UPDATE collections SET owner = 'system' WHERE slug = 'last-played'")
+        sqlx::query("UPDATE collections SET owner = 'system' WHERE slug = 'last-played'")
             .execute(&self.pool)
-            .await;
+            .await?;
         // Versions 1 and 2 rebuild `user_settings` with the same column list; the
         // second was a copy of the first. Recording both keeps the ledger
         // continuous for a future `> N` check, but the table is rewritten at most
@@ -213,11 +215,11 @@ impl Database {
         // here, below the versioned rebuilds: those rebuild the table from a fixed
         // column list, so a column added before them is dropped again on any
         // database that has not yet applied them.
-        let _ = sqlx::query(
+        add_column(
+            &self.pool,
             "ALTER TABLE user_settings ADD COLUMN categorization_enabled INTEGER NOT NULL DEFAULT 0",
         )
-        .execute(&self.pool)
-        .await;
+        .await?;
         sqlx::query(
             "INSERT OR IGNORE INTO user_settings (id, theme_mode, backdrop_mode, revision, updated_at) VALUES (1, 'noir', 'solid', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         )
@@ -228,6 +230,22 @@ impl Database {
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+}
+
+/// Runs an `ALTER TABLE ... ADD COLUMN`, tolerating only the one benign failure.
+///
+/// SQLite has no `ADD COLUMN IF NOT EXISTS`, so a column that is already present
+/// fails with "duplicate column name" — the expected no-op on every database past
+/// its first migration. Every other error is a real migration problem; discarding
+/// it with `let _ =`, as this used to, turned a locked database or a type mismatch
+/// into a later, unexplained query failure.
+async fn add_column(pool: &SqlitePool, statement: &'static str) -> Result<(), sqlx::Error> {
+    match sqlx::query(statement).execute(pool).await {
+        Err(sqlx::Error::Database(error)) if error.message().contains("duplicate column name") => {
+            Ok(())
+        }
+        outcome => outcome.map(|_| ()),
     }
 }
 

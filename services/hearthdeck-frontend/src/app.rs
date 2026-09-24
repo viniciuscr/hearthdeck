@@ -3527,6 +3527,47 @@ impl HearthDeck {
         (self.menu.is_open() || self.filter_cursor.is_some()).then(|| self.gamepad_move(message))
     }
 
+    /// The page dispatch every D-pad direction shares.
+    ///
+    /// An open overlay or filter sidebar owns the direction first; then Settings,
+    /// Dashboard and Details each move focus their own way. `None` means none of
+    /// them owns it and the caller falls through to the library grid — the only
+    /// place the directions genuinely differ, and so the only part left in the
+    /// caller. Before this, that prelude was repeated in all four arms and had to
+    /// be kept in step by hand.
+    fn navigate_page(&mut self, message: Message, delta: i32) -> Option<Task<Message>> {
+        let vertical = matches!(message, Message::PrevRow | Message::NextRow);
+        if let Some(task) = self.direction_to_overlay(message) {
+            return Some(task);
+        }
+        match self.page {
+            Page::Settings => Some(self.settings_move(delta)),
+            Page::Dashboard => {
+                let target = if vertical {
+                    self.dashboard_vertical_target(delta)
+                } else {
+                    self.dashboard_horizontal_target(delta)
+                };
+                Some(match target {
+                    Some(id) => self.focus_dashboard_id(id),
+                    None => Task::none(),
+                })
+            }
+            Page::Details => {
+                let target = if vertical {
+                    self.details_vertical_target(delta)
+                } else {
+                    self.details_horizontal_target(delta)
+                };
+                Some(match target {
+                    Some(focus) => self.focus_details(focus),
+                    None => Task::none(),
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// Handle the gamepad confirm (A) button.
     fn gamepad_confirm(&mut self) -> Task<Message> {
         if self.launch_state.error().is_some() {
@@ -4150,23 +4191,8 @@ impl cosmic::Application for HearthDeck {
             },
 
             Message::PrevRow => {
-                if let Some(task) = self.direction_to_overlay(Message::PrevRow) {
+                if let Some(task) = self.navigate_page(Message::PrevRow, -1) {
                     return task;
-                }
-                if self.page == Page::Settings {
-                    return self.settings_move(-1);
-                }
-                if self.page == Page::Dashboard {
-                    let Some(id) = self.dashboard_vertical_target(-1) else {
-                        return Task::none();
-                    };
-                    return self.focus_dashboard_id(id);
-                }
-                if self.page == Page::Details {
-                    let Some(focus) = self.details_vertical_target(-1) else {
-                        return Task::none();
-                    };
-                    return self.focus_details(focus);
                 }
                 let mut i = self
                     .focused_id
@@ -4200,23 +4226,8 @@ impl cosmic::Application for HearthDeck {
                 return Task::batch(tasks);
             }
             Message::NextRow => {
-                if let Some(task) = self.direction_to_overlay(Message::NextRow) {
+                if let Some(task) = self.navigate_page(Message::NextRow, 1) {
                     return task;
-                }
-                if self.page == Page::Settings {
-                    return self.settings_move(1);
-                }
-                if self.page == Page::Dashboard {
-                    let Some(id) = self.dashboard_vertical_target(1) else {
-                        return Task::none();
-                    };
-                    return self.focus_dashboard_id(id);
-                }
-                if self.page == Page::Details {
-                    let Some(focus) = self.details_vertical_target(1) else {
-                        return Task::none();
-                    };
-                    return self.focus_details(focus);
                 }
                 let mut i: i32 = self
                     .focused_id
@@ -4251,23 +4262,8 @@ impl cosmic::Application for HearthDeck {
                 return Task::batch(tasks);
             }
             Message::PrevCol => {
-                if let Some(task) = self.direction_to_overlay(Message::PrevCol) {
+                if let Some(task) = self.navigate_page(Message::PrevCol, -1) {
                     return task;
-                }
-                if self.page == Page::Settings {
-                    return self.settings_move(-1);
-                }
-                if self.page == Page::Dashboard {
-                    let Some(id) = self.dashboard_horizontal_target(-1) else {
-                        return Task::none();
-                    };
-                    return self.focus_dashboard_id(id);
-                }
-                if self.page == Page::Details {
-                    let Some(focus) = self.details_horizontal_target(-1) else {
-                        return Task::none();
-                    };
-                    return self.focus_details(focus);
                 }
                 let Some(i) = self.focused_grid_index() else {
                     return self.focus_grid_index(0);
@@ -4278,23 +4274,8 @@ impl cosmic::Application for HearthDeck {
                 return self.focus_grid_index(i - 1);
             }
             Message::NextCol => {
-                if let Some(task) = self.direction_to_overlay(Message::NextCol) {
+                if let Some(task) = self.navigate_page(Message::NextCol, 1) {
                     return task;
-                }
-                if self.page == Page::Settings {
-                    return self.settings_move(1);
-                }
-                if self.page == Page::Dashboard {
-                    let Some(id) = self.dashboard_horizontal_target(1) else {
-                        return Task::none();
-                    };
-                    return self.focus_dashboard_id(id);
-                }
-                if self.page == Page::Details {
-                    let Some(focus) = self.details_horizontal_target(1) else {
-                        return Task::none();
-                    };
-                    return self.focus_details(focus);
                 }
                 let i = self.focused_grid_index().unwrap_or(0);
                 let Some(last) = self.entry_ids.len().checked_sub(1) else {

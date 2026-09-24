@@ -70,25 +70,17 @@ async fn main() -> Result<()> {
         state.catalog.clone(),
         state.events.clone(),
     );
+    // Kick off the first scan before the service moves into the state, so there is
+    // no `Option` left to unwrap afterwards — the value is right here.
+    discovery.request_all().await;
     let state = AppState::with_discovery(state, discovery);
-    state
-        .discovery
-        .as_ref()
-        .expect("discovery service must be registered")
-        .request_all()
-        .await;
     let enrichment = enrichment::EnrichmentService::start(
         enrichment_providers(),
         state.catalog.clone(),
         state.events.clone(),
     );
+    enrichment.request_all().await;
     let state = AppState::with_enrichment(state, enrichment);
-    state
-        .enrichment
-        .as_ref()
-        .expect("enrichment service must be registered")
-        .request_all()
-        .await;
     // Categorization is wired unconditionally: whether a scan ever runs is the
     // user's preference in their own settings, not something a deployment is
     // configured for. Nothing here loads a checkpoint — a scan runs in the

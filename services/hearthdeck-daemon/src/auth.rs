@@ -16,7 +16,16 @@ impl AuthRepository {
         &self,
         code_hash: String,
     ) -> Result<DateTime<Utc>, sqlx::Error> {
-        let expires_at = Utc::now() + Duration::minutes(5);
+        let now = Utc::now();
+        // Drop codes that can no longer be redeemed before adding another: a
+        // consumed one is spent, and an expired one can never match again. Without
+        // this the table grows for the life of the install, one row per pairing
+        // attempt.
+        sqlx::query("DELETE FROM pairing_sessions WHERE consumed_at IS NOT NULL OR expires_at < ?")
+            .bind(now.to_rfc3339())
+            .execute(&self.pool)
+            .await?;
+        let expires_at = now + Duration::minutes(5);
         sqlx::query("INSERT INTO pairing_sessions (code_hash, expires_at) VALUES (?, ?)")
             .bind(code_hash)
             .bind(expires_at.to_rfc3339())
@@ -95,4 +104,49 @@ impl AuthRepository {
 
 pub struct PairedClient {
     pub client_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::Row;
+
+    use super::AuthRepository;
+    use crate::database::Database;
+
+    #[tokio::test]
+    async fn creating_a_code_prunes_spent_and_expired_ones() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let auth = AuthRepository::new(database.pool().clone());
+
+        // One code redeemed, and one that has already expired.
+        auth.create_pairing_code("spent".to_owned()).await.unwrap();
+        sqlx::query(
+            "UPDATE pairing_sessions SET consumed_at = '2020-01-01T00:00:00Z' WHERE code_hash = 'spent'",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO pairing_sessions (code_hash, expires_at) VALUES (?, ?)")
+            .bind("expired")
+            .bind((chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339())
+            .execute(database.pool())
+            .await
+            .unwrap();
+
+        // Minting another prunes both, leaving only the live code.
+        auth.create_pairing_code("fresh".to_owned()).await.unwrap();
+
+        let remaining: Vec<String> = sqlx::query("SELECT code_hash FROM pairing_sessions")
+            .fetch_all(database.pool())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get::<String, _>("code_hash"))
+            .collect();
+        assert_eq!(remaining, vec!["fresh".to_owned()]);
+    }
 }

@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::io;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixDatagram as StdUnixDatagram, UnixStream as StdUnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -425,6 +426,13 @@ fn toggle_subscription() -> Subscription<()> {
                     return;
                 }
             };
+            // Match the bridge and input sockets: user-only. XDG_RUNTIME_DIR is
+            // already 0700, so this is defence in depth rather than the only guard.
+            if let Err(err) =
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            {
+                error!(?err, path = ?path, "hearthdeck-overlay: failed to restrict control socket");
+            }
             let mut buffer = [0; 16];
 
             loop {

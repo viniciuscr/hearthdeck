@@ -3,6 +3,7 @@ use std::{
     path::Path,
     process::Stdio,
     sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 
 use chrono::{DateTime, Datelike, Utc};
@@ -287,7 +288,7 @@ pub struct DiagnosticsSnapshot {
     pub logs: LogTail,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ServiceStatus {
     pub id: &'static str,
     pub unit: &'static str,
@@ -305,7 +306,7 @@ pub struct RommDiagnostic {
     pub error: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct LogTail {
     pub available: bool,
     pub error: Option<String>,
@@ -319,7 +320,7 @@ pub struct LogTail {
 /// of the general `daemon` tab instead of being dropped), and `romm` is
 /// synthesized locally from the periodic RomM connectivity check since RomM
 /// itself is an external server with no journal we can tail.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct LogEntry {
     pub timestamp: Option<String>,
     pub source: String,
@@ -327,9 +328,63 @@ pub struct LogEntry {
     pub message: String,
 }
 
+/// The one HTTP client the RomM calls share.
+///
+/// Each call used to build its own `reqwest::Client`, which means a fresh
+/// connection pool, DNS cache and TLS session for every request — and the
+/// frontend polls these endpoints several times a second. One client keeps the
+/// pool warm. The per-request timeout still lives on each request builder, so the
+/// differing deadlines below are unchanged.
+fn http() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
+/// How long the subprocess-derived half of a snapshot is reused.
+///
+/// `service_statuses` forks five `systemctl` processes and `recent_logs` one
+/// `journalctl`, and the frontend polls diagnostics while its screen is open. A
+/// few seconds of staleness is invisible on a status screen and keeps that poll
+/// from being a process-spawn storm.
+const SNAPSHOT_CACHE_TTL: Duration = Duration::from_secs(5);
+
+#[derive(Clone)]
+struct SubprocessSnapshot {
+    at: Instant,
+    services: Vec<ServiceStatus>,
+    logs: LogTail,
+}
+
+/// The service statuses and log tail, reused for [`SNAPSHOT_CACHE_TTL`].
+///
+/// The RomM half of the snapshot is deliberately *not* cached: it is a live
+/// connectivity check, and its whole point is to answer whether RomM responds now.
+async fn subprocess_snapshot() -> (Vec<ServiceStatus>, LogTail) {
+    static CACHE: OnceLock<Mutex<Option<SubprocessSnapshot>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    // Clone out rather than hold the guard across the forks below.
+    let cached = cache
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone();
+    if let Some(entry) = cached
+        && entry.at.elapsed() < SNAPSHOT_CACHE_TTL
+    {
+        return (entry.services, entry.logs);
+    }
+
+    let (services, logs) = tokio::join!(service_statuses(), recent_logs());
+    let fresh = SubprocessSnapshot {
+        at: Instant::now(),
+        services: services.clone(),
+        logs: logs.clone(),
+    };
+    *cache.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(fresh);
+    (services, logs)
+}
+
 pub async fn snapshot(settings: &SettingsRepository) -> DiagnosticsSnapshot {
-    let (services, logs, romm) =
-        tokio::join!(service_statuses(), recent_logs(), romm_diagnostic(settings));
+    let ((services, logs), romm) = tokio::join!(subprocess_snapshot(), romm_diagnostic(settings));
     DiagnosticsSnapshot {
         generated_at: Utc::now().to_rfc3339(),
         services,
@@ -365,7 +420,7 @@ pub async fn romm_games(
         .await
         .map_err(RommQueryError::Failed)?
         .ok_or(RommQueryError::NotConfigured)?;
-    let mut request = reqwest::Client::new()
+    let mut request = http()
         .get(format!("{}/api/roms", credentials.base_url))
         .query(&[
             ("limit", limit.to_string()),
@@ -419,7 +474,7 @@ pub async fn romm_rom(
         .await
         .map_err(RommQueryError::Failed)?
         .ok_or(RommQueryError::NotConfigured)?;
-    let response = reqwest::Client::new()
+    let response = http()
         .get(format!("{}/api/roms/{rom_id}", credentials.base_url))
         .header(reqwest::header::ACCEPT, "application/json")
         .bearer_auth(&credentials.token)
@@ -465,7 +520,7 @@ fn romm_request(
     method: reqwest::Method,
     path: &str,
 ) -> reqwest::RequestBuilder {
-    reqwest::Client::new()
+    http()
         .request(method, format!("{}{path}", credentials.base_url))
         .header(reqwest::header::ACCEPT, "application/json")
         .bearer_auth(&credentials.token)
@@ -636,7 +691,7 @@ pub async fn romm_asset(
         .await
         .map_err(RommQueryError::Failed)?
         .ok_or(RommQueryError::NotConfigured)?;
-    let response = reqwest::Client::new()
+    let response = http()
         .get(format!("{}{}", credentials.base_url, path))
         .bearer_auth(&credentials.token)
         .timeout(std::time::Duration::from_secs(10))
@@ -840,7 +895,7 @@ fn recent_romm_logs() -> Vec<LogEntry> {
 async fn query_romm(
     credentials: &RommCredentials,
 ) -> std::result::Result<Vec<RommPlatform>, RommQueryError> {
-    let response = reqwest::Client::new()
+    let response = http()
         .get(format!("{}/api/platforms", credentials.base_url))
         .header(reqwest::header::ACCEPT, "application/json")
         .bearer_auth(&credentials.token)

@@ -180,12 +180,29 @@ impl Default for FilterType {
 
 impl Ord for FilterType {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Two filters of the same shape compare by their contents, not as equal.
+        // Returning `Equal` for distinct `AppIds` broke the `Ord` contract against
+        // the derived `PartialEq` — `Ord` requires `cmp == Equal` exactly when the
+        // values are equal — which would make any sorted or `BTree`-backed use
+        // silently reorder or collapse entries.
         match (self, other) {
-            (FilterType::AppIds(_), FilterType::AppIds(_)) => std::cmp::Ordering::Equal,
+            (FilterType::AppIds(left), FilterType::AppIds(right)) => left.cmp(right),
+            (
+                FilterType::Categories {
+                    categories: left_categories,
+                    exclude: left_exclude,
+                    include: left_include,
+                },
+                FilterType::Categories {
+                    categories: right_categories,
+                    exclude: right_exclude,
+                    include: right_include,
+                },
+            ) => left_categories
+                .cmp(right_categories)
+                .then_with(|| left_exclude.cmp(right_exclude))
+                .then_with(|| left_include.cmp(right_include)),
             (FilterType::None, FilterType::None) => std::cmp::Ordering::Equal,
-            (FilterType::Categories { .. }, FilterType::Categories { .. }) => {
-                std::cmp::Ordering::Equal
-            }
             (FilterType::Categories { .. } | FilterType::None, FilterType::AppIds(_)) => {
                 std::cmp::Ordering::Less
             }
@@ -255,6 +272,18 @@ impl Ord for AppGroup {
         match (&self.filter, &other.filter) {
             (FilterType::AppIds(_), FilterType::AppIds(_)) => {
                 self.name.to_lowercase().cmp(&other.name.to_lowercase())
+            }
+            (
+                FilterType::Categories { categories, .. },
+                FilterType::Categories {
+                    categories: others, ..
+                },
+            ) => {
+                // A category tab is shown by its first category, so that is what
+                // it sorts on — matching the name comparison the other arms use.
+                let left = categories.first().unwrap_or(&self.name);
+                let right = others.first().unwrap_or(&other.name);
+                left.to_lowercase().cmp(&right.to_lowercase())
             }
             (FilterType::Categories { categories, .. }, FilterType::AppIds(_)) => {
                 if let Some(cat_name) = categories.first() {
@@ -852,6 +881,31 @@ mod tests {
     };
     use cosmic::desktop::{DesktopEntryData, fde::IconSource};
     use std::sync::Arc;
+
+    #[test]
+    fn filter_type_ordering_is_consistent_with_equality() {
+        // `Ord` must agree with the derived `PartialEq`: `cmp == Equal` exactly when
+        // the values are equal. It used to return `Equal` for any two `AppIds`, which
+        // would let a sorted or `BTree`-backed collection drop a distinct filter.
+        let a = FilterType::AppIds(vec!["a".to_owned()]);
+        let b = FilterType::AppIds(vec!["b".to_owned()]);
+        assert_ne!(a, b);
+        assert_ne!(a.cmp(&b), std::cmp::Ordering::Equal);
+        assert_eq!(a.cmp(&a.clone()), std::cmp::Ordering::Equal);
+
+        let left = FilterType::Categories {
+            categories: vec!["Media".to_owned()],
+            exclude: Vec::new(),
+            include: Vec::new(),
+        };
+        let right = FilterType::Categories {
+            categories: vec!["Games".to_owned()],
+            exclude: Vec::new(),
+            include: Vec::new(),
+        };
+        assert_ne!(left, right);
+        assert_ne!(left.cmp(&right), std::cmp::Ordering::Equal);
+    }
 
     fn entry(id: &str, categories: &[&str]) -> Arc<DesktopEntryData> {
         Arc::new(DesktopEntryData {

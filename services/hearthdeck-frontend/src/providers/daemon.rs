@@ -1360,6 +1360,10 @@ fn cache_icon(url: &str) -> Option<String> {
         return Some(cached.to_string_lossy().into_owned());
     }
 
+    // `ureq` is blocking, and that is deliberate: this function runs inside
+    // `spawn_blocking` (it reads and writes image files), so a blocking HTTP client
+    // is the honest choice. `reqwest` is async and would want a runtime handle this
+    // call does not have.
     let response = ureq::get(url).call().ok()?;
     let mut body = Vec::new();
     response

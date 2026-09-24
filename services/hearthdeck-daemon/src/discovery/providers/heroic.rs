@@ -366,15 +366,21 @@ fn memory_bytes(value: &str) -> Option<u64> {
 
 #[cfg(target_os = "linux")]
 fn system_memory_bytes() -> Option<u64> {
-    let memory_info = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let total_kib = memory_info
-        .lines()
-        .find_map(|line| line.strip_prefix("MemTotal:"))?
-        .split_whitespace()
-        .next()?
-        .parse::<u64>()
-        .ok()?;
-    Some(total_kib * 1024)
+    // Physical memory does not change while the daemon runs, and this is read once
+    // per discovered game; memoize it rather than re-reading `/proc/meminfo` N
+    // times for an N-game library.
+    static TOTAL: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *TOTAL.get_or_init(|| {
+        let memory_info = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let total_kib = memory_info
+            .lines()
+            .find_map(|line| line.strip_prefix("MemTotal:"))?
+            .split_whitespace()
+            .next()?
+            .parse::<u64>()
+            .ok()?;
+        Some(total_kib * 1024)
+    })
 }
 
 #[cfg(not(target_os = "linux"))]

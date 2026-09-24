@@ -133,6 +133,15 @@ struct RasterIconKey {
 
 static RASTER_ICON_CACHE: OnceLock<Mutex<HashMap<RasterIconKey, icon::Handle>>> = OnceLock::new();
 
+/// Cap on the rasterized-icon cache.
+///
+/// Each entry is a full RGBA tile — hundreds of KiB at the sizes the grid uses —
+/// so an unbounded map is a slow leak on a kiosk that browses a large RomM
+/// library. When it fills, the map is dropped wholesale rather than evicted one at
+/// a time: re-rasterizing is cheap next to the bookkeeping an LRU would need, and
+/// nothing holds a key across a clear (the caller has already cloned its handle).
+const RASTER_ICON_CACHE_CAP: usize = 256;
+
 /// Resolve an entry icon into an [`icon::Handle`], pre-rendering SVG icons to
 /// raw RGBA at `size` so the renderer never rasterizes vectors on the render
 /// thread (which froze page scrolling). PNGs are kept as-is (cheap to decode),
@@ -158,6 +167,9 @@ pub fn entry_icon_handle(source: &IconSource, size: u32) -> icon::Handle {
         icon::Data::Image(_) => base,
     };
 
+    if cache.len() >= RASTER_ICON_CACHE_CAP {
+        cache.clear();
+    }
     cache.insert(key, handle.clone());
 
     handle
