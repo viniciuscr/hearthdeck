@@ -20,6 +20,7 @@
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
+    process::Stdio,
     sync::Arc,
     time::Instant,
 };
@@ -30,6 +31,7 @@ use chrono::Utc;
 use hearthdeck_categorizer::{AppKind, AppProfile, ScanReport, Taxonomy};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::{Mutex, broadcast};
 use tracing::{error, info, warn};
 
@@ -341,19 +343,46 @@ impl ScanRunner for ProcessScanRunner {
             }
         }
 
-        let status = tokio::process::Command::new(&self.settings.binary)
+        let mut command = tokio::process::Command::new(&self.settings.binary);
+        command
             .args(self.arguments())
             // The hub would otherwise cache into the user's shared
             // `~/.cache/huggingface`, outside anything this project manages.
             .env("HF_HUB_CACHE", &self.settings.cache_dir)
-            .status()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        info!(
+            binary = %self.settings.binary.display(),
+            arguments = ?self.arguments(),
+            "starting the categorizer"
+        );
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "could not run the categorizer binary {}",
+                self.settings.binary.display()
+            )
+        })?;
+        // The child is a separate process, and its own tracing goes to its
+        // stdout. Relaying both streams here is what puts its work into the
+        // daemon's log - and so into `~/hearthdeck.log` - instead of leaving it
+        // somewhere only a journal query can find. Without this a failing scan
+        // reports nothing but "exited with status 1".
+        let stdout = child.stdout.take().expect("stdout piped above");
+        let stderr = child.stderr.take().expect("stderr piped above");
+        let stdout = tokio::spawn(relay(stdout, false));
+        let stderr = tokio::spawn(relay(stderr, true));
+        let status = child
+            .wait()
             .await
-            .with_context(|| {
-                format!(
-                    "could not run the categorizer binary {}",
-                    self.settings.binary.display()
-                )
-            })?;
+            .context("could not wait for the categorizer")?;
+        let (stdout_lines, stderr_lines) = (stdout.await, stderr.await);
+        info!(
+            exit_status = %status,
+            stdout_lines = stdout_lines.as_ref().map_or(0, |lines| *lines),
+            stderr_lines = stderr_lines.as_ref().map_or(0, |lines| *lines),
+            "the categorizer exited"
+        );
         anyhow::ensure!(status.success(), "the categorizer exited with {status}");
 
         let report_path = self.settings.report_file();
@@ -365,6 +394,27 @@ impl ScanRunner for ProcessScanRunner {
         })?;
         serde_json::from_slice(&report).context("the categorizer wrote an unreadable report")
     }
+}
+
+/// Copies one of the child's streams into the daemon's own log, line by line.
+///
+/// The categorizer is where the model's work actually happens, so its output is
+/// the only place a scan's real progress and failures are visible. Relaying it
+/// through the daemon's tracing is what gets it into `~/hearthdeck.log`, which is
+/// filtered by `SyslogIdentifier` and would otherwise only catch the daemon's own
+/// lines.
+async fn relay<R: AsyncRead + Unpin>(reader: R, is_error: bool) -> usize {
+    let mut lines = BufReader::new(reader).lines();
+    let mut count = 0usize;
+    while let Ok(Some(line)) = lines.next_line().await {
+        if is_error {
+            warn!(target: "hearthdeck_daemon::categorizer", "{line}");
+        } else {
+            info!(target: "hearthdeck_daemon::categorizer", "{line}");
+        }
+        count += 1;
+    }
+    count
 }
 
 /// The latest report, and nothing else: the assignments are read back whole and
@@ -738,12 +788,13 @@ impl CategorizationService {
     async fn write_rail_collections(&self, report: &ScanReport) -> anyhow::Result<usize> {
         let collections = rail_collections(report);
         let count = collections.len();
+        let slugs: Vec<&str> = collections.iter().map(|rail| rail.slug.as_str()).collect();
         self.inner
             .collections
             .replace_owned(collections::OWNER_LAYA, &collections)
             .await
             .context("could not write the collections this report implies")?;
-        info!(count, "scan rails written");
+        info!(count, ?slugs, "scan rails written");
         Ok(count)
     }
 
@@ -758,7 +809,23 @@ impl CategorizationService {
             .latest()
             .await?
             .context("no categorization report has been produced yet")?;
-        self.write_rail_collections(&report).await
+        info!(
+            app_count = report.app_count,
+            categories = report.categories.len(),
+            generated_at = %report.generated_at,
+            "publishing dashboard collections from the stored report"
+        );
+        let written = self.write_rail_collections(&report).await?;
+        // A stored report that implies no rail is not success, it is the case
+        // the user is most likely to hit and least likely to understand. Say so,
+        // loudly, rather than letting the endpoint answer 2xx for a no-op.
+        if written == 0 {
+            warn!(
+                categories = report.categories.len(),
+                "the stored report implies no dashboard collections; categorize apps again"
+            );
+        }
+        Ok(written)
     }
 
     async fn run_scan(&self) -> anyhow::Result<ScanReport> {
@@ -1180,6 +1247,30 @@ mod tests {
         assert!(
             rows.iter()
                 .any(|row| row.slug == "laya:watch" && row.owner == crate::collections::OWNER_LAYA)
+        );
+    }
+
+    #[tokio::test]
+    async fn publishing_a_report_with_no_rails_writes_nothing() {
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture(Arc::new(FixedRunner::succeeding())).await;
+
+        // A report can be perfectly valid and still name nothing the dashboard has
+        // a rail for. That is not an error - but it is not a success either, and
+        // the count is what lets the caller say which.
+        let mut stored = report();
+        stored.categories = vec![proposal("development", &["desktop:builder.desktop"])];
+        service.inner.store.save(&stored).await.unwrap();
+
+        assert_eq!(service.publish_collections().await.unwrap(), 0);
+        let rows = service.inner.collections.list().await.unwrap();
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.owner == crate::collections::OWNER_LAYA)
         );
     }
 

@@ -1176,8 +1176,9 @@ pub(crate) enum Message {
     /// The user asked for the last scan's rails to be published as dashboard
     /// collections, without classifying the library again.
     CreateCategorizationCollections,
-    /// What the daemon answered when asked to publish those collections.
-    CategorizationCollectionsCreated(Result<Vec<Collection>, String>),
+    /// What the daemon answered when asked to publish those collections: how
+    /// many it wrote, and the dashboard's collections as they now stand.
+    CategorizationCollectionsCreated(Result<(usize, Vec<Collection>), String>),
     /// The user asked for the downloaded checkpoint to be removed.
     DeleteCategorizationModel,
     /// The user asked for the scan's tabs to give way to the derived ones.
@@ -1528,41 +1529,50 @@ impl HearthDeck {
         };
         Task::perform(
             async move {
-                client
+                let created = client
                     .create_categorization_collections()
                     .await
                     .map_err(|error| error.to_string())?;
-                client
+                let collections = client
                     .list_collections()
                     .await
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| error.to_string())?;
+                Ok((created, collections))
             },
             |result| cosmic::Action::App(Message::CategorizationCollectionsCreated(result)),
         )
     }
 
     /// Settles the publish: the dashboard's rails are redrawn from what the
-    /// daemon now holds, or the refusal is what the user sees.
+    /// daemon now holds, and the answer says how much was actually created — or
+    /// the refusal is what the user sees.
     fn settle_created_collections(
         &mut self,
-        result: Result<Vec<Collection>, String>,
+        result: Result<(usize, Vec<Collection>), String>,
     ) -> Task<Message> {
-        match result {
-            Ok(collections) => {
-                self.collections = collections;
-                self.rebuild_favorite_entries();
-                self.rebuild_watch_entries();
-                let plays = self.load_recent_plays();
-                Task::batch([
-                    plays,
-                    self.push_alert(fl!("categorization-collections-created"), false),
-                ])
-            }
+        let (created, collections) = match result {
+            Ok(answered) => answered,
             Err(error) => {
                 log::warn!("could not create the dashboard collections: {error}");
-                self.push_alert(fl!("categorization-failed", reason = error), true)
+                return self.push_alert(fl!("categorization-failed", reason = error), true);
             }
-        }
+        };
+        self.collections = collections;
+        self.rebuild_favorite_entries();
+        self.rebuild_watch_entries();
+        let plays = self.load_recent_plays();
+        // Reporting "updated" for zero writes is the false positive this exists
+        // to avoid: the stored report may simply imply no dashboard collection.
+        let notice = if created == 0 {
+            log::warn!("the last categorization produced no dashboard collections");
+            self.push_alert(fl!("categorization-collections-empty"), false)
+        } else {
+            self.push_alert(
+                fl!("categorization-collections-created", count = created),
+                false,
+            )
+        };
+        Task::batch([plays, notice])
     }
 
     /// Hands the Applications tabs back to the ones derived from the entries.

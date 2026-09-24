@@ -600,13 +600,21 @@ async fn start_categorization(
     }
 }
 
+/// The answer to publishing: how many dashboard collections the stored report
+/// implied. Zero is a result, not a success — the client has to be able to say
+/// "nothing was created" instead of reporting a no-op as done.
+#[derive(Serialize)]
+struct PublishedCollections {
+    collections: usize,
+}
+
 /// Writes the dashboard collections the last scan implies, without classifying
 /// the library again. The heavy work already happened; this republishes its
 /// answer, so the client refreshes its collections when this answers.
 async fn publish_categorization_collections(
     State(state): State<SharedState>,
     headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<PublishedCollections>, ApiError> {
     authenticate(&state, &headers).await?;
     let service = state
         .categorization
@@ -621,12 +629,12 @@ async fn publish_categorization_collections(
     {
         return Err(ApiError::conflict("categorization is not enabled"));
     }
-    let written = service
+    let collections = service
         .publish_collections()
         .await
         .map_err(|error| ApiError::conflict(error.to_string()))?;
-    info!(count = written, "categorization collections published");
-    Ok(StatusCode::NO_CONTENT)
+    info!(count = collections, "categorization collections published");
+    Ok(Json(PublishedCollections { collections }))
 }
 
 /// Frees what the checkpoint costs on disk. The report it produced is kept: it

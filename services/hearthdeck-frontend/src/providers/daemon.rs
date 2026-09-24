@@ -655,9 +655,27 @@ impl DaemonClient {
     }
 
     /// Republishes the last scan's rails as dashboard collections, without
-    /// running the scan again. The caller re-reads the collections afterwards.
-    pub async fn create_categorization_collections(&self) -> Result<(), DaemonError> {
-        self.post_empty("/v1/categorization/collections").await
+    /// running the scan again. Answers with how many collections were written,
+    /// which is what lets the caller tell "created" from "nothing to create"
+    /// instead of reporting a no-op as done.
+    pub async fn create_categorization_collections(&self) -> Result<usize, DaemonError> {
+        #[derive(serde::Deserialize)]
+        struct Published {
+            collections: usize,
+        }
+
+        let response = self
+            .http
+            .post(self.api_url("/v1/categorization/collections"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+        let published: Published = response.json().await.map_err(DaemonError::Connection)?;
+        Ok(published.collections)
     }
 
     /// Turns smart categorization on, which is the action that fetches the
