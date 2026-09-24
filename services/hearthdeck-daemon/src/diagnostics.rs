@@ -1250,6 +1250,7 @@ mod tests {
     #[test]
     fn romm_compose_service_is_optional_and_session_managed() {
         let service = include_str!("../../../deploy/systemd/romm.service");
+        let romm_path = include_str!("../../../deploy/systemd/romm.path");
         let log_service = include_str!("../../../deploy/systemd/hearthdeck-log.service");
         let deploy_target = include_str!("../../../deploy/systemd/hearthdeck.target");
         let package_target = include_str!("../../../packaging/arch/hearthdeck.target");
@@ -1272,6 +1273,12 @@ mod tests {
         assert!(service.contains("podman-compose -f ${ROMM_COMPOSE_FILE} $ROMM_COMPOSE_ARGS down"));
         assert!(service.contains("SyslogIdentifier=romm"));
         assert!(service.contains("PartOf=hearthdeck.target"));
+        // The compose file is often on an external mount that is not ready when
+        // the session starts, and a user unit cannot order itself after a system
+        // mount. The watcher is what starts the stack once the mount shows up.
+        assert!(romm_path.contains("PartOf=hearthdeck.target"));
+        assert!(romm_path.contains("PathExists=/mnt/external/romM/podman-compose.yaml"));
+        assert!(romm_path.contains("Unit=romm.service"));
         // `$ROMM_COMPOSE_ARGS` (no braces) is what makes systemd split the value
         // into separate arguments, and drop the argument entirely when the
         // variable is unset - a `${ROMM_COMPOSE_ARGS}` spelling would pass one
@@ -1305,16 +1312,17 @@ mod tests {
         assert!(session.contains("systemd-cat -t hearthdeck-session"));
         assert!(
             deploy_target.contains(
-                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service"
+                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service romm.path"
             )
         );
         assert!(
             package_target.contains(
-                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service"
+                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service romm.path"
             )
         );
         assert!(package.contains("deploy/systemd/hearthdeck-log.service"));
         assert!(package.contains("deploy/systemd/romm.service"));
+        assert!(package.contains("deploy/systemd/romm.path"));
         assert!(package.contains("deploy/systemd/romm.env.example"));
         assert!(package.contains("scripts/linux-acceptance"));
         assert!(acceptance.contains("systemctl --user restart hearthdeck.target"));
@@ -1329,6 +1337,7 @@ mod tests {
         assert!(justfile.contains("./scripts/linux-acceptance --require-romm"));
         assert!(justfile.contains("cp deploy/systemd/hearthdeck-log.service"));
         assert!(justfile.contains("cp deploy/systemd/romm.service"));
+        assert!(justfile.contains("cp deploy/systemd/romm.path"));
     }
 
     #[test]

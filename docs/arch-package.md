@@ -21,6 +21,9 @@ CachyOS. It installs:
 - `/usr/share/doc/hearthdeck/romm.env.example`: optional path override for the
   external RomM Compose deployment. The service defaults to
   `/mnt/external/romM/podman-compose.yaml` and skips when that file is absent.
+  `romm.path` watches that default path and starts the stack when the file
+  appears, so a compose file on an external mount that is not ready at session
+  start is still picked up rather than skipped for the whole session.
 - `~/hearthdeck.log`: recreated at each Hearthdeck session start with combined
   session, daemon, bridge, input broker, overlay, and RomM output.
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
@@ -75,7 +78,9 @@ Arch systemd user units cannot reliably support directives such as
 `ProtectSystem`, `ReadWritePaths`, or `PrivateTmp`.
 
 `hearthdeck.target` starts the API daemon, owns the
-`hearthdeck-bridge.socket`, and attempts the optional `romm.service`. The RomM
+`hearthdeck-bridge.socket`, and attempts the optional `romm.service` (with
+`romm.path` starting it if its compose file appears only after the session is
+up). The RomM
 unit is skipped (cleanly, not failed) unless its compose file exists, so
 installations without RomM are unaffected. The bridge process is
 socket-activated on its first typed request. Future network and Bluetooth

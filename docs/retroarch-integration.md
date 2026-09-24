@@ -297,6 +297,13 @@ and accepts an optional `ROMM_COMPOSE_FILE` override from
 user session rather than system boot, and avoids putting host command
 construction in the daemon.
 
+`deploy/systemd/romm.path` closes the one gap in that: the compose file is often
+on an external mount that is not ready when the session starts, and a
+`systemd --user` unit cannot order itself after a system mount. The unit above
+would skip and never retry; the path unit watches the default path and starts
+romm.service the moment it appears. On a machine with no RomM the file never
+appears, so the watcher is inert.
+
 Two details of that unit are deliberate and easy to get wrong:
 
 - **It has no restart policy.** `podman-compose up -d` converges a stack by

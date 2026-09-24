@@ -72,6 +72,7 @@ package() {
   install -Dm644 packaging/arch/hearthdeck-input.service "$pkgdir/usr/lib/systemd/user/hearthdeck-input.service"
   install -Dm644 deploy/systemd/hearthdeck-log.service "$pkgdir/usr/lib/systemd/user/hearthdeck-log.service"
   install -Dm644 deploy/systemd/romm.service "$pkgdir/usr/lib/systemd/user/romm.service"
+  install -Dm644 deploy/systemd/romm.path "$pkgdir/usr/lib/systemd/user/romm.path"
   install -Dm644 deploy/systemd/daemon.env.example "$pkgdir/usr/share/doc/hearthdeck/daemon.env.example"
   install -Dm644 deploy/systemd/romm.env.example "$pkgdir/usr/share/doc/hearthdeck/romm.env.example"
   install -Dm644 deploy/70-hearthdeck-uinput.rules "$pkgdir/usr/lib/udev/rules.d/70-hearthdeck-uinput.rules"

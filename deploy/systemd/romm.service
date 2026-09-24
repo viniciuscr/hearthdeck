@@ -19,7 +19,12 @@ ExecStartPre=/usr/bin/echo Starting RomM Podman Compose stack
 ExecStart=/usr/bin/podman-compose -f ${ROMM_COMPOSE_FILE} $ROMM_COMPOSE_ARGS up -d
 ExecStop=/usr/bin/podman-compose -f ${ROMM_COMPOSE_FILE} $ROMM_COMPOSE_ARGS down
 ExecStopPost=/usr/bin/echo RomM Podman Compose stack stopped
-TimeoutStartSec=300
+# A first `up` may need to pull the stack's images. 300s was observed to time out
+# on a cold machine - the unit's own journal shows a start that failed after
+# exactly 300s and then succeeded on the next attempt. The session does not wait
+# on this unit, so a longer bound only lets a slow pull finish instead of failing
+# the start and leaving a half-created stack behind.
+TimeoutStartSec=900
 TimeoutStopSec=300
 # Deliberately no restart policy here. This unit wraps `podman-compose up -d`,
 # which "converges" a stack by recreating any container whose config differs
