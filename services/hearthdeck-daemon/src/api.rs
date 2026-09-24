@@ -11,7 +11,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use hearthdeck_categorizer::{ScanReport, Taxonomy};
 use hearthdeck_protocol::{
-    ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner, InputProfile,
+    ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner, HostCapabilities,
+    InputProfile, RetroRomVersion,
 };
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
@@ -1028,18 +1029,6 @@ struct HealthResponse {
     capabilities: HostCapabilities,
 }
 
-#[derive(Clone, Copy, Serialize)]
-struct HostCapabilities {
-    launch: bool,
-    application_sessions: bool,
-    install_requests: bool,
-    retro_launch: bool,
-    /// Whether this deployment can categorize at all. Distinct from the user's
-    /// opt-in: with this false the feature does not exist for the client, and with
-    /// it true the client still has to ask.
-    categorization: bool,
-}
-
 #[derive(Serialize)]
 struct PairingResponse {
     code: String,
@@ -1116,15 +1105,6 @@ struct RetroGame {
     /// list the current disc alongside the others instead of leaving it
     /// implicit. `None` for single-file games.
     version_label: Option<String>,
-}
-
-/// One selectable version of a retro game, as offered in the context menu.
-#[derive(Serialize)]
-struct RetroRomVersion {
-    id: i64,
-    title: String,
-    /// The user's chosen main file for this game, per RomM; false when unset.
-    is_main_sibling: bool,
 }
 
 /// Everything the console-game details screen shows for one ROM.

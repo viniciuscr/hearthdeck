@@ -418,8 +418,6 @@ struct HearthDeck {
     config: AppLibraryConfig,
     cur_section: Section,
     cur_group: Option<usize>,
-    #[allow(dead_code)]
-    locale: Option<String>,
     edit_name: Option<String>,
     new_group: Option<String>,
     dnd_icon: Option<usize>,
@@ -450,9 +448,6 @@ struct HearthDeck {
     /// Navigated by the application's own cursor rather than iced focus, like
     /// the context menu and the details screen.
     filter_cursor: Option<FilterCursor>,
-    /// Kept alive to hold the background provider discovery tasks.
-    #[allow(dead_code)]
-    provider_service: Option<crate::providers::service::ProviderService>,
     /// Client for the HearthDeck daemon, if available.
     daemon_client: Option<crate::providers::daemon::DaemonClient>,
     launch_state: LaunchState,
@@ -547,7 +542,6 @@ impl Default for HearthDeck {
             config: Default::default(),
             cur_section: Section::PcGames,
             cur_group: Default::default(),
-            locale: Default::default(),
             user_name: String::new(),
             disk_free: String::new(),
             edit_name: Default::default(),
@@ -571,7 +565,6 @@ impl Default for HearthDeck {
             gamepad_focus_first: Default::default(),
             filters: RommFilters::default(),
             filter_cursor: None,
-            provider_service: None,
             daemon_client: None,
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
@@ -753,8 +746,7 @@ fn dashboard_health_error(error: crate::providers::daemon::DaemonError) -> Dashb
         DaemonError::Connection(_)
         | DaemonError::InvalidBaseUrl(_)
         | DaemonError::InvalidToken(_)
-        | DaemonError::PairingRequiresLoopback
-        | DaemonError::Unavailable => DashboardHealthError::Unreachable,
+        | DaemonError::PairingRequiresLoopback => DashboardHealthError::Unreachable,
     }
 }
 
@@ -5485,7 +5477,9 @@ impl cosmic::Application for HearthDeck {
                     .unwrap_or_else(|_| "http://127.0.0.1:38400".to_string()),
                 token: std::env::var("HEARTHDECK_PAIRING_TOKEN").unwrap_or_default(),
             });
-        let (provider_service, mut provider_rx) =
+        // Discovery runs detached inside `start`, so the service value has nothing
+        // to keep alive; only the records receiver is retained.
+        let (_, mut provider_rx) =
             crate::providers::service::ProviderService::start(vec![std::sync::Arc::new(
                 crate::providers::daemon::DaemonProvider::with_client(daemon_client.clone()),
             )]);
@@ -5520,15 +5514,11 @@ impl cosmic::Application for HearthDeck {
         let group_count = config.sections.get(Section::PcGames).len() as u64;
         let group_keys: Vec<u64> = (0..group_count).collect();
         let mut self_ = Self {
-            locale: std::env::var("LANG")
-                .ok()
-                .and_then(|l| l.split(".").next().map(str::to_string)),
             config,
             core,
             helper,
             group_keys,
             next_group_key: group_count,
-            provider_service: Some(provider_service),
             daemon_client: Some(daemon_client),
             user_name: current_user_name(),
             disk_free: disk_free_label(),

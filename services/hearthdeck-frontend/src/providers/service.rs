@@ -1,48 +1,30 @@
+//! Runs the game providers in the background and streams their merged records.
+//!
+//! A caller starts the service and reads records from the returned receiver; the
+//! discovery tasks themselves are detached, so holding the service does nothing
+//! and it is returned only to give `start` a value to pair with the receiver.
+//! Providers that declare a `refresh_interval` are re-run on that cadence and
+//! their records re-merged.
+//!
+//! There is deliberately no event or health channel here. An earlier version had
+//! one, but nothing consumed it — the daemon owns provider health now, and the UI
+//! reads it from `/v1/health` — so it was removed rather than kept as a second,
+//! unused source of truth.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::sync::{RwLock, mpsc};
+use tracing::warn;
 
-use super::{GameProvider, GameRecord, ProviderHealth, ProviderStatus};
+use super::{GameProvider, GameRecord};
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub enum ProviderEvent {
-    RecordsChanged {
-        source_id: String,
-        record_count: usize,
-    },
-    ProviderFailed {
-        source_id: String,
-        error: String,
-    },
-}
+pub struct ProviderService;
 
-#[allow(dead_code)]
-pub struct ProviderService {
-    refresh_tx: mpsc::Sender<String>,
-    health: Arc<RwLock<Vec<ProviderHealth>>>,
-    pub events: broadcast::Sender<ProviderEvent>,
-}
-
-#[allow(dead_code)]
 impl ProviderService {
     pub fn start(providers: Vec<Arc<dyn GameProvider>>) -> (Self, mpsc::Receiver<Vec<GameRecord>>) {
         let (records_tx, records_rx) = mpsc::channel(4);
         let (refresh_tx, mut refresh_rx) = mpsc::channel(16);
-        let (events_tx, _) = broadcast::channel(64);
-
-        let health = Arc::new(RwLock::new(
-            providers
-                .iter()
-                .map(|p| ProviderHealth {
-                    source_id: p.source_id().to_owned(),
-                    status: ProviderStatus::Starting,
-                    record_count: None,
-                    last_error: None,
-                })
-                .collect(),
-        ));
         let cached = Arc::new(RwLock::new(HashMap::new()));
 
         for provider in &providers {
@@ -63,109 +45,48 @@ impl ProviderService {
             });
         }
 
-        let service = Self {
-            refresh_tx,
-            health: health.clone(),
-            events: events_tx.clone(),
-        };
-
         // Initial discovery.
-        let h1 = health.clone();
         let c1 = cached.clone();
-        let e1 = events_tx.clone();
         let t1 = records_tx.clone();
         let p1 = providers.clone();
         tokio::spawn(async move {
             for provider in &p1 {
-                run_discovery(provider.as_ref(), &h1, &c1, &e1).await;
+                run_discovery(provider.as_ref(), &c1).await;
             }
             let _ = t1.send(merge_records(&c1).await).await;
         });
 
-        // Orchestrator: manual refresh + periodic ticks.
-        let h2 = health;
+        // Orchestrator: periodic ticks. The original `refresh_tx` is dropped when
+        // no provider schedules an interval, which closes the channel and ends this
+        // task — correct, since there is then nothing to refresh.
         let c2 = cached;
-        let e2 = events_tx;
         let t2 = records_tx;
         tokio::spawn(async move {
             while let Some(source_id) = refresh_rx.recv().await {
                 if let Some(provider) = providers.iter().find(|p| p.source_id() == source_id) {
-                    run_discovery(provider.as_ref(), &h2, &c2, &e2).await;
+                    run_discovery(provider.as_ref(), &c2).await;
                     let _ = t2.send(merge_records(&c2).await).await;
                 }
             }
         });
 
-        (service, records_rx)
-    }
-
-    pub async fn refresh(&self, source_id: &str) {
-        let _ = self.refresh_tx.send(source_id.to_owned()).await;
-    }
-
-    pub async fn refresh_all(&self) {
-        let ids: Vec<String> = self
-            .health
-            .read()
-            .await
-            .iter()
-            .map(|h| h.source_id.clone())
-            .collect();
-        for id in ids {
-            let _ = self.refresh_tx.send(id).await;
-        }
-    }
-
-    pub async fn health(&self) -> Vec<ProviderHealth> {
-        self.health.read().await.clone()
+        (Self, records_rx)
     }
 }
 
 async fn run_discovery(
     provider: &dyn GameProvider,
-    health: &Arc<RwLock<Vec<ProviderHealth>>>,
     cached: &Arc<RwLock<HashMap<String, Vec<GameRecord>>>>,
-    events: &broadcast::Sender<ProviderEvent>,
 ) {
     let source_id = provider.source_id().to_owned();
-
-    {
-        let mut h = health.write().await;
-        if let Some(entry) = h.iter_mut().find(|e| e.source_id == source_id) {
-            entry.status = ProviderStatus::Refreshing;
-            entry.last_error = None;
-        }
-    }
-
     match provider.discover().await {
         Ok(records) => {
-            let count = records.len();
-            cached.write().await.insert(source_id.clone(), records);
-            {
-                let mut h = health.write().await;
-                if let Some(entry) = h.iter_mut().find(|e| e.source_id == source_id) {
-                    entry.status = ProviderStatus::Ready;
-                    entry.record_count = Some(count);
-                }
-            }
-            let _ = events.send(ProviderEvent::RecordsChanged {
-                source_id,
-                record_count: count,
-            });
+            cached.write().await.insert(source_id, records);
         }
         Err(error) => {
-            let error_msg = error.to_string();
-            {
-                let mut h = health.write().await;
-                if let Some(entry) = h.iter_mut().find(|e| e.source_id == source_id) {
-                    entry.status = ProviderStatus::Degraded;
-                    entry.last_error = Some(error_msg.clone());
-                }
-            }
-            let _ = events.send(ProviderEvent::ProviderFailed {
-                source_id,
-                error: error_msg,
-            });
+            // Nothing to record this against any more; the log is the only place a
+            // provider that cannot answer is visible from here.
+            warn!(source_id, %error, "provider discovery failed");
         }
     }
 }

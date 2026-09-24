@@ -1,8 +1,17 @@
-//! Typed messages exchanged only between the local daemon and bridge.
+//! Typed messages and payloads shared across the Hearthdeck processes.
 //!
-//! These messages intentionally model allowlisted operations. Neither message
-//! type has a shell-command field, so remote API input cannot become command
-//! execution by forwarding it through this boundary.
+//! Two kinds of thing live here:
+//!
+//! * The `Bridge*` messages exchanged only between the local daemon and bridge.
+//!   These intentionally model allowlisted operations. Neither request type has a
+//!   shell-command field, so remote API input cannot become command execution by
+//!   forwarding it through this boundary.
+//! * The paired-API payloads the daemon serves and the client reads. Only the
+//!   ones with **no projection layer** belong here: a payload the client reads in
+//!   full, or one that drives client behaviour and must never silently drift.
+//!   Response types the client deliberately narrows to the fields it draws stay
+//!   client-side; those tolerate daemon additions because serde ignores unknown
+//!   fields, and sharing them would couple the client to fields it never reads.
 
 use serde::{Deserialize, Serialize};
 
@@ -123,12 +132,104 @@ pub enum BridgeErrorCode {
     Internal,
 }
 
+/// Capabilities the host advertises on `/v1/health`.
+///
+/// Shared rather than projected: the client reads every flag to decide what it may
+/// offer, so a renamed flag would silently disable a feature instead of failing.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct HostCapabilities {
+    pub launch: bool,
+    pub application_sessions: bool,
+    pub install_requests: bool,
+    pub retro_launch: bool,
+    /// Whether this deployment provides categorization at all. Distinct from the
+    /// user's opt-in: with this false the feature does not exist for the client,
+    /// and with it true the client still has to ask.
+    #[serde(default)]
+    pub categorization: bool,
+}
+
+/// One catalog row, as served by `/v1/library` and read back in full.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CatalogItem {
+    pub id: String,
+    pub source_id: String,
+    pub title: String,
+    pub kind: String,
+    pub launch_id: Option<String>,
+    pub icon: Option<String>,
+    pub metadata: serde_json::Value,
+}
+
+/// One selectable version of a retro game, as offered in the version picker.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetroRomVersion {
+    pub id: i64,
+    pub title: String,
+    /// The user's chosen main file for this game, per RomM; false when unset.
+    #[serde(default)]
+    pub is_main_sibling: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ApplicationSession, ApplicationSessionState, BridgeRequest, BridgeResponse, HeroicRunner,
-        InputProfile,
+        ApplicationSession, ApplicationSessionState, BridgeRequest, BridgeResponse, CatalogItem,
+        HeroicRunner, HostCapabilities, InputProfile, RetroRomVersion,
     };
+
+    #[test]
+    fn shared_api_payloads_keep_their_wire_names() {
+        // These are read by the client by field name, so a rename here is a silent
+        // break across the process boundary. Pin the names.
+        let capabilities = HostCapabilities {
+            launch: true,
+            application_sessions: false,
+            install_requests: false,
+            retro_launch: true,
+            categorization: true,
+        };
+        let value = serde_json::to_value(capabilities).unwrap();
+        for field in [
+            "launch",
+            "application_sessions",
+            "install_requests",
+            "retro_launch",
+            "categorization",
+        ] {
+            assert!(value.get(field).is_some(), "capabilities lost `{field}`");
+        }
+
+        let item = CatalogItem {
+            id: "hearthdeck:org.example.App".to_owned(),
+            source_id: "desktop-apps".to_owned(),
+            title: "Example".to_owned(),
+            kind: "application".to_owned(),
+            launch_id: None,
+            icon: None,
+            metadata: serde_json::Value::Null,
+        };
+        let value = serde_json::to_value(item).unwrap();
+        for field in [
+            "id",
+            "source_id",
+            "title",
+            "kind",
+            "launch_id",
+            "icon",
+            "metadata",
+        ] {
+            assert!(value.get(field).is_some(), "catalog item lost `{field}`");
+        }
+
+        let version = RetroRomVersion {
+            id: 1,
+            title: "Disc 1".to_owned(),
+            is_main_sibling: true,
+        };
+        let value = serde_json::to_value(version).unwrap();
+        assert_eq!(value["is_main_sibling"], serde_json::Value::Bool(true));
+    }
 
     #[test]
     fn request_serialization_has_no_command_field() {

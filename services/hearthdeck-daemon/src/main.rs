@@ -10,6 +10,7 @@ mod database;
 mod diagnostics;
 mod discovery;
 mod enrichment;
+mod provider_worker;
 mod retro;
 mod settings;
 mod state;

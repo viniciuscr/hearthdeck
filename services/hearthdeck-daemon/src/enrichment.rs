@@ -1,15 +1,21 @@
 pub mod providers;
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use tokio::sync::{Mutex, mpsc};
-use tracing::{Instrument, error, info, info_span, warn};
+use tracing::{Instrument, info, info_span};
 
 use crate::{
     catalog::{CatalogStore, EnrichmentRecord},
+    provider_worker::{WorkerSet, WorkerSetBuilder},
     state::{ProviderHealth, ProviderKind, ServerEvent},
 };
+
+/// The outcome of asking a provider to refresh.
+///
+/// Shared with discovery through the worker machinery, and re-exported here under
+/// the name metadata's callers already use.
+pub use crate::provider_worker::RefreshRequest as EnrichmentRequest;
 
 #[async_trait]
 pub trait MetadataProvider: Send + Sync {
@@ -21,27 +27,7 @@ pub trait MetadataProvider: Send + Sync {
 
 #[derive(Clone)]
 pub struct EnrichmentService {
-    workers: Arc<HashMap<&'static str, ProviderWorker>>,
-}
-
-#[derive(Clone)]
-struct ProviderWorker {
-    sender: mpsc::Sender<()>,
-    state: Arc<Mutex<RefreshState>>,
-    health: Arc<Mutex<ProviderHealth>>,
-}
-
-#[derive(Default)]
-struct RefreshState {
-    running: bool,
-    queued: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EnrichmentRequest {
-    Queued,
-    AlreadyScheduled,
-    UnknownProvider,
+    workers: WorkerSet,
 }
 
 impl EnrichmentService {
@@ -50,111 +36,43 @@ impl EnrichmentService {
         catalog: CatalogStore,
         events: tokio::sync::broadcast::Sender<ServerEvent>,
     ) -> Self {
-        let mut workers = HashMap::new();
+        let mut workers = WorkerSetBuilder::new("metadata");
         for provider in providers {
-            let provider_id = provider.provider_id();
-            let (sender, mut receiver) = mpsc::channel(1);
-            let state = Arc::new(Mutex::new(RefreshState::default()));
-            let health = Arc::new(Mutex::new(ProviderHealth::starting(
-                provider_id,
+            let catalog = catalog.clone();
+            let events = events.clone();
+            workers.spawn(
+                provider.provider_id(),
                 ProviderKind::Metadata,
-            )));
-            workers.insert(
-                provider_id,
-                ProviderWorker {
-                    sender: sender.clone(),
-                    state: state.clone(),
-                    health: health.clone(),
+                provider.refresh_interval(),
+                move || {
+                    let provider = provider.clone();
+                    let catalog = catalog.clone();
+                    let events = events.clone();
+                    let span = info_span!("metadata.enrich", provider_id = provider.provider_id());
+                    async move {
+                        enrich_source(provider.as_ref(), &catalog, &events)
+                            .instrument(span)
+                            .await
+                    }
                 },
             );
-            info!(
-                provider_id,
-                scheduled = provider.refresh_interval().is_some(),
-                "metadata provider registered"
-            );
-
-            let worker_catalog = catalog.clone();
-            let worker_events = events.clone();
-            let worker_provider = provider.clone();
-            let worker_state = state.clone();
-            let worker_health = health.clone();
-            tokio::spawn(async move {
-                while receiver.recv().await.is_some() {
-                    {
-                        let mut state = worker_state.lock().await;
-                        state.queued = false;
-                        state.running = true;
-                    }
-                    worker_health.lock().await.record_started();
-                    let span = info_span!("metadata.enrich", provider_id);
-                    match enrich_source(worker_provider.as_ref(), &worker_catalog, &worker_events)
-                        .instrument(span)
-                        .await
-                    {
-                        Ok(record_count) => {
-                            worker_health.lock().await.record_success(record_count);
-                        }
-                        Err(error) => {
-                            worker_health.lock().await.record_failure(&error);
-                            error!(provider_id, %error, "metadata provider failed");
-                        }
-                    }
-                    worker_state.lock().await.running = false;
-                }
-            });
-
-            if let Some(interval) = provider.refresh_interval() {
-                let interval_state = state;
-                tokio::spawn(async move {
-                    let mut timer = tokio::time::interval(interval);
-                    loop {
-                        timer.tick().await;
-                        enqueue(&sender, &interval_state).await;
-                    }
-                });
-            }
         }
         Self {
-            workers: Arc::new(workers),
+            workers: workers.build(),
         }
     }
 
     pub async fn request_all(&self) {
-        for provider_id in self.workers.keys() {
-            self.request(provider_id).await;
-        }
+        self.workers.request_all().await;
     }
 
     pub async fn provider_health(&self) -> Vec<ProviderHealth> {
-        let mut health = Vec::with_capacity(self.workers.len());
-        for worker in self.workers.values() {
-            health.push(worker.health.lock().await.clone());
-        }
-        health.sort_by(|left, right| left.id.cmp(&right.id));
-        health
+        self.workers.provider_health().await
     }
 
     pub async fn request(&self, provider_id: &str) -> EnrichmentRequest {
-        let Some(worker) = self.workers.get(provider_id) else {
-            warn!(provider_id, "unknown metadata provider requested");
-            return EnrichmentRequest::UnknownProvider;
-        };
-        enqueue(&worker.sender, &worker.state).await
+        self.workers.request(provider_id).await
     }
-}
-
-async fn enqueue(sender: &mpsc::Sender<()>, state: &Mutex<RefreshState>) -> EnrichmentRequest {
-    let mut state = state.lock().await;
-    if state.running || state.queued {
-        return EnrichmentRequest::AlreadyScheduled;
-    }
-    state.queued = true;
-    if sender.send(()).await.is_err() {
-        state.queued = false;
-        error!("metadata provider worker is unavailable");
-        return EnrichmentRequest::UnknownProvider;
-    }
-    EnrichmentRequest::Queued
 }
 
 async fn enrich_source(
@@ -183,4 +101,73 @@ async fn enrich_source(
         "metadata enrichment completed"
     );
     Ok(record_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use async_trait::async_trait;
+    use tempfile::tempdir;
+    use tokio::time::timeout;
+
+    use super::{EnrichmentRequest, EnrichmentService, MetadataProvider};
+    use crate::{
+        catalog::{CatalogStore, EnrichmentRecord},
+        database::Database,
+    };
+
+    struct PanickingProvider;
+
+    #[async_trait]
+    impl MetadataProvider for PanickingProvider {
+        fn provider_id(&self) -> &'static str {
+            "panicking"
+        }
+        fn refresh_interval(&self) -> Option<Duration> {
+            None
+        }
+        async fn enrich(&self) -> anyhow::Result<Vec<EnrichmentRecord>> {
+            panic!("simulated metadata provider crash");
+        }
+    }
+
+    /// This is the regression the shared worker fixes. Before it, enrichment kept
+    /// its own copy of the worker loop without the `catch_unwind` discovery had,
+    /// so this panic ended the worker task: `running` stayed true and every later
+    /// request returned `AlreadyScheduled` for the life of the process.
+    #[tokio::test]
+    async fn a_panicking_metadata_provider_does_not_wedge_its_worker() {
+        let directory = tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let (events, _receiver) = tokio::sync::broadcast::channel(4);
+        let service = EnrichmentService::start(
+            vec![Arc::new(PanickingProvider)],
+            CatalogStore::new(database.pool().clone()),
+            events,
+        );
+
+        assert_eq!(
+            service.request("panicking").await,
+            EnrichmentRequest::Queued
+        );
+
+        let recovered = timeout(Duration::from_secs(2), async {
+            loop {
+                match service.request("panicking").await {
+                    EnrichmentRequest::AlreadyScheduled => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    other => break other,
+                }
+            }
+        })
+        .await
+        .expect("worker never recovered from the metadata provider panic");
+
+        assert_eq!(recovered, EnrichmentRequest::Queued);
+    }
 }

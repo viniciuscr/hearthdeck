@@ -1,4 +1,3 @@
-use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use tracing::info;
@@ -242,6 +241,8 @@ fn metadata_object(metadata: Option<&Value>, key: &str) -> Option<Map<String, Va
     metadata?.get(key)?.as_object().cloned()
 }
 
+pub use hearthdeck_protocol::CatalogItem;
+
 pub struct CatalogRecord {
     pub id: String,
     pub title: String,
@@ -257,17 +258,6 @@ pub struct EnrichmentRecord {
     pub priority: i64,
     pub payload: serde_json::Value,
     pub updated_at: String,
-}
-
-#[derive(Clone, Serialize)]
-pub struct CatalogItem {
-    pub id: String,
-    pub source_id: String,
-    pub title: String,
-    pub kind: String,
-    pub launch_id: Option<String>,
-    pub icon: Option<String>,
-    pub metadata: serde_json::Value,
 }
 
 #[cfg(test)]

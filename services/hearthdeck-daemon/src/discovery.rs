@@ -1,16 +1,21 @@
 pub mod providers;
 
-use std::{any::Any, collections::HashMap, panic::AssertUnwindSafe, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use futures_util::FutureExt;
-use tokio::sync::{Mutex, mpsc};
-use tracing::{Instrument, error, info, info_span, warn};
+use tracing::{Instrument, info, info_span};
 
 use crate::{
     catalog::{CatalogRecord, CatalogStore},
+    provider_worker::{WorkerSet, WorkerSetBuilder},
     state::{ProviderHealth, ProviderKind, ServerEvent},
 };
+
+/// The outcome of asking a provider to refresh.
+///
+/// Defined alongside the worker machinery so discovery and enrichment share one
+/// type, and re-exported here under the name discovery's callers already use.
+pub use crate::provider_worker::RefreshRequest;
 
 #[async_trait]
 pub trait DiscoveryProvider: Send + Sync {
@@ -25,27 +30,7 @@ pub trait DiscoveryProvider: Send + Sync {
 
 #[derive(Clone)]
 pub struct DiscoveryService {
-    workers: Arc<HashMap<&'static str, ProviderWorker>>,
-}
-
-#[derive(Clone)]
-struct ProviderWorker {
-    sender: mpsc::Sender<()>,
-    state: Arc<Mutex<RefreshState>>,
-    health: Arc<Mutex<ProviderHealth>>,
-}
-
-#[derive(Default)]
-struct RefreshState {
-    running: bool,
-    queued: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RefreshRequest {
-    Queued,
-    AlreadyScheduled,
-    UnknownProvider,
+    workers: WorkerSet,
 }
 
 impl DiscoveryService {
@@ -54,124 +39,43 @@ impl DiscoveryService {
         catalog: CatalogStore,
         events: tokio::sync::broadcast::Sender<ServerEvent>,
     ) -> Self {
-        let mut workers = HashMap::new();
+        let mut workers = WorkerSetBuilder::new("discovery");
         for provider in providers {
-            let source_id = provider.source_id();
-            let (sender, mut receiver) = mpsc::channel(1);
-            let state = Arc::new(Mutex::new(RefreshState::default()));
-            let health = Arc::new(Mutex::new(ProviderHealth::starting(
-                source_id,
+            let catalog = catalog.clone();
+            let events = events.clone();
+            workers.spawn(
+                provider.source_id(),
                 ProviderKind::Discovery,
-            )));
-            let worker = ProviderWorker {
-                sender: sender.clone(),
-                state: state.clone(),
-                health: health.clone(),
-            };
-            workers.insert(source_id, worker);
-            info!(
-                source_id,
-                scheduled = provider.refresh_interval().is_some(),
-                "discovery provider registered"
+                provider.refresh_interval(),
+                move || {
+                    let provider = provider.clone();
+                    let catalog = catalog.clone();
+                    let events = events.clone();
+                    let span = info_span!("discovery.run", source_id = provider.source_id());
+                    async move {
+                        discover_source(provider.as_ref(), &catalog, &events)
+                            .instrument(span)
+                            .await
+                    }
+                },
             );
-
-            let worker_events = events.clone();
-            let worker_catalog = catalog.clone();
-            let worker_provider = provider.clone();
-            let worker_state = state.clone();
-            let worker_health = health.clone();
-            tokio::spawn(async move {
-                while receiver.recv().await.is_some() {
-                    {
-                        let mut state = worker_state.lock().await;
-                        state.queued = false;
-                        state.running = true;
-                    }
-                    worker_health.lock().await.record_started();
-                    let span = info_span!("discovery.run", source_id);
-                    // ponytail: a provider is third-party-ish code we don't control (a
-                    // future Steam/GOG scraper can misbehave). catch_unwind keeps a
-                    // panic from killing this worker task, which would otherwise close
-                    // its mpsc channel and leave `running` stuck true forever, so every
-                    // later refresh request silently reports "already scheduled".
-                    match AssertUnwindSafe(
-                        discover_source(worker_provider.as_ref(), &worker_catalog, &worker_events)
-                            .instrument(span),
-                    )
-                    .catch_unwind()
-                    .await
-                    {
-                        Ok(Ok(record_count)) => {
-                            worker_health.lock().await.record_success(record_count);
-                        }
-                        Ok(Err(error)) => {
-                            worker_health.lock().await.record_failure(&error);
-                            error!(source_id, %error, "discovery provider failed");
-                        }
-                        Err(panic) => {
-                            let error = anyhow::anyhow!(panic_message(&panic).to_owned());
-                            worker_health.lock().await.record_failure(&error);
-                            error!(source_id, %error, "discovery provider panicked");
-                        }
-                    }
-                    worker_state.lock().await.running = false;
-                }
-            });
-
-            if let Some(interval) = provider.refresh_interval() {
-                let interval_sender = sender;
-                let interval_state = state;
-                tokio::spawn(async move {
-                    let mut timer = tokio::time::interval(interval);
-                    loop {
-                        timer.tick().await;
-                        enqueue(&interval_sender, &interval_state).await;
-                    }
-                });
-            }
         }
         Self {
-            workers: Arc::new(workers),
+            workers: workers.build(),
         }
     }
 
     pub async fn request_all(&self) {
-        for source_id in self.workers.keys() {
-            self.request(source_id).await;
-        }
+        self.workers.request_all().await;
     }
 
     pub async fn provider_health(&self) -> Vec<ProviderHealth> {
-        let mut health = Vec::with_capacity(self.workers.len());
-        for worker in self.workers.values() {
-            health.push(worker.health.lock().await.clone());
-        }
-        health.sort_by(|left, right| left.id.cmp(&right.id));
-        health
+        self.workers.provider_health().await
     }
 
     pub async fn request(&self, source_id: &str) -> RefreshRequest {
-        let Some(worker) = self.workers.get(source_id) else {
-            warn!(%source_id, "requested unknown discovery provider");
-            return RefreshRequest::UnknownProvider;
-        };
-        enqueue(&worker.sender, &worker.state).await
+        self.workers.request(source_id).await
     }
-}
-
-async fn enqueue(sender: &mpsc::Sender<()>, state: &Mutex<RefreshState>) -> RefreshRequest {
-    let mut state = state.lock().await;
-    if state.running || state.queued {
-        info!("discovery work already scheduled");
-        return RefreshRequest::AlreadyScheduled;
-    }
-    state.queued = true;
-    if sender.send(()).await.is_err() {
-        state.queued = false;
-        error!("discovery provider worker is unavailable");
-        return RefreshRequest::UnknownProvider;
-    }
-    RefreshRequest::Queued
 }
 
 async fn discover_source(
@@ -197,14 +101,6 @@ async fn discover_source(
         "discovery completed"
     );
     Ok(record_count)
-}
-
-fn panic_message(panic: &(dyn Any + Send)) -> &str {
-    panic
-        .downcast_ref::<&str>()
-        .copied()
-        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-        .unwrap_or("unknown panic payload")
 }
 
 #[cfg(test)]

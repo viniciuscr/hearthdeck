@@ -3562,7 +3562,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -3658,7 +3657,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "evdev",
- "futures-util",
  "tokio",
  "tracing",
  "tracing-subscriber",

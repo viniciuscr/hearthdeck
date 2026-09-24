@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::sync::{OnceCell, mpsc};
+use tokio::sync::OnceCell;
 
 use super::{GameProvider, GameRecord};
 use crate::app_group::{
@@ -77,30 +77,9 @@ pub struct ProviderHealthInfo {
     pub last_attempt_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct HostCapabilities {
-    pub launch: bool,
-    pub application_sessions: bool,
-    pub install_requests: bool,
-    pub retro_launch: bool,
-    /// Whether this deployment provides categorization at all. Distinct from the
-    /// user's opt-in: false means the feature does not exist for this client.
-    #[serde(default)]
-    pub categorization: bool,
-}
-
-/// Catalog item returned by the daemon's /v1/library endpoint.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CatalogItem {
-    pub id: String,
-    pub source_id: String,
-    pub title: String,
-    pub kind: String,
-    pub launch_id: Option<String>,
-    pub icon: Option<String>,
-    pub metadata: serde_json::Value,
-}
+// Shared with the daemon so the two sides cannot drift on the payloads the client
+// reads in full. Re-exported under their original names for the rest of the crate.
+pub use hearthdeck_protocol::{CatalogItem, HostCapabilities, RetroRomVersion};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct RecentActivityItem {
@@ -151,16 +130,6 @@ impl RecentActivityItem {
             metadata: self.metadata,
         }
     }
-}
-
-/// Server event received via WebSocket.
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ServerEvent {
-    LibraryChanged,
-    ApplicationSessionChanged { session: Option<ApplicationSession> },
-    InstallRequested { item_id: String },
 }
 
 /// The daemon's view of the categorization scan: whether one is running, and
@@ -281,17 +250,6 @@ pub struct RetroGame {
     /// launches), present only when the game has siblings.
     #[serde(default)]
     pub version_label: Option<String>,
-}
-
-/// One selectable version of a retro game. Mirrors the daemon's
-/// `RetroRomVersion`; the client shows these as "play this version" choices
-/// in the context menu and on the details screen.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RetroRomVersion {
-    pub id: i64,
-    pub title: String,
-    #[serde(default)]
-    pub is_main_sibling: bool,
 }
 
 /// Full detail for one RomM game, from the daemon's /v1/retro/roms/{id}.
@@ -547,7 +505,6 @@ impl DaemonClient {
     }
 
     /// Checks if the daemon is reachable and returns its health status.
-    #[allow(dead_code)]
     pub async fn health(&self) -> Result<HealthResponse, DaemonError> {
         let response = self
             .http
@@ -610,7 +567,6 @@ impl DaemonClient {
     }
 
     /// Triggers a rescan of all discovery and enrichment providers.
-    #[allow(dead_code)]
     pub async fn rescan_library(&self) -> Result<(), DaemonError> {
         let response = self
             .http
@@ -761,24 +717,6 @@ impl DaemonClient {
         }
 
         response.json().await.map_err(DaemonError::Deserialization)
-    }
-
-    /// Stops a running application session.
-    #[allow(dead_code)]
-    pub async fn stop_session(&self, session_id: &str) -> Result<(), DaemonError> {
-        let response = self
-            .http
-            .post(self.api_url(&format!("/v1/sessions/{}/stop", session_id)))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
-        Ok(())
     }
 
     /// Lists available retro consoles from RomM, caching each console's logo
@@ -1133,36 +1071,6 @@ impl DaemonClient {
 
         response.json().await.map_err(DaemonError::Deserialization)
     }
-
-    /// Connects to the daemon's event stream via polling.
-    /// Returns a channel receiver that yields server events.
-    #[allow(dead_code)]
-    pub async fn connect_events(&self) -> Result<mpsc::Receiver<ServerEvent>, DaemonError> {
-        let (tx, rx) = mpsc::channel(32);
-
-        // Spawn a task that polls for events
-        let client = self.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
-            loop {
-                interval.tick().await;
-                // Poll active session changes
-                match client.active_session().await {
-                    Ok(session) => {
-                        let event = ServerEvent::ApplicationSessionChanged { session };
-                        if tx.send(event).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => {
-                        // Daemon might be unavailable, continue polling
-                    }
-                }
-            }
-        });
-
-        Ok(rx)
-    }
 }
 
 /// Converts a daemon CatalogItem into a GameRecord for display in the UI.
@@ -1360,10 +1268,6 @@ pub enum DaemonError {
 
     #[error("automatic pairing requires a loopback daemon")]
     PairingRequiresLoopback,
-
-    #[error("daemon not available")]
-    #[allow(dead_code)]
-    Unavailable,
 }
 
 /// Maps a daemon error-response body to a [`DaemonError`], surfacing the
@@ -1393,12 +1297,6 @@ impl DaemonProvider {
     /// Creates a new daemon provider with an existing client.
     pub fn with_client(client: DaemonClient) -> Self {
         Self { client }
-    }
-
-    /// Returns a reference to the underlying daemon client.
-    #[allow(dead_code)]
-    pub fn client(&self) -> &DaemonClient {
-        &self.client
     }
 }
 

@@ -175,35 +175,21 @@ impl Database {
         let _ = sqlx::query("UPDATE collections SET owner = 'system' WHERE slug = 'last-played'")
             .execute(&self.pool)
             .await;
-        let migration =
-            sqlx::query("INSERT OR IGNORE INTO hearthdeck_schema_migrations (version) VALUES (1)")
-                .execute(&self.pool)
-                .await?;
-        if migration.rows_affected() == 1 {
-            let mut transaction = self.pool.begin().await?;
-            sqlx::query(
-                "CREATE TABLE user_settings_rebuilt (id INTEGER PRIMARY KEY CHECK (id = 1), theme_mode TEXT NOT NULL, backdrop_mode TEXT NOT NULL DEFAULT 'solid', revision INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)",
+        // Versions 1 and 2 rebuild `user_settings` with the same column list; the
+        // second was a copy of the first. Recording both keeps the ledger
+        // continuous for a future `> N` check, but the table is rewritten at most
+        // once — previously a fresh database dropped and recreated it twice.
+        let mut rebuild = false;
+        for version in [1_i64, 2] {
+            let migration = sqlx::query(
+                "INSERT OR IGNORE INTO hearthdeck_schema_migrations (version) VALUES (?)",
             )
-            .execute(&mut *transaction)
+            .bind(version)
+            .execute(&self.pool)
             .await?;
-            sqlx::query(
-                "INSERT INTO user_settings_rebuilt (id, theme_mode, backdrop_mode, revision, updated_at) SELECT id, theme_mode, backdrop_mode, revision, updated_at FROM user_settings",
-            )
-            .execute(&mut *transaction)
-            .await?;
-            sqlx::query("DROP TABLE user_settings")
-                .execute(&mut *transaction)
-                .await?;
-            sqlx::query("ALTER TABLE user_settings_rebuilt RENAME TO user_settings")
-                .execute(&mut *transaction)
-                .await?;
-            transaction.commit().await?;
+            rebuild |= migration.rows_affected() == 1;
         }
-        let migration =
-            sqlx::query("INSERT OR IGNORE INTO hearthdeck_schema_migrations (version) VALUES (2)")
-                .execute(&self.pool)
-                .await?;
-        if migration.rows_affected() == 1 {
+        if rebuild {
             let mut transaction = self.pool.begin().await?;
             sqlx::query(
                 "CREATE TABLE user_settings_rebuilt (id INTEGER PRIMARY KEY CHECK (id = 1), theme_mode TEXT NOT NULL, backdrop_mode TEXT NOT NULL DEFAULT 'solid', revision INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)",
@@ -295,5 +281,34 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 3);
+    }
+
+    #[tokio::test]
+    async fn migrations_record_both_versions_and_rerun_safely() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+
+        database.migrate().await.unwrap();
+        // Running again is the upgrade path for a database that already migrated;
+        // it must be a no-op rather than an error.
+        database.migrate().await.unwrap();
+
+        let versions: Vec<i64> =
+            sqlx::query_scalar("SELECT version FROM hearthdeck_schema_migrations ORDER BY version")
+                .fetch_all(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(versions, vec![1, 2]);
+
+        // The rebuild left exactly one `user_settings` row and no scratch table.
+        let rebuilt: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'user_settings_rebuilt'",
+        )
+        .fetch_one(database.pool())
+        .await
+        .unwrap();
+        assert_eq!(rebuilt, 0);
     }
 }

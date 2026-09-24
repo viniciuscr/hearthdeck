@@ -104,24 +104,7 @@ pub trait GameProvider: Send + Sync {
     async fn discover(&self) -> anyhow::Result<Vec<GameRecord>>;
 }
 
-/// Health status of a provider.
-#[derive(Debug, Clone, Serialize)]
-pub struct ProviderHealth {
-    pub source_id: String,
-    pub status: ProviderStatus,
-    pub record_count: Option<usize>,
-    pub last_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderStatus {
-    Starting,
-    Refreshing,
-    Ready,
-    Degraded,
-}
-
+/// A game provider discovers installed games or applications from a specific
 #[cfg(test)]
 mod tests {
     use super::GameRecord;
