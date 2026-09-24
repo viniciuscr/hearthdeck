@@ -654,6 +654,12 @@ impl DaemonClient {
         self.post_empty("/v1/categorization/scan").await
     }
 
+    /// Republishes the last scan's rails as dashboard collections, without
+    /// running the scan again. The caller re-reads the collections afterwards.
+    pub async fn create_categorization_collections(&self) -> Result<(), DaemonError> {
+        self.post_empty("/v1/categorization/collections").await
+    }
+
     /// Turns smart categorization on, which is the action that fetches the
     /// checkpoint when none is cached and produces the first report.
     pub async fn enable_categorization(&self) -> Result<(), DaemonError> {

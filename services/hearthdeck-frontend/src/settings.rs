@@ -1,9 +1,10 @@
 //! The settings screen.
 //!
 //! Smart categorization is the one thing here that both costs something and
-//! changes something: it downloads most of a gigabyte, and it takes over the
-//! library's category tabs. So this screen says both of those plainly before
-//! anything happens, does it only when asked, and offers the way back.
+//! changes something: it downloads most of a gigabyte, calls a local model over
+//! the library, and takes over the library's category tabs and the dashboard.
+//! So this screen says both of those plainly before anything happens, does it
+//! only when asked, and offers the way back.
 
 use std::sync::LazyLock;
 
@@ -11,7 +12,7 @@ use cosmic::Element;
 use cosmic::iced::{Alignment, Length};
 use cosmic::theme;
 use cosmic::theme::Button;
-use cosmic::widget::{Id, button, column, container, row, scrollable, text};
+use cosmic::widget::{Id, button, column, container, row, scrollable, text, toggler};
 
 use crate::app::{Message, human_size};
 use crate::fl;
@@ -24,27 +25,36 @@ use crate::style::{TEXT_TITLE, primary_action_button_class};
 /// cannot drift away from the number the operator reads in the docs.
 const DOWNLOAD_SIZE: &str = "~850 MB";
 
-/// Widget ids for the buttons, so the gamepad can find them. Stable strings:
+/// Widget ids for the controls, so the gamepad can find them. Stable strings:
 /// the focus is addressed by id across frames.
-static ENABLE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("settings-categorization-enable"));
-static DISABLE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("settings-categorization-disable"));
-static RESCAN_ID: LazyLock<Id> = LazyLock::new(|| Id::new("settings-categorization-rescan"));
+static TOGGLE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("settings-categorization-toggle"));
+static CATEGORIZE_ID: LazyLock<Id> =
+    LazyLock::new(|| Id::new("settings-categorization-categorize"));
+static CREATE_COLLECTIONS_ID: LazyLock<Id> =
+    LazyLock::new(|| Id::new("settings-categorization-create-collections"));
 static RESET_ID: LazyLock<Id> = LazyLock::new(|| Id::new("settings-categorization-reset"));
 static REMOVE_MODEL_ID: LazyLock<Id> =
     LazyLock::new(|| Id::new("settings-categorization-remove-model"));
 
-/// One thing the screen can do.
+/// One control the screen offers.
 ///
 /// Kept as data rather than as a row of widgets built in one place, because the
 /// application needs the same list for two other jobs: moving the gamepad's
-/// focus through the row, and knowing what a press on a focused button means.
-/// One list means the drawn buttons and the handled ones cannot drift apart.
+/// focus through the row, and knowing what a press on a focused control means.
+/// One list means the drawn controls and the handled ones cannot drift apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    Enable,
-    Disable,
-    Rescan,
+    /// The opt-in itself. Turning it on is what installs and activates the
+    /// model; turning it off restores everything the model changed.
+    Toggle,
+    /// Classify the library with the model. This is the run that calls it.
+    Categorize,
+    /// Publish the last run's rails as dashboard collections, without calling
+    /// the model again.
+    CreateCollections,
+    /// Give the tabs back to the ones derived from the entries themselves.
     Reset,
+    /// Free the downloaded checkpoint.
     RemoveModel,
 }
 
@@ -53,19 +63,19 @@ impl Action {
     /// [`actions`], so this is only used to get back from a widget id to the
     /// action it stands for.
     const ALL: [Action; 5] = [
-        Action::Enable,
-        Action::Disable,
-        Action::Rescan,
+        Action::Toggle,
+        Action::Categorize,
+        Action::CreateCollections,
         Action::Reset,
         Action::RemoveModel,
     ];
 
-    /// The widget id the button carries, so focus can be addressed to it.
+    /// The widget id the control carries, so focus can be addressed to it.
     pub fn id(self) -> &'static Id {
         match self {
-            Self::Enable => &ENABLE_ID,
-            Self::Disable => &DISABLE_ID,
-            Self::Rescan => &RESCAN_ID,
+            Self::Toggle => &TOGGLE_ID,
+            Self::Categorize => &CATEGORIZE_ID,
+            Self::CreateCollections => &CREATE_COLLECTIONS_ID,
             Self::Reset => &RESET_ID,
             Self::RemoveModel => &REMOVE_MODEL_ID,
         }
@@ -73,9 +83,9 @@ impl Action {
 
     fn label(self) -> String {
         match self {
-            Self::Enable => fl!("categorization-enable"),
-            Self::Disable => fl!("categorization-disable"),
-            Self::Rescan => fl!("categorization-rescan"),
+            Self::Toggle => fl!("categorization-toggle"),
+            Self::Categorize => fl!("categorization-categorize"),
+            Self::CreateCollections => fl!("categorization-create-collections"),
             Self::Reset => fl!("categorization-reset"),
             Self::RemoveModel => fl!("categorization-remove-model"),
         }
@@ -84,9 +94,9 @@ impl Action {
     /// The message the application handles when this is pressed.
     pub fn message(self) -> Message {
         match self {
-            Self::Enable => Message::EnableCategorization,
-            Self::Disable => Message::DisableCategorization,
-            Self::Rescan => Message::StartCategorization,
+            Self::Toggle => Message::ToggleCategorization,
+            Self::Categorize => Message::StartCategorization,
+            Self::CreateCollections => Message::CreateCategorizationCollections,
             Self::Reset => Message::ResetCategorizationTabs,
             Self::RemoveModel => Message::DeleteCategorizationModel,
         }
@@ -94,30 +104,37 @@ impl Action {
 
     fn class(self) -> Button {
         match self {
-            Self::Enable | Self::Rescan => primary_action_button_class(),
+            Self::Categorize | Self::CreateCollections => primary_action_button_class(),
             Self::RemoveModel => Button::Destructive,
-            Self::Disable | Self::Reset => Button::Standard,
+            Self::Toggle | Self::Reset => Button::Standard,
         }
     }
 }
 
-/// The actions on offer for the state `panel` describes, in the order they are
-/// drawn. Enable and Disable never appear together: which one is offered is the
-/// state of the feature.
+/// The controls on offer for the state `panel` describes, in the order they are
+/// drawn.
+///
+/// The switch is always first and always there: it is the one control that
+/// installs and activates the model, and the only way back. The two buttons that
+/// make the model do something appear only once it is on — there is nothing for
+/// them to act on before that, and a scan with no opt-in is refused.
 ///
 /// Anything that reads or writes the checkpoint is off the list while a scan is
-/// running, since only one scan can hold it at a time. The buttons stay drawn
+/// running, since only one scan can hold it at a time. The controls stay drawn
 /// but unpressable, so the row does not jump about mid-scan.
 pub fn actions(panel: &Panel) -> Vec<Action> {
     let Some(snapshot) = &panel.snapshot else {
         return Vec::new();
     };
-    let mut actions = if snapshot.enabled {
-        vec![Action::Rescan, Action::Disable]
-    } else {
-        vec![Action::Enable]
-    };
+    let mut actions = vec![Action::Toggle];
+    if !snapshot.enabled {
+        return actions;
+    }
+    actions.push(Action::Categorize);
     if snapshot.report.is_some() {
+        // Both read the stored report: without one there is nothing to publish,
+        // and nothing to undo.
+        actions.push(Action::CreateCollections);
         actions.push(Action::Reset);
     }
     if matches!(snapshot.status.model, ModelStatus::Downloaded { .. }) {
@@ -128,20 +145,28 @@ pub fn actions(panel: &Panel) -> Vec<Action> {
 
 /// The action a widget id stands for, or `None` when the id belongs to
 /// something else. Widget ids are unique across the app, so this is how the
-/// confirm handler recognises its own buttons.
+/// confirm handler recognises its own controls.
 pub fn action(id: &Id) -> Option<Action> {
     Action::ALL.into_iter().find(|action| action.id() == id)
 }
 
 /// Whether pressing `action` would be accepted in the state `panel` describes.
-/// The application asks before it moves the focus onto a button, so a scan in
+/// The application asks before it moves the focus onto a control, so a scan in
 /// progress is skipped rather than confirming into nothing.
 pub fn pressable(action: Action, panel: &Panel) -> bool {
-    let busy = panel
-        .snapshot
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.status.running);
-    !matches!(action, Action::Rescan | Action::RemoveModel) || !busy
+    let snapshot = panel.snapshot.as_ref();
+    let busy = snapshot.is_some_and(|snapshot| snapshot.status.running);
+    let enabled = snapshot.is_some_and(|snapshot| snapshot.enabled);
+    match action {
+        // The switch reads and writes the opt-in, which a running scan does not
+        // hold: the daemon leaves a running scan to finish either way.
+        Action::Toggle => snapshot.is_some(),
+        Action::Categorize | Action::RemoveModel => enabled && !busy,
+        Action::CreateCollections => {
+            enabled && !busy && snapshot.is_some_and(|snapshot| snapshot.report.is_some())
+        }
+        Action::Reset => enabled,
+    }
 }
 
 /// What the screen shows. Gathered by the caller, so this module needs nothing
@@ -166,8 +191,8 @@ pub fn view(panel: &Panel) -> Element<'static, Message> {
 
     match panel.capable {
         Some(true) => {}
-        // Offered only once the daemon is known to provide it: a button that
-        // cannot work is worse than no button.
+        // Offered only once the daemon is known to provide it: a control that
+        // cannot work is worse than no control.
         Some(false) => {
             body = body.push(note(fl!("categorization-unsupported")));
             body = body.push(text::caption(fl!("categorization-unsupported-hint")));
@@ -187,7 +212,17 @@ pub fn view(panel: &Panel) -> Element<'static, Message> {
     {
         body = body.push(text::caption(fl!("categorization-failed", reason = error)));
     }
-    body = body.push(actions_row(panel));
+    // Nothing to draw until the first read answers; the status line says so.
+    if panel.snapshot.is_some() {
+        body = body.push(toggle_row(panel));
+    }
+    let buttons: Vec<Action> = actions(panel)
+        .into_iter()
+        .filter(|action| *action != Action::Toggle)
+        .collect();
+    if !buttons.is_empty() {
+        body = body.push(buttons_row(&buttons, panel));
+    }
     if let Some(snapshot) = &panel.snapshot
         && let Some(report) = snapshot.report.as_ref()
     {
@@ -237,12 +272,30 @@ fn model_line(model: &ModelStatus) -> String {
     }
 }
 
-fn actions_row(panel: &Panel) -> Element<'static, Message> {
+/// The opt-in switch, on its own row above the buttons it gates.
+fn toggle_row(panel: &Panel) -> Element<'static, Message> {
+    let checked = panel
+        .snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.enabled);
+    let control = toggler(checked)
+        .id(Action::Toggle.id().clone())
+        .label(Action::Toggle.label())
+        .spacing(theme::spacing().space_xs);
+    let control = if pressable(Action::Toggle, panel) {
+        control.on_toggle(|_| Message::ToggleCategorization)
+    } else {
+        control
+    };
+    row![control].into()
+}
+
+fn buttons_row(actions: &[Action], panel: &Panel) -> Element<'static, Message> {
     let spacing = theme::spacing();
     let mut row = row![].spacing(spacing.space_s).align_y(Alignment::Center);
 
-    for action in actions(panel) {
-        row = row.push(action_button(action, panel));
+    for action in actions {
+        row = row.push(action_button(*action, panel));
     }
     row.into()
 }

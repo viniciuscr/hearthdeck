@@ -63,6 +63,10 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/categorization/disable", post(disable_categorization))
         .route("/v1/categorization/scan", post(start_categorization))
         .route(
+            "/v1/categorization/collections",
+            post(publish_categorization_collections),
+        )
+        .route(
             "/v1/categorization/model",
             delete(delete_categorization_model),
         )
@@ -594,6 +598,35 @@ async fn start_categorization(
             Ok(StatusCode::ACCEPTED)
         }
     }
+}
+
+/// Writes the dashboard collections the last scan implies, without classifying
+/// the library again. The heavy work already happened; this republishes its
+/// answer, so the client refreshes its collections when this answers.
+async fn publish_categorization_collections(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    let service = state
+        .categorization
+        .as_ref()
+        .ok_or_else(ApiError::service_unavailable)?;
+    if !state
+        .settings
+        .get()
+        .await
+        .map_err(ApiError::internal)?
+        .categorization_enabled
+    {
+        return Err(ApiError::conflict("categorization is not enabled"));
+    }
+    let written = service
+        .publish_collections()
+        .await
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
+    info!(count = written, "categorization collections published");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Frees what the checkpoint costs on disk. The report it produced is kept: it

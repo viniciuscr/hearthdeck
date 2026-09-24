@@ -715,7 +715,9 @@ impl CategorizationService {
         }
         match outcome {
             Ok(report) => {
-                self.write_rail_collections(&report).await;
+                if let Err(error) = self.write_rail_collections(&report).await {
+                    warn!(%error, "could not write the collections this scan implies");
+                }
                 let _ = self.inner.events.send(ServerEvent::CategorizationChanged {
                     categorizer: report.categorizer.clone(),
                     app_count: report.app_count,
@@ -729,25 +731,34 @@ impl CategorizationService {
     /// Replaces this feature's rails with the ones this report implies.
     ///
     /// Replacement, not merging: a rail the scan no longer has anything for is
-    /// gone on the next scan, without anybody deleting it by hand. A failure here
-    /// is not a failed scan — the report is stored either way, and the tabs come
-    /// from that — so it is a warning, not an error the caller sees.
-    async fn write_rail_collections(&self, report: &ScanReport) {
+    /// gone on the next scan, without anybody deleting it by hand. The caller
+    /// decides whether a failure matters: a scan keeps its report either way, so
+    /// it warns and carries on, while the publish button has nothing else to do
+    /// and hands the error back.
+    async fn write_rail_collections(&self, report: &ScanReport) -> anyhow::Result<usize> {
         let collections = rail_collections(report);
-        if let Err(error) = self
-            .inner
+        let count = collections.len();
+        self.inner
             .collections
             .replace_owned(collections::OWNER_LAYA, &collections)
             .await
-        {
-            warn!(
-                %error,
-                count = collections.len(),
-                "could not write the collections this scan implies"
-            );
-            return;
-        }
-        info!(count = collections.len(), "scan rails written");
+            .context("could not write the collections this report implies")?;
+        info!(count, "scan rails written");
+        Ok(count)
+    }
+
+    /// Writes the dashboard collections the last stored report implies, without
+    /// re-running the scan. This is the dashboard-collections button: the heavy
+    /// work (classifying the library) already happened, and this only republishes
+    /// its answer. A database with no report yet has nothing to publish.
+    pub async fn publish_collections(&self) -> anyhow::Result<usize> {
+        let report = self
+            .inner
+            .store
+            .latest()
+            .await?
+            .context("no categorization report has been produced yet")?;
+        self.write_rail_collections(&report).await
     }
 
     async fn run_scan(&self) -> anyhow::Result<ScanReport> {
@@ -1146,6 +1157,30 @@ mod tests {
             Ok(ServerEvent::CategorizationChanged { app_count: 2, .. })
         ));
         assert_eq!(runner.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn publishing_collections_writes_the_latest_reports_rails_without_a_scan() {
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture(Arc::new(FixedRunner::succeeding())).await;
+
+        // Nothing to publish before any scan has produced a report.
+        assert!(service.publish_collections().await.is_err());
+
+        let mut stored = report();
+        stored.categories = vec![proposal("video_streaming", &["desktop:netflix.desktop"])];
+        service.inner.store.save(&stored).await.unwrap();
+
+        let written = service.publish_collections().await.unwrap();
+        assert_eq!(written, 1);
+        let rows = service.inner.collections.list().await.unwrap();
+        assert!(
+            rows.iter()
+                .any(|row| row.slug == "laya:watch" && row.owner == crate::collections::OWNER_LAYA)
+        );
     }
 
     #[tokio::test]

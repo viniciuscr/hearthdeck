@@ -1170,10 +1170,14 @@ pub(crate) enum Message {
     CategorizationAction(Result<CategorizationSnapshot, String>),
     /// The user pressed Settings in the dashboard's navigation.
     OpenSettings,
-    /// The user turned smart categories on, which is what starts the download.
-    EnableCategorization,
-    /// The user turned them off, which restores the derived categories.
-    DisableCategorization,
+    /// The user flipped the AI switch. Turning it on installs and activates the
+    /// model; turning it off restores the derived categories.
+    ToggleCategorization,
+    /// The user asked for the last scan's rails to be published as dashboard
+    /// collections, without classifying the library again.
+    CreateCategorizationCollections,
+    /// What the daemon answered when asked to publish those collections.
+    CategorizationCollectionsCreated(Result<Vec<Collection>, String>),
     /// The user asked for the downloaded checkpoint to be removed.
     DeleteCategorizationModel,
     /// The user asked for the scan's tabs to give way to the derived ones.
@@ -1498,6 +1502,67 @@ impl HearthDeck {
             },
             |result| cosmic::Action::App(Message::CategorizationAction(result)),
         )
+    }
+
+    /// Flips the AI switch. Turning it on is what installs and activates the
+    /// model: enabling starts the first scan, which fetches the checkpoint when
+    /// the machine has none yet.
+    fn toggle_categorization(&mut self) -> Task<Message> {
+        if self
+            .categorization
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.enabled)
+        {
+            self.disable_categorization()
+        } else {
+            self.enable_categorization()
+        }
+    }
+
+    /// Republishes the last scan's rails as dashboard collections, without
+    /// classifying the library again. The heavy work already happened; this only
+    /// re-reads its answer into the collections the dashboard composes from.
+    fn create_categorization_collections(&mut self) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                client
+                    .create_categorization_collections()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                client
+                    .list_collections()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CategorizationCollectionsCreated(result)),
+        )
+    }
+
+    /// Settles the publish: the dashboard's rails are redrawn from what the
+    /// daemon now holds, or the refusal is what the user sees.
+    fn settle_created_collections(
+        &mut self,
+        result: Result<Vec<Collection>, String>,
+    ) -> Task<Message> {
+        match result {
+            Ok(collections) => {
+                self.collections = collections;
+                self.rebuild_favorite_entries();
+                self.rebuild_watch_entries();
+                let plays = self.load_recent_plays();
+                Task::batch([
+                    plays,
+                    self.push_alert(fl!("categorization-collections-created"), false),
+                ])
+            }
+            Err(error) => {
+                log::warn!("could not create the dashboard collections: {error}");
+                self.push_alert(fl!("categorization-failed", reason = error), true)
+            }
+        }
     }
 
     /// Hands the Applications tabs back to the ones derived from the entries.
@@ -5084,8 +5149,13 @@ impl cosmic::Application for HearthDeck {
                     .unwrap_or_else(Task::none);
                 return Task::batch([focus, self.poll_categorization(std::time::Duration::ZERO)]);
             }
-            Message::EnableCategorization => return self.enable_categorization(),
-            Message::DisableCategorization => return self.disable_categorization(),
+            Message::ToggleCategorization => return self.toggle_categorization(),
+            Message::CreateCategorizationCollections => {
+                return self.create_categorization_collections();
+            }
+            Message::CategorizationCollectionsCreated(result) => {
+                return self.settle_created_collections(result);
+            }
             Message::DeleteCategorizationModel => return self.delete_categorization_model(),
             Message::ResetCategorizationTabs => {
                 self.restore_derived_categories();
@@ -7721,10 +7791,16 @@ mod tests {
         };
 
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSettings);
-        assert_eq!(app.focused_id.as_ref(), Some(Action::Rescan.id()));
+        // The switch is first: it is what installs and activates the model.
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Toggle.id()));
 
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
-        assert_eq!(app.focused_id.as_ref(), Some(Action::Disable.id()));
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Categorize.id()));
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(
+            app.focused_id.as_ref(),
+            Some(Action::CreateCollections.id())
+        );
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
         assert_eq!(app.focused_id.as_ref(), Some(Action::Reset.id()));
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
@@ -7746,9 +7822,11 @@ mod tests {
 
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSettings);
 
-        // Rescan is drawn but unpressable while the scan it would replace is
-        // running, so the pad starts on the next button that does something.
-        assert_eq!(app.focused_id.as_ref(), Some(Action::Disable.id()));
+        // The model's buttons are drawn but unpressable while a scan holds the
+        // checkpoint, so the pad starts on the switch and skips to Restore.
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Toggle.id()));
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Reset.id()));
     }
 
     #[test]
@@ -7777,24 +7855,26 @@ mod tests {
     fn the_settings_focus_follows_a_row_that_changed_under_it() {
         let mut app = HearthDeck {
             categorization_capable: Some(true),
-            categorization: Some(serde_json::from_value(snapshot_json(false, false)).unwrap()),
+            categorization: Some(serde_json::from_value(snapshot_json(false, true)).unwrap()),
             ..Default::default()
         };
 
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSettings);
-        assert_eq!(app.focused_id.as_ref(), Some(Action::Enable.id()));
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Toggle.id()));
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Categorize.id()));
 
-        // The user pressed Enable and the first poll already finds a scan
-        // running: Enable is no longer a button the row has.
+        // The feature was turned off elsewhere: the button the pad was on is gone
+        // from the row, so the focus falls back to the control that remains.
         let _ = <HearthDeck as cosmic::Application>::update(
             &mut app,
             super::Message::CategorizationPolled(Ok(serde_json::from_value(snapshot_json(
-                true, true,
+                false, false,
             ))
             .unwrap())),
         );
 
-        assert_eq!(app.focused_id.as_ref(), Some(Action::Disable.id()));
+        assert_eq!(app.focused_id.as_ref(), Some(Action::Toggle.id()));
     }
 
     #[test]
