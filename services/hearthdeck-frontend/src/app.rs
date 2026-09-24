@@ -270,6 +270,13 @@ fn available_disk_bytes(path: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// Free space on the home filesystem, formatted for the status bar. Called once
+/// at startup and again on the periodic system-status poll — never from a view.
+fn disk_free_label() -> String {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+    human_size(available_disk_bytes(&home))
+}
+
 /// Formats a byte count for humans, e.g. "128.4 GB".
 pub(crate) fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
@@ -516,6 +523,12 @@ struct HearthDeck {
     /// subscription while a transition is in flight (the application's `update`
     /// does not receive it the way raw iced's does).
     now: Instant,
+    /// The current user's display name, resolved once in `init`. Reading
+    /// `/etc/passwd` per frame was the reason this moved out of the view.
+    user_name: String,
+    /// Free space on the home filesystem, refreshed on the periodic system-status
+    /// poll rather than on every frame.
+    disk_free: String,
 }
 
 impl Default for HearthDeck {
@@ -535,6 +548,8 @@ impl Default for HearthDeck {
             cur_section: Section::PcGames,
             cur_group: Default::default(),
             locale: Default::default(),
+            user_name: String::new(),
+            disk_free: String::new(),
             edit_name: Default::default(),
             new_group: Default::default(),
             dnd_icon: Default::default(),
@@ -5041,6 +5056,9 @@ impl cosmic::Application for HearthDeck {
             }
             Message::SystemStatus(status) => {
                 self.system_status = status;
+                // Disk usage changes on the order of the poll, not the frame, so it
+                // rides the status tick instead of the render path.
+                self.disk_free = disk_free_label();
                 return Self::load_system_status(SYSTEM_STATUS_POLL_INTERVAL);
             }
             Message::DashboardHealth { generation, result } => {
@@ -5512,6 +5530,8 @@ impl cosmic::Application for HearthDeck {
             next_group_key: group_count,
             provider_service: Some(provider_service),
             daemon_client: Some(daemon_client),
+            user_name: current_user_name(),
+            disk_free: disk_free_label(),
             ..Default::default()
         };
 
@@ -5708,7 +5728,7 @@ impl HearthDeck {
         } = theme::spacing();
         let tile_size = dashboard_tile_size(self.window_width, space_l, space_l);
         let nav_button_size = f32::from(space_xl);
-        let user_name = current_user_name();
+        let user_name = self.user_name.clone();
 
         let nav_button = |id: widget::Id,
                           icon_name: &'static str,
@@ -6301,9 +6321,8 @@ impl HearthDeck {
             self.entry_path_input.len()
         };
 
-        let user_name = current_user_name();
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
-        let disk_free = human_size(available_disk_bytes(&home));
+        let user_name = self.user_name.clone();
+        let disk_free = self.disk_free.clone();
 
         // ===== Sidebar: fixed section navigation =====
         let build_section_button = |section: crate::app_group::Section| {

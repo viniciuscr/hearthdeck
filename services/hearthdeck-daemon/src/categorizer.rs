@@ -22,7 +22,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::Context;
@@ -105,6 +105,15 @@ pub struct CategorizerSettings {
     pub model_path: Option<PathBuf>,
     pub dtype: String,
     pub research: bool,
+    /// How long the child may run before the daemon kills it.
+    ///
+    /// A deadlock breaker, not a performance budget: the first scan on a fresh
+    /// host downloads the checkpoint, so the default is deliberately generous.
+    /// Its job is to guarantee the scan slot is always released — without it a
+    /// child stalled on a download would leave `running` claimed forever, and
+    /// because scans coalesce on `running`, every later scan would silently
+    /// no-op until the daemon restarted.
+    pub timeout: Duration,
 }
 
 impl CategorizerSettings {
@@ -167,6 +176,11 @@ impl CategorizerSettings {
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "float16".to_owned()),
             research: flag(get("HEARTHDECK_CATEGORIZER_RESEARCH")),
+            timeout: get("HEARTHDECK_CATEGORIZER_TIMEOUT_SECS")
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|seconds| *seconds > 0)
+                .map(Duration::from_secs)
+                .unwrap_or_else(default_scan_timeout),
         }
     }
 
@@ -188,6 +202,13 @@ impl CategorizerSettings {
 
 fn flag(value: Option<String>) -> bool {
     value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+/// Ceiling on one scan, in the absence of an override. An hour is far more than a
+/// scan needs once the checkpoint is local, which is the point: it only ever
+/// fires on a run that has genuinely wedged.
+fn default_scan_timeout() -> Duration {
+    Duration::from_secs(60 * 60)
 }
 
 /// The name of the program that does the scan.
@@ -372,10 +393,20 @@ impl ScanRunner for ProcessScanRunner {
         let stderr = child.stderr.take().expect("stderr piped above");
         let stdout = tokio::spawn(relay(stdout, false));
         let stderr = tokio::spawn(relay(stderr, true));
-        let status = child
-            .wait()
-            .await
-            .context("could not wait for the categorizer")?;
+        let status = match tokio::time::timeout(self.settings.timeout, child.wait()).await {
+            Ok(status) => status.context("could not wait for the categorizer")?,
+            Err(_) => {
+                // The child hung. Kill it and reap so the pipes close and the relay
+                // tasks end, then fail: `run_scan`'s caller releases the scan slot on
+                // any error, which is the whole point of bounding the wait.
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                anyhow::bail!(
+                    "the categorizer did not finish within {} seconds",
+                    self.settings.timeout.as_secs()
+                );
+            }
+        };
         let (stdout_lines, stderr_lines) = (stdout.await, stderr.await);
         info!(
             exit_status = %status,
@@ -969,6 +1000,7 @@ mod tests {
             model_path: None,
             dtype: "float16".to_owned(),
             research: false,
+            timeout: std::time::Duration::from_secs(60 * 60),
         }
     }
 
@@ -1046,6 +1078,25 @@ mod tests {
             settings.binary,
             std::path::PathBuf::from("hearthdeck-categorizer")
         );
+        assert_eq!(settings.timeout, std::time::Duration::from_secs(60 * 60));
+    }
+
+    #[test]
+    fn a_scan_timeout_can_be_overridden_and_a_bad_value_is_ignored() {
+        let dir = std::path::Path::new("/data");
+        let seconds = |value: &str| {
+            let value = value.to_owned();
+            CategorizerSettings::from_lookup(
+                dir,
+                &move |name| (name == "HEARTHDECK_CATEGORIZER_TIMEOUT_SECS").then(|| value.clone()),
+                bare_binary(),
+            )
+            .timeout
+        };
+
+        assert_eq!(seconds("120"), std::time::Duration::from_secs(120));
+        assert_eq!(seconds("0"), std::time::Duration::from_secs(60 * 60));
+        assert_eq!(seconds("nonsense"), std::time::Duration::from_secs(60 * 60));
     }
 
     #[test]
@@ -1136,6 +1187,7 @@ mod tests {
             model_path: Some("/models/laya".into()),
             dtype: "float32".to_owned(),
             research: true,
+            timeout: std::time::Duration::from_secs(60 * 60),
         };
         let runner = ProcessScanRunner::new(settings);
         let arguments: Vec<String> = runner

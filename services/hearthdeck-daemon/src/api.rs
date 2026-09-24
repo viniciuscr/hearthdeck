@@ -105,9 +105,27 @@ async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
         } else {
             "http"
         },
-        providers: state.provider_health().await,
+        providers: state
+            .provider_health()
+            .await
+            .into_iter()
+            .map(redact_provider_error)
+            .collect(),
         capabilities,
     })
+}
+
+/// `/v1/health` is unauthenticated, so a provider's own error message never
+/// crosses it. Those messages are `error.to_string()` from the discovery and
+/// enrichment layers and routinely embed absolute host paths (a Heroic config
+/// directory, a resources mount), which a client on the LAN should not be able
+/// to read before it is paired. The status still says the provider is degraded;
+/// only the string that would leak the host is replaced.
+fn redact_provider_error(mut provider: ProviderHealth) -> ProviderHealth {
+    if provider.last_error.is_some() {
+        provider.last_error = Some("provider error".to_owned());
+    }
+    provider
 }
 
 #[cfg(target_os = "linux")]
@@ -1691,14 +1709,37 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    use super::{local_router, router};
+    use super::{local_router, redact_provider_error, router};
     use crate::{
         catalog::CatalogRecord,
         config::Config,
         database::Database,
         discovery::{DiscoveryProvider, DiscoveryService},
-        state::{AppState, SharedState},
+        state::{AppState, ProviderHealth, ProviderKind, ProviderStatus, SharedState},
     };
+
+    #[test]
+    fn health_redacts_provider_error_strings() {
+        // The status still says the provider is degraded, but the string that would
+        // have carried a host path does not cross the unauthenticated endpoint.
+        let degraded = ProviderHealth {
+            id: "heroic".to_owned(),
+            kind: ProviderKind::Discovery,
+            status: ProviderStatus::Degraded,
+            record_count: None,
+            last_attempt_at: None,
+            last_success_at: None,
+            last_error: Some("read /home/user/.config/heroic/legendaryConfig failed".to_owned()),
+        };
+        assert_eq!(
+            redact_provider_error(degraded).last_error.as_deref(),
+            Some("provider error")
+        );
+
+        // A provider with no error is left alone.
+        let healthy = ProviderHealth::starting("desktop-apps", ProviderKind::Discovery);
+        assert!(redact_provider_error(healthy).last_error.is_none());
+    }
 
     async fn response_json(
         app: axum::Router,

@@ -693,6 +693,13 @@ async fn desktop_entry_path(source_id: &str, application_id: &str) -> Result<Pat
     if source_id != DESKTOP_APPS_SOURCE {
         anyhow::bail!("unsupported application source")
     }
+    // `application_id` is client-supplied. Discovery is safe because it reads the
+    // file's own name, but this launch path joins the raw string onto a discovery
+    // root, so a value containing `..` or a path separator could point at any
+    // `.desktop` file on the host. Require a single normal component.
+    if !is_bare_file_name(application_id) {
+        anyhow::bail!("invalid desktop entry id")
+    }
     for directory in desktop_entry_directories() {
         let path = directory.join(application_id);
         if path.is_file() && parse_desktop_entry(&path).await.is_ok() {
@@ -700,6 +707,14 @@ async fn desktop_entry_path(source_id: &str, application_id: &str) -> Result<Pat
         }
     }
     anyhow::bail!("desktop entry is not registered")
+}
+
+/// Whether `value` is a single file-name component: not empty, not `.` or `..`,
+/// and free of separators. The single-component check is what rejects `./x`,
+/// `../x`, `/x`, and `dir/x`; the explicit `.`/`..` check catches what
+/// `components()` would otherwise fold into one.
+fn is_bare_file_name(value: &str) -> bool {
+    !value.is_empty() && value != "." && value != ".." && Path::new(value).components().count() == 1
 }
 
 async fn command_for_desktop_entry(path: &Path) -> Result<DesktopLaunch> {
@@ -1025,11 +1040,26 @@ mod tests {
 
     use super::{
         RETRO_VIDEO_DRIVER_DEFAULT, SHADER_PRESET_BY_CORE, VIDEO_DRIVER_BY_CORE,
-        desktop_entry_directories_for, parse_desktop_entry, parse_exec, retro_profiles,
-        retroarch_command_args, retroarch_managed_config, shader_preset_for_core_in,
-        valid_heroic_application_id, validate_retro_core_path_in, validate_retro_rom_path_in,
-        video_driver_for_core, visible_in_desktop,
+        desktop_entry_directories_for, is_bare_file_name, parse_desktop_entry, parse_exec,
+        retro_profiles, retroarch_command_args, retroarch_managed_config,
+        shader_preset_for_core_in, valid_heroic_application_id, validate_retro_core_path_in,
+        validate_retro_rom_path_in, video_driver_for_core, visible_in_desktop,
     };
+
+    #[test]
+    fn a_desktop_entry_id_must_be_a_single_file_name() {
+        // Valid desktop-entry ids: reversed-DNS names and plain file names.
+        assert!(is_bare_file_name("org.example.App.desktop"));
+        assert!(is_bare_file_name("firefox.desktop"));
+
+        // Everything a client could use to walk out of a discovery root.
+        assert!(!is_bare_file_name(""));
+        assert!(!is_bare_file_name("."));
+        assert!(!is_bare_file_name(".."));
+        assert!(!is_bare_file_name("../evil.desktop"));
+        assert!(!is_bare_file_name("/etc/evil.desktop"));
+        assert!(!is_bare_file_name("sub/evil.desktop"));
+    }
 
     #[tokio::test]
     async fn parses_only_the_desktop_entry_group() {

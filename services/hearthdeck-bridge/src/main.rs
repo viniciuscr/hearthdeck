@@ -466,15 +466,28 @@ async fn active_managed_session(
     let mut running = Vec::new();
 
     for (session_id, managed) in candidates {
-        if !platform::application_is_running(managed.unit_name.as_deref())
-            .await
-            .unwrap_or(false)
-        {
-            sessions.lock().await.remove(&session_id);
-            if let Err(error) = remove_managed_session(session_directory, &session_id).await {
-                warn!(session_id, %error, "could not remove inactive application session record");
+        match platform::application_is_running(managed.unit_name.as_deref()).await {
+            // Definitively gone: drop it from the map and from disk.
+            Ok(false) => {
+                sessions.lock().await.remove(&session_id);
+                if let Err(error) = remove_managed_session(session_directory, &session_id).await {
+                    warn!(session_id, %error, "could not remove inactive application session record");
+                }
+                continue;
             }
-            continue;
+            // Still running.
+            Ok(true) => {}
+            // Could not tell. A transient `systemctl` error must not be read as
+            // "stopped": pruning a session whose application is still up makes the
+            // application unclosable, because stopping it goes through the very
+            // record we would have deleted.
+            Err(error) => {
+                warn!(
+                    session_id,
+                    %error,
+                    "could not determine whether the application is running"
+                );
+            }
         }
         let modified_at = managed_session_modified_at(session_directory, &session_id).await;
         running.push((session_id, managed, modified_at));
