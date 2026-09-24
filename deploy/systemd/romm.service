@@ -11,7 +11,7 @@ PartOf=hearthdeck.target
 # that whichever target pulls this unit in - including an older packaged one
 # with the romm Wants= supplied by a drop-in - also arms romm.path. Without this
 # a box whose compose file appears after the session starts is never retried.
-Wants=romm.path
+Wants=romm.path hearthdeck-romm-discover.service
 
 [Service]
 Type=oneshot

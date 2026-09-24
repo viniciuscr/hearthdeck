@@ -115,6 +115,25 @@ library and resource roots silently pointed at a directory that did not exist.
 When you add or move a setting, grep every consumer and give each one the same
 `EnvironmentFile=`.
 
+## Rule 8 — host state is discovered at session start, never assumed at install
+
+Whether RomM's compose file exists, and where, is host state: it depends on a
+mount being up and on where the operator put the deployment. An install-time
+decision cannot know it, and a user who is told to "just export the right
+variable" on a production box will not do it.
+
+So the session runs `hearthdeck-romm-discover.service`
+(`packaging/arch/hearthdeck-romm-discover`) before its consumers start. It checks
+the configured path, a list of likely locations, and finally the compose file
+recorded in an existing stack's podman container labels, then writes the answer to
+`~/.config/hearthdeck/romm.env` -
+which both `romm.service` and `hearthdeck-daemon` load. Every candidate it checks
+is printed, found or not, so one paste of `~/hearthdeck.log` answers "where did it
+look" without anyone running a command.
+
+Two rules follow for anything similar: resolve host state at session start, and
+print the search, not just the result.
+
 ## Logging: how `~/hearthdeck.log` is built, and how to add a source
 
 `hearthdeck-log.service` truncates the file at session start and runs

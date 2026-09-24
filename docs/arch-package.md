@@ -19,8 +19,12 @@ CachyOS. It installs:
   `/usr/lib/modules-load.d/hearthdeck-uinput.conf`: active-seat access to the
   virtual input device and boot-time loading of the `uinput` kernel module.
 - `/usr/share/doc/hearthdeck/romm.env.example`: optional path override for the
-  external RomM Compose deployment. The service defaults to
-  `/mnt/external/romM/podman-compose.yaml` and skips when that file is absent.
+  external RomM Compose deployment. `/usr/lib/hearthdeck/hearthdeck-romm-discover`
+  runs at session start and finds the compose file itself (configured path, likely
+  locations, then a running stack's podman labels), writing it to
+  `~/.config/hearthdeck/romm.env`, which both `romm.service` and the daemon read.
+  The service defaults to `/mnt/external/romM/podman-compose.yaml` and skips when
+  that file is absent.
   `romm.path` watches that default path and starts the stack when the file
   appears, so a compose file on an external mount that is not ready at session
   start is still picked up rather than skipped for the whole session.

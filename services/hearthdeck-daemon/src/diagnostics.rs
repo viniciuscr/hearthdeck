@@ -1316,15 +1316,16 @@ mod tests {
         assert!(log_service.contains("-u hearthdeck-overlay.service"));
         assert!(log_service.contains("-u romm.service"));
         assert!(log_service.contains("-u romm.path"));
+        assert!(log_service.contains("-u hearthdeck-romm-discover.service"));
         assert!(session.contains("systemd-cat -t hearthdeck-session"));
         assert!(
             deploy_target.contains(
-                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service romm.path"
+                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service romm.path hearthdeck-romm-discover.service"
             )
         );
         assert!(
             package_target.contains(
-                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service romm.path"
+                "Wants=hearthdeck-log.service hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service romm.service romm.path hearthdeck-romm-discover.service"
             )
         );
         assert!(package.contains("deploy/systemd/hearthdeck-log.service"));
@@ -1442,6 +1443,25 @@ mod tests {
             );
         }
         assert!(checked >= 5, "parsed only {checked} packaged user units");
+    }
+
+    #[test]
+    fn romm_discovery_runs_before_its_consumers_and_is_pulled_in_by_them() {
+        let discover = include_str!("../../../deploy/systemd/hearthdeck-romm-discover.service");
+        let romm = include_str!("../../../deploy/systemd/romm.service");
+        let daemon = include_str!("../../../packaging/arch/hearthdeck-daemon.service");
+        let package = include_str!("../../../packaging/arch/PKGBUILD");
+
+        // Discovery must finish before anything that reads romm.env starts...
+        assert!(discover.contains("Before=hearthdeck-daemon.service romm.service"));
+        // ...and it must be pulled in by those consumers, not only by the target,
+        // or a host whose hearthdeck.target predates it never runs it.
+        assert!(romm.contains("Wants=romm.path hearthdeck-romm-discover.service"));
+        assert!(daemon.contains("Wants=hearthdeck-romm-discover.service"));
+        assert!(daemon.contains("After=hearthdeck-bridge.socket hearthdeck-romm-discover.service"));
+        // And the script it runs has to be what the package installs.
+        assert!(package.contains("packaging/arch/hearthdeck-romm-discover"));
+        assert!(package.contains("deploy/systemd/hearthdeck-romm-discover.service"));
     }
 
     #[test]
