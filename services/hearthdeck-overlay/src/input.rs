@@ -100,17 +100,30 @@ pub fn subscription(visible: bool) -> Subscription<GamepadEvent> {
         stream::channel(
             8,
             move |mut output: futures_channel::mpsc::Sender<GamepadEvent>| async move {
+                // Warn once when nothing matches. The rescan runs every
+                // `RESCAN_DELAY`, so a machine whose controller never reports
+                // BTN_MODE would otherwise repeat the same warning forever.
+                let mut reported_missing = false;
                 loop {
                     let devices = gamepad_devices();
                     if devices.is_empty() {
-                        tracing::warn!(
-                            "hearthdeck-overlay: no evdev device exposes BTN_MODE (Guide button); \
-                         retrying in {RESCAN_DELAY:?}. Run `evtest` on this hardware to confirm \
-                         the actual event codes your controller sends."
-                        );
+                        if reported_missing {
+                            tracing::debug!(
+                                "hearthdeck-overlay: still no evdev device exposes BTN_MODE; \
+                             retrying in {RESCAN_DELAY:?}"
+                            );
+                        } else {
+                            tracing::warn!(
+                                "hearthdeck-overlay: no evdev device exposes BTN_MODE (Guide button); \
+                             retrying in {RESCAN_DELAY:?}. Run `evtest` on this hardware to confirm \
+                             the actual event codes your controller sends."
+                            );
+                            reported_missing = true;
+                        }
                         tokio::time::sleep(RESCAN_DELAY).await;
                         continue;
                     }
+                    reported_missing = false;
 
                     // One task per device, all feeding the same channel, rather
                     // than a merged Stream: evdev's Stream impl needs its

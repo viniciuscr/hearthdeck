@@ -27,7 +27,7 @@ use tower_http::{
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     trace::TraceLayer,
 };
-use tracing::{info, info_span, warn};
+use tracing::{debug, info, info_span, warn};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -255,7 +255,10 @@ fn request_response(
     let latency_ms = latency.as_millis() as u64;
     span.record("status_code", status_code);
     span.record("latency_ms", latency_ms);
-    info!(status_code, latency_ms, "request completed");
+    // Every client polls several endpoints a second, so a completed request is a
+    // heartbeat, not an event. `debug` keeps it one `RUST_LOG` override away
+    // without writing the same line to the session log forever.
+    debug!(status_code, latency_ms, "request completed");
 }
 
 struct HeaderName;

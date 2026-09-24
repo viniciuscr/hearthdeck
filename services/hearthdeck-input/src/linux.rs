@@ -13,7 +13,7 @@ use evdev::{
 use tokio::net::UnixDatagram;
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::mapping::{Control, Mapper, OutputEvent, OutputKey};
@@ -64,6 +64,7 @@ pub async fn run() -> Result<()> {
     let (device_tx, mut device_rx) = mpsc::channel(128);
     let mut mapper = Mapper::default();
     let mut retro_osk = false;
+    let mut compatibility = false;
     let mut guide_devices = HashSet::new();
     let mut active_paths = HashSet::new();
     let mut path_devices = HashMap::new();
@@ -117,13 +118,19 @@ pub async fn run() -> Result<()> {
                     warn!("ignored invalid input profile command");
                     continue;
                 };
+                // The frontend re-sends this on every poll, so it is a heartbeat,
+                // not an event: only a real change is worth an `info`, and the
+                // unchanged case stays at `debug` rather than filling the session
+                // log with the same line once a second.
+                let changed = mode.compatibility != compatibility || mode.retro_osk != retro_osk;
+                compatibility = mode.compatibility;
                 retro_osk = mode.retro_osk;
                 guide_devices.clear();
-                info!(
-                    compatibility = mode.compatibility,
-                    retro_osk,
-                    "input mode updated"
-                );
+                if changed {
+                    info!(compatibility, retro_osk, "input mode updated");
+                } else {
+                    debug!(compatibility, retro_osk, "input mode unchanged");
+                }
                 let events = mapper.set_active(mode.compatibility);
                 emit(&mut output, events)?;
             }
