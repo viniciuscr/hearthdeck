@@ -1413,6 +1413,50 @@ mod tests {
     }
 
     #[test]
+    fn the_session_log_collector_follows_every_packaged_user_unit() {
+        let package = include_str!("../../../packaging/arch/PKGBUILD");
+        let log_service = include_str!("../../../deploy/systemd/hearthdeck-log.service");
+
+        // Not followed on purpose: the target and the socket emit nothing useful
+        // of their own, and following the collector from itself is pointless.
+        const NOT_COLLECTED: &[&str] =
+            &["hearthdeck.target", "hearthdeck-bridge.socket", "hearthdeck-log.service"];
+
+        let mut checked = 0;
+        for line in package.lines() {
+            let Some(target) = line.split("$pkgdir/usr/lib/systemd/user/").nth(1) else {
+                continue;
+            };
+            let unit = target.trim().trim_end_matches('"');
+            if NOT_COLLECTED.contains(&unit) {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                log_service.contains(&format!("-u {unit}")),
+                "hearthdeck-log.service must follow {unit} with `-u`; otherwise its output, \
+                 and systemd's own messages about it, never reach ~/hearthdeck.log"
+            );
+        }
+        assert!(checked >= 5, "parsed only {checked} packaged user units");
+    }
+
+    #[test]
+    fn the_romm_watcher_watches_the_default_compose_file() {
+        let service = include_str!("../../../deploy/systemd/romm.service");
+        let watcher = include_str!("../../../deploy/systemd/romm.path");
+
+        // The watcher cannot read an EnvironmentFile, so it can only ever be right
+        // about the default. Pin the two paths together so they cannot drift.
+        assert!(
+            service.contains(
+                "Environment=ROMM_COMPOSE_FILE=/mnt/external/romM/podman-compose.yaml"
+            )
+        );
+        assert!(watcher.contains("PathExists=/mnt/external/romM/podman-compose.yaml"));
+    }
+
+    #[test]
     fn renders_structured_journal_messages_for_the_diagnostics_view() {
         let entry = super::parse_journal_entry(
             r#"{"MESSAGE":"{\"level\":\"INFO\",\"message\":\"discovery completed\",\"source_id\":\"heroic\",\"record_count\":2}","PRIORITY":"6","_SYSTEMD_UNIT":"hearthdeck-daemon.service","__REALTIME_TIMESTAMP":"1760000000000000"}"#,

@@ -81,6 +81,7 @@ package() {
   install -Dm644 docs/arch-package.md "$pkgdir/usr/share/doc/hearthdeck/README.md"
   install -Dm644 docs/linux-acceptance.md "$pkgdir/usr/share/doc/hearthdeck/ACCEPTANCE.md"
   install -Dm644 docs/kiosk-session.md "$pkgdir/usr/share/doc/hearthdeck/KIOSK-SESSION.md"
+  install -Dm644 docs/units-and-logs.md "$pkgdir/usr/share/doc/hearthdeck/UNITS-AND-LOGS.md"
   # romm.service's Documentation= points here; ship the RomM design/runbook doc
   # under the name it references so `systemctl --user status romm.service` and
   # `man`-style lookups resolve instead of dangling.

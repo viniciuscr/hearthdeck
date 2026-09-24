@@ -27,6 +27,8 @@ CachyOS. It installs:
 - `~/hearthdeck.log`: recreated at each Hearthdeck session start with combined
   session, daemon, bridge, input broker, overlay, and RomM output, plus systemd's
   own messages about those units (skipped conditions, start timeouts, failures).
+  Before changing a unit, the session script, the log collector, the schema, or
+  `PKGBUILD`, read `docs/units-and-logs.md` (shipped as `UNITS-AND-LOGS.md`).
 - `/usr/share/applications/`: the Hearthdeck desktop entry and icon.
 - `/usr/share/wayland-sessions/hearthdeck.desktop`: the Hearthdeck session
   (cosmic-comp with the frontend fullscreen) shown by compatible display

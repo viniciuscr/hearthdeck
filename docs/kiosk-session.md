@@ -8,6 +8,9 @@
 > "COSMIC (Test)" session have all been removed. This document is kept for its
 > incident history and the lessons that still hold; its Gamescope-specific
 > descriptions no longer match the shipped session.
+>
+> For the current session, unit, and logging traps — and the checklist to avoid
+> them — read `docs/units-and-logs.md` instead.
 
 This document exists because this session broke, got "fixed" three different
 ways by three different guesses at which commit actually worked, and each
