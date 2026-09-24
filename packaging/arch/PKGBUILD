@@ -34,7 +34,7 @@ optdepends=(
   'libretro-mame: RetroArch core for arcade/Neo Geo'
   'libretro-scummvm: RetroArch core for ScummVM adventure games'
   'libretro-shaders-slang: Slang shader presets Hearthdeck applies per console'
-  'cosmic-comp: the Hearthdeck session\'s compositor'
+  'cosmic-comp: compositor for the Hearthdeck session'
   'podman-compose: start an optional local RomM stack with the Hearthdeck session'
 )
 install="${pkgname}.install"
