@@ -8,12 +8,12 @@
 //! The service and emulator lists are lifted from `app_group.rs` in the
 //! frontend, where they are the "shady" matching this crate is meant to replace.
 
-use crate::decision::{
+use super::decision::{
     AppCategorization, AppTraits, Categorizer, CategoryMatch, DecisionProvenance,
 };
-use crate::error::Result;
-use crate::model::AppProfile;
-use crate::taxonomy::{Section, Taxonomy};
+use super::error::Result;
+use super::model::AppProfile;
+use super::taxonomy::{Section, Taxonomy};
 
 /// Probability assigned to a trait a hard rule matched.
 const HARD: f64 = 1.0;
@@ -218,11 +218,11 @@ fn slug_for(category: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::HeuristicCategorizer;
-    use crate::decision::Categorizer;
-    use crate::model::{AppKind, AppProfile};
-    use crate::taxonomy::{Section, Taxonomy};
+    use crate::categorization::decision::Categorizer;
+    use crate::categorization::model::{AppKind, AppProfile};
+    use crate::categorization::taxonomy::{Section, Taxonomy};
 
-    fn categorize(app: &AppProfile) -> crate::decision::AppCategorization {
+    fn categorize(app: &AppProfile) -> crate::categorization::decision::AppCategorization {
         HeuristicCategorizer::new()
             .categorize(app, &Taxonomy::baseline())
             .unwrap()

@@ -9,7 +9,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
-use hearthdeck_categorizer::{ScanReport, Taxonomy};
+use hearthdeck_ai::categorization::{ScanReport, Taxonomy};
 use hearthdeck_protocol::{
     ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner, HostCapabilities,
     InputProfile, RetroRomVersion,

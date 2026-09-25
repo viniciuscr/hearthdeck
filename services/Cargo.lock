@@ -3549,23 +3549,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0049b265b7f201ca9ab25475b22b47fe444060126a51abe00f77d986fc5cc52e"
 
 [[package]]
-name = "hearthdeck-bridge"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "directories",
- "hearthdeck-observability",
- "hearthdeck-protocol",
- "sd-notify",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "hearthdeck-categorizer"
+name = "hearthdeck-ai"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -3582,6 +3566,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hearthdeck-bridge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "hearthdeck-observability",
+ "hearthdeck-protocol",
+ "sd-notify",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hearthdeck-daemon"
 version = "0.1.0"
 dependencies = [
@@ -3592,7 +3592,7 @@ dependencies = [
  "chrono",
  "directories",
  "futures-util",
- "hearthdeck-categorizer",
+ "hearthdeck-ai",
  "hearthdeck-observability",
  "hearthdeck-protocol",
  "rand 0.10.2",

@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use hearthdeck_categorizer::{ScanReport, Section};
+use hearthdeck_ai::categorization::{ScanReport, Section};
 
 /// One freedesktop `Game`, one app with a `Development` category, one emulator
 /// that declares nothing, and one record that says nothing the categorizer can
@@ -38,10 +38,10 @@ const LIBRARY: &str = r#"[
 ]"#;
 
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_hearthdeck-categorizer"))
+    Command::new(env!("CARGO_BIN_EXE_hearthdeck-ai"))
         .args(args)
         .output()
-        .expect("failed to spawn hearthdeck-categorizer")
+        .expect("failed to spawn hearthdeck-ai")
 }
 
 fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {

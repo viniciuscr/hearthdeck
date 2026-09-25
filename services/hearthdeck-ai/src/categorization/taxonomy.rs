@@ -4,12 +4,12 @@
 //! it can pick a category only from a list we hand it. "Deciding which
 //! categories to create" therefore has two halves — this module defines the
 //! candidates (the project's opinion about what a TV library should look like),
-//! and [`crate::ScanReport`] aggregates the model's picks into the handful of
-//! tabs that are actually worth showing.
+//! and [`crate::categorization::ScanReport`] aggregates the model's picks into the
+//! handful of tabs that are actually worth showing.
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{CategorizerError, Result};
+use super::error::{Error, Result};
 
 /// The fixed top-level navigation tabs. Mirrors the frontend's `Section`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -155,19 +155,19 @@ impl Taxonomy {
         let mut slugs = std::collections::HashSet::new();
         for category in &categories {
             if category.name.trim().is_empty() {
-                return Err(CategorizerError::Invalid("category name is empty".into()));
+                return Err(Error::Invalid("category name is empty".into()));
             }
             if category.slug.trim().is_empty() {
-                return Err(CategorizerError::Invalid("category slug is empty".into()));
+                return Err(Error::Invalid("category slug is empty".into()));
             }
             if !names.insert(category.name.to_lowercase()) {
-                return Err(CategorizerError::Invalid(format!(
+                return Err(Error::Invalid(format!(
                     "duplicate category name {:?}",
                     category.name
                 )));
             }
             if !slugs.insert(category.slug.to_lowercase()) {
-                return Err(CategorizerError::Invalid(format!(
+                return Err(Error::Invalid(format!(
                     "duplicate category slug {:?}",
                     category.slug
                 )));

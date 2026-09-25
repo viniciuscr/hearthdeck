@@ -7,7 +7,7 @@ members = [
   "hearthdeck-input",
   "hearthdeck-frontend",
   "hearthdeck-overlay",
-  "hearthdeck-categorizer",
+  "hearthdeck-ai",
 ]
 resolver = "3"
 

@@ -3,8 +3,8 @@
 //! A scan is not run in this process. The model is far too big to keep resident
 //! beside the library and the UI: a scan wants most of a gigabyte and seconds of
 //! CPU, and the daemon owns both the catalog and the API the UI is using. So the
-//! daemon writes the library out as JSON, spawns the `hearthdeck-categorizer`
-//! binary, waits for it, and reads the report back. The heavy state lives in a
+//! daemon writes the library out as JSON, spawns the `hearthdeck-ai` binary,
+//! waits for it, and reads the report back. The heavy state lives in a
 //! process that exits.
 //!
 //! Two things this module deliberately does *not* do:
@@ -28,7 +28,7 @@ use std::{
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
-use hearthdeck_categorizer::{AppKind, AppProfile, ScanReport, Taxonomy};
+use hearthdeck_ai::categorization::{AppKind, AppProfile, ScanReport, Taxonomy};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
@@ -86,8 +86,8 @@ impl ScanModel {
 /// How to run a scan.
 #[derive(Clone, Debug)]
 pub struct CategorizerSettings {
-    /// The sibling `hearthdeck-categorizer` binary. A bare name is looked up on
-    /// `PATH`, which is how the packaged unit finds it in `~/.local/bin`.
+    /// The sibling `hearthdeck-ai` binary. A bare name is looked up on `PATH`,
+    /// which is how the packaged unit finds it in `~/.local/bin`.
     pub binary: PathBuf,
     /// Scratch directory for the handoff files: the library, the report, and the
     /// progress the child reports while it works.
@@ -149,7 +149,7 @@ impl CategorizerSettings {
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
         Self {
-            binary: get("HEARTHDECK_CATEGORIZER_BIN")
+            binary: get("HEARTHDECK_AI_BIN")
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or(fallback_binary),
@@ -157,26 +157,26 @@ impl CategorizerSettings {
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| data_dir.join("categorization")),
-            cache_dir: get("HEARTHDECK_CATEGORIZER_CACHE_DIR")
+            cache_dir: get("HEARTHDECK_AI_CACHE_DIR")
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| data_dir.join("models").join("hub")),
-            engine: get("HEARTHDECK_CATEGORIZER_ENGINE")
+            engine: get("HEARTHDECK_AI_ENGINE")
                 .as_deref()
                 .and_then(ScanEngine::parse)
                 .unwrap_or(ScanEngine::Laya),
-            model: match get("HEARTHDECK_CATEGORIZER_MODEL").as_deref() {
+            model: match get("HEARTHDECK_AI_MODEL").as_deref() {
                 Some("multilingual") => ScanModel::Multilingual,
                 _ => ScanModel::English,
             },
-            model_path: get("HEARTHDECK_CATEGORIZER_MODEL_PATH")
+            model_path: get("HEARTHDECK_AI_MODEL_PATH")
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from),
-            dtype: get("HEARTHDECK_CATEGORIZER_DTYPE")
+            dtype: get("HEARTHDECK_AI_DTYPE")
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "float16".to_owned()),
-            research: flag(get("HEARTHDECK_CATEGORIZER_RESEARCH")),
-            timeout: get("HEARTHDECK_CATEGORIZER_TIMEOUT_SECS")
+            research: flag(get("HEARTHDECK_AI_RESEARCH")),
+            timeout: get("HEARTHDECK_AI_TIMEOUT_SECS")
                 .and_then(|value| value.parse::<u64>().ok())
                 .filter(|seconds| *seconds > 0)
                 .map(Duration::from_secs)
@@ -212,9 +212,9 @@ fn default_scan_timeout() -> Duration {
 }
 
 /// The name of the program that does the scan.
-const CATEGORIZER_BINARY: &str = "hearthdeck-categorizer";
+const AI_BINARY: &str = "hearthdeck-ai";
 
-/// The categorizer that ships beside the daemon, or the bare name to look for on
+/// The AI worker that ships beside the daemon, or the bare name to look for on
 /// `PATH` when there is none.
 ///
 /// Both binaries land in the same directory however Hearthdeck was installed —
@@ -223,13 +223,13 @@ const CATEGORIZER_BINARY: &str = "hearthdeck-categorizer";
 /// variable for it.
 fn sibling_of(daemon: &Path) -> PathBuf {
     let Some(directory) = daemon.parent() else {
-        return PathBuf::from(CATEGORIZER_BINARY);
+        return PathBuf::from(AI_BINARY);
     };
-    let candidate = directory.join(CATEGORIZER_BINARY);
+    let candidate = directory.join(AI_BINARY);
     if candidate.is_file() {
         candidate
     } else {
-        PathBuf::from(CATEGORIZER_BINARY)
+        PathBuf::from(AI_BINARY)
     }
 }
 
@@ -237,7 +237,7 @@ fn default_binary() -> PathBuf {
     std::env::current_exe()
         .ok()
         .map(|daemon| sibling_of(&daemon))
-        .unwrap_or_else(|| PathBuf::from(CATEGORIZER_BINARY))
+        .unwrap_or_else(|| PathBuf::from(AI_BINARY))
 }
 
 /// The collections a scan implies: one per dashboard rail the taxonomy declares,
@@ -286,7 +286,7 @@ impl ProcessScanRunner {
         Self { settings }
     }
 
-    /// The exact command line the categorizer binary understands. Kept in one
+    /// The exact command line the hearthdeck-ai binary understands. Kept in one
     /// place so the two sides cannot drift apart silently.
     fn arguments(&self) -> Vec<OsString> {
         let mut arguments: Vec<OsString> = vec![
@@ -926,8 +926,8 @@ mod tests {
         state::ServerEvent,
     };
     use async_trait::async_trait;
-    use hearthdeck_categorizer::{AppKind, AppProfile, ScanReport};
-    use hearthdeck_categorizer::{CategoryProposal, Section};
+    use hearthdeck_ai::categorization::{AppKind, AppProfile, ScanReport};
+    use hearthdeck_ai::categorization::{CategoryProposal, Section};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -992,7 +992,7 @@ mod tests {
     /// near the real model cache.
     fn settings(root: &std::path::Path) -> CategorizerSettings {
         CategorizerSettings {
-            binary: "hearthdeck-categorizer".into(),
+            binary: "hearthdeck-ai".into(),
             work_dir: root.join("work"),
             cache_dir: root.join("models"),
             engine: ScanEngine::Heuristic,
@@ -1074,10 +1074,7 @@ mod tests {
         let settings = CategorizerSettings::from_lookup(dir, &|_| None, bare_binary());
         assert_eq!(settings.engine, ScanEngine::Laya);
         assert_eq!(settings.model, ScanModel::English);
-        assert_eq!(
-            settings.binary,
-            std::path::PathBuf::from("hearthdeck-categorizer")
-        );
+        assert_eq!(settings.binary, std::path::PathBuf::from("hearthdeck-ai"));
         assert_eq!(settings.timeout, std::time::Duration::from_secs(60 * 60));
     }
 
@@ -1088,7 +1085,7 @@ mod tests {
             let value = value.to_owned();
             CategorizerSettings::from_lookup(
                 dir,
-                &move |name| (name == "HEARTHDECK_CATEGORIZER_TIMEOUT_SECS").then(|| value.clone()),
+                &move |name| (name == "HEARTHDECK_AI_TIMEOUT_SECS").then(|| value.clone()),
                 bare_binary(),
             )
             .timeout
@@ -1107,7 +1104,7 @@ mod tests {
         let settings = CategorizerSettings::from_lookup(
             database,
             &|name| match name {
-                "HEARTHDECK_CATEGORIZER_MODEL" => Some("multilingual".to_owned()),
+                "HEARTHDECK_AI_MODEL" => Some("multilingual".to_owned()),
                 _ => None,
             },
             bare_binary(),
@@ -1122,10 +1119,7 @@ mod tests {
             settings.work_dir,
             std::path::PathBuf::from("/data/categorization")
         );
-        assert_eq!(
-            settings.binary,
-            std::path::PathBuf::from("hearthdeck-categorizer")
-        );
+        assert_eq!(settings.binary, std::path::PathBuf::from("hearthdeck-ai"));
     }
 
     #[test]
@@ -1136,18 +1130,18 @@ mod tests {
         // Neither binary is installed: the bare name, left to `PATH`.
         assert_eq!(
             sibling_of(&daemon),
-            std::path::PathBuf::from("hearthdeck-categorizer")
+            std::path::PathBuf::from("hearthdeck-ai")
         );
 
         // Installed side by side, which is how both the package and `just
         // install-services` lay them out: found without a variable to say so.
-        let worker = directory.path().join("hearthdeck-categorizer");
+        let worker = directory.path().join("hearthdeck-ai");
         std::fs::write(&worker, b"").unwrap();
         assert_eq!(sibling_of(&daemon), worker);
     }
 
     fn bare_binary() -> std::path::PathBuf {
-        std::path::PathBuf::from("hearthdeck-categorizer")
+        std::path::PathBuf::from("hearthdeck-ai")
     }
 
     #[test]
@@ -1179,7 +1173,7 @@ mod tests {
     #[test]
     fn the_argv_matches_what_the_binary_parses() {
         let settings = CategorizerSettings {
-            binary: "hearthdeck-categorizer".into(),
+            binary: "hearthdeck-ai".into(),
             work_dir: "/work".into(),
             cache_dir: "/models/hub".into(),
             engine: ScanEngine::Heuristic,

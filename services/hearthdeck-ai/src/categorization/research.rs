@@ -4,8 +4,8 @@
 
 use async_trait::async_trait;
 
-use crate::error::Result;
-use crate::model::AppProfile;
+use super::error::Result;
+use super::model::AppProfile;
 
 /// Looks an application up online and returns what it learned.
 ///

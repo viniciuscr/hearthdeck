@@ -240,7 +240,7 @@ paths:
         of a gigabyte. The most recent report is kept: it still describes the
         library, and the tabs it built are still the user's. Never deletes a
         checkpoint the deployment pointed at with
-        `HEARTHDECK_CATEGORIZER_MODEL_PATH`.
+        `HEARTHDECK_AI_MODEL_PATH`.
       responses:
         '204':
           description: Checkpoint removed

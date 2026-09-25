@@ -143,7 +143,7 @@ install-services:
   cp services/target/release/hearthdeck-bridge "$HOME/.local/bin/"
   cp services/target/release/hearthdeck-daemon "$HOME/.local/bin/"
   cp services/target/release/hearthdeck-input "$HOME/.local/bin/"
-  cp services/target/release/hearthdeck-categorizer "$HOME/.local/bin/"
+  cp services/target/release/hearthdeck-ai "$HOME/.local/bin/"
   cp packaging/arch/hearthdeck-romm "$HOME/.local/bin/hearthdeck-romm"
   systemctl --user daemon-reload
   systemctl --user enable --now hearthdeck.target

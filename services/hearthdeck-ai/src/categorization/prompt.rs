@@ -8,9 +8,9 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::decision::{AppCategorization, AppTraits, CategoryMatch, DecisionProvenance};
-use crate::model::AppProfile;
-use crate::taxonomy::{Section, Taxonomy};
+use super::decision::{AppCategorization, AppTraits, CategoryMatch, DecisionProvenance};
+use super::model::AppProfile;
+use super::taxonomy::{Section, Taxonomy};
 
 /// Question ids. Stable because the prompt cache in Laya keys off them.
 pub const Q_GAME: &str = "is_game";
@@ -223,8 +223,8 @@ mod tests {
         CATEGORY_NONE, Q_CATEGORY, Q_EMULATOR, Q_GAME, Q_WATCH, build_questions, build_state,
         interpret,
     };
-    use crate::model::{AppKind, AppProfile};
-    use crate::taxonomy::{Section, Taxonomy};
+    use crate::categorization::model::{AppKind, AppProfile};
+    use crate::categorization::taxonomy::{Section, Taxonomy};
     use serde_json::{Value, json};
 
     fn app() -> AppProfile {

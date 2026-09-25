@@ -2,9 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
-use crate::model::AppProfile;
-use crate::taxonomy::{Section, Taxonomy};
+use super::error::Result;
+use super::model::AppProfile;
+use super::taxonomy::{Section, Taxonomy};
 
 /// Probability above which a yes/no trait is treated as true.
 pub const TRAIT_THRESHOLD: f64 = 0.5;

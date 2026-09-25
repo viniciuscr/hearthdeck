@@ -12,11 +12,11 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::decision::{AppCategorization, Categorizer};
-use crate::error::{CategorizerError, Result};
-use crate::model::AppProfile;
-use crate::research::AppResearcher;
-use crate::taxonomy::{Section, Taxonomy};
+use super::decision::{AppCategorization, Categorizer};
+use super::error::{Error, Result};
+use super::model::AppProfile;
+use super::research::AppResearcher;
+use super::taxonomy::{Section, Taxonomy};
 
 /// Progress notification, emitted once per application.
 pub type ProgressCallback = Arc<dyn Fn(ScanProgress) + Send + Sync>;
@@ -215,7 +215,7 @@ impl LibraryScanner {
             decide(categorizer.as_ref(), &taxonomy, &apps, progress.as_ref())
         })
         .await
-        .map_err(|error| CategorizerError::Worker(error.to_string()))?;
+        .map_err(|error| Error::Worker(error.to_string()))?;
         failures.extend(decision_failures);
 
         maybe_progress(
@@ -400,10 +400,10 @@ fn propose_categories(
 #[cfg(test)]
 mod tests {
     use super::{LibraryScanner, ScanOptions, ScanPhase, ScanProgress};
-    use crate::decision::Categorizer;
-    use crate::heuristic::HeuristicCategorizer;
-    use crate::model::AppProfile;
-    use crate::research::AppResearcher;
+    use crate::categorization::decision::Categorizer;
+    use crate::categorization::heuristic::HeuristicCategorizer;
+    use crate::categorization::model::AppProfile;
+    use crate::categorization::research::AppResearcher;
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
 
@@ -439,7 +439,7 @@ mod tests {
     async fn a_rail_is_the_categories_that_share_it() {
         let scanner = LibraryScanner::new(Arc::new(HeuristicCategorizer::new()));
         let report = scanner.scan(library()).await.unwrap();
-        let taxonomy = crate::taxonomy::Taxonomy::baseline();
+        let taxonomy = crate::categorization::taxonomy::Taxonomy::baseline();
 
         // Netflix is Video & Streaming and VLC is Media Center: two tabs, one
         // rail, because "what is there to watch" is one question to a person.
@@ -505,7 +505,10 @@ mod tests {
             "fake"
         }
 
-        async fn research(&self, app: &AppProfile) -> crate::error::Result<Option<AppProfile>> {
+        async fn research(
+            &self,
+            app: &AppProfile,
+        ) -> crate::categorization::error::Result<Option<AppProfile>> {
             if app.id != "com.example.Untagged.desktop" {
                 return Ok(None);
             }
@@ -552,10 +555,12 @@ mod tests {
             fn categorize(
                 &self,
                 app: &AppProfile,
-                taxonomy: &crate::taxonomy::Taxonomy,
-            ) -> crate::error::Result<crate::decision::AppCategorization> {
+                taxonomy: &crate::categorization::taxonomy::Taxonomy,
+            ) -> crate::categorization::error::Result<
+                crate::categorization::decision::AppCategorization,
+            > {
                 if app.id.contains("VLC") {
-                    return Err(crate::error::CategorizerError::Inference("boom".into()));
+                    return Err(crate::ai::Error::Inference("boom".into()).into());
                 }
                 HeuristicCategorizer::new().categorize(app, taxonomy)
             }

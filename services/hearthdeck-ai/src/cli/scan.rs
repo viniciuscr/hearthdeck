@@ -1,14 +1,10 @@
-//! One-shot scan CLI.
+//! The `scan` command: one-shot categorization of a library.
 //!
 //! The daemon spawns this as a child process to categorize a library: it reads a
 //! JSON array of [`AppProfile`]s from `--library`, runs one scan, and writes the
 //! [`ScanReport`] as pretty JSON to `--output`. There is no interactive
 //! behaviour, and the report never goes to stdout — the observability helper
 //! does, but stdout is the journal's to read.
-//!
-//! Arguments are parsed by hand rather than with a parser crate: the contract is
-//! a fixed, flat list of flags and the daemon spawns one exact command line, so
-//! a dependency would buy nothing.
 //!
 //! A second, optional channel exists for the parent process: `--phase-file`
 //! names a JSON file this process overwrites as it works, because the daemon can
@@ -19,49 +15,26 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use hearthdeck_categorizer::{
+#[cfg(feature = "laya")]
+use hearthdeck_ai::ai::{LayaConfig, LayaModel};
+#[cfg(feature = "laya")]
+use hearthdeck_ai::categorization::LayaCategorizer;
+use hearthdeck_ai::categorization::{
     AppProfile, Categorizer, HeuristicCategorizer, LibraryScanner, NoopResearcher, ScanOptions,
     ScanPhase, ScanProgress, ScanReport,
 };
-#[cfg(feature = "laya")]
-use hearthdeck_categorizer::{LayaCategorizer, LayaConfig, LayaModel};
 use serde::Serialize;
 use tracing::{debug, info, warn};
-
-/// Printed to stderr whenever the command line does not match the contract.
-const USAGE: &str = "usage: hearthdeck-categorizer scan --library <PATH> --output <PATH> \
-                     [--engine heuristic|laya] [--model english|multilingual] \
-                     [--model-path <DIR>] [--dtype <DTYPE>] [--research] \
-                     [--phase-file <PATH>]";
 
 /// Checkpoint precision used when `--dtype` is not given.
 const DEFAULT_DTYPE: &str = "float16";
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    hearthdeck_observability::init("hearthdeck-categorizer", "hearthdeck_categorizer=info");
-
-    let args: Vec<OsString> = std::env::args_os().collect();
-    let request = match Request::parse(&args) {
-        Ok(request) => request,
-        Err(message) => {
-            eprintln!("hearthdeck-categorizer: {message}");
-            eprintln!("{USAGE}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    match run(request).await {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprintln!("hearthdeck-categorizer: {message}");
-            ExitCode::FAILURE
-        }
-    }
+pub(super) async fn run(args: &[OsString]) -> Result<(), String> {
+    let request = Request::parse(args)?;
+    execute(request).await
 }
 
 /// Which decision engine to run.
@@ -111,23 +84,11 @@ struct Request {
 }
 
 impl Request {
-    /// Parse `argv`, or return a message explaining what was wrong with it.
+    /// Parse `argv` (program and command included), or return a message
+    /// explaining what was wrong with it.
     fn parse(args: &[OsString]) -> Result<Self, String> {
-        let mut args = args.iter().skip(1);
-
-        let command = args
-            .next()
-            .ok_or_else(|| "missing subcommand (expected `scan`)".to_owned())?;
-        if command.to_str() != Some("scan") {
-            return Err(format!(
-                "unknown subcommand `{}` (expected `scan`)",
-                command.to_string_lossy()
-            ));
-        }
-
-        // Index-based rather than an iterator so the value helpers can borrow the
-        // same slice while the cursor advances.
-        let args: Vec<OsString> = args.cloned().collect();
+        // Skip the program name and the `scan` command the dispatcher matched.
+        let args: Vec<OsString> = args.iter().skip(2).cloned().collect();
         let mut index = 0;
         let mut library = None;
         let mut output = None;
@@ -214,7 +175,7 @@ fn parse_model(value: &str) -> Result<ModelChoice, String> {
     }
 }
 
-async fn run(request: Request) -> Result<(), String> {
+async fn execute(request: Request) -> Result<(), String> {
     info!(
         library = %request.library.display(),
         output = %request.output.display(),
@@ -306,9 +267,9 @@ impl PhaseWriter {
     }
 
     /// The engine is being built. From the daemon's point of view this whole
-    /// stretch is "getting the model ready": a Laya checkpoint is downloaded
-    /// here when it is not cached, and the daemon tells a download from a load
-    /// itself by watching the model directory.
+    /// stretch is "getting the model ready": a checkpoint is downloaded here when
+    /// it is not cached, and the daemon tells a download from a load itself by
+    /// watching the model directory.
     fn loading(&self) {
         self.write(&PhaseUpdate {
             phase: "loading",

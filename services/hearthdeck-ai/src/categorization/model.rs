@@ -36,7 +36,8 @@ impl AppKind {
 ///
 /// This is deliberately a superset of what any single source knows: discovery
 /// fills title, categories and exec, AppStream-style metadata fills summary and
-/// description, and an [`crate::AppResearcher`] can fill in whatever is left.
+/// description, and an [`crate::categorization::AppResearcher`] can fill in whatever is
+/// left.
 /// The categorizer never assumes a field is present, because a scan has to run
 /// over a library where most entries are only partially described.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
