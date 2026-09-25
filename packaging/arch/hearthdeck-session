@@ -3,6 +3,14 @@
 # settings daemon), launching the hearthdeck-frontend COSMIC app (the migrated
 # cosmic-app-library UI) as its client. This is the one graphical Hearthdeck
 # session; on a TV box greetd autologins into it (scripts/hearthdeck-autologin).
+#
+# It doubles as the boot process, in four phases:
+#   1. environment - session bus and the variables the units read;
+#   2. services    - start the target, and don't wait the whole way for it;
+#   3. readiness   - wait until the session-critical units are actually up;
+#   4. compositor  - start cosmic-comp, retrying a transient failed start.
+# Nothing here races "and hope": each phase has a bounded wait or a bounded retry
+# and says what it did in the log.
 set -Euo pipefail
 
 # Preserve all session, compositor, and frontend output even after the app
@@ -14,6 +22,8 @@ log() {
 }
 
 log "starting"
+
+# --- Phase 1: environment -----------------------------------------------------
 
 export XDG_CURRENT_DESKTOP=hearthdeck:COSMIC
 export XDG_SESSION_DESKTOP=hearthdeck
@@ -42,12 +52,50 @@ systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_
 # won't see XDG_CURRENT_DESKTOP and XDG_SESSION_TYPE, breaking environment-dependent
 # logic like is_kiosk_session() (hearthdeck-bridge's kiosk slice assignment).
 systemctl --user daemon-reload || true
-log "starting hearthdeck.target"
-if ! systemctl --user start hearthdeck.target; then
-  log "hearthdeck.target failed; continuing so Hearthdeck can show diagnostics"
-fi
+
+# --- Phase 2: services (asynchronous) -----------------------------------------
+
+# Pick up a new binary when the session is re-run without a reboot, so an upgrade
+# needs only a sign-out. On a fresh boot these units are inactive and this is a
+# no-op; it runs *before* the target start so it cannot race the queued start job.
 systemctl --user try-restart hearthdeck-daemon.service || true
 systemctl --user try-restart hearthdeck-bridge.service || true
+
+log "starting hearthdeck.target"
+# --no-block on purpose: hearthdeck.target Wants= romm.service, and a target's
+# start waits for its oneshot dependencies to exit - so a blocking start here
+# waits for `podman-compose up` to converge, which can take many seconds. That is
+# the black screen; worse, the compositor then starts at a time dictated by a
+# container stack and races whatever else grabs the GPU (the intermittent
+# `EBUSY on /dev/dri/card1`). Queue the jobs; phase 3 waits for the parts that
+# actually matter.
+if ! systemctl --user start --no-block hearthdeck.target; then
+  log "hearthdeck.target failed to queue; continuing so Hearthdeck can show diagnostics"
+fi
+
+# --- Phase 3: readiness -------------------------------------------------------
+
+# Wait for the services the session cannot run without. RomM is deliberately not
+# in this list: it is optional and unbounded (a first `up` may pull images), and
+# gating on it is what produced the black screen and the GPU race. `is-active` on
+# the daemon means its listeners are actually up, because it is `Type=notify`.
+wait_for_unit() {
+  local unit=$1 timeout=$2 waited=0
+  while ! systemctl --user is-active --quiet "$unit"; do
+    if ((waited >= timeout * 10)); then
+      log "gave up after ${timeout}s waiting for $unit; continuing"
+      return 1
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  return 0
+}
+
+for unit in hearthdeck-log.service hearthdeck-daemon.service hearthdeck-bridge.socket; do
+  wait_for_unit "$unit" 15 || true
+done
+log "session-critical services are up"
 
 # Add the default COSMIC custom shortcut once. The helper is idempotent and
 # refuses to replace a binding the user already assigned.
@@ -57,6 +105,8 @@ systemctl --user try-restart hearthdeck-bridge.service || true
 # session. Its restart policy absorbs the compositor's initial
 # activation-environment race.
 systemctl --user start hearthdeck-overlay.service || true
+
+# --- Phase 4: compositor ------------------------------------------------------
 
 launch_app="/usr/bin/hearthdeck-frontend"
 if [[ ! -x "$launch_app" && -x /usr/bin/hearthdeck_cosmic ]]; then
@@ -69,14 +119,66 @@ fi
 # ended immediately".
 log "env WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<unset>} DISPLAY=${DISPLAY:-<unset>} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-<unset>} DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-<unset>}"
 
-if [[ ! -x "$launch_app" ]]; then
+client_args=()
+if [[ -x "$launch_app" ]]; then
+  client_args=("$launch_app")
+else
   # Never end the session over a missing client. cosmic-comp exits when its child
   # exits, so exiting here would bounce the user straight back to the greeter with
   # no way in - a login loop caused by a packaging mistake. Start the compositor
   # anyway and leave the reason in the log.
   log "no client at /usr/bin/hearthdeck-frontend; starting cosmic-comp with no client"
-  exec cosmic-comp
 fi
 
-log "exec cosmic-comp ($launch_app)"
-exec cosmic-comp "$launch_app"
+# cosmic-comp exits when its client exits. A non-zero exit within the first few
+# seconds is a failed start - the observed case is `EBUSY on /dev/dri/card1`
+# becoming "Backend initialized without output" - so retry it a bounded number of
+# times, logging who held the GPU, instead of dropping the user to the greeter.
+# A normal end (the user quit Hearthdeck) or a long run is not a failure.
+child=""
+stopping=false
+forward() {
+  stopping=true
+  if [ -n "$child" ]; then
+    kill -TERM "$child" 2>/dev/null || true
+  fi
+}
+trap forward TERM INT
+
+max_attempts=3
+attempt=0
+status=0
+while true; do
+  attempt=$((attempt + 1))
+  log "starting cosmic-comp (attempt $attempt/$max_attempts) client=${launch_app:-<none>}"
+  started=$(date +%s)
+  cosmic-comp "${client_args[@]}" &
+  child=$!
+  status=0
+  wait "$child" || status=$?
+  child=""
+
+  if [ "$stopping" = true ]; then
+    log "session is stopping"
+    break
+  fi
+
+  elapsed=$(($(date +%s) - started))
+  if [ "$status" -eq 0 ] || [ "$elapsed" -ge 5 ]; then
+    break
+  fi
+
+  log "cosmic-comp exited early (status $status after ${elapsed}s); GPU holders follow"
+  log "drm devices: $(ls /dev/dri 2>/dev/null | tr '\n' ' ' || true)"
+  if command -v fuser >/dev/null 2>&1; then
+    log "drm holders: $(fuser -v /dev/dri/card* 2>&1 | tr '\n' ' ' || true)"
+  fi
+
+  if [ "$attempt" -ge "$max_attempts" ]; then
+    log "cosmic-comp failed $attempt times; giving up so the greeter can take over"
+    break
+  fi
+  sleep 1
+done
+
+exit "$status"

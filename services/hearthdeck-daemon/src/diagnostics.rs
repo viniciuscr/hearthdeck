@@ -1519,6 +1519,66 @@ mod tests {
     }
 
     #[test]
+    fn the_session_does_not_block_on_the_service_target() {
+        let session = include_str!("../../../packaging/arch/hearthdeck-session");
+
+        // The compositor must not wait for hearthdeck.target. RomM is a target
+        // dependency and `podman-compose up` can take many seconds, so a blocking
+        // start is both the black screen and the cause of the intermittent
+        // `EBUSY on /dev/dri/cardN`: the compositor starts late and loses the GPU
+        // to whatever took it in the meantime. Queue the jobs instead.
+        assert!(session.contains("systemctl --user start --no-block hearthdeck.target"));
+        assert!(
+            !session
+                .lines()
+                .any(|line| line.trim() == "systemctl --user start hearthdeck.target"),
+            "the session must not block on the full target before starting the compositor"
+        );
+    }
+
+    #[test]
+    fn the_session_waits_for_readiness_and_retries_the_compositor() {
+        let session = include_str!("../../../packaging/arch/hearthdeck-session");
+
+        // Phase 3: bounded readiness for exactly the session-critical units.
+        assert!(session.contains("wait_for_unit"));
+        assert!(session.contains(
+            "for unit in hearthdeck-log.service hearthdeck-daemon.service hearthdeck-bridge.socket"
+        ));
+        // RomM is never part of the gate: it is optional and unbounded, and
+        // waiting on it is the black screen and the GPU race this avoids. The
+        // exact list above is the guarantee; only the loop calls `wait_for_unit`.
+        assert_eq!(
+            session.matches("wait_for_unit").count(),
+            2,
+            "only the definition and the single readiness loop may use wait_for_unit"
+        );
+        // Phase 4: a failed compositor start is retried, not fatal, and the retry
+        // names who held the GPU.
+        assert!(session.contains("max_attempts="));
+        assert!(session.contains("drm holders:"));
+    }
+
+    #[test]
+    fn the_package_ships_the_hearthdeck_boot_splash() {
+        let package = include_str!("../../../packaging/arch/PKGBUILD");
+        let theme = include_str!("../../../packaging/arch/plymouth/hearthdeck.plymouth");
+        let script = include_str!("../../../packaging/arch/plymouth/hearthdeck.script");
+
+        // The theme is optional (only used where plymouth is installed) but the
+        // package must still carry it, and the descriptor must point at the
+        // script the package installs beside it.
+        assert!(package.contains("usr/share/plymouth/themes/hearthdeck"));
+        assert!(package.contains("packaging/arch/plymouth/hearthdeck.plymouth"));
+        assert!(package.contains("packaging/arch/plymouth/hearthdeck.script"));
+        assert!(package.contains("packaging/arch/plymouth/logo.png"));
+        assert!(
+            theme.contains("ScriptFile=/usr/share/plymouth/themes/hearthdeck/hearthdeck.script")
+        );
+        assert!(script.contains("Image(\"logo.png\")"));
+    }
+
+    #[test]
     fn the_session_starts_the_user_session_bus() {
         let session = include_str!("../../../packaging/arch/hearthdeck-session");
 

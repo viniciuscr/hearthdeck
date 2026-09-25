@@ -184,6 +184,12 @@ Combined session logs are written to ~/hearthdeck.log; the packaged
 /usr/lib/hearthdeck/linux-acceptance re-checks the installed services, RomM
 stack, API, and logs on a host where that needs confirming.
 
+A Hearthdeck Plymouth theme is installed for the boot screen. If plymouth is
+present, select it with
+  sudo plymouth-set-default-theme hearthdeck && sudo mkinitcpio -P
+It replaces the kernel/systemd boot splash with the Hearthdeck mark; the
+Hearthdeck session draws itself once Plymouth has handed the display over.
+
 Future Hearthdeck package updates arrive through `pacman -Syu`. The GitHub
 Pages repository is unsigned and should not be enabled on systems that require
 signed packages.

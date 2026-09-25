@@ -13,7 +13,7 @@ the SQLite schema, or `packaging/arch/PKGBUILD`.
 ```
 greetd / display manager
   -> /usr/lib/hearthdeck/hearthdeck-session          (packaging/arch/hearthdeck-session)
-       -> systemctl --user start hearthdeck.target
+       -> systemctl --user start --no-block hearthdeck.target
             Wants= hearthdeck-log.service, hearthdeck-bridge.socket,
                    hearthdeck-daemon.service, hearthdeck-input.service,
                    romm.service, romm.path, hearthdeck-overlay.service

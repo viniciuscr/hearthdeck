@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Hearthdeck
+Description=Hearthdeck boot splash: the app mark centred on the TV theme
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/hearthdeck
+ScriptFile=/usr/share/plymouth/themes/hearthdeck/hearthdeck.script

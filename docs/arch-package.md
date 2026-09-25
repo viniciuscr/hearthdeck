@@ -44,6 +44,12 @@ CachyOS. It installs:
 - `/usr/share/wayland-sessions/hearthdeck.desktop`: the Hearthdeck session
   (cosmic-comp with the frontend fullscreen) shown by compatible display
   managers.
+- `/usr/share/plymouth/themes/hearthdeck/`: Hearthdeck's boot splash, for the
+  kernel/systemd boot screen. Not forced on: the operator selects it
+  (`plymouth-set-default-theme hearthdeck && mkinitcpio -P`), and it is only
+  used where `plymouth` is installed. It covers the boot before the session, not
+  the session start itself - the compositor draws from the moment it owns the
+  display.
 - `/usr/lib/hearthdeck/hearthdeck-overlay` and
   `/usr/lib/systemd/user/hearthdeck-overlay.service`: Guide-button-toggled
   quick-menu overlay, started only by the Hearthdeck session. The session
@@ -160,11 +166,13 @@ or leave it as the autologin session - which is what a keyboardless TV box needs
 and what the package sets up automatically (or `hearthdeck-autologin enable`
 does by hand) - to boot straight into Hearthdeck fullscreen.
 
-The session script (`/usr/lib/hearthdeck/hearthdeck-session`) imports the
-session environment into the systemd user manager, starts `hearthdeck.target`
-(and the overlay) for the current user, and then execs `cosmic-comp` with the
-frontend as its single client. Exiting Hearthdeck ends `cosmic-comp` and
-returns to the display manager's login screen.
+The session script (`/usr/lib/hearthdeck/hearthdeck-session`) is the boot
+process: it imports the session environment into the systemd user manager, starts
+`hearthdeck.target` without blocking on it, waits (bounded) for the
+session-critical services, then starts `cosmic-comp` with the frontend as its
+single client - retrying a failed compositor start instead of dropping the user
+to the greeter. Exiting Hearthdeck ends `cosmic-comp` and returns to the display
+manager's login screen.
 
 Hearthdeck launches registered desktop applications and RetroArch games as
 direct clients of that same outer Kiosk session compositor - its embedded

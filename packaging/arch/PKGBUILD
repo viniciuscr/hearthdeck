@@ -35,6 +35,7 @@ optdepends=(
   'libretro-scummvm: RetroArch core for ScummVM adventure games'
   'libretro-shaders-slang: Slang shader presets Hearthdeck applies per console'
   'cosmic-comp: compositor for the Hearthdeck session'
+  'plymouth: Hearthdeck boot splash for the kernel and systemd boot screen'
   'podman-compose: start an optional local RomM stack with the Hearthdeck session'
 )
 install="${pkgname}.install"
@@ -89,6 +90,13 @@ package() {
   install -Dm755 packaging/arch/hearthdeck-romm "$pkgdir/usr/lib/hearthdeck/hearthdeck-romm"
   install -Dm755 services/target/release/hearthdeck-frontend "$pkgdir/usr/bin/hearthdeck-frontend"
   install -Dm644 packaging/arch/hearthdeck-overlay.service "$pkgdir/usr/lib/systemd/user/hearthdeck-overlay.service"
+  # Hearthdeck boot splash for Plymouth, when it is installed. Not forced on:
+  # choosing a splash is the operator's, and it only reaches early boot after
+  # `mkinitcpio -P` - the install message says how to switch it on
+  # (`plymouth-set-default-theme hearthdeck`).
+  install -Dm644 packaging/arch/plymouth/hearthdeck.plymouth "$pkgdir/usr/share/plymouth/themes/hearthdeck/hearthdeck.plymouth"
+  install -Dm644 packaging/arch/plymouth/hearthdeck.script "$pkgdir/usr/share/plymouth/themes/hearthdeck/hearthdeck.script"
+  install -Dm644 packaging/arch/plymouth/logo.png "$pkgdir/usr/share/plymouth/themes/hearthdeck/logo.png"
   install -Dm644 services/hearthdeck-frontend/data/icons/org.hearthdeck.HearthDeck.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.viniciuscr.hearthdeck.svg"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

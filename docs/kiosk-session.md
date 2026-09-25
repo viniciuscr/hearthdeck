@@ -26,12 +26,12 @@ overlay.
 ```
 Display manager (SDDM/GDM/greetd/...)
   -> reads /usr/share/wayland-sessions/hearthdeck.desktop
-  -> Exec = /usr/lib/hearthdeck/hearthdeck-session
-       -> export XDG_CURRENT_DESKTOP/XDG_SESSION_DESKTOP/XDG_SESSION_TYPE
-       -> systemctl --user start dbus.socket        (cosmic-session is not run)
-       -> systemctl --user import-environment (those three plus DBUS_SESSION_BUS_ADDRESS)
-       -> systemctl --user daemon-reload
-       -> systemctl --user start hearthdeck.target
+  -> Exec = /usr/lib/hearthdeck/hearthdeck-session     (the boot process)
+       1. environment:  export the session variables, start dbus.socket
+                        (cosmic-session is not run), import-environment,
+                        daemon-reload
+       2. services:     try-restart daemon/-bridge (upgrade pickup, a no-op on a
+                        fresh boot), then `start --no-block hearthdeck.target`
             -> Wants= hearthdeck-log.service, hearthdeck-bridge.socket,
                 hearthdeck-daemon.service, hearthdeck-input.service,
                 romm.service, romm.path
@@ -41,28 +41,32 @@ Display manager (SDDM/GDM/greetd/...)
                      lands after login (external mount still coming up)
                  -> hearthdeck-daemon.service loads the same romm.env, so the
                      RomM library/resource roots follow the configured path
-       -> systemctl --user try-restart hearthdeck-daemon.service /-bridge.service
-       -> systemctl --user start hearthdeck-overlay.service
-       -> exec cosmic-comp /usr/bin/hearthdeck-frontend
+       3. readiness:    wait (bounded) for hearthdeck-log.service,
+                        hearthdeck-daemon.service, hearthdeck-bridge.socket -
+                        never romm.service, which is optional and unbounded
+       4. compositor:   start cosmic-comp /usr/bin/hearthdeck-frontend, retrying a
+                        failed start (bounded) and logging the DRM holders
             -> the Hearthdeck frontend is cosmic-comp's ONLY client
 ```
 
 `hearthdeck.target` is this session's single, dedicated, documented hook for
-everything that has to be started before `cosmic-comp` launches the frontend —
-see that unit's own `Wants=` line for the current list. Anything the session
-needs started belongs there (or behind one of the units it wants), **never** in
-the session script itself. RomM is the newest member and the most involved: its
-full trigger chain, why the discovery step must run first, and why its service is
-never allowed to wait for a slow mount are documented in
+everything that has to be started alongside `cosmic-comp` — see that unit's own
+`Wants=` line for the current list. Anything the session needs started belongs
+there (or behind one of the units it wants), **never** in the session script
+itself. RomM is the most involved member: its full trigger chain is in
 `docs/retroarch-integration.md`, "Starting the RomM server itself" (shipped as
 `/usr/share/doc/hearthdeck/ROMM.md`, the file `romm.service`'s own
 `Documentation=` points at).
 
-The session script's `systemctl --user start hearthdeck.target` deliberately does
-not abort the session when it fails — Hearthdeck launches anyway so its own
-system-health view can report the backend problem, rather than the whole login
-refusing to start over one service. Its output must never be sent to
-`/dev/null`.
+`start --no-block` is deliberate. A target's start waits for its oneshot
+dependencies to exit, so a blocking start waits for `podman-compose up` to
+converge — a multi-second black screen, and a compositor start whose timing
+depends on a container stack, which is how it intermittently lost
+`/dev/dri/card1` to whatever else took it. Phase 3 waits for the parts that
+actually matter instead, and phase 4 retries a failed start rather than dropping
+the user to the greeter. Nothing aborts the session over a service: it launches
+anyway so its own system-health view can report the problem, rather than the
+whole login refusing to start. Its output must never be sent to `/dev/null`.
 
 The `import-environment` step exists because a plain shell `export` only changes
 this script's own process environment — it never reaches the systemd `--user`
@@ -87,8 +91,8 @@ in `hearthdeck-kiosk.slice` (`is_kiosk_session()` in
 that slice name is a leftover of an earlier session design; the slice is still
 real and still assigned — only the name is historical.
 
-That's the whole session: one script, one `exec`, `cosmic-comp` with the
-Hearthdeck frontend as its only client. Nothing else runs *as the outer
+That's the whole session: one script, one compositor process, `cosmic-comp` with
+the Hearthdeck frontend as its only client. Nothing else runs *as the outer
 compositor* — no panel, dock, or launcher. Launched apps, RetroArch, and every
 other launcher connect directly to this same compositor as ordinary Wayland
 clients (see "Launching apps and games" below for why that is different from,

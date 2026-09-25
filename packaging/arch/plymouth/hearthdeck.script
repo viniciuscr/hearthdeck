@@ -1,0 +1,16 @@
+# Hearthdeck bootstrap theme.
+#
+# Plymouth's script plugin runs this with the ImageDir as the working directory,
+# so `Image("logo.png")` resolves beside this file. The screen stays this logo
+# until the session releases Plymouth; see packaging/arch/hearthdeck-session for
+# who quits it. Keep this to the mark and the background - a boot screen that
+# animates costs boot time on the very box this is for.
+
+# The TV theme's near-black, so the handoff to the compositor does not flash.
+Window.SetBackgroundTopColor(0.02, 0.02, 0.03);
+Window.SetBackgroundBottomColor(0.02, 0.02, 0.03);
+
+logo.image = Image("logo.png");
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetX(Window.GetWidth() / 2 - logo.image.GetWidth() / 2);
+logo.sprite.SetY(Window.GetHeight() / 2 - logo.image.GetHeight() / 2);
