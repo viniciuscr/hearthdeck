@@ -174,9 +174,9 @@ get their own internal resolution/upscaling.
 Configure LAN TLS through
 `~/.config/hearthdeck/daemon.env`; see `deploy/systemd/daemon.env.example`.
 
-## Next Slice
+## Where work is tracked
 
-Add a host pairing screen that displays the pairing code and TLS fingerprint,
-then store the paired endpoint/token in the frontend client using secure
-storage. After that, replace static library models with `GET /v1/library`
-and use WebSocket events to refresh the UI.
+This doc owns the current shape only. Forward work lives in
+[`code-review-roadmap.md`](code-review-roadmap.md) (review findings and known
+debt) and [`retroarch-integration.md`](retroarch-integration.md) (the
+RomM/RetroArch roadmap). See [`README.md`](README.md) for the full doc map.

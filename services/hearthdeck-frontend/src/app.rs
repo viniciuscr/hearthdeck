@@ -670,7 +670,7 @@ impl HearthDeck {
                     e.path
                         .as_deref()
                         .map(|p| format!("app-entry-{}", p.to_string_lossy()))
-                        .unwrap_or_else(|| format!("app-entry-{}", e.id))
+                        .unwrap_or_else(|| format!("app-entry-{}", e.id)),
                 )
             })
             .collect();
@@ -1477,7 +1477,13 @@ impl HearthDeck {
                     .await
                     .map_err(|error| error.to_string())
             },
-            move |result| cosmic::Action::App(Message::RommGames { scope, generation, result }),
+            move |result| {
+                cosmic::Action::App(Message::RommGames {
+                    scope,
+                    generation,
+                    result,
+                })
+            },
         )
     }
 
@@ -4394,7 +4400,11 @@ impl cosmic::Application for HearthDeck {
                 let listing = self.romm_listings.entry(scope).or_default();
                 for record in page.items {
                     let entry = Arc::new(record.into_desktop_entry());
-                    if !listing.entries.iter().any(|existing| existing.id == entry.id) {
+                    if !listing
+                        .entries
+                        .iter()
+                        .any(|existing| existing.id == entry.id)
+                    {
                         listing.entries.push(entry);
                     }
                 }
@@ -6874,14 +6884,10 @@ impl HearthDeck {
             None => space::horizontal().width(Length::Shrink).into(),
         };
 
-        let tab_row = row![
-            tab_strip,
-            filter_button,
-            count_label,
-        ]
-        .spacing(space_m)
-        .align_y(Alignment::Center)
-        .width(Length::Fill);
+        let tab_row = row![tab_strip, filter_button, count_label,]
+            .spacing(space_m)
+            .align_y(Alignment::Center)
+            .width(Length::Fill);
 
         // ===== Application grid =====
         //
@@ -6914,8 +6920,7 @@ impl HearthDeck {
                 let entry = &self.entry_path_input[i];
                 let id = &self.entry_ids[i];
                 // Icons are resolved per visible tile, not for the whole list.
-                let icon_handle =
-                    crate::icon_cache::entry_icon_handle(&entry.icon, tile_w as u32);
+                let icon_handle = crate::icon_cache::entry_icon_handle(&entry.icon, tile_w as u32);
                 let dup = entry
                     .path
                     .as_ref()
@@ -8542,9 +8547,7 @@ mod tests {
         };
         // The scope exists as soon as its first page is requested; the listing
         // is what a page is merged into.
-        app.romm_listings
-            .entry(RommScope::Console(7))
-            .or_default();
+        app.romm_listings.entry(RommScope::Console(7)).or_default();
 
         // Page 0 then page 1, in the daemon's name order. A name sort over the
         // combined catalog would reorder page 1 before page 0 ("Alpha" vs
@@ -8646,9 +8649,7 @@ mod tests {
             cur_group: Some(0),
             ..Default::default()
         };
-        app.romm_listings
-            .entry(RommScope::Console(7))
-            .or_default();
+        app.romm_listings.entry(RommScope::Console(7)).or_default();
         // A reload of the scope bumps its generation; a page still tagged with
         // the old generation must not be merged into the fresh log.
         app.romm_listings
@@ -8954,9 +8955,7 @@ mod tests {
             total,
             offset,
         };
-        app.romm_listings
-            .entry(RommScope::Console(7))
-            .or_default();
+        app.romm_listings.entry(RommScope::Console(7)).or_default();
         // The first page's total is authoritative; a later page of the same
         // scope reporting a different number must not make the header jump.
         for (offset, total) in [(0_u32, 240_u64), (48, 198)] {
@@ -9554,9 +9553,7 @@ mod tests {
     /// A grid full of entries, as a big library would leave it.
     fn long_grid_app(count: usize) -> HearthDeck {
         HearthDeck {
-            entry_path_input: (0..count)
-                .map(|i| entry(&format!("app{i:04}")))
-                .collect(),
+            entry_path_input: (0..count).map(|i| entry(&format!("app{i:04}"))).collect(),
             window_width: 1280.0,
             viewport_height: 700.0,
             ..Default::default()
@@ -9572,7 +9569,10 @@ mod tests {
         // whole list.
         let window = app.grid_row_window();
         assert_eq!(window.start, 0);
-        assert!(window.end < total_rows, "built {window:?} of {total_rows} rows");
+        assert!(
+            window.end < total_rows,
+            "built {window:?} of {total_rows} rows"
+        );
 
         // Scrolled into the middle, the window moves with the viewport instead
         // of growing to cover the list.

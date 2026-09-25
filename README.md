@@ -2,9 +2,11 @@
 
 A local-first, controller-first TV library and launcher for Linux.
 
-## Product Foundations
+## Documentation
 
-Start with [Product Foundations](docs/product-foundations.md). It defines the
+The map of every doc — what it owns and when to read it — is
+[docs/README.md](docs/README.md). Start there. New to the codebase, read
+[Product Foundations](docs/product-foundations.md) first: it defines the
 non-negotiable controller navigation contract, catalog and metadata model,
 service boundaries, and low-resource rules that every feature must follow.
 
