@@ -102,6 +102,7 @@ use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
 use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
 use crate::widgets::application::{AppletString, ApplicationButton};
+use crate::widgets::controller_key::{FaceButton, controller_hint};
 use crate::widgets::menu::{self, Menu, Row};
 use crate::widgets::rail::{rail, rail_item};
 use crate::widgets::transition::{PageTransition, SectionTransition, TabTransition};
@@ -7155,12 +7156,13 @@ impl HearthDeck {
 
     /// The filter sidebar's footer: one action, dropping every chosen facet.
     ///
-    /// Pointer-only. The controller does not walk to it — X clears the filters
-    /// from anywhere in the drawer — so it wears no cursor ring; it is here for
-    /// a mouse or touch pointer that has no equivalent button.
+    /// Pointer-only in the sense that the controller does not walk to it — X
+    /// clears the filters from anywhere in the drawer — so it wears no cursor
+    /// ring and carries the X key cap, which is both the button that works on a
+    /// pad and the reminder of it for a mouse or touch user.
     fn filter_drawer_footer(&self) -> Element<'_, Message> {
         let space = theme::spacing();
-        button::custom(text::body(fl!("filter-clear")).size(TEXT_BODY))
+        button::custom(controller_hint(fl!("filter-clear"), FaceButton::X))
             .class(destructive_button_class())
             .on_press(Message::ClearFilters)
             .padding([space.space_xs, space.space_l])

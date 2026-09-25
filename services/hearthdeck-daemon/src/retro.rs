@@ -140,6 +140,18 @@ const CORE_BY_PLATFORM_SLUG: &[(&str, &str)] = &[
     ("scummvm", "scummvm_libretro.so"),
 ];
 
+/// Cores a ROM's *content* forces regardless of the platform it is filed under,
+/// keyed on the file extension.
+///
+/// Sega 32X is the case that matters. A 32X cartridge is a `.32x` file for an
+/// add-on to the Mega Drive, and RomM libraries routinely keep 32X roms in the
+/// Mega Drive platform's folder. The platform slug then says `genesis`, which
+/// maps to Genesis Plus GX - a core that cannot run 32X at all - so the launch
+/// fails with the core looking like the problem. The extension is the only
+/// signal that tells a 32X cartridge from a Mega Drive one, so a `.32x` file is
+/// routed to PicoDrive whatever platform claims it.
+const CORE_BY_CONTENT_EXTENSION: &[(&str, &str)] = &[("32x", "picodrive_libretro.so")];
+
 #[derive(Debug)]
 pub enum RetroLaunchError {
     Romm(RommQueryError),
@@ -223,7 +235,24 @@ pub async fn prepare_launch(
         }
     })?;
 
-    let core_path = resolve_core_path(&fs_slug).await?;
+    // The content extension can override the platform: a `.32x` file is a 32X
+    // cartridge even when it is filed under the Mega Drive platform.
+    let content_name = rom.fs_name.as_deref().unwrap_or_default();
+    let core_filename = core_filename_for(&fs_slug, content_name).ok_or_else(|| {
+        RetroLaunchError::UnsupportedPlatform {
+            fs_slug: fs_slug.clone(),
+        }
+    })?;
+    let core_path = core_path_for(core_filename).await?;
+    // Logged because "the wrong core started" is otherwise invisible: the core
+    // is chosen here, the launch itself is silent, and the only symptom is the
+    // emulator misbehaving.
+    tracing::info!(
+        platform = %fs_slug,
+        content = content_name,
+        core = core_filename,
+        "resolved RetroArch core for launch"
+    );
 
     Ok(RetroLaunchPlan {
         core_path,
@@ -274,14 +303,29 @@ async fn library_rom_path(
     Ok(rom_path)
 }
 
-async fn resolve_core_path(fs_slug: &str) -> Result<PathBuf, RetroLaunchError> {
-    let core_filename = CORE_BY_PLATFORM_SLUG
+/// The libretro core filename for a rom: its content extension if one is known,
+/// otherwise the platform slug.
+///
+/// Content wins over platform on purpose. A platform slug is the weaker signal
+/// for anything that is an add-on or shares a folder (32X in a Mega Drive
+/// library), and getting it wrong launches a core that cannot run the rom.
+fn core_filename_for(fs_slug: &str, content_name: &str) -> Option<&'static str> {
+    if let Some(extension) = Path::new(content_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        && let Some((_, core)) = CORE_BY_CONTENT_EXTENSION
+            .iter()
+            .find(|(ext, _)| ext.eq_ignore_ascii_case(extension))
+    {
+        return Some(core);
+    }
+    CORE_BY_PLATFORM_SLUG
         .iter()
         .find(|(slug, _)| *slug == fs_slug)
         .map(|(_, core)| *core)
-        .ok_or_else(|| RetroLaunchError::UnsupportedPlatform {
-            fs_slug: fs_slug.to_owned(),
-        })?;
+}
+
+async fn core_path_for(core_filename: &str) -> Result<PathBuf, RetroLaunchError> {
     let core_path = Path::new(CORE_DIRECTORY).join(core_filename);
     fs::metadata(&core_path)
         .await
@@ -303,7 +347,8 @@ fn validate_content_filename(fs_name: &str) -> Result<(), RetroLaunchError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CORE_BY_PLATFORM_SLUG, RetroLaunchError, resolve_core_path, validate_content_filename,
+        CORE_BY_PLATFORM_SLUG, RetroLaunchError, core_filename_for, core_path_for,
+        validate_content_filename,
     };
 
     /// Every libretro core the PKGBUILD packages must be reachable from at least
@@ -380,16 +425,36 @@ mod tests {
         format!("{}_libretro.so", name.replace('-', "_"))
     }
 
+    #[test]
+    fn a_platform_slug_with_no_core_and_no_content_override_is_unsupported() {
+        assert_eq!(
+            core_filename_for("some-platform-nobody-mapped-yet", "game.bin"),
+            None
+        );
+    }
+
     #[tokio::test]
-    async fn rejects_a_platform_slug_with_no_configured_core() {
-        let error = resolve_core_path("some-platform-nobody-mapped-yet")
+    async fn a_missing_core_file_is_reported_as_not_installed() {
+        let error = core_path_for("definitely_not_installed_libretro.so")
             .await
             .unwrap_err();
 
-        assert!(matches!(
-            error,
-            RetroLaunchError::UnsupportedPlatform { .. }
-        ));
+        assert!(matches!(error, RetroLaunchError::CoreNotInstalled { .. }));
+    }
+
+    #[test]
+    fn a_32x_rom_uses_picodrive_even_under_a_genesis_platform() {
+        // 32X roms routinely live in the Mega Drive platform, whose slug maps to
+        // Genesis Plus GX - a core that cannot run 32X. The extension decides.
+        assert_eq!(
+            core_filename_for("genesis-slash-megadrive", "Knuckles Chaotix (USA).32x"),
+            Some("picodrive_libretro.so")
+        );
+        // An ordinary Mega Drive rom still gets the platform's core.
+        assert_eq!(
+            core_filename_for("genesis-slash-megadrive", "Sonic (USA).md"),
+            Some("genesis_plus_gx_libretro.so")
+        );
     }
 
     #[test]

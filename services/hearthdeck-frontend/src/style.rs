@@ -389,6 +389,8 @@ pub const ICON_BODY: u16 = 24;
 pub const ICON_TILE_ACTION: f32 = 32.0;
 /// Small icons and inline spacers (menu checkboxes, source badges).
 pub const ICON_SMALL: u16 = 20;
+/// Diameter of the key-cap badge that names a gamepad button on a control.
+pub const CONTROLLER_KEY_SIZE: f32 = 22.0;
 
 // ---------------------------------------------------------------------------
 // Focus rings
@@ -961,6 +963,31 @@ pub fn tab_button_class(selected: bool) -> Button {
 /// The arrows and value inside are ordinary buttons; this only paints the row
 /// they sit in, so the whole row reads as one control rather than as three
 /// loose widgets - the compact, list-row shape a large option set needs.
+/// A small key-cap badge for a gamepad face button, shown on a control the
+/// controller can also trigger (`widgets::controller_key`).
+///
+/// Drawn as a filled circle with a hairline on-surface border and the button's
+/// letter, so it reads as a face button in either theme. The letter is SDL's
+/// positional naming (A south, B east, X west, Y north), which is what the input
+/// layer maps from - the same control has to read correctly on an Xbox, a
+/// PlayStation and a generic pad, whose printed caps and colours differ.
+pub fn controller_key(theme: &Theme) -> container::Style {
+    let mut border_color: Color = theme.cosmic().on_bg_color().into();
+    border_color.a = 0.45;
+    container::Style {
+        text_color: Some(theme.cosmic().on_bg_color().into()),
+        icon_color: Some(theme.cosmic().on_bg_color().into()),
+        background: Some(chip_background(0.14, theme)),
+        border: Border {
+            radius: (CONTROLLER_KEY_SIZE / 2.0).into(),
+            width: 1.0,
+            color: border_color,
+        },
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
 pub fn filter_row(selected: bool, cursor: bool) -> impl Fn(&Theme) -> container::Style {
     move |theme| {
         let alpha = match (selected, cursor) {

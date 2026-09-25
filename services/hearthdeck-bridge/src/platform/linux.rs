@@ -246,25 +246,28 @@ const RETRO_SHADER_DIRECTORY: &str = "/usr/share/libretro/shaders/shaders_slang"
 /// RetroArch's compiled default is `gl`. That is wrong for Hearthdeck in two
 /// ways: `gl` cannot load slang shader presets at all, and it behaves
 /// differently for hardware-rendered cores under the Gamescope/KMS sessions
-/// Hearthdeck runs in (the Dolphin/GameCube core in particular came up as a
-/// small centered window while software cores were fine). `vulkan` is the
-/// natural fit for Gamescope (itself a Vulkan compositor) and is supported by
-/// every core in `retro.rs`'s table. Pinned unconditionally so a launch's
+/// Hearthdeck runs in. `vulkan` is the natural fit for Gamescope (itself a
+/// Vulkan compositor) and works for every core in `retro.rs`'s table except the
+/// ones named in [`VIDEO_DRIVER_BY_CORE`]. Pinned unconditionally so a launch's
 /// behaviour does not depend on whether a shader happened to apply.
 const RETRO_VIDEO_DRIVER_DEFAULT: &str = "vulkan";
 
 /// Per-core driver overrides, keyed on the core filename like
 /// `SHADER_PRESET_BY_CORE`.
 ///
-/// Flycast is the one core that cannot take the `vulkan` default. Its libretro
-/// Vulkan renderer has documented segfaults (flyinghead/flycast#2082 and #2442,
-/// the latter right after the resolution-change `SET_SYSTEM_AV_INFO` an
-/// FMV-to-gameplay transition produces), so it is pinned to `glcore` -- the
-/// modern GL driver, which keeps hardware rendering and a slang-capable
-/// context while avoiding the buggy Vulkan path. `gl` would also avoid it, but
-/// it is the pre-3.1 driver that mis-sized Dolphin under Gamescope, so it is
-/// not the floor we want for another hardware-rendered core.
-const VIDEO_DRIVER_BY_CORE: &[(&str, &str)] = &[("flycast_libretro.so", "glcore")];
+/// The override exists because a core's libretro renderer can fail on a driver
+/// the rest of the table is fine with. Dolphin never brings a Vulkan picture up
+/// under the Gamescope/KMS session - the core loads, the screen stays black and
+/// RetroArch's own menu stops responding, so the launch is only recoverable by
+/// force-quitting. Flycast's Vulkan renderer segfaults on the resolution change
+/// of an FMV-to-gameplay transition (flyinghead/flycast#2082 and #2442). Both
+/// are pinned to `glcore`: the modern GL driver, which keeps hardware rendering
+/// and a slang-capable context, and which (unlike the pre-3.1 `gl` driver that
+/// mis-sized Dolphin under Gamescope) sizes a hardware-rendered core correctly.
+const VIDEO_DRIVER_BY_CORE: &[(&str, &str)] = &[
+    ("dolphin_libretro.so", "glcore"),
+    ("flycast_libretro.so", "glcore"),
+];
 
 /// Per-core shader preset, relative to `RETRO_SHADER_DIRECTORY`.
 ///
@@ -1335,8 +1338,12 @@ mod tests {
 
     #[test]
     fn resolves_a_per_core_video_driver_override() {
-        // Flycast is the override: its libretro Vulkan renderer segfaults on the
-        // FMV-to-gameplay resolution change, so it is pinned to `glcore`.
+        // Dolphin's Vulkan renderer black-screens under Gamescope; Flycast's
+        // segfaults on an FMV-to-gameplay transition. Both take `glcore`.
+        assert_eq!(
+            video_driver_for_core(Path::new("/usr/lib/libretro/dolphin_libretro.so")),
+            "glcore"
+        );
         assert_eq!(
             video_driver_for_core(Path::new("/usr/lib/libretro/flycast_libretro.so")),
             "glcore"
@@ -1344,10 +1351,6 @@ mod tests {
         // Every other core gets the Hearthdeck default.
         assert_eq!(
             video_driver_for_core(Path::new("/usr/lib/libretro/snes9x_libretro.so")),
-            RETRO_VIDEO_DRIVER_DEFAULT
-        );
-        assert_eq!(
-            video_driver_for_core(Path::new("/usr/lib/libretro/dolphin_libretro.so")),
             RETRO_VIDEO_DRIVER_DEFAULT
         );
         // Every override names a real core and a driver that is not the default.

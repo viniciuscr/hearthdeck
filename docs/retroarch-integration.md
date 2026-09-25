@@ -208,26 +208,26 @@ disagrees.
    consoles, an LCD grid for handhelds, no preset for 3D-era cores). The
    managed config pins `video_driver = "vulkan"` for **every** launch (not
    only shaded ones), with a per-core override table `VIDEO_DRIVER_BY_CORE`
-   that pins Flycast to `glcore`.
+   that pins Flycast and Dolphin to `glcore`.
    Rationale: RetroArch's compiled default is `gl`, which cannot load slang
    presets at all and mis-sizes hardware-rendered cores under the
-   Gamescope/KMS sessions Hearthdeck runs in — the Dolphin/GameCube core
-   showed up as a small centered window while software cores were fine, and
-   it was the only core left on the default driver because it receives no
-   shader. `vulkan` fits Gamescope (itself a Vulkan compositor) and is
-   supported by every core in `retro.rs`'s table. Flycast is the exception:
-   its libretro Vulkan renderer segfaults on the resolution change an
-   FMV-to-gameplay transition produces (flyinghead/flycast#2082, #2442), so
-   it is pinned to `glcore` — the modern GL driver, which keeps hardware
-   rendering and a slang-capable context without the buggy Vulkan path.
-   Default and override are named constants (`RETRO_VIDEO_DRIVER_DEFAULT`,
-   `VIDEO_DRIVER_BY_CORE`), so each is one explicit decision, and a missing
-   preset still degrades to an unshaded launch instead of failing. Keying
-   presets on the core keeps the platform→core decision in one place while
-   naturally covering consoles that share a core (Dolphin = GC/Wii, Genesis
-   Plus GX = MD/MS/GG/Sega CD). Per-user preset and per-core core-option
-   overrides are future work, alongside the core-install configurability in
-   open question 2.
+   Gamescope/KMS sessions Hearthdeck runs in. `vulkan` fits Gamescope (itself
+   a Vulkan compositor) and works for every other core in `retro.rs`'s table,
+   but it is not a blanket default for the hardware-rendered ones: Dolphin's
+   libretro Vulkan renderer loads and then never brings a picture up under
+   Gamescope (black screen, RetroArch's menu unresponsive, only recoverable by
+   force-quitting), and Flycast's segfaults on the resolution change an
+   FMV-to-gameplay transition produces (flyinghead/flycast#2082, #2442). Both
+   are pinned to `glcore` — the modern GL driver, which keeps hardware
+   rendering and a slang-capable context, and which (unlike the pre-3.1 `gl`
+   driver) sizes a hardware-rendered core correctly. Default and override are
+   named constants (`RETRO_VIDEO_DRIVER_DEFAULT`, `VIDEO_DRIVER_BY_CORE`), so
+   each is one explicit decision, and a missing preset still degrades to an
+   unshaded launch instead of failing. Keying presets on the core keeps the
+   platform→core decision in one place while naturally covering consoles that
+   share a core (Dolphin = GC/Wii, Genesis Plus GX = MD/MS/GG/Sega CD).
+   Per-user preset and per-core core-option overrides are future work,
+   alongside the core-install configurability in open question 2.
 
 9. **Guide/Home belongs to Hearthdeck, so RetroArch's menu opens with
    Start + Select.** Every bundled joypad autoconfig profile binds the pad's
@@ -458,13 +458,16 @@ Each phase is scoped to be doable in one sitting and independently useful.
 - **Phase 2 — Daemon: core + ROM resolution. DONE.** New `retro.rs` module:
   static `fs_slug` → libretro core filename table (covering every core added
   in Phase 0, including Dreamcast/`flycast` and N64/`mupen64plus-next`),
-  validated against `/usr/lib/libretro`; ROM fetch/cache from RomM's
-  `/api/roms/{id}` and `/api/roms/{id}/content/{fs_name}` (added to
-  `diagnostics.rs`, same authenticated-proxy pattern as `romm_asset` —
-  credentials never leave the daemon) into `$XDG_CACHE_HOME/hearthdeck/romm/`,
-  the same path the bridge's own allowlist expects. User-configurable core
-  overrides remain future work (open question 2). Cache retention landed later
-  as `retro::start_cache_janitor` (decision 10).
+  validated against `/usr/lib/libretro`. A ROM's **content extension** can
+  override the platform's core, because a platform slug cannot distinguish
+  software that shares a folder: a `.32x` cartridge is a 32X rom even when
+  RomM files it under the Mega Drive platform, whose slug maps to Genesis
+  Plus GX — a core that cannot run 32X — so `.32x` routes to PicoDrive
+  whatever platform claims it. The resolved platform, content name and core
+  are logged at launch, since "the wrong core started" is otherwise silent.
+  ROM paths are read from RomM's own library mount (`fs_path` + `fs_name`)
+  rather than cached (decision 10's cache was retired); user-configurable
+  core overrides remain future work (open question 2).
 - **Phase 3 — Bridge: launch + stop. Code done, hardware verification
   pending.** `launch_retro_game`, path validation, and the systemd-run/
   gamescope wrapping landed in Phase 1's implementation above. What's left:
