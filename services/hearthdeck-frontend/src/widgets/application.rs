@@ -23,8 +23,8 @@ use std::rc::Rc;
 use std::str::FromStr;
 
 use crate::style::{
-    ICON_SMALL, SOURCE_BADGE, TEXT_CAPTION, TEXT_TILE_LABEL, TILE_DRAG_ICON, artwork, source_badge,
-    tile_button_class, tile_label_overlay,
+    ICON_SMALL, SOURCE_BADGE, TEXT_CAPTION, TEXT_TILE_LABEL, TILE_DRAG_ICON, artwork,
+    artwork_contained, source_badge, tile_button_class, tile_label_overlay, tile_surface,
 };
 
 pub const MIME_TYPE: &str = "text/uri-list";
@@ -96,9 +96,22 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
             name.to_string()
         };
         let path_ = path.clone();
+        // The cover is fitted, not cropped: some box art is not the tile's 2:3
+        // shape, and `Cover` cut its title art off. `tile_surface` behind it
+        // turns the bands a `Contain` fit leaves into a card, so a fitted cover
+        // still reads as a tile of a consistent size next to its neighbours.
+        let cover = |handle: &icon::Handle| -> Element<'a, Message> {
+            container(artwork_contained(handle, Length::Fill, Length::Fill))
+                .class(cosmic::theme::Container::Custom(Box::new(tile_surface)))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Horizontal::Center)
+                .align_y(Vertical::Center)
+                .into()
+        };
         let artwork_layer: Element<'a, Message> = if version_count > 1 {
             stack![
-                artwork(&icon_handle, Length::Fill, Length::Fill),
+                cover(&icon_handle),
                 container(
                     container(
                         row![
@@ -123,7 +136,7 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
             ]
             .into()
         } else {
-            artwork(&icon_handle, Length::Fill, Length::Fill)
+            cover(&icon_handle)
         };
         let content = dnd_source(
             button::custom(

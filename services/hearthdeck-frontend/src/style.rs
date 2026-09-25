@@ -66,6 +66,12 @@ pub const TAB_TRANSITION_DURATION: Duration = Duration::from_millis(240);
 /// of transition.
 pub const SECTION_TRANSITION_DURATION: Duration = Duration::from_millis(300);
 
+/// Duration of an eased scroll when focus drags a list by itself (grid rows,
+/// dashboard shelves and rails). Every list routes through the same animation,
+/// so they all move at this speed. Short, because it fires on each focus step:
+/// long enough to read as motion, short enough not to lag the D-pad.
+pub const SCROLL_TRANSITION_DURATION: Duration = Duration::from_millis(220);
+
 // ---------------------------------------------------------------------------
 // Window & layout (proportional — sizes computed from window_width)
 // ---------------------------------------------------------------------------
@@ -130,10 +136,27 @@ pub const DASHBOARD_RAIL_TILES: usize = 12;
 
 /// Number of columns in the application grid.
 pub const GRID_COLUMNS: usize = 4;
+/// Number of columns in the Console Games grid. A console's covers are the same
+/// 2:3 box as any game's, but the section reads better as a denser wall of
+/// smaller boxes; six columns makes each tile ~30% smaller than the default
+/// four, which is the size the console grid is designed around.
+pub const CONSOLE_GRID_COLUMNS: usize = 6;
 /// Gap between grid tiles as a fraction of tile width. Tiles are recomputed
 /// from the remaining content width, so a larger ratio shrinks each cover a
 /// little and buys noticeably more air between cards than the Xbox-style 6.5%.
 pub const GRID_GAP_RATIO: f32 = 0.14;
+
+/// How many columns a section's grid uses. Consoles get the denser layout;
+/// every other section keeps the default. This is the single place the two grid
+/// densities are decided, so a tile's size, its row height and the page's
+/// scroll math all agree.
+pub fn grid_columns(is_console: bool) -> usize {
+    if is_console {
+        CONSOLE_GRID_COLUMNS
+    } else {
+        GRID_COLUMNS
+    }
+}
 
 /// Top padding of the scrollable grid; keeps the focus ring on the first row
 /// from being clipped by the viewport and gives the first cover row breathing
@@ -166,9 +189,9 @@ pub fn content_width(window_width: f32) -> f32 {
 /// Compute the gap between grid tiles from the tile width.
 /// Uses self-referencing formula: tile = (cw - (cols-1)*gap) / cols,
 /// gap = ratio * tile.
-pub fn grid_gap(window_width: f32) -> f32 {
+pub fn grid_gap(window_width: f32, columns: usize) -> f32 {
     let cw = content_width(window_width);
-    let cols = GRID_COLUMNS as f32;
+    let cols = columns as f32;
     // cw = cols * tile + (cols - 1) * ratio * tile = tile * (cols + (cols-1)*ratio)
     let est_tile = cw / (cols + (cols - 1.0) * GRID_GAP_RATIO);
     let s = spacing();
@@ -176,15 +199,15 @@ pub fn grid_gap(window_width: f32) -> f32 {
 }
 
 /// Compute the tile width from the padded content width.
-pub fn tile_width(window_width: f32) -> f32 {
+pub fn tile_width(window_width: f32, columns: usize) -> f32 {
     let cw = content_width(window_width);
-    let gap = grid_gap(window_width);
-    ((cw - (GRID_COLUMNS as f32 - 1.0) * gap) / GRID_COLUMNS as f32).max(60.0)
+    let gap = grid_gap(window_width, columns);
+    ((cw - (columns as f32 - 1.0) * gap) / columns as f32).max(60.0)
 }
 
 /// Games use common 2:3 portrait cover art; applications remain square.
-pub fn tile_height(window_width: f32, is_game: bool) -> f32 {
-    tile_width(window_width) * if is_game { 1.5 } else { 1.0 }
+pub fn tile_height(tile_width: f32, is_game: bool) -> f32 {
+    tile_width * if is_game { 1.5 } else { 1.0 }
 }
 
 /// Square dashboard tiles fill one horizontal row without shifting on focus.
@@ -287,11 +310,16 @@ pub const EDIT_NAME_INPUT_WIDTH: f32 = 280.0;
 pub fn title_action_height() -> f32 {
     f32::from(spacing().space_xl)
 }
-/// Height of the filter button on the tab row; 40px at Standard.
+/// Height of the filter button on the tab row; 48px at Standard. Matches the
+/// tab strip's own height so the control sits on the tabs' baseline instead of
+/// floating under them.
 pub fn filter_button_height() -> f32 {
-    let s = spacing();
-    f32::from(s.space_l + s.space_xxs)
+    f32::from(spacing().space_xl)
 }
+
+/// Minimum width of the filter button, so its label never shrinks it into an
+/// afterthought next to the tabs.
+pub const FILTER_BUTTON_MIN_WIDTH: f32 = 168.0;
 
 /// Width of the console filter sidebar (the right-hand context drawer).
 /// Clamped so it keeps a readable label column on small windows without
@@ -417,6 +445,20 @@ pub fn artwork<'a, M: 'a>(handle: &icon::Handle, width: Length, height: Length) 
     artwork_fit(handle, ContentFit::Cover, width, height)
 }
 
+/// Artwork scaled to *fit* inside its bounds, whole: the image is resized to the
+/// largest size that still fits and centred, so a cover whose aspect ratio does
+/// not match the tile is neither stretched nor cropped to match it. This is what
+/// grid tiles use — box art comes in too many shapes for a cover-crop to be
+/// trusted with the title art — with [`tile_surface`] behind it so the bands the
+/// fit leaves are a card, not a hole.
+pub fn artwork_contained<'a, M: 'a>(
+    handle: &icon::Handle,
+    width: Length,
+    height: Length,
+) -> Element<'a, M> {
+    artwork_fit(handle, ContentFit::Contain, width, height)
+}
+
 // ---------------------------------------------------------------------------
 // Container styles
 // ---------------------------------------------------------------------------
@@ -477,6 +519,20 @@ pub fn card_surface(theme: &Theme) -> container::Style {
 /// borrowing a different preset.
 pub fn source_badge(theme: &Theme) -> container::Style {
     card_surface(theme)
+}
+
+/// Quiet backdrop drawn behind a tile's artwork.
+///
+/// Grid tiles fit their cover art ([`artwork_contained`]) rather than cropping
+/// it, so art whose aspect ratio is not the tile's leaves bands on two sides.
+/// This fills those with a faint card surface instead of letting the page show
+/// through, so a letterboxed cover still reads as a card of a consistent size.
+pub fn tile_surface(theme: &Theme) -> container::Style {
+    let mut style = card_surface(theme);
+    if let Some(Background::Color(color)) = style.background.as_mut() {
+        color.a = if theme.cosmic().is_dark { 0.35 } else { 0.5 };
+    }
+    style
 }
 
 /// Opaque launch layer shown while a selected game is starting.
@@ -633,7 +689,147 @@ pub fn menu_scrim(theme: &Theme) -> container::Style {
 
 // ---------------------------------------------------------------------------
 // Button styles
+//
+// The design system's button palette, from most to least prominent. Views pick
+// one of these by role rather than reaching for a raw `theme::Button` preset,
+// so two controls that mean the same thing look the same everywhere:
+//
+//   * `primary_action_button_class` - the one affirmative action on a screen.
+//   * `destructive_button_class`    - the action that removes something.
+//   * `standard_button_class`       - an ordinary secondary action.
+//   * `control_button_class`        - labelled tools and toggles (the filter
+//                                     button, drawer actions).
+//   * `text_button_class`           - a bare-text control (a value you click).
+//   * `icon_button_class`           - icon-only tools in a toolbar or row.
+//   * `tile_button_class` / `rail`  - the media tiles themselves.
+//
+// They all share `focus_ring` and a radius, so "this is selected" looks
+// identical whether the focus is on a tile, a tab or a control.
 // ---------------------------------------------------------------------------
+
+/// A labelled control that reads as a control: a chip fill at rest, a stronger
+/// one on hover, and the accent tint while `selected`. Unlike
+/// [`section_button_class`], which is transparent when idle because it is
+/// navigation, this one is always visible — a tool should look pressable
+/// before it is focused.
+pub fn control_button_class(selected: bool) -> Button {
+    let styled = move |focused: bool, theme: &Theme, hovered: bool| {
+        let mut style = theme.active(focused, false, &Button::IconVertical);
+        style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+        style.background = Some(if selected {
+            let mut color: Color = theme.cosmic().accent.base.into();
+            color.a = 0.22;
+            Background::Color(color)
+        } else {
+            chip_background(if hovered { 0.16 } else { 0.10 }, theme)
+        });
+        if selected {
+            style.text_color = Some(theme.cosmic().accent_text_color().into());
+            style.icon_color = Some(theme.cosmic().accent_text_color().into());
+        }
+        focus_ring(style, focused, theme)
+    };
+
+    Button::Custom {
+        active: Box::new(move |focused, theme| styled(focused, theme, false)),
+        disabled: Box::new(|theme| theme.disabled(&Button::IconVertical)),
+        hovered: Box::new(move |focused, theme| styled(focused, theme, true)),
+        pressed: Box::new(move |focused, theme| styled(focused, theme, true)),
+    }
+}
+
+/// An icon-only button for a toolbar or list row. The shared radius and focus
+/// ring, transparent at rest so a row of them stays quiet.
+pub fn icon_button_class() -> Button {
+    Button::Custom {
+        active: Box::new(|focused, theme| {
+            let mut style = theme.active(focused, false, &Button::Icon);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+        disabled: Box::new(|theme| theme.disabled(&Button::Icon)),
+        hovered: Box::new(|focused, theme| {
+            let mut style = theme.hovered(focused, false, &Button::Icon);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+        pressed: Box::new(|focused, theme| {
+            let mut style = theme.pressed(focused, false, &Button::Icon);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+    }
+}
+
+/// The action that removes something: the theme's destructive preset with the
+/// shared radius and focus ring.
+pub fn destructive_button_class() -> Button {
+    Button::Custom {
+        active: Box::new(|focused, theme| {
+            let mut style = theme.active(focused, false, &Button::Destructive);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+        disabled: Box::new(|theme| theme.disabled(&Button::Destructive)),
+        hovered: Box::new(|focused, theme| {
+            let mut style = theme.hovered(focused, false, &Button::Destructive);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+        pressed: Box::new(|focused, theme| {
+            let mut style = theme.pressed(focused, false, &Button::Destructive);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+    }
+}
+
+/// An ordinary secondary action (a settings toggle, a reset): the theme's
+/// standard fill with the shared radius and focus ring.
+pub fn standard_button_class() -> Button {
+    Button::Custom {
+        active: Box::new(|focused, theme| {
+            let mut style = theme.active(focused, false, &Button::Standard);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+        disabled: Box::new(|theme| theme.disabled(&Button::Standard)),
+        hovered: Box::new(|focused, theme| {
+            let mut style = theme.hovered(focused, false, &Button::Standard);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+        pressed: Box::new(|focused, theme| {
+            let mut style = theme.pressed(focused, false, &Button::Standard);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+    }
+}
+
+/// A bare-text control - a value you click to change (the filter drawer's
+/// current value). Transparent at rest like [`tab_button_class`], but with the
+/// shared radius and focus ring so it still reads as a control.
+pub fn text_button_class() -> Button {
+    Button::Custom {
+        active: Box::new(|focused, theme| {
+            let mut style = theme.active(focused, false, &Button::Text);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+        disabled: Box::new(|theme| theme.disabled(&Button::Text)),
+        hovered: Box::new(|focused, theme| {
+            let mut style = theme.hovered(focused, false, &Button::Text);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+        pressed: Box::new(|focused, theme| {
+            let mut style = theme.pressed(focused, false, &Button::Text);
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+    }
+}
 
 /// A subtle neutral fill derived from the theme's on-color so it stays visible
 /// on both light and dark themes.
@@ -818,20 +1014,28 @@ pub fn tile_button_class(selected: bool) -> Button {
 // ---------------------------------------------------------------------------
 
 /// The primary action of a details screen: filled with the theme's accent, so
-/// the button that starts the game is unmistakable at TV distance. The focus
-/// ring uses the theme's on-accent color, because an accent ring on an accent
-/// fill would be invisible.
+/// the button that starts the game is unmistakable at TV distance.
+///
+/// Built on the theme's `Button::Suggested` component rather than pairing
+/// `accent.base` with `accent.on` by hand. That pair is not a fill and its
+/// text: `accent.on` is a neutral control step, while the suggested button's
+/// own `on` color is derived from the accent fill's contrast (`get_text` in
+/// `cosmic-theme`). Using the former painted the label white (or black) with no
+/// relationship to the button underneath it, so on a light accent the text
+/// became unreadable. The suggested component is the one place the theme
+/// guarantees the fill and its label agree, so we take both from it and only
+/// add the shared radius and focus ring.
 pub fn primary_action_button_class() -> Button {
     let styled = |focused: bool, theme: &Theme| {
-        let t = theme.cosmic();
         let mut style = theme.active(focused, false, &Button::Suggested);
-        style.background = Some(Background::Color(t.accent.base.into()));
-        style.text_color = Some(t.accent.on.into());
-        style.icon_color = Some(t.accent.on.into());
         style.border_radius = surface_radius(theme).into();
+        // Ring in the label's own color: the theme guarantees it contrasts with
+        // the fill, and an accent ring on an accent fill would be invisible.
         style.outline_width = FOCUS_RING_WIDTH;
         style.outline_color = if focused {
-            t.accent.on.into()
+            style
+                .text_color
+                .unwrap_or_else(|| theme.cosmic().accent_text_color().into())
         } else {
             Color::TRANSPARENT
         };
@@ -878,10 +1082,11 @@ pub fn details_toggle_button_class(active: bool) -> Button {
 #[cfg(test)]
 mod tests {
     use super::{
-        DASHBOARD_VISIBLE_TILES, GRID_COLUMNS, content_horizontal_padding, content_width,
-        dashboard_tile_size, filter_button_height, grid_gap, grid_top_padding, search_icon_padding,
-        sidebar_accent_bar_height, sidebar_header_height, sidebar_item_height, sidebar_width,
-        tab_height, tab_underline_height, tile_height, tile_width, title_action_height,
+        CONSOLE_GRID_COLUMNS, DASHBOARD_VISIBLE_TILES, GRID_COLUMNS, content_horizontal_padding,
+        content_width, dashboard_tile_size, filter_button_height, grid_columns, grid_gap,
+        grid_top_padding, search_icon_padding, sidebar_accent_bar_height, sidebar_header_height,
+        sidebar_item_height, sidebar_width, tab_height, tab_underline_height, tile_height,
+        tile_width, title_action_height,
     };
 
     #[test]
@@ -892,7 +1097,7 @@ mod tests {
         assert_eq!(sidebar_item_height(), 56.0);
         assert_eq!(sidebar_accent_bar_height(), 40.0);
         assert_eq!(title_action_height(), 48.0);
-        assert_eq!(filter_button_height(), 40.0);
+        assert_eq!(filter_button_height(), 48.0);
         assert_eq!(tab_height(), 48.0);
         assert_eq!(tab_underline_height(), 4.0);
         assert_eq!(content_horizontal_padding(), 24);
@@ -903,14 +1108,27 @@ mod tests {
     #[test]
     fn grid_fits_inside_padded_content() {
         let window_width = 1200.0;
-        let occupied = GRID_COLUMNS as f32 * tile_width(window_width)
-            + (GRID_COLUMNS - 1) as f32 * grid_gap(window_width);
+        let columns = GRID_COLUMNS;
+        let occupied = columns as f32 * tile_width(window_width, columns)
+            + (columns - 1) as f32 * grid_gap(window_width, columns);
 
         assert!((occupied - content_width(window_width)).abs() < 0.01);
         assert!(
             occupied + sidebar_width(window_width) + 2.0 * f32::from(content_horizontal_padding())
                 <= window_width
         );
+    }
+
+    #[test]
+    fn console_grid_is_denser_than_the_default() {
+        let window_width = 1200.0;
+        assert_eq!(grid_columns(false), GRID_COLUMNS);
+        assert_eq!(grid_columns(true), CONSOLE_GRID_COLUMNS);
+        // Six columns of the same content width leave each cover about 30%
+        // smaller than four columns, which is the console grid's target size.
+        let ratio =
+            tile_width(window_width, CONSOLE_GRID_COLUMNS) / tile_width(window_width, GRID_COLUMNS);
+        assert!((0.62..0.72).contains(&ratio), "ratio was {ratio}");
     }
 
     #[test]
@@ -930,8 +1148,8 @@ mod tests {
 
     #[test]
     fn game_tiles_are_portrait_and_application_tiles_are_square() {
-        let width = tile_width(1200.0);
-        assert_eq!(tile_height(1200.0, false), width);
-        assert_eq!(tile_height(1200.0, true), width * 1.5);
+        let width = tile_width(1200.0, GRID_COLUMNS);
+        assert_eq!(tile_height(width, false), width);
+        assert_eq!(tile_height(width, true), width * 1.5);
     }
 }

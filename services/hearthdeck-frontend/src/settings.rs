@@ -19,7 +19,9 @@ use crate::fl;
 use crate::providers::daemon::{
     CategorizationPhase, CategorizationSnapshot, ModelStatus, ScanReport,
 };
-use crate::style::{TEXT_TITLE, primary_action_button_class};
+use crate::style::{
+    TEXT_TITLE, destructive_button_class, primary_action_button_class, standard_button_class,
+};
 
 /// What a first download costs. Named once, so the sentence that warns about it
 /// cannot drift away from the number the operator reads in the docs.
@@ -105,8 +107,8 @@ impl Action {
     fn class(self) -> Button {
         match self {
             Self::Categorize | Self::CreateCollections => primary_action_button_class(),
-            Self::RemoveModel => Button::Destructive,
-            Self::Toggle | Self::Reset => Button::Standard,
+            Self::RemoveModel => destructive_button_class(),
+            Self::Toggle | Self::Reset => standard_button_class(),
         }
     }
 }

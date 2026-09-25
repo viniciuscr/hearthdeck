@@ -22,10 +22,7 @@ use cosmic::{
         executor,
         id::Id,
         stream,
-        widget::{
-            column, container, row,
-            scrollable::{AbsoluteOffset, RelativeOffset},
-        },
+        widget::{column, container, row, scrollable::AbsoluteOffset},
     },
     iced::{
         core::{
@@ -87,18 +84,20 @@ use crate::style::{
     DASHBOARD_GAME_ASPECT, DASHBOARD_RAIL_TILES, DETAILS_ACTION_WIDTH, DETAILS_FACT_LABEL_WIDTH,
     DETAILS_HERO_RASTER, DETAILS_PICKER_WIDTH, DETAILS_PLAY_WIDTH, DETAILS_SHOT_ASPECT,
     DETAILS_SHOT_RASTER, DETAILS_SHOT_SIZE, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
-    EDIT_NAME_INPUT_WIDTH, FILTER_VALUE_WIDTH, GRID_COLUMNS, ICON_BODY, ICON_LARGE, ICON_SEARCH,
-    ICON_SMALL, ICON_TILE_ACTION, MENU_MAX_HEIGHT, PAGE_TRANSITION_DURATION, SEARCH_WIDTH,
-    SECTION_TRANSITION_DURATION, SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY,
-    TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar,
-    action_bar, artwork_fit, backdrop_scrim, backdrop_wash, card_surface,
-    content_horizontal_padding, dashboard_console_tile_size, dashboard_nav_button_class,
-    dashboard_tile_size, details_action_bar_padding, details_action_height, details_hero_width,
-    details_toggle_button_class, filter_button_height, filter_drawer_width, filter_row, grid_gap,
-    grid_top_padding, hero_card, launch_overlay, modal_scrim, primary_action_button_class,
-    root_background, search_icon_padding, section_button_class, sidebar_accent_bar_height,
-    sidebar_divider, sidebar_header_height, sidebar_item_height, sidebar_width, tab_button_class,
-    tab_height, tab_underline_height, tab_width, tile_height, tile_width, title_action_height,
+    EDIT_NAME_INPUT_WIDTH, FILTER_BUTTON_MIN_WIDTH, FILTER_VALUE_WIDTH, ICON_BODY, ICON_LARGE,
+    ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION, MENU_MAX_HEIGHT, PAGE_TRANSITION_DURATION,
+    SCROLL_TRANSITION_DURATION, SEARCH_WIDTH, SECTION_TRANSITION_DURATION,
+    SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER,
+    TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, action_bar, artwork_fit,
+    backdrop_scrim, backdrop_wash, card_surface, content_horizontal_padding, control_button_class,
+    dashboard_console_tile_size, dashboard_nav_button_class, dashboard_tile_size,
+    destructive_button_class, details_action_bar_padding, details_action_height,
+    details_hero_width, details_toggle_button_class, filter_button_height, filter_drawer_width,
+    filter_row, grid_gap, grid_top_padding, hero_card, icon_button_class, launch_overlay,
+    modal_scrim, primary_action_button_class, root_background, search_icon_padding,
+    section_button_class, sidebar_accent_bar_height, sidebar_divider, sidebar_header_height,
+    sidebar_item_height, sidebar_width, tab_button_class, tab_height, tab_underline_height,
+    tab_width, text_button_class, tile_height, tile_width, title_action_height,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
@@ -146,14 +145,9 @@ fn group_tab_id(key: u64) -> Id {
 }
 
 static EDIT_GROUP_ID: LazyLock<Id> = LazyLock::new(|| Id::new("edit_group"));
-static NEW_GROUP_ID: LazyLock<Id> = LazyLock::new(|| Id::new("new_group"));
 static SUBMIT_DELETE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("cancel_delete"));
 
-static CREATE_NEW: LazyLock<String> = LazyLock::new(|| fl!("create-new"));
-static ADD_GROUP: LazyLock<String> = LazyLock::new(|| fl!("add-group"));
 static SEARCH_PLACEHOLDER: LazyLock<String> = LazyLock::new(|| fl!("search-placeholder"));
-static NEW_GROUP_PLACEHOLDER: LazyLock<String> = LazyLock::new(|| fl!("new-group-placeholder"));
-static SAVE: LazyLock<String> = LazyLock::new(|| fl!("save"));
 static CANCEL: LazyLock<String> = LazyLock::new(|| fl!("cancel"));
 static RUN: LazyLock<String> = LazyLock::new(|| fl!("run"));
 const LAUNCH_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(1200);
@@ -177,9 +171,6 @@ static NIX: LazyLock<String> = LazyLock::new(|| fl!("nix"));
 static SNAP: LazyLock<String> = LazyLock::new(|| fl!("snap"));
 static SYSTEM: LazyLock<String> = LazyLock::new(|| fl!("system"));
 
-static NEW_GROUP_WINDOW_ID: LazyLock<SurfaceId> = LazyLock::new(SurfaceId::unique);
-static NEW_GROUP_AUTOSIZE_ID: LazyLock<cosmic::widget::Id> =
-    LazyLock::new(cosmic::widget::Id::unique);
 static DELETE_GROUP_WINDOW_ID: LazyLock<SurfaceId> = LazyLock::new(SurfaceId::unique);
 static DELETE_GROUP_AUTOSIZE_ID: LazyLock<cosmic::widget::Id> =
     LazyLock::new(cosmic::widget::Id::unique);
@@ -419,7 +410,6 @@ struct HearthDeck {
     cur_section: Section,
     cur_group: Option<usize>,
     edit_name: Option<String>,
-    new_group: Option<String>,
     dnd_icon: Option<usize>,
     offer_group: Option<Option<usize>>,
     waiting_for_filtered: bool,
@@ -429,6 +419,17 @@ struct HearthDeck {
     /// reported by the rail's `on_scroll`. Lets focus navigation scroll only
     /// when the selected card would leave the visible window.
     dashboard_rail_scroll: HashMap<&'static str, (f32, f32)>,
+    /// Vertical scroll offset of the dashboard shelf scrollable, tracked so a
+    /// focus-driven scroll can be eased from where the list actually is.
+    dashboard_scroll_offset: f32,
+    /// Horizontal scroll offset of the section tab strip, tracked for the same
+    /// reason as [`HearthDeck::dashboard_scroll_offset`].
+    tab_strip_offset: f32,
+    /// In-flight eased scroll, if any. Every focus-driven scroll on every list
+    /// (the library grid, the dashboard shelves and rails, the tab strip) is
+    /// started here, so all lists move the same way instead of each surface
+    /// snapping on its own.
+    scroll_animation: Option<ScrollAnimation>,
     window_width: f32,
     core: Core,
     group_to_delete: Option<usize>,
@@ -444,6 +445,12 @@ struct HearthDeck {
     /// RomM metadata to filter on today; the grid projection applies this to
     /// them and ignores it everywhere else.
     filters: RommFilters,
+    /// The console filter facets and each facet's option list (a leading `None`
+    /// meaning "All"), recomputed when the records change rather than on every
+    /// frame. The drawer reads a facet's values and finds its selected row every
+    /// frame it is open; deriving them from every record there made an open
+    /// drawer expensive on a large library. Empty for every non-console section.
+    facet_options: Vec<(RommFacet, Vec<Option<String>>)>,
     /// Cursor of the open console filter sidebar, or `None` while it is closed.
     /// Navigated by the application's own cursor rather than iced focus, like
     /// the context menu and the details screen.
@@ -545,13 +552,15 @@ impl Default for HearthDeck {
             user_name: String::new(),
             disk_free: String::new(),
             edit_name: Default::default(),
-            new_group: Default::default(),
             dnd_icon: Default::default(),
             offer_group: Default::default(),
             waiting_for_filtered: Default::default(),
             scroll_offset: Default::default(),
             viewport_height: Default::default(),
             dashboard_rail_scroll: Default::default(),
+            dashboard_scroll_offset: Default::default(),
+            tab_strip_offset: Default::default(),
+            scroll_animation: None,
             window_width: WINDOW_WIDTH,
             core: Default::default(),
             group_to_delete: Default::default(),
@@ -564,6 +573,7 @@ impl Default for HearthDeck {
             next_group_key: Default::default(),
             gamepad_focus_first: Default::default(),
             filters: RommFilters::default(),
+            facet_options: Vec::new(),
             filter_cursor: None,
             daemon_client: None,
             launch_state: LaunchState::default(),
@@ -602,9 +612,7 @@ impl HearthDeck {
         self.entry_icon_handles = self
             .entry_path_input
             .iter()
-            .map(|e| {
-                crate::icon_cache::entry_icon_handle(&e.icon, tile_width(self.window_width) as u32)
-            })
+            .map(|e| crate::icon_cache::entry_icon_handle(&e.icon, self.grid_tile_width() as u32))
             .collect();
     }
 
@@ -633,18 +641,20 @@ impl HearthDeck {
     /// A task that scrolls the single-line tab strip so the currently
     /// selected group tab is visible. When no custom group is selected the
     /// strip returns to the leading "all apps" tab.
-    fn reveal_tab_strip(&self) -> Option<Task<Message>> {
+    fn reveal_tab_strip(&mut self) -> Option<Task<Message>> {
         if self.page != Page::Library {
             return None;
         }
         match self.cur_group {
-            None => Some(iced::widget::scrollable::scroll_to(
-                TAB_STRIP_SCROLLABLE_ID.clone(),
-                AbsoluteOffset {
-                    x: Some(0.0),
-                    y: None,
-                },
-            )),
+            None => {
+                let from = self.tab_strip_offset;
+                Some(self.animate_scroll_to(
+                    TAB_STRIP_SCROLLABLE_ID.clone(),
+                    ScrollAxis::Horizontal,
+                    from,
+                    0.0,
+                ))
+            }
             Some(index) => {
                 let key = self.group_keys.get(index).copied()?;
                 Some(
@@ -713,6 +723,41 @@ struct SectionAnimation {
     direction: f32,
     /// Whether the pending `target` has been applied yet.
     swapped: bool,
+}
+
+/// Which axis of a scrollable an animation moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl ScrollAxis {
+    fn offset(self, value: f32) -> AbsoluteOffset<Option<f32>> {
+        match self {
+            ScrollAxis::Horizontal => AbsoluteOffset {
+                x: Some(value),
+                y: None,
+            },
+            ScrollAxis::Vertical => AbsoluteOffset {
+                x: None,
+                y: Some(value),
+            },
+        }
+    }
+}
+
+/// An eased scroll in flight on one scrollable. Started by
+/// [`HearthDeck::animate_scroll_to`] and advanced once per frame by
+/// [`HearthDeck::advance_scroll_animation`], so focus moving down a list reads
+/// as motion instead of a jump.
+#[derive(Clone, Debug)]
+struct ScrollAnimation {
+    id: widget::Id,
+    axis: ScrollAxis,
+    from: f32,
+    to: f32,
+    started_at: Instant,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1015,7 +1060,6 @@ impl Details {
 pub(crate) enum GroupRowKey {
     AllApps,
     Custom(u64),
-    NewGroup,
 }
 
 #[derive(Clone, Debug)]
@@ -1097,10 +1141,6 @@ pub(crate) enum Message {
     StartEditName(String),
     EditName(String),
     SubmitName,
-    StartNewGroup,
-    NewGroup(String),
-    SubmitNewGroup,
-    CancelNewGroup,
     FilterApps(
         String,
         Vec<Arc<DesktopEntryData>>,
@@ -1122,6 +1162,12 @@ pub(crate) enum Message {
     LeaveDndOffer(Option<usize>),
     ScrollYOffset(f32, f32),
     ViewportHeight(f32),
+    /// The section tab strip's live horizontal offset, tracked so a
+    /// focus-driven reveal can be eased from it.
+    TabStripScrolled(f32),
+    /// The dashboard shelf scrollable's live vertical offset, tracked for the
+    /// same reason as [`Message::TabStripScrolled`].
+    DashboardScrolled(f32),
     /// A dashboard rail's live scroll viewport, keyed by the rail's stable
     /// key. `offset` is the horizontal scroll position and `viewport` the
     /// visible width, both needed to keep the selected card in view without
@@ -1986,26 +2032,42 @@ impl HearthDeck {
     }
 
     /// The facets the current section can filter on, in the order the filter
-    /// sidebar shows them. Only console games expose facets today, and a facet
-    /// that no loaded record carries is dropped rather than shown empty: a
-    /// library without region metadata simply gets no region row.
+    /// sidebar shows them. Read from [`HearthDeck::facet_options`], which a
+    /// facet that no loaded record carries was already dropped from.
     fn filter_facets(&self) -> Vec<RommFacet> {
-        if self.cur_section != Section::ConsoleGames {
-            return Vec::new();
-        }
-        RommFacet::ALL
-            .into_iter()
-            .filter(|facet| !facet.values(&self.all_entries).is_empty())
-            .collect()
+        self.facet_options.iter().map(|(facet, _)| *facet).collect()
     }
 
     /// The options a facet offers, "All" first. Index 0 always means "no filter
     /// here", which is what lets the arrows wrap through "All" and clear the
-    /// facet.
+    /// facet. Served from the cache built when the records last changed.
     fn filter_options(&self, facet: RommFacet) -> Vec<Option<String>> {
-        std::iter::once(None)
-            .chain(facet.values(&self.all_entries).into_iter().map(Some))
-            .collect()
+        self.facet_options
+            .iter()
+            .find(|(candidate, _)| *candidate == facet)
+            .map(|(_, options)| options.clone())
+            .unwrap_or_default()
+    }
+
+    /// Recomputes the console filter facets and their option lists from the
+    /// records currently held. Only console games expose facets, so every other
+    /// section keeps the cache empty; a facet no record carries is dropped
+    /// rather than offered empty.
+    fn rebuild_facet_options(&mut self) {
+        self.facet_options = if self.cur_section == Section::ConsoleGames {
+            RommFacet::ALL
+                .into_iter()
+                .map(|facet| {
+                    let options = std::iter::once(None)
+                        .chain(facet.values(&self.all_entries).into_iter().map(Some))
+                        .collect::<Vec<_>>();
+                    (facet, options)
+                })
+                .filter(|(_, options)| options.len() > 1)
+                .collect()
+        } else {
+            Vec::new()
+        };
     }
 
     /// Where a facet's current value sits in its option list. The leading `None`
@@ -2020,13 +2082,15 @@ impl HearthDeck {
 
     /// Keeps the cursor on a row that exists. Facets come and go as records
     /// load, so a cursor set while a row existed has to be pulled back before
-    /// the view indexes into the list. The footer's clear button is always the
-    /// last row, so even a section with no facets keeps one reachable row.
+    /// the view indexes into the list. The clear action is not a cursor row — it
+    /// is the X button's job (see
+    /// [`Message::GamepadEvent`](Message::GamepadEvent)) — so the walkable rows
+    /// are exactly the facets.
     fn clamp_filter_cursor(&mut self) {
         let Some(cursor) = self.filter_cursor else {
             return;
         };
-        let last_row = self.filter_facets().len();
+        let last_row = self.filter_facets().len().saturating_sub(1);
         self.filter_cursor = Some(FilterCursor {
             row: cursor.row.min(last_row),
         });
@@ -2046,42 +2110,40 @@ impl HearthDeck {
         self.request_virtual_keyboard(false)
     }
 
-    /// One D-pad step inside the open sidebar. `row` walks the facet rows and
-    /// then the footer's clear button, wrapping at both ends; `column` steps the
-    /// row under the cursor through its values, which is what the left/right
-    /// arrows do too.
+    /// One D-pad step inside the open sidebar. `row` walks the facet rows,
+    /// wrapping at both ends; `column` steps the row under the cursor through its
+    /// values, which is what the left/right arrows do too.
     fn step_filter_cursor(&mut self, column: i32, row: i32) -> Task<Message> {
         let Some(cursor) = self.filter_cursor else {
             return Task::none();
         };
         let facets = self.filter_facets();
-        // The walkable rows are the facets plus the footer's clear button, so
-        // there is always one row more than there are facets.
-        let rows = facets.len() + 1;
+        // No facets: nothing to walk. The clear action is still reachable on X.
+        if facets.is_empty() {
+            return Task::none();
+        }
+        // The walkable rows are exactly the facets.
+        let rows = facets.len();
         if row != 0 {
             let next = (cursor.row as i32 + row).rem_euclid(rows as i32) as usize;
             self.filter_cursor = Some(FilterCursor { row: next });
             return Task::none();
         }
-        // Only a facet row has a value to step; the clear row has none.
         if column != 0 && cursor.row < facets.len() {
             return self.cycle_filter(facets[cursor.row], column);
         }
         Task::none()
     }
 
-    /// The confirm button acts on the row under the cursor: it steps that
-    /// facet's value forward, so a controller with no usable left/right can
-    /// still change it, or clears every filter when the cursor is on the
-    /// footer's clear button.
+    /// The confirm button steps the facet under the cursor forward, so a
+    /// controller with no usable left/right can still change it.
     fn apply_filter_cursor(&mut self) -> Task<Message> {
         let Some(cursor) = self.filter_cursor else {
             return Task::none();
         };
         let facets = self.filter_facets();
         let Some(facet) = facets.get(cursor.row).copied() else {
-            // No facet on this row, so the cursor is on the clear button.
-            return self.update(Message::ClearFilters);
+            return Task::none();
         };
         self.cycle_filter(facet, 1)
     }
@@ -2183,6 +2245,7 @@ impl HearthDeck {
             )
             .0;
         self.update_entry_metadata();
+        self.rebuild_facet_options();
     }
 
     fn filter_apps(&mut self) -> Task<Message> {
@@ -2192,7 +2255,7 @@ impl HearthDeck {
         let cur_group = self.cur_group;
         let input = self.search_value.clone();
         let filters = self.filters.clone();
-        let prerender = tile_width(self.window_width) as u32;
+        let prerender = self.grid_tile_width() as u32;
         if !self.waiting_for_filtered {
             self.waiting_for_filtered = true;
             iced::Task::perform(
@@ -2448,7 +2511,6 @@ impl HearthDeck {
         self.focused_id = None;
         self.entry_ids.clear();
         self.entry_icon_handles.clear();
-        self.new_group = None;
         self.search_value.clear();
         self.edit_name = None;
         self.cur_group = None;
@@ -2460,7 +2522,6 @@ impl HearthDeck {
 
         iced::Task::batch(vec![
             keyboard,
-            destroy_layer_surface(*NEW_GROUP_WINDOW_ID),
             destroy_layer_surface(*DELETE_GROUP_WINDOW_ID),
             window::close(window::Id::RESERVED),
         ])
@@ -3218,7 +3279,7 @@ impl HearthDeck {
     /// moving left past the leading edge pins it at the start. Inside the
     /// window the selection walks card by card and the strip stays put, so
     /// controller navigation moves a cursor instead of dragging the shelf.
-    fn reveal_dashboard_rail(&self, id: &widget::Id) -> Option<Task<Message>> {
+    fn reveal_dashboard_rail(&mut self, id: &widget::Id) -> Option<Task<Message>> {
         let spacing = theme::spacing();
         let card = dashboard_tile_size(self.window_width, spacing.space_l, spacing.space_l);
         let gap = f32::from(spacing.space_l);
@@ -3248,12 +3309,11 @@ impl HearthDeck {
                 (self.window_width - 2.0 * f32::from(spacing.space_l)).max(card)
             };
             let target = rail_scroll_target(index, ids.len(), offset, viewport, card, gap)?;
-            return Some(iced::widget::scrollable::scroll_to(
+            return Some(self.animate_scroll_to(
                 dashboard_rail_id(key),
-                AbsoluteOffset {
-                    x: Some(target),
-                    y: None,
-                },
+                ScrollAxis::Horizontal,
+                offset,
+                target,
             ));
         }
         None
@@ -3377,13 +3437,12 @@ impl HearthDeck {
     fn focused_is_text_input(&self) -> bool {
         self.focused_id
             .as_ref()
-            .is_some_and(|id| id == &*SEARCH_ID || id == &*EDIT_GROUP_ID || id == &*NEW_GROUP_ID)
+            .is_some_and(|id| id == &*SEARCH_ID || id == &*EDIT_GROUP_ID)
     }
 
     /// Height of one row of the application grid, in logical pixels.
     fn grid_row_height(&self) -> f32 {
-        tile_height(self.window_width, self.cur_section != Section::Applications)
-            + grid_gap(self.window_width)
+        self.grid_tile_height() + grid_gap(self.window_width, self.grid_columns())
     }
 
     /// The number of grid rows currently visible in the scrollable viewport.
@@ -3411,33 +3470,91 @@ impl HearthDeck {
         .map(|height| cosmic::Action::App(Message::ViewportHeight(height)))
     }
 
-    /// Scrolls the grid scrollable to the given relative offset (0..=1).
-    fn snap_to(&self, id: widget::Id, y: f32) -> Task<Message> {
-        iced::widget::scrollable::snap_to(
-            id,
-            RelativeOffset {
-                x: None,
-                y: Some(y),
-            },
+    /// The number of columns in the current section's grid. Console Games use
+    /// the denser layout; every other section the default.
+    fn grid_columns(&self) -> usize {
+        crate::style::grid_columns(self.cur_section == Section::ConsoleGames)
+    }
+
+    /// Width of one grid tile in the current section.
+    fn grid_tile_width(&self) -> f32 {
+        tile_width(self.window_width, self.grid_columns())
+    }
+
+    /// Height of one grid tile in the current section.
+    fn grid_tile_height(&self) -> f32 {
+        tile_height(
+            self.grid_tile_width(),
+            self.cur_section != Section::Applications,
         )
     }
 
-    /// The target relative scroll offset (0..=1) that keeps grid row `row`
-    /// fully visible, or `None` if it is already inside the viewport and no
-    /// scrolling is needed. The viewport only moves when the focused row
-    /// would otherwise leave the visible area: it is then pinned to the
-    /// nearest edge, instead of scrolling proportionally with every move.
+    /// The single place a list is moved by focus.
+    ///
+    /// Eases from `from` to `to` over [`SCROLL_TRANSITION_DURATION`], driven by
+    /// the frame clock, or jumps straight there when the two are already the
+    /// same. Every focus-driven scroll on every list (the library grid, the
+    /// dashboard shelves and rails, the tab strip) goes through here, so they all
+    /// move identically instead of each surface snapping on its own.
+    fn animate_scroll_to(
+        &mut self,
+        id: widget::Id,
+        axis: ScrollAxis,
+        from: f32,
+        to: f32,
+    ) -> Task<Message> {
+        if (to - from).abs() < 0.5 {
+            return iced::widget::scrollable::scroll_to(id, axis.offset(to));
+        }
+        self.now = Instant::now();
+        self.scroll_animation = Some(ScrollAnimation {
+            id,
+            axis,
+            from,
+            to,
+            started_at: self.now,
+        });
+        Task::none()
+    }
+
+    /// Advances the in-flight eased scroll by one frame: emits the `scroll_to`
+    /// for the interpolated position and clears the animation once it has
+    /// reached its target. A no-op with no animation in flight, which is why it
+    /// is safe to run from every frame message.
+    fn advance_scroll_animation(&mut self) -> Task<Message> {
+        let Some(animation) = self.scroll_animation.as_ref() else {
+            return Task::none();
+        };
+        let elapsed = self.now.saturating_duration_since(animation.started_at);
+        let raw =
+            (elapsed.as_secs_f32() / SCROLL_TRANSITION_DURATION.as_secs_f32()).clamp(0.0, 1.0);
+        let eased = cosmic::anim::smootherstep(raw);
+        let value = animation.from + (animation.to - animation.from) * eased;
+        let id = animation.id.clone();
+        let axis = animation.axis;
+        if raw >= 1.0 {
+            self.scroll_animation = None;
+        }
+        iced::widget::scrollable::scroll_to(id, axis.offset(value))
+    }
+
+    /// The absolute vertical scroll offset that keeps grid row `row` fully
+    /// visible, or `None` if it is already inside the viewport and no scrolling
+    /// is needed. The viewport only moves when the focused row would otherwise
+    /// leave the visible area: it is then pinned to the nearest edge, instead of
+    /// scrolling proportionally with every move.
     fn scroll_offset_for_row(&self, row: usize) -> Option<f32> {
-        let total_rows = self.entry_path_input.len().div_ceil(GRID_COLUMNS);
+        let total_rows = self.entry_path_input.len().div_ceil(self.grid_columns());
+        let row_height = self.grid_row_height();
         if total_rows <= 1 {
-            return Some(0.0);
+            return None;
         }
         let visible = self.visible_row_count();
         if visible >= total_rows as f32 {
-            return Some(0.0);
+            return None;
         }
         let row = row as f32;
-        let top = (self.scroll_offset / self.grid_row_height()).max(0.0);
+        let top = (self.scroll_offset / row_height).max(0.0);
         let bottom = top + visible;
         if row >= top && row + 1.0 <= bottom {
             // The row is fully visible: leave the viewport alone.
@@ -3450,8 +3567,7 @@ impl HearthDeck {
             // The row left through the top: pin it to the top.
             row
         };
-        let out = (target_top / (total_rows as f32 - visible)).clamp(0.0, 1.0);
-        Some(out)
+        Some(target_top * row_height)
     }
 
     /// Focuses the app at the given grid index, scrolling it into view only if
@@ -3466,8 +3582,14 @@ impl HearthDeck {
                 .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id)))),
             self.request_virtual_keyboard(false),
         ];
-        if let Some(y) = self.scroll_offset_for_row(i / GRID_COLUMNS) {
-            tasks.push(self.snap_to(SCROLLABLE_ID.clone(), y));
+        if let Some(y) = self.scroll_offset_for_row(i / self.grid_columns()) {
+            let from = self.scroll_offset;
+            tasks.push(self.animate_scroll_to(
+                SCROLLABLE_ID.clone(),
+                ScrollAxis::Vertical,
+                from,
+                y,
+            ));
         }
         tasks.push(self.query_viewport_task());
         Task::batch(tasks)
@@ -3480,7 +3602,7 @@ impl HearthDeck {
         if self.launch_state.is_visible() {
             return Task::none();
         }
-        if self.new_group.is_some() || self.group_to_delete.is_some() {
+        if self.group_to_delete.is_some() {
             return Task::none();
         }
         if let Some(target) = self.menu.target() {
@@ -3622,9 +3744,6 @@ impl HearthDeck {
             self.filter_cursor = None;
             return Task::none();
         }
-        if self.new_group.is_some() {
-            return self.update(Message::CancelNewGroup);
-        }
         if self.group_to_delete.is_some() {
             return self.update(Message::CancelDelete);
         }
@@ -3667,10 +3786,7 @@ impl HearthDeck {
     /// arrives as the *main* window unfocusing; this keeps the frontend from
     /// reading that as the user driving something else.
     fn frontend_surface_open(&self) -> bool {
-        self.menu.is_open()
-            || self.filter_cursor.is_some()
-            || self.new_group.is_some()
-            || self.group_to_delete.is_some()
+        self.menu.is_open() || self.filter_cursor.is_some() || self.group_to_delete.is_some()
     }
 
     /// The action menu's rows for the entry at `i`, in on-screen order.
@@ -4143,7 +4259,8 @@ impl cosmic::Application for HearthDeck {
                 }
                 // Load just enough further pages to fill the viewport.
                 if let Some(offset) = self.romm_next_offset {
-                    let loaded_rows = self.entry_path_input.len().div_ceil(GRID_COLUMNS) as f32;
+                    let loaded_rows =
+                        self.entry_path_input.len().div_ceil(self.grid_columns()) as f32;
                     if loaded_rows < self.visible_row_count() + 1.0 {
                         return Task::batch([focus, self.load_romm_page(offset)]);
                     }
@@ -4162,8 +4279,14 @@ impl cosmic::Application for HearthDeck {
                     return keyboard;
                 };
                 let mut tasks = vec![keyboard, self.query_viewport_task()];
-                if let Some(y) = self.scroll_offset_for_row(i / GRID_COLUMNS) {
-                    tasks.push(self.snap_to(SCROLLABLE_ID.clone(), y));
+                if let Some(y) = self.scroll_offset_for_row(i / self.grid_columns()) {
+                    let from = self.scroll_offset;
+                    tasks.push(self.animate_scroll_to(
+                        SCROLLABLE_ID.clone(),
+                        ScrollAxis::Vertical,
+                        from,
+                        y,
+                    ));
                 }
                 return Task::batch(tasks);
             }
@@ -4194,11 +4317,12 @@ impl cosmic::Application for HearthDeck {
                 if let Some(task) = self.navigate_page(Message::PrevRow, -1) {
                     return task;
                 }
+                let columns = self.grid_columns();
                 let mut i = self
                     .focused_id
                     .as_ref()
                     .and_then(|focused| self.entry_ids.iter().position(|i| i == focused))
-                    .unwrap_or(self.entry_ids.len().saturating_add(GRID_COLUMNS - 1));
+                    .unwrap_or(self.entry_ids.len().saturating_add(columns - 1));
                 if i == 0 {
                     self.focused_id = None;
 
@@ -4210,7 +4334,7 @@ impl cosmic::Application for HearthDeck {
                         self.query_viewport_task(),
                     ]);
                 }
-                i = i.saturating_sub(GRID_COLUMNS);
+                i = i.saturating_sub(columns);
                 let Some(focused) = self.entry_ids.get(i).cloned() else {
                     return Task::none();
                 };
@@ -4219,8 +4343,14 @@ impl cosmic::Application for HearthDeck {
                     iced_runtime::task::widget(focus(focused))
                         .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id)))),
                 ];
-                if let Some(y) = self.scroll_offset_for_row(i / GRID_COLUMNS) {
-                    tasks.push(self.snap_to(SCROLLABLE_ID.clone(), y));
+                if let Some(y) = self.scroll_offset_for_row(i / columns) {
+                    let from = self.scroll_offset;
+                    tasks.push(self.animate_scroll_to(
+                        SCROLLABLE_ID.clone(),
+                        ScrollAxis::Vertical,
+                        from,
+                        y,
+                    ));
                 }
                 tasks.push(self.query_viewport_task());
                 return Task::batch(tasks);
@@ -4229,12 +4359,13 @@ impl cosmic::Application for HearthDeck {
                 if let Some(task) = self.navigate_page(Message::NextRow, 1) {
                     return task;
                 }
+                let columns = self.grid_columns();
                 let mut i: i32 = self
                     .focused_id
                     .as_ref()
                     .and_then(|focused| self.entry_ids.iter().position(|i| i == focused))
                     .map(|i| i as i32)
-                    .unwrap_or(-(GRID_COLUMNS as i32));
+                    .unwrap_or(-(columns as i32));
                 if i == self.entry_ids.len() as i32 - 1 {
                     self.focused_id = None;
                     return iced::Task::batch(vec![
@@ -4245,7 +4376,7 @@ impl cosmic::Application for HearthDeck {
                         self.query_viewport_task(),
                     ]);
                 }
-                i += GRID_COLUMNS as i32;
+                i += columns as i32;
                 i = i.min(self.entry_ids.len() as i32 - 1);
                 let Some(focused) = self.entry_ids.get(i as usize).cloned() else {
                     return Task::none();
@@ -4255,8 +4386,14 @@ impl cosmic::Application for HearthDeck {
                     iced_runtime::task::widget(focus(focused))
                         .map(|id| cosmic::Action::App(Message::UpdateFocused(Some(id)))),
                 ];
-                if let Some(y) = self.scroll_offset_for_row(i as usize / GRID_COLUMNS) {
-                    tasks.push(self.snap_to(SCROLLABLE_ID.clone(), y));
+                if let Some(y) = self.scroll_offset_for_row(i as usize / columns) {
+                    let from = self.scroll_offset;
+                    tasks.push(self.animate_scroll_to(
+                        SCROLLABLE_ID.clone(),
+                        ScrollAxis::Vertical,
+                        from,
+                        y,
+                    ));
                 }
                 tasks.push(self.query_viewport_task());
                 return Task::batch(tasks);
@@ -4292,6 +4429,12 @@ impl cosmic::Application for HearthDeck {
                 // `Frontend` (e.g. a popup that took keyboard focus).
                 if !self.input_ownership.frontend_has_control() && !self.frontend_surface_open() {
                     return Task::none();
+                }
+                // The filter drawer keeps one controller shortcut: X clears every
+                // facet. The clear action is deliberately not a cursor row, so the
+                // cursor never has to travel to a button to reset the filters.
+                if self.filter_cursor.is_some() && event == GamepadEvent::ContextMenu {
+                    return self.update(Message::ClearFilters);
                 }
                 // The open filter sidebar owns the pad: its cursor handles the
                 // D-pad and A, B closes it, and letting any other button through
@@ -4546,9 +4689,6 @@ impl cosmic::Application for HearthDeck {
                     };
                     return self.activate_dashboard_app(&entry_id);
                 }
-                if focused == *NEW_GROUP_ID {
-                    return self.update(Message::SubmitNewGroup);
-                }
                 if focused == *SUBMIT_DELETE_ID {
                     return self.update(Message::ConfirmDelete);
                 }
@@ -4622,7 +4762,7 @@ impl cosmic::Application for HearthDeck {
                     .into_iter()
                     .filter_map(|key| match key {
                         GroupRowKey::Custom(k) => Some(k),
-                        GroupRowKey::AllApps | GroupRowKey::NewGroup => None,
+                        GroupRowKey::AllApps => None,
                     })
                     .collect();
 
@@ -4702,49 +4842,6 @@ impl cosmic::Application for HearthDeck {
             Message::StartEditName(name) => {
                 self.edit_name = Some(name);
                 return self.focus_text_input(EDIT_GROUP_ID.clone());
-            }
-            Message::StartNewGroup => {
-                if self.new_group.is_some() {
-                    return Task::none();
-                }
-                self.new_group = Some(String::new());
-                return Task::batch(vec![
-                    get_layer_surface(SctkLayerSurfaceSettings {
-                        id: *NEW_GROUP_WINDOW_ID,
-                        keyboard_interactivity: KeyboardInteractivity::Exclusive,
-                        anchor: Anchor::empty(),
-                        namespace: "dialog".into(),
-                        size: None,
-                        ..Default::default()
-                    }),
-                    self.focus_text_input(NEW_GROUP_ID.clone()),
-                ]);
-            }
-            Message::NewGroup(group_name) => {
-                self.new_group = Some(group_name);
-            }
-            Message::SubmitNewGroup => {
-                if let Some(group_name) = self.new_group.take() {
-                    self.config.add(self.cur_section, group_name);
-                    self.group_keys.push(self.next_group_key);
-                    self.next_group_key += 1;
-                }
-                if let Some(helper) = self.helper.as_ref()
-                    && let Err(err) = self.config.write_entry(helper)
-                {
-                    error!("{:?}", err);
-                }
-                return Task::batch([
-                    destroy_layer_surface(*NEW_GROUP_WINDOW_ID),
-                    self.request_virtual_keyboard(false),
-                ]);
-            }
-            Message::CancelNewGroup => {
-                self.new_group = None;
-                return Task::batch([
-                    destroy_layer_surface(*NEW_GROUP_WINDOW_ID),
-                    self.request_virtual_keyboard(false),
-                ]);
             }
             Message::VirtualKeyboardToggled { target, result } => {
                 let succeeded = result.is_ok();
@@ -4846,7 +4943,8 @@ impl cosmic::Application for HearthDeck {
                     && !self.romm_loading_page
                     && let Some(offset) = self.romm_next_offset
                 {
-                    let total_rows = self.entry_path_input.len().div_ceil(GRID_COLUMNS) as f32;
+                    let total_rows =
+                        self.entry_path_input.len().div_ceil(self.grid_columns()) as f32;
                     let content_height = total_rows * self.grid_row_height();
                     if y + viewport_height >= content_height - self.grid_row_height() {
                         return self.load_romm_page(offset);
@@ -4863,22 +4961,23 @@ impl cosmic::Application for HearthDeck {
             } => {
                 self.dashboard_rail_scroll.insert(key, (offset, viewport));
             }
+            Message::TabStripScrolled(offset) => {
+                self.tab_strip_offset = offset;
+            }
+            Message::DashboardScrolled(offset) => {
+                self.dashboard_scroll_offset = offset;
+            }
             Message::ScrollStrip(id, offset) => {
-                return iced::widget::scrollable::scroll_to(
-                    id,
-                    AbsoluteOffset {
-                        x: Some(offset),
-                        y: None,
-                    },
-                );
+                let from = self.tab_strip_offset;
+                return self.animate_scroll_to(id, ScrollAxis::Horizontal, from, offset);
             }
             Message::ScrollDashboard(offset) => {
-                return iced::widget::scrollable::scroll_to(
+                let from = self.dashboard_scroll_offset;
+                return self.animate_scroll_to(
                     DASHBOARD_SCROLLABLE_ID.clone(),
-                    AbsoluteOffset {
-                        x: None,
-                        y: Some(offset),
-                    },
+                    ScrollAxis::Vertical,
+                    from,
+                    offset,
                 );
             }
             Message::ConfirmDelete => {
@@ -5175,6 +5274,7 @@ impl cosmic::Application for HearthDeck {
                 return Task::batch([
                     self.advance_tab_animation(),
                     self.advance_section_animation(),
+                    self.advance_scroll_animation(),
                 ]);
             }
         }
@@ -5236,51 +5336,6 @@ impl cosmic::Application for HearthDeck {
             space_xxs, space_s, ..
         } = theme::spacing();
 
-        if id == *NEW_GROUP_WINDOW_ID {
-            let Some(group_name) = self.new_group.as_ref() else {
-                return container(space::horizontal())
-                    .width(Length::Fixed(1.0))
-                    .height(Length::Fixed(1.0))
-                    .into();
-            };
-            let dialog = widget::dialog::dialog()
-                .title(CREATE_NEW.as_str())
-                .control(
-                    text_input("", group_name)
-                        .label(&*NEW_GROUP_PLACEHOLDER)
-                        .on_input(Message::NewGroup)
-                        .on_submit(|_| Message::SubmitNewGroup)
-                        .width(Length::Fixed(DIALOG_WIDTH))
-                        .size(TEXT_BODY)
-                        .id(NEW_GROUP_ID.clone()),
-                )
-                .primary_action(
-                    button::custom(
-                        text::body(SAVE.as_str())
-                            .size(TEXT_BODY)
-                            .center()
-                            .width(Length::Fill),
-                    )
-                    .class(Button::Suggested)
-                    .on_press(Message::SubmitNewGroup)
-                    .padding([space_xxs, space_s])
-                    .width(DIALOG_ACTION_WIDTH),
-                )
-                .secondary_action(
-                    button::custom(
-                        text::body(CANCEL.as_str())
-                            .size(TEXT_BODY)
-                            .center()
-                            .width(Length::Fill),
-                    )
-                    .on_press(Message::CancelNewGroup)
-                    .padding([space_xxs, space_s])
-                    .width(DIALOG_ACTION_WIDTH),
-                )
-                .width(Length::Fixed(DIALOG_WIDTH));
-
-            return autosize(dialog, NEW_GROUP_AUTOSIZE_ID.clone()).into();
-        }
         if id == *DELETE_GROUP_WINDOW_ID {
             let dialog = widget::dialog::dialog()
                 .icon(icon::from_name("edit-delete-symbolic").size(ICON_LARGE))
@@ -5294,7 +5349,7 @@ impl cosmic::Application for HearthDeck {
                             .width(Length::Fill),
                     )
                     .id(SUBMIT_DELETE_ID.clone())
-                    .class(Button::Destructive)
+                    .class(destructive_button_class())
                     .on_press(Message::ConfirmDelete)
                     .padding([space_xxs, space_s])
                     .width(DIALOG_ACTION_WIDTH),
@@ -5436,6 +5491,7 @@ impl cosmic::Application for HearthDeck {
         if self.page_animation.is_some()
             || self.tab_animation.is_some()
             || self.section_animation.is_some()
+            || self.scroll_animation.is_some()
         {
             subs.push(window::frames().map(|(_window, at)| Message::Animate(at)));
         }
@@ -5860,6 +5916,7 @@ impl HearthDeck {
         // every one of them instead of clipping the last rows away.
         let shelves = scrollable(shelves.padding([0, 0, space_xxl, 0]))
             .id(DASHBOARD_SCROLLABLE_ID.clone())
+            .on_scroll(|viewport| Message::DashboardScrolled(viewport.absolute_offset().y))
             .scrollbar_width(0)
             .scroller_width(0)
             .height(Length::Fill);
@@ -6220,7 +6277,7 @@ impl HearthDeck {
                 text::body(title),
                 text::caption(error),
                 button::custom(text::body("Dismiss"))
-                    .class(Button::Suggested)
+                    .class(primary_action_button_class())
                     .on_press(Message::DismissLaunch)
                     .padding([spacing.space_xs, spacing.space_l]),
             ]
@@ -6437,7 +6494,7 @@ impl HearthDeck {
                                 .height(Length::Fixed(ICON_TILE_ACTION)),
                         )
                         .padding(space_xs)
-                        .class(Button::Icon);
+                        .class(icon_button_class());
                         if self.edit_name.is_none() {
                             b = b.on_press(Message::StartEditName(cur_group.name()));
                         }
@@ -6456,7 +6513,7 @@ impl HearthDeck {
                                 .height(Length::Fixed(ICON_TILE_ACTION)),
                         )
                         .padding(space_xs)
-                        .class(Button::Icon)
+                        .class(icon_button_class())
                         .on_press_maybe(self.cur_group.map(Message::Delete))
                     )
                     .height(Length::Fixed(title_action_height()))
@@ -6569,26 +6626,6 @@ impl HearthDeck {
             None,
         );
 
-        let add_tab_btn = button::custom(
-            container(
-                row![
-                    icon::icon(icon::from_name("list-add-symbolic").into()).size(ICON_BODY),
-                    text::body(ADD_GROUP.as_str()).size(TEXT_BODY)
-                ]
-                .spacing(space_xs)
-                .align_y(Alignment::Center),
-            )
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding([space_none, space_m]),
-        )
-        .height(Length::Fixed(tab_height()))
-        .width(Length::Shrink)
-        .class(theme::Button::IconVertical)
-        .on_press(Message::StartNewGroup);
-
         // Keep the group tabs on a single line inside a horizontal scrollable:
         // `reorderable_flex_row` wraps onto extra rows when the strip is
         // narrower than its tabs, eating header space. Inside a scrollable it
@@ -6616,26 +6653,19 @@ impl HearthDeck {
                         let key = self.group_keys.get(i).copied().unwrap_or(i as u64);
                         row.push(GroupRowKey::Custom(key), build_group_tab(i, key, group))
                     },
-                )
-                .push_locked(GroupRowKey::NewGroup, add_tab_btn),
+                ),
         )
         .id(TAB_STRIP_SCROLLABLE_ID.clone())
         .width(Length::Fill)
+        .on_scroll(|viewport| Message::TabStripScrolled(viewport.absolute_offset().x))
         .scrollbar_width(0)
         .scroller_width(0);
 
-        let tab_row = row![tab_strip]
-            .spacing(space_m)
-            .align_y(Alignment::Center)
-            .width(Length::Fill);
-
         // ===== Filter button + item count =====
-        // A line of its own under the tab strip: the tabs are the library's
-        // grouping, and the filter button is a second, independent axis over the
-        // same grid. Only Console Games exposes facets today, so every other
-        // section gets the line with just the item count on it. The options
-        // themselves live in a right-hand sidebar (see `view_filter_drawer`)
-        // rather than folding out under this button.
+        // The filter button lives at the end of the tab row, on the tabs' own
+        // baseline and sized like them, so it reads as a peer control over the
+        // same grid rather than a small tag under the strip. Only Console Games
+        // exposes facets today, so every other section reserves no space for it.
         let filter_button: Element<'_, Message> = if self.cur_section == Section::ConsoleGames {
             let label = if self.filters.is_active() {
                 fl!("filter-count", count = self.filters.len())
@@ -6648,18 +6678,21 @@ impl HearthDeck {
                         icon::icon(icon::from_name("view-filter-symbolic").into()).size(ICON_BODY),
                         text::body(label).size(TEXT_BODY),
                     ]
-                    .spacing(space_xs)
+                    .spacing(space_s)
                     .align_y(Alignment::Center),
                 )
                 .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
+                .align_y(Vertical::Center)
+                .width(Length::Fill)
+                .height(Length::Fill)
                 .padding([space_none, space_m]),
             )
             .height(Length::Fixed(filter_button_height()))
-            .width(Length::Shrink)
+            .width(Length::Fixed(FILTER_BUTTON_MIN_WIDTH))
             // Where Up from the grid's first row lands, and where A opens the
-            // sidebar.
-            .class(section_button_class(self.filter_cursor.is_some()))
+            // sidebar. Tinted while any facet is narrowed, so the grid's state
+            // is legible without opening the drawer.
+            .class(control_button_class(self.filters.is_active()))
             .id(FILTER_ID.clone())
             .on_press(Message::ToggleFilterPanel)
             .into()
@@ -6667,9 +6700,9 @@ impl HearthDeck {
             space::horizontal().width(Length::Shrink).into()
         };
 
-        let filter_bar = row![
+        let tab_row = row![
+            tab_strip,
             filter_button,
-            space::horizontal(),
             container(text::body(fl!("count-items", count = item_count)).size(TEXT_BODY))
                 .align_y(Vertical::Center),
         ]
@@ -6678,6 +6711,10 @@ impl HearthDeck {
         .width(Length::Fill);
 
         // ===== Application grid =====
+        let columns = self.grid_columns();
+        let tile_w = self.grid_tile_width();
+        let tile_h = self.grid_tile_height();
+        let gap = grid_gap(self.window_width, columns);
         let app_grid_list: Vec<_> = self
             .entry_path_input
             .iter()
@@ -6698,8 +6735,8 @@ impl HearthDeck {
                     &entry.name,
                     icon_handle.clone(),
                     &entry.path,
-                    tile_width(self.window_width),
-                    tile_height(self.window_width, self.cur_section != Section::Applications),
+                    tile_w,
+                    tile_h,
                     self.romm_versions
                         .get(&entry.id)
                         .map_or(1, |versions| versions.len()),
@@ -6719,11 +6756,11 @@ impl HearthDeck {
 
                 b.into()
             })
-            .chunks(GRID_COLUMNS)
+            .chunks(columns)
             .into_iter()
             .map(|row_chunk| {
                 let mut new_row = row_chunk.collect_vec();
-                let missing = GRID_COLUMNS - new_row.len();
+                let missing = columns - new_row.len();
                 if missing > 0 {
                     new_row.push(
                         iced::widget::space::horizontal()
@@ -6731,7 +6768,7 @@ impl HearthDeck {
                             .into(),
                     );
                 }
-                row(new_row).spacing(grid_gap(self.window_width)).into()
+                row(new_row).spacing(gap).into()
             })
             .collect();
 
@@ -6739,7 +6776,7 @@ impl HearthDeck {
             scrollable(
                 column(app_grid_list)
                     .width(Length::Fill)
-                    .spacing(grid_gap(self.window_width))
+                    .spacing(gap)
                     // padding on top needed to avoid focus highlight clipping
                     .padding([grid_top_padding(), 0, space_xxl, 0]),
             )
@@ -6775,10 +6812,10 @@ impl HearthDeck {
             // Keep the tab strip visually attached to its section title:
             // a full 64px gap pushed the grid too far down the window.
             space::vertical().height(space_m).into(),
-            container(tab_row).padding([0, 0, 0, 0]).into(),
-            // The filter button's line is its own row under the tabs; the
-            // open sidebar floats over the grid rather than in this column.
-            container(filter_bar).padding([space_s, 0, 0, 0]).into(),
+            // The tab row carries the tabs, the filter button and the item
+            // count; the open filter drawer floats over the grid rather than
+            // taking a row in this column.
+            container(tab_row).padding([0, 0, space_s, 0]).into(),
         ];
         main_column.push(app_scrollable);
 
@@ -6852,7 +6889,7 @@ impl HearthDeck {
                 .map_or_else(|| fl!("filter-all"), |value| facet.value_label(value));
             let arrow = |name: &'static str, delta: i32| {
                 button::custom(icon::icon(icon::from_name(name).size(ICON_BODY).into()))
-                    .class(Button::Icon)
+                    .class(icon_button_class())
                     .on_press(Message::CycleFilter {
                         facet: *facet,
                         delta,
@@ -6871,7 +6908,7 @@ impl HearthDeck {
                                 .width(Length::Fixed(FILTER_VALUE_WIDTH))
                                 .align_x(Alignment::Center),
                         )
-                        .class(Button::Text)
+                        .class(text_button_class())
                         .on_press(Message::SelectFilter {
                             facet: *facet,
                             value: None,
@@ -6910,24 +6947,16 @@ impl HearthDeck {
 
     /// The filter sidebar's footer: one action, dropping every chosen facet.
     ///
-    /// It is a cursor row like the facets - the last one - so the wrapper wears
-    /// the same focus ring `filter_row` gives them: without it the controller
-    /// could reach the button but nothing would show it was there.
+    /// Pointer-only. The controller does not walk to it — X clears the filters
+    /// from anywhere in the drawer — so it wears no cursor ring; it is here for
+    /// a mouse or touch pointer that has no equivalent button.
     fn filter_drawer_footer(&self) -> Element<'_, Message> {
         let space = theme::spacing();
-        let focused = self
-            .filter_cursor
-            .is_some_and(|cursor| cursor.row >= self.filter_facets().len());
-        container(
-            button::custom(text::body(fl!("filter-clear")).size(TEXT_BODY))
-                .class(Button::Destructive)
-                .on_press(Message::ClearFilters)
-                .padding([space.space_xs, space.space_l]),
-        )
-        .class(theme::Container::Custom(Box::new(filter_row(
-            false, focused,
-        ))))
-        .into()
+        button::custom(text::body(fl!("filter-clear")).size(TEXT_BODY))
+            .class(destructive_button_class())
+            .on_press(Message::ClearFilters)
+            .padding([space.space_xs, space.space_l])
+            .into()
     }
 }
 
@@ -9333,7 +9362,7 @@ mod tests {
     }
 
     #[test]
-    fn the_pad_reaches_the_clear_button_below_the_facets() {
+    fn the_controller_clears_filters_without_a_cursor_row() {
         let mut app = console_app();
 
         let _ = <HearthDeck as cosmic::Application>::update(
@@ -9343,19 +9372,21 @@ mod tests {
         // The cursor opens on the one facet row.
         assert_eq!(app.filter_cursor, Some(super::FilterCursor { row: 0 }));
 
-        // Narrow the facet, then step down past the facet rows: the last row is
-        // the footer's clear button.
+        // Narrow the one facet.
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextCol);
         assert_eq!(app.filters.selected(RommFacet::Genre), Some("Action"));
+        assert_eq!(grid_names(&app), ["Mario"]);
 
+        // There is no clear row to walk to: with one facet, stepping down wraps
+        // straight back onto it.
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
-        assert_eq!(app.filter_cursor, Some(super::FilterCursor { row: 1 }));
+        assert_eq!(app.filter_cursor, Some(super::FilterCursor { row: 0 }));
 
-        // Confirm on that row drops every filter and pulls the cursor back to
-        // the first facet row.
+        // X clears every facet from anywhere in the drawer, without the cursor
+        // having to travel to a button.
         let _ = <HearthDeck as cosmic::Application>::update(
             &mut app,
-            super::Message::GamepadEvent(super::GamepadEvent::Confirm),
+            super::Message::GamepadEvent(super::GamepadEvent::ContextMenu),
         );
         assert!(app.filters.selected(RommFacet::Genre).is_none());
         assert_eq!(grid_names(&app), ["Mario", "Chrono"]);

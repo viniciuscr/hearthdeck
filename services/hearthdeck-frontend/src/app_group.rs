@@ -607,6 +607,10 @@ impl AppLibraryConfig {
         &HOME
     }
 
+    /// Appends an empty group to a section's tabs. The in-strip "add group"
+    /// control was removed, so nothing calls this from the UI today; it is kept
+    /// as the one place group creation happens, for the screen that will own it.
+    #[allow(dead_code)]
     pub fn add(&mut self, section: Section, name: String) {
         self.sections.get_mut(section).push(AppGroup {
             name,
