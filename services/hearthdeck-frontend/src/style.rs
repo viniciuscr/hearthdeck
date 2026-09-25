@@ -491,6 +491,21 @@ pub fn tile_label_overlay(theme: &Theme) -> container::Style {
     }
 }
 
+/// A container that only groups and centres its child: no fill, and - the point
+/// - no text or icon colour.
+///
+/// A bare `container()` is COSMIC's `Transparent`, which *sets* the current
+/// container's on-background text colour. Inside a button that is fatal to
+/// theming: iced's container draws with `style.text_color.unwrap_or(outer)`, so
+/// the explicit colour it sets replaces the one the button's own class
+/// assigned. A button whose class paints its label - the accent-filled primary
+/// action, a selected control - was therefore still drawn in the default
+/// foreground. Any button that wraps its labelled content in a container must
+/// use this instead.
+pub fn passthrough(_theme: &Theme) -> container::Style {
+    container::Style::default()
+}
+
 /// Neutral card surface for content laid over the page background: the
 /// details screen's hero box and its metadata chips, and the source badge on a
 /// tile. Uses the theme's card background so it reads as a raised surface under

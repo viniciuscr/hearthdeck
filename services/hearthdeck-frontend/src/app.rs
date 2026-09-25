@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Display};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -61,7 +61,6 @@ use cosmic::{
 };
 use cosmic_app_list_config::AppListConfig;
 use hearthdeck_protocol::InputProfile;
-use itertools::Itertools;
 use log::{error, warn};
 use serde::{Deserialize, Serialize};
 
@@ -94,7 +93,7 @@ use crate::style::{
     destructive_button_class, details_action_bar_padding, details_action_height,
     details_hero_width, details_toggle_button_class, filter_button_height, filter_drawer_width,
     filter_row, grid_gap, grid_top_padding, hero_card, icon_button_class, launch_overlay,
-    modal_scrim, primary_action_button_class, root_background, search_icon_padding,
+    modal_scrim, passthrough, primary_action_button_class, root_background, search_icon_padding,
     section_button_class, sidebar_accent_bar_height, sidebar_divider, sidebar_header_height,
     sidebar_item_height, sidebar_width, tab_button_class, tab_height, tab_underline_height,
     tab_width, text_button_class, tile_height, tile_width, title_action_height,
@@ -412,7 +411,6 @@ struct HearthDeck {
     edit_name: Option<String>,
     dnd_icon: Option<usize>,
     offer_group: Option<Option<usize>>,
-    waiting_for_filtered: bool,
     scroll_offset: f32,
     viewport_height: f32,
     /// Horizontal scroll offset and visible width of each dashboard rail,
@@ -437,7 +435,6 @@ struct HearthDeck {
     app_list_config: AppListConfig,
     focused_id: Option<widget::Id>,
     entry_ids: Vec<widget::Id>,
-    entry_icon_handles: Vec<widget::icon::Handle>,
     group_keys: Vec<u64>,
     next_group_key: u64,
     gamepad_focus_first: bool,
@@ -482,30 +479,26 @@ struct HearthDeck {
     /// new health result so the alert fires only when the set changes.
     degraded_providers: Vec<String>,
     dashboard_health_generation: u64,
-    romm_request_generation: u64,
     /// Cached local path to each RomM platform's console artwork, used by the
     /// dashboard's console rail.
     romm_platform_icons: HashMap<i64, String>,
-    /// Authoritative game count per RomM platform id, straight from the
-    /// consoles endpoint. The Console Games grid lazy-loads pages, so the
-    /// number of loaded entries grows as the user scrolls; this is the stable
-    /// total the header should show instead of `entry_path_input.len()`.
-    romm_platform_counts: HashMap<i64, u64>,
     /// Alternative versions (regions, revisions, discs) per RomM entry id,
     /// captured while the record still carries its metadata. The grid stores
     /// entries as `DesktopEntryData`, which has no metadata field, so the
     /// version picker reads from here instead.
     romm_versions: HashMap<String, Vec<crate::providers::daemon::RetroRomVersion>>,
-    /// Grouped game total RomM reported for the last loaded scope. Overrides
-    /// the per-platform `rom_count` in the Console Games header, which counts
-    /// files rather than collapsed games. Cleared on a fresh scope reload.
-    romm_grouped_total: Option<u64>,
-    /// Next RomM page offset for the active console scope. `None` means the
-    /// current scope has no further pages to fetch.
-    romm_next_offset: Option<u32>,
-    /// Whether a RomM page request is in flight, so scrolling and the periodic
-    /// platform refresh cannot queue duplicate pages.
-    romm_loading_page: bool,
+    /// Loaded RomM pages, one listing per scope (each console and the "all
+    /// consoles" tab). Each is prefetched in the background and paged on its
+    /// own, so opening a console paints from cache instead of clearing the grid
+    /// and waiting. RomM records live here, never in `all_entries`, so a
+    /// provider refresh cannot disturb the grid's order.
+    romm_listings: HashMap<RommScope, RommListing>,
+    /// Scopes whose first page has not been requested yet, in prefetch order.
+    /// Pumped under [`ROMM_MAX_INFLIGHT`] so the walk of the console list does
+    /// not open dozens of cover downloads at once.
+    romm_prefetch: VecDeque<RommScope>,
+    /// Page requests in flight across every scope, against [`ROMM_MAX_INFLIGHT`].
+    romm_inflight: usize,
     /// The console-game details screen, when one is open. `None` on every other
     /// page; which page is showing lives in [`HearthDeck::page`].
     details: Option<Details>,
@@ -533,6 +526,59 @@ struct HearthDeck {
     disk_free: String,
 }
 
+/// Which RomM listing a page belongs to. The "all consoles" tab and each
+/// console are separate scopes, so they are cached and paged independently:
+/// opening one console never discards another's loaded pages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum RommScope {
+    /// The section's "all consoles" tab, i.e. no platform filter.
+    All,
+    /// One console, by RomM platform id.
+    Console(i64),
+}
+
+impl RommScope {
+    /// The `platform_ids` filter to send RomM, or `None` for every console.
+    fn platform_id(self) -> Option<i64> {
+        match self {
+            Self::All => None,
+            Self::Console(id) => Some(id),
+        }
+    }
+}
+
+/// One scope's loaded pages: a grow-only record log in RomM's own order, plus
+/// the cursor for extending it.
+///
+/// The log is never sorted. RomM returns games in name order and the grid
+/// draws them in arrival order, so an entry that has been drawn keeps its
+/// position as later pages land. Every scope owns its own listing, which is
+/// what lets page 0 of every console sit warm in the background at once.
+#[derive(Default)]
+struct RommListing {
+    entries: Vec<Arc<DesktopEntryData>>,
+    /// Grouped game total RomM reported, taken from the first page.
+    total: Option<u64>,
+    /// Next offset to request, or `None` when the scope is fully loaded.
+    next_offset: Option<u32>,
+    /// A page request is in flight for this scope.
+    loading: bool,
+    /// Bumped when the scope is reloaded, so a page from before the reload is
+    /// dropped instead of merged into the fresh log.
+    generation: u64,
+}
+
+/// How many page requests may be in flight across every scope at once. The
+/// prefetch walks the whole console list, so this is what keeps it from
+/// stampeding RomM (and its cover downloads) at startup.
+const ROMM_MAX_INFLIGHT: usize = 3;
+
+/// Rows of grid built beyond the viewport, above and below, so a small scroll
+/// does not reveal an unbuilt row. The grid is virtualized: only rows inside the
+/// viewport (plus this margin) become widgets, and the rest of the list is
+/// reserved with spacers of exactly the missing height.
+const GRID_OVERSCAN_ROWS: usize = 2;
+
 impl Default for HearthDeck {
     fn default() -> Self {
         Self {
@@ -554,7 +600,6 @@ impl Default for HearthDeck {
             edit_name: Default::default(),
             dnd_icon: Default::default(),
             offer_group: Default::default(),
-            waiting_for_filtered: Default::default(),
             scroll_offset: Default::default(),
             viewport_height: Default::default(),
             dashboard_rail_scroll: Default::default(),
@@ -568,7 +613,6 @@ impl Default for HearthDeck {
             app_list_config: Default::default(),
             focused_id: Default::default(),
             entry_ids: Default::default(),
-            entry_icon_handles: Default::default(),
             group_keys: Default::default(),
             next_group_key: Default::default(),
             gamepad_focus_first: Default::default(),
@@ -587,13 +631,11 @@ impl Default for HearthDeck {
             backend_available: None,
             degraded_providers: Vec::new(),
             dashboard_health_generation: 0,
-            romm_request_generation: 0,
             romm_platform_icons: HashMap::new(),
-            romm_platform_counts: HashMap::new(),
             romm_versions: HashMap::new(),
-            romm_grouped_total: None,
-            romm_next_offset: None,
-            romm_loading_page: false,
+            romm_listings: HashMap::new(),
+            romm_prefetch: VecDeque::new(),
+            romm_inflight: 0,
             details: None,
             virtual_keyboard: VirtualKeyboard::default(),
             page_animation: None,
@@ -605,15 +647,11 @@ impl Default for HearthDeck {
 }
 
 impl HearthDeck {
-    /// Update entry IDs and their icon handles.
+    /// Rebuild the stable named entry IDs (see `rebuild_entry_ids`). Icon handles
+    /// are resolved per visible tile in the view instead of here, so a large
+    /// library never rasterizes icons for entries that are not on screen.
     fn update_entry_metadata(&mut self) {
         self.rebuild_entry_ids();
-
-        self.entry_icon_handles = self
-            .entry_path_input
-            .iter()
-            .map(|e| crate::icon_cache::entry_icon_handle(&e.icon, self.grid_tile_width() as u32))
-            .collect();
     }
 
     /// Rebuild the stable named entry IDs (see `update_entry_metadata`).
@@ -632,10 +670,49 @@ impl HearthDeck {
                     e.path
                         .as_deref()
                         .map(|p| format!("app-entry-{}", p.to_string_lossy()))
-                        .unwrap_or_else(|| format!("app-entry-{}", e.id)),
+                        .unwrap_or_else(|| format!("app-entry-{}", e.id))
                 )
             })
             .collect();
+    }
+
+    /// Sorts the provider catalog by name.
+    ///
+    /// ROM records are not in this list: they live in their own per-scope
+    /// listings (see [`RommListing`]). Keeping them out means a provider
+    /// refresh can never reorder the console grid, which is what used to bump
+    /// already-drawn tiles every 30 seconds.
+    fn sort_catalog(&mut self) {
+        self.all_entries.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+
+    /// The records the current section/group draws from: the provider catalog
+    /// followed by the active RomM scope's loaded pages.
+    ///
+    /// ROM entries always come after the catalog and in arrival order, so the
+    /// projection is stable as pages land. For any non-console section the
+    /// scope is `None` and this is just the catalog.
+    fn projection_source(&self) -> Vec<Arc<DesktopEntryData>> {
+        let mut source = self.all_entries.clone();
+        if let Some(scope) = self.current_romm_scope()
+            && let Some(listing) = self.romm_listings.get(&scope)
+        {
+            source.extend(listing.entries.iter().cloned());
+        }
+        source
+    }
+
+    /// Finds a loaded entry by id across the provider catalog, every RomM
+    /// listing, and the recent rail.
+    fn find_known_entry(&self, id: &str) -> Option<&Arc<DesktopEntryData>> {
+        self.all_entries
+            .iter()
+            .chain(
+                self.romm_listings
+                    .values()
+                    .flat_map(|listing| listing.entries.iter()),
+            )
+            .find(|entry| entry.id == id)
     }
 
     /// A task that scrolls the single-line tab strip so the currently
@@ -1141,11 +1218,6 @@ pub(crate) enum Message {
     StartEditName(String),
     EditName(String),
     SubmitName,
-    FilterApps(
-        String,
-        Vec<Arc<DesktopEntryData>>,
-        Vec<widget::icon::Handle>,
-    ),
     /// Show the context menu for the entry at this index, or hide it when it
     /// is already showing. The menu is drawn inside the main window, so the
     /// index is all it needs; nothing has to be anchored to a screen rect.
@@ -1238,8 +1310,8 @@ pub(crate) enum Message {
     ResetCategorizationTabs,
     SystemStatus(SystemStatus),
     RommGames {
+        scope: RommScope,
         generation: u64,
-        platform_id: Option<i64>,
         result: Result<crate::providers::daemon::RetroRecordPage, String>,
     },
     /// One game's detail read, answering the details screen that asked for it.
@@ -1366,49 +1438,108 @@ impl HearthDeck {
         )
     }
 
-    fn current_romm_platform_id(&self) -> Option<Option<i64>> {
-        selected_romm_platform_id(self.cur_section, self.cur_group, &self.config)
+    /// The RomM scope the Console Games grid is currently showing, if it is a
+    /// RomM scope at all. `None` in every other section, and for a custom
+    /// console tab that has no platform behind it.
+    fn current_romm_scope(&self) -> Option<RommScope> {
+        match selected_romm_platform_id(self.cur_section, self.cur_group, &self.config)? {
+            None => Some(RommScope::All),
+            Some(id) => Some(RommScope::Console(id)),
+        }
     }
 
-    fn load_romm_page(&mut self, offset: u32) -> Task<Message> {
-        let Some(platform_id) = self.current_romm_platform_id() else {
-            return Task::none();
-        };
+    /// Loads one page of `scope` into its own listing.
+    ///
+    /// Offset 0 resets the listing and bumps its generation, so a page from a
+    /// previous load is dropped when it lands. A non-zero offset is refused
+    /// while the scope already has a request in flight.
+    fn load_romm_page(&mut self, scope: RommScope, offset: u32) -> Task<Message> {
         let Some(client) = self.daemon_client.clone() else {
             return Task::none();
         };
-        // Only one page request may be in flight. Reloading from the start
-        // (offset 0) is always allowed: it bumps the generation so any older
-        // in-flight page is discarded when it lands.
-        if offset > 0 && self.romm_loading_page {
+        let listing = self.romm_listings.entry(scope).or_default();
+        if offset > 0 && listing.loading {
             return Task::none();
         }
         if offset == 0 {
-            self.romm_request_generation += 1;
-            self.all_entries
-                .retain(|entry| !entry.id.starts_with("romm:"));
-            self.romm_versions.clear();
-            self.romm_grouped_total = None;
-            self.romm_next_offset = None;
-            self.load_apps();
+            listing.generation += 1;
+            listing.entries.clear();
+            listing.total = None;
+            listing.next_offset = None;
         }
-        self.romm_loading_page = true;
-        let generation = self.romm_request_generation;
+        listing.loading = true;
+        let generation = listing.generation;
+        self.romm_inflight += 1;
         Task::perform(
             async move {
                 client
-                    .list_retro_records(platform_id, ROMM_PAGE_SIZE, offset)
+                    .list_retro_records(scope.platform_id(), ROMM_PAGE_SIZE, offset)
                     .await
                     .map_err(|error| error.to_string())
             },
-            move |result| {
-                cosmic::Action::App(Message::RommGames {
-                    generation,
-                    platform_id,
-                    result,
-                })
-            },
+            move |result| cosmic::Action::App(Message::RommGames { scope, generation, result }),
         )
+    }
+
+    /// Makes `scope` the grid's source, requesting its first page only if it has
+    /// never been loaded. A prefetched scope is shown straight from cache, which
+    /// is what makes opening a console instant; focus still moves to the grid as
+    /// it would had a page just arrived.
+    fn ensure_romm_scope(&mut self, scope: RommScope) -> Task<Message> {
+        let ready = self
+            .romm_listings
+            .get(&scope)
+            .is_some_and(|listing| !listing.entries.is_empty() || listing.loading);
+        if ready {
+            self.load_apps();
+            return self.focus_grid_after_reload();
+        }
+        self.load_romm_page(scope, 0)
+    }
+
+    /// Queues every console scope (and the "all consoles" tab) that has no page
+    /// yet, so the whole list warms up in the background and any console opens
+    /// from cache. The "all consoles" tab is queued first: it is the section's
+    /// landing view.
+    fn queue_romm_prefetch(&mut self) {
+        let scopes = std::iter::once(RommScope::All).chain(
+            self.config
+                .sections
+                .console_games
+                .iter()
+                .filter_map(AppGroup::romm_platform_id)
+                .map(RommScope::Console),
+        );
+        for scope in scopes {
+            let pending = self
+                .romm_listings
+                .get(&scope)
+                .is_none_or(|listing| listing.entries.is_empty() && !listing.loading);
+            if pending && !self.romm_prefetch.contains(&scope) {
+                self.romm_prefetch.push_back(scope);
+            }
+        }
+    }
+
+    /// Issues queued prefetches up to [`ROMM_MAX_INFLIGHT`] requests, so walking
+    /// the console list does not open every console's covers at once.
+    fn pump_romm_prefetch(&mut self) -> Task<Message> {
+        let mut tasks = Vec::new();
+        while self.romm_inflight < ROMM_MAX_INFLIGHT {
+            let Some(scope) = self.romm_prefetch.pop_front() else {
+                break;
+            };
+            // Loaded or loading since it was queued: nothing left to do.
+            if self
+                .romm_listings
+                .get(&scope)
+                .is_some_and(|listing| !listing.entries.is_empty() || listing.loading)
+            {
+                continue;
+            }
+            tasks.push(self.load_romm_page(scope, 0));
+        }
+        Task::batch(tasks)
     }
 
     fn poll_active_session(&self, delay: std::time::Duration) -> Task<Message> {
@@ -1864,20 +1995,25 @@ impl HearthDeck {
     /// game whose console section was never opened \u2014 falls back to the snapshot
     /// the daemon stored with the membership, which is what makes the rail complete.
     fn rebuild_favorite_entries(&mut self) {
-        let live: Vec<Arc<DesktopEntryData>> = self
-            .all_entries
-            .iter()
-            .chain(&self.recent_entries)
-            .cloned()
-            .collect();
-        self.favorite_entries = collection_items(&self.collections, FAVORITES_COLLECTION)
-            .map(|item| {
-                live.iter()
-                    .find(|entry| entry.id == item.item_id)
-                    .cloned()
-                    .unwrap_or_else(|| Arc::new(snapshot_entry(item)))
-            })
-            .collect();
+        // Resolve against everything loaded - the catalog, every console's
+        // listing, and the recent rail - so a favorited RomM game keeps its
+        // resolved entry once any scope holding it has been loaded (which the
+        // prefetch makes every console's first page do). Anything still unknown
+        // falls back to the snapshot the daemon stored with the membership.
+        let resolved: Vec<Arc<DesktopEntryData>> =
+            collection_items(&self.collections, FAVORITES_COLLECTION)
+                .map(|item| {
+                    self.find_known_entry(&item.item_id)
+                        .or_else(|| {
+                            self.recent_entries
+                                .iter()
+                                .find(|entry| entry.id == item.item_id)
+                        })
+                        .cloned()
+                        .unwrap_or_else(|| Arc::new(snapshot_entry(item)))
+                })
+                .collect();
+        self.favorite_entries = resolved;
     }
 
     /// Adds or removes one item in a curated collection, reloading the collections
@@ -1986,35 +2122,21 @@ impl HearthDeck {
     }
 
     /// The game total the Console Games header should show for the current
-    /// scope, from RomM's own console metadata rather than the number of pages
-    /// lazy-loaded so far. A selected console uses its `rom_count`; the "all
-    /// consoles" tab sums every platform. Returns `None` when the console
-    /// totals are not known yet (before the first consoles response), so the
-    /// caller can fall back to the loaded count.
+    /// scope: the grouped total from that scope's listing, which counts the
+    /// collapsed games the grid actually draws.
     ///
-    /// The grouped total from the list endpoint wins when known: RomM's
-    /// per-platform `rom_count` counts every file, so it overstates a library
-    /// whose regions/revisions/discs are collapsed into single tiles.
+    /// Deliberately *not* RomM's per-platform `rom_count`. That counts files,
+    /// so a library whose regions, revisions and discs collapse into single
+    /// tiles would show a larger number than the grid has tiles - the header
+    /// changing from that file count to the grouped total a moment after the
+    /// page lands is exactly the jump this avoids. `None` means the scope's
+    /// first page has not arrived yet.
     fn console_total_count(&self) -> Option<usize> {
-        if let Some(total) = self.romm_grouped_total {
-            return Some(total as usize);
-        }
-        match self.cur_group {
-            Some(index) => self
-                .config
-                .sections
-                .console_games
-                .get(index)
-                .and_then(AppGroup::romm_platform_id)
-                .and_then(|id| self.romm_platform_counts.get(&id))
-                .map(|count| *count as usize),
-            None => (!self.romm_platform_counts.is_empty()).then(|| {
-                self.romm_platform_counts
-                    .values()
-                    .map(|count| *count as usize)
-                    .sum()
-            }),
-        }
+        let scope = self.current_romm_scope()?;
+        self.romm_listings
+            .get(&scope)
+            .and_then(|listing| listing.total)
+            .map(|total| total as usize)
     }
 
     /// Whether the console grid's local view has to see the whole scope before
@@ -2053,13 +2175,13 @@ impl HearthDeck {
     /// records currently held. Only console games expose facets, so every other
     /// section keeps the cache empty; a facet no record carries is dropped
     /// rather than offered empty.
-    fn rebuild_facet_options(&mut self) {
+    fn rebuild_facet_options(&mut self, entries: &[Arc<DesktopEntryData>]) {
         self.facet_options = if self.cur_section == Section::ConsoleGames {
             RommFacet::ALL
                 .into_iter()
                 .map(|facet| {
                     let options = std::iter::once(None)
-                        .chain(facet.values(&self.all_entries).into_iter().map(Some))
+                        .chain(facet.values(entries).into_iter().map(Some))
                         .collect::<Vec<_>>();
                     (facet, options)
                 })
@@ -2180,10 +2302,12 @@ impl HearthDeck {
             },
         )];
         if self.console_needs_all_pages()
-            && !self.romm_loading_page
-            && let Some(offset) = self.romm_next_offset
+            && let Some(scope) = self.current_romm_scope()
+            && let Some(listing) = self.romm_listings.get(&scope)
+            && !listing.loading
+            && let Some(offset) = listing.next_offset
         {
-            tasks.push(self.load_romm_page(offset));
+            tasks.push(self.load_romm_page(scope, offset));
         }
         Task::batch(tasks)
     }
@@ -2200,14 +2324,14 @@ impl HearthDeck {
     }
 
     pub fn load_apps(&mut self) {
-        // The daemon owns discovery; this only projects its catalog records
-        // into the currently selected section and group.
-
+        // The daemon owns discovery; this only projects its catalog records and
+        // the active RomM scope's loaded pages into the current section/group.
+        let source = self.projection_source();
         self.entry_path_input = self.config.filtered(
             self.cur_section,
             self.cur_group,
             &self.search_value,
-            &self.all_entries,
+            &source,
             &self.filters,
         );
 
@@ -2245,36 +2369,20 @@ impl HearthDeck {
             )
             .0;
         self.update_entry_metadata();
-        self.rebuild_facet_options();
+        self.rebuild_facet_options(&source);
     }
 
-    fn filter_apps(&mut self) -> Task<Message> {
-        let config = self.config.clone();
-        let all_entries = self.all_entries.clone();
-        let cur_section = self.cur_section;
-        let cur_group = self.cur_group;
-        let input = self.search_value.clone();
-        let filters = self.filters.clone();
-        let prerender = self.grid_tile_width() as u32;
-        if !self.waiting_for_filtered {
-            self.waiting_for_filtered = true;
-            iced::Task::perform(
-                async move {
-                    let mut apps =
-                        config.filtered(cur_section, cur_group, &input, &all_entries, &filters);
-                    apps.sort_by(|a, b| a.name.cmp(&b.name));
-                    let icon_handles = apps
-                        .iter()
-                        .map(|e| crate::icon_cache::entry_icon_handle(&e.icon, prerender))
-                        .collect::<Vec<_>>();
-                    (input, apps, icon_handles)
-                },
-                |(input, apps, icon_handles)| Message::FilterApps(input, apps, icon_handles),
-            )
-            .map(cosmic::Action::App)
-        } else {
-            iced::Task::none()
-        }
+    /// Re-projects the grid and, when this load is entering a section or tab,
+    /// moves focus to the first tile once it has been laid out.
+    ///
+    /// There is only one projection path. An earlier async variant existed to
+    /// rasterize every entry's icon off the update thread, but icons are now
+    /// resolved per visible tile in the view, so filtering is cheap enough to do
+    /// inline - and doing it inline removes the race where a stale async
+    /// projection overwrote a page that had just landed.
+    fn reload_grid(&mut self) -> Task<Message> {
+        self.load_apps();
+        self.focus_grid_after_reload()
     }
 
     /// Switches the visible page, starting a fade-through transition when the
@@ -2337,10 +2445,14 @@ impl HearthDeck {
         self.filter_cursor = None;
         self.cur_group = group;
         self.scroll_offset = 0.0;
+        // Set before the load so a scope served from cache focuses the grid now
+        // rather than relying on a page arriving to do it.
+        self.gamepad_focus_first = true;
         let load = if self.cur_section == Section::ConsoleGames {
-            self.load_romm_page(0)
+            self.current_romm_scope()
+                .map_or(Task::none(), |scope| self.ensure_romm_scope(scope))
         } else {
-            self.filter_apps()
+            self.reload_grid()
         };
         let mut cmds = vec![
             load,
@@ -2354,7 +2466,6 @@ impl HearthDeck {
         ];
         // A tab change lands on the grid, not in the search box: focusing a text
         // input raises the on-screen keyboard, which is hostile on a TV.
-        self.gamepad_focus_first = true;
         cmds.push(self.request_virtual_keyboard(false));
         if let Some(task) = self.reveal_tab_strip() {
             cmds.push(task);
@@ -2475,10 +2586,14 @@ impl HearthDeck {
         self.cur_group = None;
         self.scroll_offset = 0.0;
         self.group_keys = (0..self.config.sections.get(section).len() as u64).collect();
+        // Set before the load so a scope served from cache focuses the grid now
+        // rather than relying on a page arriving to do it.
+        self.gamepad_focus_first = true;
         let load = if section == Section::ConsoleGames {
-            self.load_romm_page(0)
+            self.current_romm_scope()
+                .map_or(Task::none(), |scope| self.ensure_romm_scope(scope))
         } else {
-            self.filter_apps()
+            self.reload_grid()
         };
         let mut cmds = vec![
             load,
@@ -2492,7 +2607,6 @@ impl HearthDeck {
         ];
         // Entering a section lands on the grid rather than in the search box,
         // which would raise the on-screen keyboard.
-        self.gamepad_focus_first = true;
         cmds.push(self.request_virtual_keyboard(false));
         if let Some(task) = self.reveal_tab_strip() {
             cmds.push(task);
@@ -2510,7 +2624,6 @@ impl HearthDeck {
         }
         self.focused_id = None;
         self.entry_ids.clear();
-        self.entry_icon_handles.clear();
         self.search_value.clear();
         self.edit_name = None;
         self.cur_group = None;
@@ -2534,11 +2647,9 @@ impl HearthDeck {
 
     fn activate_dashboard_app(&mut self, id: &str) -> Task<<Self as cosmic::Application>::Message> {
         let entry = self
-            .all_entries
-            .iter()
-            .chain(&self.recent_entries)
-            .chain(&self.favorite_entries)
-            .find(|entry| entry.id == id)
+            .find_known_entry(id)
+            .or_else(|| self.recent_entries.iter().find(|entry| entry.id == id))
+            .or_else(|| self.favorite_entries.iter().find(|entry| entry.id == id))
             .cloned();
         self.activate_entry(entry)
     }
@@ -2572,15 +2683,15 @@ impl HearthDeck {
     /// to what the daemon sent with the item, which for a derived rail it filled
     /// in from the catalog.
     fn rebuild_watch_entries(&mut self) {
-        self.watch_entries = model_collection_items(&self.collections, WATCH_RAIL)
-            .map(|item| {
-                self.all_entries
-                    .iter()
-                    .find(|entry| entry.id == item.item_id)
-                    .cloned()
-                    .unwrap_or_else(|| Arc::new(snapshot_entry(item)))
-            })
-            .collect();
+        let resolved: Vec<Arc<DesktopEntryData>> =
+            model_collection_items(&self.collections, WATCH_RAIL)
+                .map(|item| {
+                    self.find_known_entry(&item.item_id)
+                        .cloned()
+                        .unwrap_or_else(|| Arc::new(snapshot_entry(item)))
+                })
+                .collect();
+        self.watch_entries = resolved;
     }
 
     fn dashboard_shelves(&self) -> Vec<(DashboardShelf, Vec<&Arc<DesktopEntryData>>)> {
@@ -2605,12 +2716,15 @@ impl HearthDeck {
             .collect::<Vec<_>>();
         // Favorites saved by a build that predates the collections table live only
         // in the local config; keep resolving them so an upgrade cannot empty the
-        // rail.
-        for entry in self.config.favorite_entries(&self.all_entries) {
+        // rail. ROM favorites resolve through their console's listing.
+        for id in &self.config.favorite_ids {
             if favorites.len() >= DASHBOARD_RAIL_TILES {
                 break;
             }
-            if !favorites.iter().any(|card| card.id == entry.id) {
+            if favorites.iter().any(|card| card.id == *id) {
+                continue;
+            }
+            if let Some(entry) = self.find_known_entry(id) {
                 favorites.push(entry);
             }
         }
@@ -2723,9 +2837,7 @@ impl HearthDeck {
     /// desktop file's own.
     fn launch_window_hint(&self, app_id: &str, title: &str) -> WindowHint {
         let wm_class = self
-            .all_entries
-            .iter()
-            .find(|entry| entry.id == app_id)
+            .find_known_entry(app_id)
             .and_then(|entry| entry.wm_class.clone());
         WindowHint::for_entry(app_id, title, wm_class.as_deref())
     }
@@ -2768,8 +2880,11 @@ impl HearthDeck {
         self.switch_page(Page::Library);
         self.focused_id = None;
 
+        let load = self
+            .current_romm_scope()
+            .map_or(Task::none(), |scope| self.ensure_romm_scope(scope));
         let mut cmds = vec![
-            self.load_romm_page(0),
+            load,
             iced::widget::scrollable::scroll_to(
                 SCROLLABLE_ID.clone(),
                 AbsoluteOffset {
@@ -2800,9 +2915,12 @@ impl HearthDeck {
             return Task::none();
         };
         let title = entry.name.clone();
-        // The tile's cover is decoded at tile size already, so the screen has
-        // artwork before any download finishes.
-        let cover = self.entry_icon_handles.get(index).cloned();
+        // Resolve the tile's cover on demand: the grid no longer keeps a handle
+        // for every entry, only for the tiles it draws, so the details screen
+        // resolves the one it needs from the same cache.
+        let cover = self.entry_path_input.get(index).map(|entry| {
+            crate::icon_cache::entry_icon_handle(&entry.icon, self.grid_tile_width() as u32)
+        });
         // The version list is built when the RomM page loads, so the details
         // screen reads it rather than re-deriving it from the detail payload.
         let versions = self
@@ -3447,14 +3565,46 @@ impl HearthDeck {
 
     /// The number of grid rows currently visible in the scrollable viewport.
     fn visible_row_count(&self) -> f32 {
-        let viewport = if self.viewport_height > 0.0 {
+        (self.grid_viewport_height() / self.grid_row_height()).max(1.0)
+    }
+
+    /// The grid viewport height, with the first-frame fallback used before the
+    /// scrollable has reported its real size.
+    fn grid_viewport_height(&self) -> f32 {
+        if self.viewport_height > 0.0 {
             self.viewport_height
         } else {
-            // Fallback before the first layout reports the real size: the
-            // window is 690px tall with a header and a tab row on top.
+            // The window is 690px tall with a header and a tab row on top.
             690.0 - 160.0
-        };
-        (viewport / self.grid_row_height()).max(1.0)
+        }
+    }
+
+    /// The range of grid rows to build this frame.
+    ///
+    /// The grid is virtualized: only the rows inside the viewport plus a margin
+    /// become widgets, so a library of thousands of games lays out a screenful
+    /// per frame instead of thousands of tiles. The focused row is always
+    /// included, because `focus(id)` needs that tile's widget to exist.
+    fn grid_row_window(&self) -> std::ops::Range<usize> {
+        let columns = self.grid_columns().max(1);
+        let total_rows = self.entry_path_input.len().div_ceil(columns);
+        if total_rows == 0 {
+            return 0..0;
+        }
+        let row_height = self.grid_row_height().max(1.0);
+        let first = (self.scroll_offset.max(0.0) / row_height).floor() as usize;
+        let visible = (self.grid_viewport_height() / row_height).ceil().max(1.0) as usize;
+        let mut start = first.saturating_sub(GRID_OVERSCAN_ROWS);
+        let mut end = first
+            .saturating_add(visible)
+            .saturating_add(GRID_OVERSCAN_ROWS)
+            .min(total_rows);
+        if let Some(focused) = self.focused_grid_index() {
+            let row = focused / columns;
+            start = start.min(row);
+            end = end.max(row + 1).min(total_rows);
+        }
+        start.min(end)..end
     }
 
     /// Returns a task that queries the grid scrollable's viewport height,
@@ -4116,7 +4266,7 @@ impl cosmic::Application for HearthDeck {
                         self.all_entries.push(entry);
                     }
                 }
-                self.all_entries.sort_by(|a, b| a.name.cmp(&b.name));
+                self.sort_catalog();
                 self.sync_category_groups();
                 if let Some(helper) = AppLibraryConfig::helper() {
                     let _ = self.config.write_entry(&helper);
@@ -4136,10 +4286,6 @@ impl cosmic::Application for HearthDeck {
                     .iter()
                     .filter_map(|console| console.icon.clone().map(|icon| (console.id, icon)))
                     .collect();
-                self.romm_platform_counts = consoles
-                    .iter()
-                    .map(|console| (console.id, console.rom_count))
-                    .collect();
                 let selected_group = self
                     .cur_group
                     .and_then(|index| self.config.sections.console_games.get(index))
@@ -4151,6 +4297,10 @@ impl cosmic::Application for HearthDeck {
                     .collect::<Vec<_>>();
                 let changed = self.config.sync_console_groups(&platforms);
                 let refresh = self.load_romm_platforms(ROMM_REFRESH_INTERVAL);
+                // Warm every console (and the "all consoles" tab) so opening one
+                // paints from cache instead of clearing the grid and waiting.
+                self.queue_romm_prefetch();
+                let prefetch = self.pump_romm_prefetch();
                 if self.cur_section == Section::ConsoleGames {
                     if changed {
                         self.cur_group = selected_group.and_then(|selected| {
@@ -4163,109 +4313,125 @@ impl cosmic::Application for HearthDeck {
                         self.group_keys =
                             (0..self.config.sections.console_games.len() as u64).collect();
                     }
-                    // Fetch the first page only when nothing is loaded for this
-                    // scope and no request is already in flight. Further pages
-                    // load on demand as the grid is scrolled.
-                    let needs_initial_page = !self.romm_loading_page
-                        && self.romm_next_offset.is_none()
-                        && !self
-                            .all_entries
-                            .iter()
-                            .any(|entry| entry.id.starts_with("romm:"));
-                    if changed || needs_initial_page {
-                        return Task::batch([self.load_romm_page(0), refresh]);
-                    }
+                    // The current scope may have just appeared, or may have lost
+                    // its tab; make sure whatever is selected is loading.
+                    let load = self
+                        .current_romm_scope()
+                        .map_or(Task::none(), |scope| self.ensure_romm_scope(scope));
+                    return Task::batch([load, prefetch, refresh]);
                 }
-                return refresh;
+                return Task::batch([prefetch, refresh]);
             }
             Message::RommGames {
+                scope,
                 generation,
-                platform_id,
                 result,
             } => {
-                if !romm_page_is_current(
-                    generation,
-                    self.romm_request_generation,
-                    platform_id,
-                    self.current_romm_platform_id(),
-                ) {
-                    return Task::none();
+                // Every response completes exactly one in-flight request, even
+                // one whose payload is dropped, so the count is settled first.
+                self.romm_inflight = self.romm_inflight.saturating_sub(1);
+
+                // Drop a page a later reload of the same scope has superseded.
+                // Its `loading` flag already belongs to the newer request, so
+                // only the payload is discarded.
+                let stale = self
+                    .romm_listings
+                    .get(&scope)
+                    .is_none_or(|listing| listing.generation != generation);
+                if stale {
+                    return self.pump_romm_prefetch();
                 }
                 let page = match result {
                     Ok(page) => page,
                     Err(error) => {
-                        self.romm_loading_page = false;
+                        if let Some(listing) = self.romm_listings.get_mut(&scope) {
+                            listing.loading = false;
+                        }
                         tracing::warn!(%error, "failed to load RomM games");
-                        return Task::none();
+                        return self.pump_romm_prefetch();
                     }
                 };
-                let item_count = page.items.len() as u32;
-                self.romm_grouped_total = Some(page.total);
-                for record in page.items {
-                    // Store the full version list, representative first, so the
-                    // context menu can label every disc (including the one
-                    // "Run" targets) instead of leaving it implicit.
+
+                // Store each entry's versions while the record still carries its
+                // metadata. The grid keeps only `DesktopEntryData`, which has no
+                // metadata field, so the version picker reads them from here.
+                for record in &page.items {
                     let siblings = retro_rom_versions(&record.metadata);
-                    if !siblings.is_empty() {
-                        let mut versions = Vec::with_capacity(siblings.len() + 1);
-                        if let Some(current_id) = record
-                            .id
-                            .strip_prefix("romm:")
-                            .and_then(|id| id.parse::<i64>().ok())
-                        {
-                            versions.push(RetroRomVersion {
-                                id: current_id,
-                                title: retro_version_label(&record.metadata)
-                                    .unwrap_or_else(|| record.name.clone()),
-                                is_main_sibling: true,
-                            });
-                        }
-                        versions.extend(siblings);
-                        // Two files can share a name; append the id so no two
-                        // menu entries read the same.
-                        let mut seen = std::collections::HashSet::new();
-                        for version in &mut versions {
-                            if !seen.insert(version.title.clone()) {
-                                version.title = format!("{} (#{})", version.title, version.id);
-                            }
-                        }
-                        self.romm_versions.insert(record.id.clone(), versions);
+                    if siblings.is_empty() {
+                        continue;
                     }
-                    let entry = Arc::new(record.into_desktop_entry());
-                    if !self
-                        .all_entries
-                        .iter()
-                        .any(|existing| existing.id == entry.id)
+                    let mut versions = Vec::with_capacity(siblings.len() + 1);
+                    if let Some(current_id) = record
+                        .id
+                        .strip_prefix("romm:")
+                        .and_then(|id| id.parse::<i64>().ok())
                     {
-                        self.all_entries.push(entry);
+                        versions.push(RetroRomVersion {
+                            id: current_id,
+                            title: retro_version_label(&record.metadata)
+                                .unwrap_or_else(|| record.name.clone()),
+                            is_main_sibling: true,
+                        });
+                    }
+                    versions.extend(siblings);
+                    // Two files can share a name; append the id so no two menu
+                    // entries read the same.
+                    let mut seen = std::collections::HashSet::new();
+                    for version in &mut versions {
+                        if !seen.insert(version.title.clone()) {
+                            version.title = format!("{} (#{})", version.title, version.id);
+                        }
+                    }
+                    self.romm_versions.insert(record.id.clone(), versions);
+                }
+
+                let item_count = page.items.len() as u32;
+                let page_offset = page.offset;
+                let page_total = page.total;
+                // Append in arrival order into this scope's own log. RomM returns
+                // name order and pages are appended, never re-sorted, so nothing
+                // already drawn moves.
+                let listing = self.romm_listings.entry(scope).or_default();
+                for record in page.items {
+                    let entry = Arc::new(record.into_desktop_entry());
+                    if !listing.entries.iter().any(|existing| existing.id == entry.id) {
+                        listing.entries.push(entry);
                     }
                 }
-                self.romm_loading_page = false;
-                self.romm_next_offset = next_romm_offset(page.offset, item_count, page.total);
-                // Deliberately no re-sort. RomM already returns name order, and
-                // sorting the combined catalog here moved already-rendered
-                // tiles each time a later page landed (visible reflow). Pages
-                // are appended in order; more load on scroll.
-                self.load_apps();
-                // A section entry focuses the grid once its first page exists.
-                let focus = self.focus_grid_after_reload();
-                // While a search or a filter is active, the local projection must
-                // see the whole scope, so keep pulling pages until it is
-                // exhausted. Plain browsing stays on-demand.
-                if self.console_needs_all_pages()
-                    && let Some(offset) = self.romm_next_offset
-                {
-                    return Task::batch([focus, self.load_romm_page(offset)]);
+                // The total is the full result count for the scope, so every
+                // page reports the same number; the first is authoritative.
+                listing.total.get_or_insert(page_total);
+                listing.next_offset = next_romm_offset(page_offset, item_count, page_total);
+                listing.loading = false;
+                let next_offset = listing.next_offset;
+
+                let is_current = self.current_romm_scope() == Some(scope);
+                if is_current {
+                    self.load_apps();
                 }
-                // Load just enough further pages to fill the viewport.
-                if let Some(offset) = self.romm_next_offset {
-                    let loaded_rows =
-                        self.entry_path_input.len().div_ceil(self.grid_columns()) as f32;
-                    if loaded_rows < self.visible_row_count() + 1.0 {
-                        return Task::batch([focus, self.load_romm_page(offset)]);
+
+                let mut tasks = vec![self.pump_romm_prefetch()];
+                if is_current {
+                    // A section entry focuses the grid once its first page exists.
+                    tasks.push(self.focus_grid_after_reload());
+                    if let Some(offset) = next_offset {
+                        // While a search or a filter is active the local
+                        // projection must see the whole scope, so keep pulling
+                        // pages until it is drained. Plain browsing only loads
+                        // enough further pages to fill the viewport.
+                        let need_more = if self.console_needs_all_pages() {
+                            true
+                        } else {
+                            let loaded_rows =
+                                self.entry_path_input.len().div_ceil(self.grid_columns()) as f32;
+                            loaded_rows < self.visible_row_count() + 1.0
+                        };
+                        if need_more {
+                            tasks.push(self.load_romm_page(scope, offset));
+                        }
                     }
                 }
-                return focus;
+                return Task::batch(tasks);
             }
             Message::UpdateFocused(id) => {
                 self.focused_id = id;
@@ -4597,15 +4763,17 @@ impl cosmic::Application for HearthDeck {
             }
             Message::InputChanged(value) => {
                 self.search_value = value;
-                let filter = self.filter_apps();
+                let filter = self.reload_grid();
                 // While a search or a filter is active the local projection has
                 // to see the whole scope, so keep pulling pages until it is
                 // exhausted. Plain browsing stays on-demand.
                 if self.console_needs_all_pages()
-                    && !self.romm_loading_page
-                    && let Some(offset) = self.romm_next_offset
+                    && let Some(scope) = self.current_romm_scope()
+                    && let Some(listing) = self.romm_listings.get(&scope)
+                    && !listing.loading
+                    && let Some(offset) = listing.next_offset
                 {
-                    return Task::batch([filter, self.load_romm_page(offset)]);
+                    return Task::batch([filter, self.load_romm_page(scope, offset)]);
                 }
                 return filter;
             }
@@ -4887,7 +5055,7 @@ impl cosmic::Application for HearthDeck {
                             {
                                 error!("{:?}", err);
                             }
-                            tasks.push(self.filter_apps());
+                            tasks.push(self.reload_grid());
                         }
                     }
                 }
@@ -4910,7 +5078,7 @@ impl cosmic::Application for HearthDeck {
                     {
                         error!("{:?}", err);
                     }
-                    return self.filter_apps();
+                    return self.reload_grid();
                 }
             }
             Message::CancelDrag => {
@@ -4940,14 +5108,16 @@ impl cosmic::Application for HearthDeck {
                 // Infinite scroll for the RomM console grid: load the next page
                 // once the viewport nears the end of what is loaded.
                 if self.cur_section == Section::ConsoleGames
-                    && !self.romm_loading_page
-                    && let Some(offset) = self.romm_next_offset
+                    && let Some(scope) = self.current_romm_scope()
+                    && let Some(listing) = self.romm_listings.get(&scope)
+                    && !listing.loading
+                    && let Some(offset) = listing.next_offset
                 {
                     let total_rows =
                         self.entry_path_input.len().div_ceil(self.grid_columns()) as f32;
                     let content_height = total_rows * self.grid_row_height();
                     if y + viewport_height >= content_height - self.grid_row_height() {
-                        return self.load_romm_page(offset);
+                        return self.load_romm_page(scope, offset);
                     }
                 }
             }
@@ -4993,24 +5163,13 @@ impl cosmic::Application for HearthDeck {
                         error!("{:?}", err);
                     }
                     self.cur_group = None;
-                    cmds.push(self.filter_apps());
+                    cmds.push(self.reload_grid());
                 }
                 return Task::batch(cmds);
             }
             Message::CancelDelete => {
                 self.group_to_delete = None;
                 return destroy_layer_surface(*DELETE_GROUP_WINDOW_ID);
-            }
-            Message::FilterApps(input, filtered_apps, icon_handles) => {
-                self.entry_path_input = filtered_apps;
-                self.entry_icon_handles = icon_handles;
-                self.rebuild_entry_ids();
-
-                self.waiting_for_filtered = false;
-                if self.search_value != input {
-                    return self.filter_apps();
-                }
-                return self.focus_grid_after_reload();
             }
             Message::PinToAppTray(usize) => {
                 let pinned_id = self.entry_path_input.get(usize).map(|e| e.id.clone());
@@ -5292,7 +5451,7 @@ impl cosmic::Application for HearthDeck {
                     ApplicationsTasks::Input { input } => {
                         if let Some(input) = input {
                             self.search_value = input;
-                            return self.filter_apps();
+                            return self.reload_grid();
                         }
                         Task::none()
                     }
@@ -5596,7 +5755,7 @@ impl cosmic::Application for HearthDeck {
                 self_.all_entries.push(entry);
             }
         }
-        self_.all_entries.sort_by(|a, b| a.name.cmp(&b.name));
+        self_.sort_catalog();
         self_.sync_category_groups();
 
         self_.load_apps();
@@ -6021,7 +6180,10 @@ impl HearthDeck {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Horizontal::Center)
-                .align_y(Vertical::Center),
+                .align_y(Vertical::Center)
+                // No colour of its own: the class below decides the label's
+                // colour, and a bare container would overwrite it.
+                .class(theme::Container::Custom(Box::new(passthrough))),
             )
             .id(details_focus_id(focus))
             .width(Length::Fixed(width))
@@ -6339,15 +6501,17 @@ impl HearthDeck {
 
         // The Console Games grid lazy-loads pages, so its "N items" label must
         // not track the loaded-page count (which climbs as the user scrolls).
-        // Use RomM's own per-console total unless the view is narrowed by a
-        // search or a filter, where the loaded count *is* the result count.
-        let item_count = if cur_section == Section::ConsoleGames && !self.console_needs_all_pages()
-        {
-            self.console_total_count()
-                .unwrap_or(self.entry_path_input.len())
-        } else {
-            self.entry_path_input.len()
-        };
+        // It reports RomM's grouped game total for the scope - the unit the
+        // grid draws. While that total is still unknown the label is left blank
+        // rather than seeded with a different number that changes moments later.
+        // A narrowed view filters the records in memory, so there the loaded
+        // count *is* the result count.
+        let item_count: Option<usize> =
+            if cur_section == Section::ConsoleGames && !self.console_needs_all_pages() {
+                self.console_total_count()
+            } else {
+                Some(self.entry_path_input.len())
+            };
 
         let user_name = self.user_name.clone();
         let disk_free = self.disk_free.clone();
@@ -6685,7 +6849,10 @@ impl HearthDeck {
                 .align_y(Vertical::Center)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .padding([space_none, space_m]),
+                .padding([space_none, space_m])
+                // The control class paints the label; keep this container from
+                // overriding that with the default foreground.
+                .class(theme::Container::Custom(Box::new(passthrough))),
             )
             .height(Length::Fixed(filter_button_height()))
             .width(Length::Fixed(FILTER_BUTTON_MIN_WIDTH))
@@ -6700,28 +6867,55 @@ impl HearthDeck {
             space::horizontal().width(Length::Shrink).into()
         };
 
+        let count_label: Element<'_, Message> = match item_count {
+            Some(count) => container(text::body(fl!("count-items", count = count)).size(TEXT_BODY))
+                .align_y(Vertical::Center)
+                .into(),
+            None => space::horizontal().width(Length::Shrink).into(),
+        };
+
         let tab_row = row![
             tab_strip,
             filter_button,
-            container(text::body(fl!("count-items", count = item_count)).size(TEXT_BODY))
-                .align_y(Vertical::Center),
+            count_label,
         ]
         .spacing(space_m)
         .align_y(Alignment::Center)
         .width(Length::Fill);
 
         // ===== Application grid =====
-        let columns = self.grid_columns();
+        //
+        // Virtualized: only the rows inside the viewport (plus a margin) become
+        // widgets, so a library of thousands of games lays out a screenful per
+        // frame instead of building every tile. The rows above and below are
+        // reserved with spacers of exactly the missing height, so the scrollable
+        // keeps its true extent and the scroll math is unchanged.
+        let columns = self.grid_columns().max(1);
         let tile_w = self.grid_tile_width();
         let tile_h = self.grid_tile_height();
         let gap = grid_gap(self.window_width, columns);
-        let app_grid_list: Vec<_> = self
-            .entry_path_input
-            .iter()
-            .zip(self.entry_ids.iter())
-            .zip(self.entry_icon_handles.iter())
-            .enumerate()
-            .map(|(i, ((entry, id), icon_handle))| {
+        let row_height = self.grid_row_height();
+        let total_rows = self.entry_path_input.len().div_ceil(columns);
+        let window = self.grid_row_window();
+
+        let mut app_grid_list: Vec<Element<'_, Message>> = Vec::new();
+        if window.start > 0 {
+            app_grid_list.push(
+                space::vertical()
+                    .height(Length::Fixed(window.start as f32 * row_height))
+                    .into(),
+            );
+        }
+        for row_index in window.clone() {
+            let start = row_index * columns;
+            let end = (start + columns).min(self.entry_path_input.len());
+            let mut children: Vec<Element<'_, Message>> = Vec::with_capacity(columns);
+            for i in start..end {
+                let entry = &self.entry_path_input[i];
+                let id = &self.entry_ids[i];
+                // Icons are resolved per visible tile, not for the whole list.
+                let icon_handle =
+                    crate::icon_cache::entry_icon_handle(&entry.icon, tile_w as u32);
                 let dup = entry
                     .path
                     .as_ref()
@@ -6733,7 +6927,7 @@ impl HearthDeck {
                 let b = ApplicationButton::new(
                     id.clone(),
                     &entry.name,
-                    icon_handle.clone(),
+                    icon_handle,
                     &entry.path,
                     tile_w,
                     tile_h,
@@ -6754,29 +6948,37 @@ impl HearthDeck {
                     (!self.menu.is_open()).then_some(Message::CancelDrag),
                 );
 
-                b.into()
-            })
-            .chunks(columns)
-            .into_iter()
-            .map(|row_chunk| {
-                let mut new_row = row_chunk.collect_vec();
-                let missing = columns - new_row.len();
-                if missing > 0 {
-                    new_row.push(
-                        iced::widget::space::horizontal()
-                            .width(Length::FillPortion(missing as u16))
-                            .into(),
-                    );
-                }
-                row(new_row).spacing(gap).into()
-            })
-            .collect();
+                children.push(b.into());
+            }
+            let missing = columns - children.len();
+            if missing > 0 {
+                children.push(
+                    iced::widget::space::horizontal()
+                        .width(Length::FillPortion(missing as u16))
+                        .into(),
+                );
+            }
+            // The row element is sized to `row_height` (tile + gap), so the
+            // column needs no spacing and every spacer is an exact multiple.
+            app_grid_list.push(
+                container(row(children).spacing(gap))
+                    .height(Length::Fixed(row_height))
+                    .align_y(Vertical::Top)
+                    .into(),
+            );
+        }
+        if window.end < total_rows {
+            app_grid_list.push(
+                space::vertical()
+                    .height(Length::Fixed((total_rows - window.end) as f32 * row_height))
+                    .into(),
+            );
+        }
 
         let app_grid = container(
             scrollable(
                 column(app_grid_list)
                     .width(Length::Fill)
-                    .spacing(gap)
                     // padding on top needed to avoid focus highlight clipping
                     .padding([grid_top_padding(), 0, space_xxl, 0]),
             )
@@ -6906,7 +7108,8 @@ impl HearthDeck {
                         button::custom(
                             container(text::body(value).size(TEXT_BODY))
                                 .width(Length::Fixed(FILTER_VALUE_WIDTH))
-                                .align_x(Alignment::Center),
+                                .align_x(Alignment::Center)
+                                .class(theme::Container::Custom(Box::new(passthrough))),
                         )
                         .class(text_button_class())
                         .on_press(Message::SelectFilter {
@@ -7086,15 +7289,6 @@ fn selected_romm_platform_id(
     }
 }
 
-fn romm_page_is_current(
-    response_generation: u64,
-    current_generation: u64,
-    response_platform: Option<i64>,
-    current_platform: Option<Option<i64>>,
-) -> bool {
-    response_generation == current_generation && current_platform == Some(response_platform)
-}
-
 fn next_romm_offset(offset: u32, item_count: u32, total: u64) -> Option<u32> {
     let next = offset.saturating_add(item_count);
     (item_count > 0 && u64::from(next) < total).then_some(next)
@@ -7107,9 +7301,9 @@ fn is_primary_window(id: SurfaceId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DashboardShelf, HearthDeck, Page, SECTION_TRANSITION_DURATION, TAB_TRANSITION_DURATION,
-        VirtualKeyboard, degraded_providers, focused_entry_index, is_primary_window,
-        next_romm_offset, rail_scroll_target, romm_page_is_current, selected_romm_platform_id,
+        DashboardShelf, HearthDeck, Page, RommScope, SECTION_TRANSITION_DURATION,
+        TAB_TRANSITION_DURATION, VirtualKeyboard, degraded_providers, focused_entry_index,
+        is_primary_window, next_romm_offset, rail_scroll_target, selected_romm_platform_id,
     };
     use crate::app_group::{
         AppGroup, AppLibraryConfig, CategorizationGroup, FilterType, RommFacet, Section,
@@ -8315,11 +8509,7 @@ mod tests {
     }
 
     #[test]
-    fn romm_paging_rejects_stale_results_and_stops_at_total() {
-        assert!(romm_page_is_current(3, 3, Some(7), Some(Some(7))));
-        assert!(!romm_page_is_current(2, 3, Some(7), Some(Some(7))));
-        assert!(!romm_page_is_current(3, 3, Some(7), Some(Some(9))));
-
+    fn romm_paging_stops_at_total_and_advances_by_what_arrived() {
         assert_eq!(next_romm_offset(0, 48, 100), Some(48));
         assert_eq!(next_romm_offset(96, 4, 100), None);
         assert_eq!(next_romm_offset(0, 0, 100), None);
@@ -8350,10 +8540,15 @@ mod tests {
             cur_group: Some(0),
             ..Default::default()
         };
+        // The scope exists as soon as its first page is requested; the listing
+        // is what a page is merged into.
+        app.romm_listings
+            .entry(RommScope::Console(7))
+            .or_default();
 
         // Page 0 then page 1, in the daemon's name order. A name sort over the
         // combined catalog would reorder page 1 before page 0 ("Alpha" vs
-        // "Zeta"); the grid must instead keep arrival order.
+        // "Zeta"); the log must instead keep arrival order.
         for (offset, items) in [
             (0_u32, vec![romm_record(1, "Zeta", 7)]),
             (48, vec![romm_record(2, "Alpha", 7)]),
@@ -8361,8 +8556,8 @@ mod tests {
             let _ = <HearthDeck as cosmic::Application>::update(
                 &mut app,
                 super::Message::RommGames {
+                    scope: RommScope::Console(7),
                     generation: 0,
-                    platform_id: Some(7),
                     result: Ok(RetroRecordPage {
                         items,
                         total: 2,
@@ -8379,8 +8574,103 @@ mod tests {
             .collect();
         assert_eq!(names, ["Zeta", "Alpha"]);
         // The last page ends pagination.
-        assert_eq!(app.romm_next_offset, None);
-        assert!(!app.romm_loading_page);
+        let listing = &app.romm_listings[&RommScope::Console(7)];
+        assert_eq!(listing.next_offset, None);
+        assert!(!listing.loading);
+    }
+
+    #[test]
+    fn romm_scopes_keep_their_own_loaded_pages() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string()), (9, "Mega Drive".to_string())]);
+        let mut app = HearthDeck {
+            config,
+            cur_section: Section::ConsoleGames,
+            cur_group: Some(0),
+            ..Default::default()
+        };
+        // Page 0 of both consoles, as the prefetch warms them.
+        app.romm_listings
+            .entry(RommScope::Console(7))
+            .or_default()
+            .entries
+            .push(Arc::new(romm_record(1, "Sonic", 7).into_desktop_entry()));
+        app.romm_listings
+            .entry(RommScope::Console(9))
+            .or_default()
+            .entries
+            .push(Arc::new(romm_record(2, "Ecco", 9).into_desktop_entry()));
+
+        app.load_apps();
+        assert_eq!(grid_names(&app), ["Sonic"]);
+
+        // Switching console shows the other scope from cache, and clearing the
+        // first scope's view must not touch either listing.
+        app.cur_group = Some(1);
+        app.load_apps();
+        assert_eq!(grid_names(&app), ["Ecco"]);
+        assert_eq!(app.romm_listings[&RommScope::Console(7)].entries.len(), 1);
+        assert_eq!(app.romm_listings[&RommScope::Console(9)].entries.len(), 1);
+    }
+
+    #[test]
+    fn prefetch_queues_only_scopes_without_a_page() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string()), (9, "Mega Drive".to_string())]);
+        let mut app = HearthDeck {
+            config,
+            ..Default::default()
+        };
+        app.romm_listings
+            .entry(RommScope::Console(7))
+            .or_default()
+            .entries
+            .push(console_entry(1, "Sonic", &[]));
+
+        app.queue_romm_prefetch();
+
+        // The all-consoles tab and the console with no page are queued; the one
+        // that already has a page is not.
+        assert!(app.romm_prefetch.contains(&RommScope::All));
+        assert!(app.romm_prefetch.contains(&RommScope::Console(9)));
+        assert!(!app.romm_prefetch.contains(&RommScope::Console(7)));
+    }
+
+    #[test]
+    fn a_page_from_a_superseded_load_is_dropped() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_console_groups(&[(7, "SNES".to_string())]);
+        let mut app = HearthDeck {
+            config,
+            cur_section: Section::ConsoleGames,
+            cur_group: Some(0),
+            ..Default::default()
+        };
+        app.romm_listings
+            .entry(RommScope::Console(7))
+            .or_default();
+        // A reload of the scope bumps its generation; a page still tagged with
+        // the old generation must not be merged into the fresh log.
+        app.romm_listings
+            .get_mut(&RommScope::Console(7))
+            .unwrap()
+            .generation = 1;
+
+        let _ = <HearthDeck as cosmic::Application>::update(
+            &mut app,
+            super::Message::RommGames {
+                scope: RommScope::Console(7),
+                generation: 0,
+                result: Ok(RetroRecordPage {
+                    items: vec![romm_record(1, "Sonic", 7)],
+                    total: 1,
+                    offset: 0,
+                }),
+            },
+        );
+
+        assert!(app.romm_listings[&RommScope::Console(7)].entries.is_empty());
+        assert!(app.entry_path_input.is_empty());
     }
 
     #[test]
@@ -8620,14 +8910,10 @@ mod tests {
         // A platform with no games gets no tab, but its logo is still cached.
         assert_eq!(app.config.sections.console_games.len(), 1);
         assert!(app.romm_platform_icons.contains_key(&9));
-        // The authoritative per-console totals are kept separately from the
-        // lazy-loaded grid entries.
-        assert_eq!(app.romm_platform_counts.get(&7), Some(&3));
-        assert_eq!(app.console_total_count(), Some(3));
     }
 
     #[test]
-    fn console_header_uses_romm_totals_not_the_loaded_pages() {
+    fn console_header_uses_the_grouped_total_not_the_loaded_pages() {
         let mut config = AppLibraryConfig::default();
         config.sync_console_groups(&[(7, "SNES".to_string())]);
         let mut app = HearthDeck {
@@ -8636,16 +8922,24 @@ mod tests {
             cur_group: Some(0),
             ..Default::default()
         };
-        // Only two entries are lazy-loaded so far, but RomM reports 240 games
-        // on the console: the header must show the console total, not 2.
-        app.romm_platform_counts.insert(7, 240);
+        // Before the scope's first page there is no trustworthy total, so the
+        // header stays blank instead of showing a count that changes moments
+        // later.
+        assert_eq!(app.console_total_count(), None);
+
+        // Only two entries are lazy-loaded so far, but the scope holds 240
+        // games: the header must show the scope total, not the loaded count.
+        app.romm_listings
+            .entry(RommScope::Console(7))
+            .or_default()
+            .total = Some(240);
         app.entry_path_input = vec![entry("one"), entry("two")];
 
         assert_eq!(app.console_total_count(), Some(240));
     }
 
     #[test]
-    fn grouped_list_total_overrides_the_file_count_header() {
+    fn a_console_scopes_total_comes_once_from_its_first_page() {
         let mut config = AppLibraryConfig::default();
         config.sync_console_groups(&[(7, "SNES".to_string())]);
         let mut app = HearthDeck {
@@ -8654,13 +8948,29 @@ mod tests {
             cur_group: Some(0),
             ..Default::default()
         };
-        // RomM counts every file (240), but grouping collapses regions and
-        // discs into fewer tiles; the header must show the grouped total once
-        // the list endpoint has reported it.
-        app.romm_platform_counts.insert(7, 240);
-        app.romm_grouped_total = Some(198);
 
-        assert_eq!(app.console_total_count(), Some(198));
+        let page = |offset: u32, total: u64| RetroRecordPage {
+            items: vec![romm_record(i64::from(offset), "Game", 7)],
+            total,
+            offset,
+        };
+        app.romm_listings
+            .entry(RommScope::Console(7))
+            .or_default();
+        // The first page's total is authoritative; a later page of the same
+        // scope reporting a different number must not make the header jump.
+        for (offset, total) in [(0_u32, 240_u64), (48, 198)] {
+            let _ = <HearthDeck as cosmic::Application>::update(
+                &mut app,
+                super::Message::RommGames {
+                    scope: RommScope::Console(7),
+                    generation: 0,
+                    result: Ok(page(offset, total)),
+                },
+            );
+        }
+
+        assert_eq!(app.console_total_count(), Some(240));
     }
 
     #[test]
@@ -9241,6 +9551,52 @@ mod tests {
             .collect()
     }
 
+    /// A grid full of entries, as a big library would leave it.
+    fn long_grid_app(count: usize) -> HearthDeck {
+        HearthDeck {
+            entry_path_input: (0..count)
+                .map(|i| entry(&format!("app{i:04}")))
+                .collect(),
+            window_width: 1280.0,
+            viewport_height: 700.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_grid_builds_only_the_rows_around_the_viewport() {
+        let mut app = long_grid_app(600);
+        let total_rows = 600usize.div_ceil(app.grid_columns());
+
+        // At the top the window starts at row 0 and stops well short of the
+        // whole list.
+        let window = app.grid_row_window();
+        assert_eq!(window.start, 0);
+        assert!(window.end < total_rows, "built {window:?} of {total_rows} rows");
+
+        // Scrolled into the middle, the window moves with the viewport instead
+        // of growing to cover the list.
+        app.scroll_offset = app.grid_row_height() * 100.0;
+        let window = app.grid_row_window();
+        assert!(window.start > 0);
+        assert!(window.end < total_rows);
+        assert!(window.contains(&100));
+    }
+
+    #[test]
+    fn the_grid_window_always_includes_the_focused_row() {
+        let mut app = long_grid_app(600);
+        app.rebuild_entry_ids();
+        let last = app.entry_ids.last().cloned().unwrap();
+        app.focused_id = Some(last);
+
+        // The viewport is still at the top, but the focused tile's widget must
+        // exist for `focus(id)` to resolve, so its row is in the window.
+        let columns = app.grid_columns();
+        let row = (app.entry_path_input.len() - 1) / columns;
+        assert!(app.grid_row_window().contains(&row));
+    }
+
     #[test]
     fn entering_a_section_focuses_the_grid_not_the_search_box() {
         let mut app = HearthDeck::default();
@@ -9251,16 +9607,9 @@ mod tests {
         );
 
         // Focusing the search box raises the on-screen keyboard, so entering a
-        // section must not do it. The grid is focused instead, deferred through
-        // the reload that produces its entries.
+        // section must not do it. It schedules a focus of the first grid tile
+        // instead, deferred until the tiles have been laid out.
         assert_ne!(app.focused_id, Some(super::SEARCH_ID.clone()));
-        assert!(app.gamepad_focus_first);
-
-        let _ = <HearthDeck as cosmic::Application>::update(
-            &mut app,
-            super::Message::FilterApps(String::new(), Vec::new(), Vec::new()),
-        );
-        assert!(!app.gamepad_focus_first);
 
         app.entry_path_input = vec![entry("writer")];
         app.update_entry_metadata();

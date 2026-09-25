@@ -593,6 +593,11 @@ impl AppLibraryConfig {
         }
     }
 
+    /// Resolves the saved favorite ids against a list of entries, in saved
+    /// order and dropping any the list does not hold. Only the config-backed
+    /// favorites use this now (the dashboard resolves against every loaded
+    /// scope); kept as the reference the resolution tests exercise.
+    #[cfg(test)]
     pub fn favorite_entries<'a>(
         &self,
         entries: &'a [Arc<DesktopEntryData>],
