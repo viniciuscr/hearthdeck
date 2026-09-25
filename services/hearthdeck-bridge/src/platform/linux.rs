@@ -255,19 +255,18 @@ const RETRO_VIDEO_DRIVER_DEFAULT: &str = "vulkan";
 /// Per-core driver overrides, keyed on the core filename like
 /// `SHADER_PRESET_BY_CORE`.
 ///
-/// The override exists because a core's libretro renderer can fail on a driver
-/// the rest of the table is fine with. Dolphin never brings a Vulkan picture up
-/// under the Gamescope/KMS session - the core loads, the screen stays black and
-/// RetroArch's own menu stops responding, so the launch is only recoverable by
-/// force-quitting. Flycast's Vulkan renderer segfaults on the resolution change
-/// of an FMV-to-gameplay transition (flyinghead/flycast#2082 and #2442). Both
-/// are pinned to `glcore`: the modern GL driver, which keeps hardware rendering
-/// and a slang-capable context, and which (unlike the pre-3.1 `gl` driver that
-/// mis-sized Dolphin under Gamescope) sizes a hardware-rendered core correctly.
-const VIDEO_DRIVER_BY_CORE: &[(&str, &str)] = &[
-    ("dolphin_libretro.so", "glcore"),
-    ("flycast_libretro.so", "glcore"),
-];
+/// Only Flycast is here. Its libretro Vulkan renderer has documented segfaults
+/// (flyinghead/flycast#2082 and #2442, the latter right after the
+/// resolution-change `SET_SYSTEM_AV_INFO` an FMV-to-gameplay transition
+/// produces), so it is pinned to `glcore` -- the modern GL driver, which keeps
+/// hardware rendering and a slang-capable context while avoiding the buggy
+/// Vulkan path.
+///
+/// Dolphin was tried on `glcore` too, on the theory that its Vulkan renderer
+/// was the GameCube black screen. It was not: `glcore` black-screened the same
+/// way on real hardware, so the driver is not the cause and Dolphin stays on
+/// the default rather than carrying an override that was never shown to help.
+const VIDEO_DRIVER_BY_CORE: &[(&str, &str)] = &[("flycast_libretro.so", "glcore")];
 
 /// Per-core shader preset, relative to `RETRO_SHADER_DIRECTORY`.
 ///
@@ -1338,17 +1337,19 @@ mod tests {
 
     #[test]
     fn resolves_a_per_core_video_driver_override() {
-        // Dolphin's Vulkan renderer black-screens under Gamescope; Flycast's
-        // segfaults on an FMV-to-gameplay transition. Both take `glcore`.
-        assert_eq!(
-            video_driver_for_core(Path::new("/usr/lib/libretro/dolphin_libretro.so")),
-            "glcore"
-        );
+        // Flycast is the override: its libretro Vulkan renderer segfaults on the
+        // FMV-to-gameplay resolution change, so it is pinned to `glcore`.
         assert_eq!(
             video_driver_for_core(Path::new("/usr/lib/libretro/flycast_libretro.so")),
             "glcore"
         );
-        // Every other core gets the Hearthdeck default.
+        // Every other core gets the Hearthdeck default. Dolphin is deliberately
+        // not overridden: `glcore` was tried on hardware and black-screened the
+        // same as the default, so the driver is not its problem.
+        assert_eq!(
+            video_driver_for_core(Path::new("/usr/lib/libretro/dolphin_libretro.so")),
+            RETRO_VIDEO_DRIVER_DEFAULT
+        );
         assert_eq!(
             video_driver_for_core(Path::new("/usr/lib/libretro/snes9x_libretro.so")),
             RETRO_VIDEO_DRIVER_DEFAULT

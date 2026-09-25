@@ -16,8 +16,9 @@ in **Settings > System > Retro & RomM**). RetroArch becomes the thing that
 actually runs a game when the user presses "Play" on a RomM item, launched and
 supervised the same disciplined way Hearthdeck already launches desktop apps:
 typed request in, no shell string ever crosses the daemon/bridge boundary,
-tracked as a session, stoppable, and (per the standing kiosk rule) wrapped in
-Gamescope with the smallest possible memory/CPU footprint.
+tracked as a session, and stoppable, connecting directly to the Kiosk session
+the way every other launch does (see `kiosk-session.md`; the earlier nested
+Gamescope-per-launch was removed as it was never shown on hardware).
 
 ## Non-negotiable constraints (carried over from existing product rules)
 
@@ -25,11 +26,13 @@ Gamescope with the smallest possible memory/CPU footprint.
   (`hearthdeck-protocol`). No new request type gets a free-form command,
   path, or URL field — same discipline as `LaunchApplication` and
   `LaunchHeroicGame` today.
-- Gamescope wraps every game launch in the Kiosk session, exactly like
-  `launch_with_systemd(..., wrap_in_gamescope: true)` does for desktop apps
-  today (`hearthdeck-bridge/src/platform/linux.rs:121`). RetroArch is not a
-  background daemon; it is a per-session process, started on demand and torn
-  down when the game ends, never resident when nothing is playing.
+- Every game launch connects **directly to the Kiosk session**, the same
+  `DISPLAY`/`WAYLAND_DISPLAY` Hearthdeck itself uses, rather than a nested
+  Gamescope instance. This is not this document's rule to set — it is
+  `kiosk-session.md`'s, and it applies to RetroArch exactly as it does to
+  desktop apps and Heroic. RetroArch is not a background daemon; it is a
+  per-session process, started on demand and torn down when the game ends,
+  never resident when nothing is playing.
 - RetroArch must be **directly supervised by the transient systemd unit**,
   not handed off via a URI/IPC scheme to some other already-running process.
   This is the one thing to explicitly *not* copy from Heroic's launch path:
@@ -208,26 +211,29 @@ disagrees.
    consoles, an LCD grid for handhelds, no preset for 3D-era cores). The
    managed config pins `video_driver = "vulkan"` for **every** launch (not
    only shaded ones), with a per-core override table `VIDEO_DRIVER_BY_CORE`
-   that pins Flycast and Dolphin to `glcore`.
+   that pins Flycast to `glcore`.
    Rationale: RetroArch's compiled default is `gl`, which cannot load slang
    presets at all and mis-sizes hardware-rendered cores under the
    Gamescope/KMS sessions Hearthdeck runs in. `vulkan` fits Gamescope (itself
-   a Vulkan compositor) and works for every other core in `retro.rs`'s table,
-   but it is not a blanket default for the hardware-rendered ones: Dolphin's
-   libretro Vulkan renderer loads and then never brings a picture up under
-   Gamescope (black screen, RetroArch's menu unresponsive, only recoverable by
-   force-quitting), and Flycast's segfaults on the resolution change an
-   FMV-to-gameplay transition produces (flyinghead/flycast#2082, #2442). Both
-   are pinned to `glcore` — the modern GL driver, which keeps hardware
-   rendering and a slang-capable context, and which (unlike the pre-3.1 `gl`
-   driver) sizes a hardware-rendered core correctly. Default and override are
-   named constants (`RETRO_VIDEO_DRIVER_DEFAULT`, `VIDEO_DRIVER_BY_CORE`), so
-   each is one explicit decision, and a missing preset still degrades to an
-   unshaded launch instead of failing. Keying presets on the core keeps the
-   platform→core decision in one place while naturally covering consoles that
-   share a core (Dolphin = GC/Wii, Genesis Plus GX = MD/MS/GG/Sega CD).
-   Per-user preset and per-core core-option overrides are future work,
-   alongside the core-install configurability in open question 2.
+   a Vulkan compositor) and is supported by every core in `retro.rs`'s table.
+   Flycast is the exception: its libretro Vulkan renderer segfaults on the
+   resolution change an FMV-to-gameplay transition produces
+   (flyinghead/flycast#2082, #2442), so it is pinned to `glcore` — the modern
+   GL driver, which keeps hardware rendering and a slang-capable context
+   without the buggy Vulkan path.
+   Default and override are named constants (`RETRO_VIDEO_DRIVER_DEFAULT`,
+   `VIDEO_DRIVER_BY_CORE`), so each is one explicit decision, and a missing
+   preset still degrades to an unshaded launch instead of failing. Keying
+   presets on the core keeps the platform→core decision in one place while
+   naturally covering consoles that share a core (Dolphin = GC/Wii, Genesis
+   Plus GX = MD/MS/GG/Sega CD). Per-user preset and per-core core-option
+   overrides are future work, alongside the core-install configurability in
+   open question 2.
+   **Not the variable for GameCube:** Dolphin was tried on `glcore` here too,
+   on the theory that its Vulkan renderer was the GameCube black screen. It
+   black-screened identically on hardware, so the driver is not the cause and
+   Dolphin is deliberately left on the default rather than carrying an
+   override that was never shown to help. See open question 6.
 
 9. **Guide/Home belongs to Hearthdeck, so RetroArch's menu opens with
    Start + Select.** Every bundled joypad autoconfig profile binds the pad's
@@ -433,6 +439,21 @@ provider-refresh controls on the same screen. Only shown/wired for the
    /v1/library` and `CatalogStore::list()` are unpaginated. Worth fixing
    before any future large-library `DiscoveryProvider` (Steam, GOG) gets
    added, but out of scope for RetroArch/RomM launch work per decision 6.
+6. **GameCube (Dolphin) black screen on launch. Unresolved.** Every other
+   core starts; Dolphin's core loads, the picture stays black and RetroArch's
+   own menu stops responding (the core's init blocks the main loop), so the
+   session can only be force-quit. Ruled out so far on hardware: the video
+   driver (`vulkan` and `glcore` black-screen identically - decision 8), and
+   the platform→core mapping (the resolved core is logged at launch; it is
+   `dolphin_libretro.so`). Not yet gathered: RetroArch's own output for the
+   attempt, which is the next step and is available from the transient unit's
+   journal (`journalctl --user -u 'hearthdeck-app-*.service'`) - a libretro
+   core's failure prints there. Also worth testing: the same core + rom
+   launched outside Hearthdeck (`retroarch -L
+   /usr/lib/libretro/dolphin_libretro.so <rom>`), which separates "Hearthdeck's
+   managed config and launch" from "this core under this session". Do not
+   change the driver or the launch args again before one of those two shows
+   the actual failure.
 
 ## Phased roadmap
 
@@ -450,7 +471,8 @@ Each phase is scoped to be doable in one sitting and independently useful.
   frontend `DaemonClient`. Implemented the bridge side ahead of schedule since the
   match on `BridgeRequest` is exhaustive: `launch_retro_game` in
   `platform/linux.rs` execs `retroarch` directly (decision 1) via
-  `launch_with_systemd(..., wrap_in_gamescope: true)`, against a
+  `launch_with_systemd`, connecting directly to the Kiosk session the same way
+  every other launch does (see `kiosk-session.md`), against a
   Hearthdeck-owned config directory (decision 2) and a validated,
   allowlisted core path plus a validated, Hearthdeck-cache-scoped ROM path
   — the daemon-side resolution that produces those two paths is still
@@ -469,8 +491,8 @@ Each phase is scoped to be doable in one sitting and independently useful.
   rather than cached (decision 10's cache was retired); user-configurable
   core overrides remain future work (open question 2).
 - **Phase 3 — Bridge: launch + stop. Code done, hardware verification
-  pending.** `launch_retro_game`, path validation, and the systemd-run/
-  gamescope wrapping landed in Phase 1's implementation above. What's left:
+  pending.** `launch_retro_game`, path validation, and the direct systemd-run
+  launch landed in Phase 1's implementation above. What's left:
   confirm on real Linux hardware that SIGTERM-based stop (`stop_application`,
   unchanged, reused as-is) actually flushes `.srm` saves (open question 4);
   switch to RetroArch's network command interface for a clean quit first if
