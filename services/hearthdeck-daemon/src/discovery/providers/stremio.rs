@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
+use tracing::debug;
 
 use crate::{
     catalog::CatalogRecord,
@@ -78,7 +79,10 @@ impl DiscoveryProvider for StremioProvider {
     async fn discover(&self) -> Result<Vec<CatalogRecord>> {
         let Some(credentials) = self.settings.credentials().await? else {
             // Not linked. An empty snapshot is the honest answer and not an error:
-            // it also clears anything a previous link left behind.
+            // it also clears anything a previous link left behind. Logged because
+            // "the rail is empty" and "no account is linked" look identical from
+            // the dashboard.
+            debug!("the stremio account is not linked; publishing nothing");
             self.cached.lock().await.take();
             return Ok(Vec::new());
         };

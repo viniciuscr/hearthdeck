@@ -226,11 +226,12 @@ authoritative would drop usable fields:
    `database.rs::migrate()` rather than published on link — an empty rule costs
    nothing, and a seeded row saves the link path a lifecycle to maintain — and
    `list_collections` resolves it from the records the provider published, newest
-   change first. Its items carry the **catalog** ids, not the `hearthdeck:`-prefixed
-   form the model's rails use, because a client activates a card by handing that id
-   straight back to `/v1/apps/{id}/launch`, which resolves it against the catalog to
-   find the Stremio desktop entry the record carries. That is what lets the rail
-   launch with no new launch code at all.
+   change first. Its items carry the `hearthdeck:`-prefixed ids the model's rails use,
+   and that prefix is load-bearing rather than cosmetic: the client strips it and hands
+   the remainder to `/v1/apps/{id}/launch`. Sending the bare catalog id instead leaves
+   the client's own launch gate refusing it, so the card would draw and then do
+   nothing when pressed. (That is the first thing that broke in testing, and the
+   reason `activate_dashboard_app` now also looks in the rail's own entry lists.)
 7. **Season and episode come from `video_id`**, never from `state.season` /
    `state.episode`.
 8. **Launch is a deep link, assembled by the bridge from typed fields** (`type`,
@@ -351,7 +352,10 @@ Each phase is scoped to be doable in one sitting and independently useful.
   daemon's `stremio:continue-watching` collection and placed above the streaming apps.
   It deliberately has no fallback, unlike the Watch shelf — an empty rail means no
   account is linked or nothing on it is unfinished, and a shelf guessed from names
-  would be a claim about somebody else's watch history.
+  would be a claim about somebody else's watch history. A link re-reads the collection
+  once the daemon's refresh has had time to publish, because that refresh is a network
+  round trip on the daemon's side and reading it straight away would find the row still
+  empty.
 
   Two pieces remain, both small. The **QR image**: decision 9 called for the daemon to
   produce it, which means either a `qrcode` dependency in the daemon plus a route, or

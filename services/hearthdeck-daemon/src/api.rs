@@ -17,7 +17,7 @@ use hearthdeck_protocol::{
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -1523,22 +1523,29 @@ fn played_collection_item(play: RecentActivity) -> CollectionItem {
 /// account: the provider has already applied Stremio's own rule for what belongs in
 /// this row, so all that is left is the order and the two fields a card draws with.
 ///
-/// The ids are the *catalog* ids, not the `hearthdeck:`-prefixed form the model's
-/// rails use, because a client activates one by handing it straight back to
+/// The ids carry the same `hearthdeck:` prefix the model's rails use. That prefix is
+/// what makes a card launchable: the client strips it and hands the remainder to
 /// `/v1/apps/{id}/launch`, which resolves it against the catalog to find the Stremio
-/// desktop entry the record carries. Nothing an account is not linked to is here:
-/// an unlinked account has published no records, and a link that was removed took
-/// its records with it.
+/// desktop entry the record carries. Sending the bare catalog id instead leaves the
+/// client's own launch gate refusing it, and the card does nothing when pressed.
+///
+/// Nothing an account is not linked to is here: an unlinked account has published no
+/// records, and a link that was removed took its records with it.
 async fn continue_watching_items(state: &SharedState) -> Result<Vec<CollectionItem>, ApiError> {
     let records = state
         .catalog
         .list_source(stremio::SOURCE_ID, COLLECTION_RULE_ITEM_LIMIT as usize)
         .await
         .map_err(ApiError::internal)?;
+    debug!(
+        source_id = stremio::SOURCE_ID,
+        items = records.len(),
+        "continue watching rail composed"
+    );
     Ok(records
         .into_iter()
         .map(|record| CollectionItem {
-            item_id: record.id,
+            item_id: format!("{ENTRY_ID_PREFIX}{}", record.id),
             name: record.title,
             icon: record.icon,
             played: None,
@@ -2063,7 +2070,12 @@ mod tests {
             Err(error) => panic!("the rail should have composed: {}", error.message),
         };
         let ids: Vec<&str> = items.iter().map(|item| item.item_id.as_str()).collect();
-        assert_eq!(ids, vec!["stremio:tt2", "stremio:tt1"]);
+        // Prefixed, because that prefix is what the client's launch gate strips
+        // before handing the catalog id back to the daemon.
+        assert_eq!(
+            ids,
+            vec!["hearthdeck:stremio:tt2", "hearthdeck:stremio:tt1"]
+        );
         assert_eq!(items[0].name, "Newer");
         assert!(items[0].icon.is_some());
         // The play record rides along only for the rules that have one.

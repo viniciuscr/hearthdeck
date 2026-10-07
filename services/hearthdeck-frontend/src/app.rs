@@ -1590,7 +1590,13 @@ impl HearthDeck {
                 // Publish the account's unfinished titles now, rather than leaving
                 // the dashboard empty until the provider's own interval elapses.
                 let refresh = self.refresh_stremio_source();
-                Task::batch([toast, focus, refresh])
+                // That refresh is a network round trip to Stremio on the daemon's
+                // side, so the rail's collection is read again once it has had time
+                // to publish — reading it now would find the row still empty. Five
+                // seconds matches the delay the categorization screen already uses
+                // for a change whose end it cannot see.
+                let rail = self.load_collections(std::time::Duration::from_secs(5));
+                Task::batch([toast, focus, refresh, rail])
             }
             Ok(StremioLink::Expired) => {
                 self.stremio_pending = None;
@@ -2904,6 +2910,17 @@ impl HearthDeck {
             .find_known_entry(id)
             .or_else(|| self.recent_entries.iter().find(|entry| entry.id == id))
             .or_else(|| self.favorite_entries.iter().find(|entry| entry.id == id))
+            // A card a composed rail drew is launched from that rail's own list. It
+            // has to be consulted: a rail's ids carry the `hearthdeck:` prefix, so
+            // they are not among the catalog entries `find_known_entry` searches, and
+            // without this a card on such a rail would draw and then do nothing when
+            // pressed.
+            .or_else(|| self.watch_entries.iter().find(|entry| entry.id == id))
+            .or_else(|| {
+                self.continue_watching_entries
+                    .iter()
+                    .find(|entry| entry.id == id)
+            })
             .cloned();
         self.activate_entry(entry)
     }
