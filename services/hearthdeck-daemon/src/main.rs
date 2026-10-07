@@ -193,6 +193,16 @@ fn notify_ready() -> Result<()> {
     Ok(())
 }
 
+/// The source namespace the bridge resolves desktop entries in, and the source id of
+/// the provider that publishes them.
+///
+/// Mirrors `hearthdeck_bridge`'s own constant of the same name. A launch request
+/// means "start a desktop entry", and the bridge refuses every other source id, so
+/// the provider a record came *from* is not what that request wants: passing it is
+/// refused with "unsupported application source", which reaches the user as a failed
+/// launch and no explanation.
+pub(crate) const DESKTOP_APPS_SOURCE: &str = "desktop-apps";
+
 #[cfg(target_os = "linux")]
 fn discovery_providers(
     config: &Config,
@@ -207,8 +217,12 @@ fn discovery_providers(
         Arc::new(discovery::providers::heroic::HeroicInstalledProvider::from_system()),
         // Publishes the account's Continue Watching list. It reads the session from
         // the same store the settings endpoints write, so linking an account in the
-        // UI is all it takes for the next refresh to have something to publish.
-        Arc::new(discovery::providers::stremio::StremioProvider::new(stremio)),
+        // UI is all it takes for the next refresh to have something to publish. It
+        // also needs the bridge, to find the desktop entry a card launches.
+        Arc::new(discovery::providers::stremio::StremioProvider::new(
+            stremio,
+            config.bridge_socket_path.clone(),
+        )),
     ]
 }
 

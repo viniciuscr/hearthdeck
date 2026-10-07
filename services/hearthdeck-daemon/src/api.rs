@@ -916,7 +916,10 @@ async fn launch_app(
         }
     } else {
         BridgeRequest::LaunchApplication {
-            source_id: item.source_id.clone(),
+            // Not `item.source_id`: see DESKTOP_APPS_SOURCE. What is being started is
+            // a desktop entry whichever provider published the record naming it, and
+            // the bridge refuses any other source id.
+            source_id: crate::DESKTOP_APPS_SOURCE.to_owned(),
             application_id: launch_id.to_owned(),
             session_id,
             input_profile: options.input_profile,
@@ -925,8 +928,17 @@ async fn launch_app(
     let response = crate::bridge::request(&state.config.bridge_socket_path, request)
         .await
         .map_err(ApiError::bad_gateway)?;
-    let BridgeResponse::LaunchAccepted { session } = response else {
-        return Err(ApiError::bad_gateway("bridge rejected application launch"));
+    // The bridge's own words whenever it has any. "bridge rejected application
+    // launch" on its own sent somebody looking in the wrong place for a launch that
+    // failed because of a source id, which the bridge had already named.
+    let session = match response {
+        BridgeResponse::LaunchAccepted { session } => session,
+        BridgeResponse::Error { message, .. } => return Err(ApiError::bad_gateway(message)),
+        other => {
+            return Err(ApiError::bad_gateway(format!(
+                "bridge rejected application launch: {other:?}"
+            )));
+        }
     };
     if let Err(error) = state
         .activity
@@ -2354,8 +2366,7 @@ mod tests {
         // Nothing exercised the actual launch endpoints before this: launch
         // dispatch (daemon -> bridge socket -> LaunchAccepted -> response)
         // had zero route-level coverage. `test:app`'s launch_id ("test.app")
-        // and source_id ("test-apps") come from ApiTestProvider/discovery
-        // above.
+        // comes from ApiTestProvider/discovery above.
         let bridge = spawn_fake_bridge(state.config.bridge_socket_path.clone(), |request| {
             let BridgeRequest::LaunchApplication {
                 source_id,
@@ -2366,7 +2377,11 @@ mod tests {
             else {
                 panic!("expected a LaunchApplication request, got {request:?}");
             };
-            assert_eq!(source_id, "test-apps");
+            // The bridge resolves desktop entries in its own namespace and refuses
+            // every other source, so the record's own source ("test-apps" here) must
+            // not be what arrives. It was, and that is why launching a record from any
+            // other provider failed with "unsupported application source".
+            assert_eq!(source_id, "desktop-apps");
             assert_eq!(application_id, "test.app");
             assert_eq!(input_profile, InputProfile::Desktop);
             BridgeResponse::LaunchAccepted {
@@ -2387,7 +2402,9 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(launched["source_id"], "test-apps");
+        // The session names the namespace it was launched in, which is the desktop
+        // one whatever provider published the record.
+        assert_eq!(launched["source_id"], "desktop-apps");
         assert_eq!(launched["application_id"], "test.app");
         assert_eq!(launched["state"], "running");
         assert!(launched["id"].as_str().is_some_and(|id| !id.is_empty()));

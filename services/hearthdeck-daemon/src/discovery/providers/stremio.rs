@@ -11,16 +11,19 @@
 //! this API: they are what a real account returned. `docs/stremio-integration.md`
 //! records the full findings, and the traps the mapping has to absorb.
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use hearthdeck_protocol::{BridgeRequest, BridgeResponse, DiscoveredApplication};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
+    bridge,
     catalog::CatalogRecord,
     discovery::DiscoveryProvider,
     stremio::{SOURCE_ID, StremioRepository},
@@ -32,16 +35,21 @@ const API_URL: &str = "https://api.strem.io/api";
 /// this is the same ten a Stremio user sees rather than an invented length.
 const CONTINUE_WATCHING_LIMIT: usize = 10;
 
-/// The app that opens a title, until the deep link lands.
+/// The URL scheme Stremio's own desktop entry declares.
 ///
-/// Decision 8 of `docs/stremio-integration.md`: the launch the user actually wants
-/// is `stremio://` at the exact episode, and that format is unverified until it has
-/// been tried on the kiosk. Until then a card opens Stremio itself, which resumes
-/// from its own state, rather than doing nothing.
-const STREMIO_DESKTOP_ID: &str = "com.stremio.Stremio.desktop";
+/// It is how the entry is found: `x-scheme-handler/stremio` is what the installed
+/// entry claims to own `stremio://`, so the scheme identifies the application far
+/// more reliably than its file name, which differs between a distribution package
+/// and a Flatpak. Decision 8 of `docs/stremio-integration.md` wants a `stremio://`
+/// deep link once that format is confirmed on hardware; until then a card opens the
+/// app itself, and this is the entry it opens.
+const STREMIO_SCHEME: &str = "stremio";
 
 pub struct StremioProvider {
     settings: StremioRepository,
+    /// Where the host answers questions about installed applications. A card
+    /// launches a desktop entry, and only the bridge knows which entry that is.
+    bridge_socket_path: PathBuf,
     /// The snapshot this provider last published, with the datastore metadata it
     /// came from. In memory only: after a restart the first refresh reads the
     /// library once, which is a fair price for not persisting a second copy of it.
@@ -55,9 +63,10 @@ struct CachedLibrary {
 }
 
 impl StremioProvider {
-    pub fn new(settings: StremioRepository) -> Self {
+    pub fn new(settings: StremioRepository, bridge_socket_path: PathBuf) -> Self {
         Self {
             settings,
+            bridge_socket_path,
             cached: Mutex::new(None),
         }
     }
@@ -98,7 +107,21 @@ impl DiscoveryProvider for StremioProvider {
         }
 
         let library = datastore_get(&credentials.auth_key).await?;
-        let records = continue_watching(&library)?;
+        let mut records = continue_watching(&library)?;
+        // The launch target is resolved here, once per refresh, rather than in the
+        // mapping: which desktop entry opens a title is a fact about this host, not
+        // about the account, and keeping it out of the mapping leaves that a pure
+        // function of the account's own data.
+        let launch_id = desktop_entry_for_stremio(&self.bridge_socket_path).await;
+        if launch_id.is_none() {
+            warn!(
+                "no Stremio desktop entry was discovered, so the rail will draw without \
+                 anything to launch"
+            );
+        }
+        for record in &mut records {
+            record.launch_id = launch_id.clone();
+        }
         *self.cached.lock().await = Some(CachedLibrary {
             digest,
             records: records.clone(),
@@ -257,9 +280,10 @@ fn catalog_record(item: &Value) -> Option<CatalogRecord> {
             .and_then(Value::as_str)
             .unwrap_or("other")
             .to_owned(),
-        // The app-level launch, per decision 8; Phase 6 replaces this with a typed
-        // deep link once the scheme is confirmed on hardware.
-        launch_id: Some(STREMIO_DESKTOP_ID.to_owned()),
+        // Filled in by the provider once per refresh, from the desktop entry the
+        // bridge found; see `desktop_entry_for_stremio`. The mapping has no way to
+        // know it, and a guess that names nothing is refused at launch time.
+        launch_id: None,
         icon: poster(item),
         metadata,
         // The record's own change time, so a snapshot is stable between refreshes
@@ -293,6 +317,52 @@ fn poster(item: &Value) -> Option<String> {
         return None;
     }
     Some(poster.replace("/poster/small/", "/poster/medium/"))
+}
+
+/// The desktop entry that opens a title, as the host's application list has it.
+///
+/// Asked of the bridge rather than hardcoded. The entry's file name differs between a
+/// distribution package and a Flatpak, and an id that names nothing is refused at
+/// launch time — which the user sees only as a launch that failed, with nothing
+/// saying why. Resolved once per refresh, so an app installed later is picked up on
+/// the next one.
+async fn desktop_entry_for_stremio(bridge_socket_path: &Path) -> Option<String> {
+    let response = bridge::request(
+        bridge_socket_path,
+        BridgeRequest::DiscoverApplications {
+            source_id: crate::DESKTOP_APPS_SOURCE.to_owned(),
+        },
+    )
+    .await
+    .ok()?;
+    let BridgeResponse::Applications { applications, .. } = response else {
+        return None;
+    };
+    pick_stremio(&applications)
+}
+
+/// The Stremio entry among the host's applications, if it is installed at all.
+///
+/// Matched on the URL scheme the entry declares first, because that is what
+/// identifies the application rather than what it happens to be called, and only
+/// then on the id and name.
+fn pick_stremio(applications: &[DiscoveredApplication]) -> Option<String> {
+    let by_scheme = applications
+        .iter()
+        .find(|application| application.launch_scheme.as_deref() == Some(STREMIO_SCHEME));
+    let by_name = applications.iter().find(|application| {
+        application
+            .application_id
+            .to_ascii_lowercase()
+            .contains(STREMIO_SCHEME)
+            || application
+                .name
+                .to_ascii_lowercase()
+                .contains(STREMIO_SCHEME)
+    });
+    by_scheme
+        .or(by_name)
+        .map(|application| application.application_id.clone())
 }
 
 fn state(item: &Value) -> &Value {
@@ -345,10 +415,11 @@ fn mtime(item: &Value) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CONTINUE_WATCHING_LIMIT, STREMIO_DESKTOP_ID, continue_watching, digest_of,
-        in_continue_watching,
+        CONTINUE_WATCHING_LIMIT, STREMIO_SCHEME, continue_watching, digest_of,
+        in_continue_watching, pick_stremio,
     };
     use crate::discovery::DiscoveryProvider;
+    use hearthdeck_protocol::DiscoveredApplication;
     use serde_json::{Value, json};
 
     /// The observed film record, `removed` and `temp` both true, 34.3% in.
@@ -476,7 +547,9 @@ mod tests {
             records[0].icon.as_deref(),
             Some("https://images.metahub.space/poster/medium/tt26657236/img")
         );
-        assert_eq!(records[0].launch_id.as_deref(), Some(STREMIO_DESKTOP_ID));
+        // No launch target: the mapping cannot know one, and the provider fills it in
+        // from the desktop entry the bridge found.
+        assert_eq!(records[0].launch_id, None);
 
         let mut bare = backrooms();
         bare["poster"] = json!("");
@@ -518,6 +591,48 @@ mod tests {
         assert_eq!(continue_watching(&library(vec![empty])).unwrap().len(), 1);
     }
 
+    /// The host's Stremio entry is found by the scheme it declares, not by a guessed
+    /// file name: the same application ships as `com.stremio.Stremio.desktop` from a
+    /// distribution package and under another id as a Flatpak, and a guess that names
+    /// nothing is refused at launch time.
+    #[test]
+    fn finds_the_stremio_entry_by_its_scheme_before_its_name() {
+        let application = |id: &str, name: &str, scheme: Option<&str>| DiscoveredApplication {
+            application_id: id.to_owned(),
+            name: name.to_owned(),
+            comment: None,
+            icon: None,
+            categories: Vec::new(),
+            launch_scheme: scheme.map(str::to_owned),
+        };
+
+        assert_eq!(pick_stremio(&[]), None);
+        assert_eq!(
+            pick_stremio(&[application("org.videolan.VLC.desktop", "VLC", Some("vlc"))]),
+            None
+        );
+
+        // The scheme wins even when another entry merely mentions the name.
+        let applications = [
+            application("com.example.stremio-helper.desktop", "Stremio Helper", None),
+            application(
+                "net.stremio.Stremio.desktop",
+                "Stremio",
+                Some(STREMIO_SCHEME),
+            ),
+        ];
+        assert_eq!(
+            pick_stremio(&applications).as_deref(),
+            Some("net.stremio.Stremio.desktop")
+        );
+
+        // A name is still enough for an entry that declares no scheme at all.
+        assert_eq!(
+            pick_stremio(&[application("com.stremio.Stremio.desktop", "Stremio", None)]).as_deref(),
+            Some("com.stremio.Stremio.desktop")
+        );
+    }
+
     /// An account that is not linked publishes nothing, and does not fail: an error
     /// here would show up as a degraded provider on every refresh forever.
     #[tokio::test]
@@ -530,7 +645,12 @@ mod tests {
             .await
             .unwrap();
         database.migrate().await.unwrap();
-        let provider = super::StremioProvider::new(StremioRepository::new(database.pool().clone()));
+        let provider = super::StremioProvider::new(
+            StremioRepository::new(database.pool().clone()),
+            // A socket that is not there: an unlinked account must return before it
+            // ever asks the bridge anything.
+            directory.path().join("bridge.sock"),
+        );
 
         assert!(provider.discover().await.unwrap().is_empty());
     }

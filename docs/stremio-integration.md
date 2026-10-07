@@ -190,6 +190,14 @@ These were all observed in real data. Each one silently produces a wrong rail.
 - **Poster URLs are not uniform** — `/poster/small/` and `/poster/medium/`
   appear for the same shape of item. Rewrite the size segment for card art
   rather than trusting it.
+- **A launch names the bridge's own source namespace, not the record's provider.**
+  `LaunchApplication` means "start a desktop entry", and the bridge resolves it
+  inside `desktop-apps` and refuses every other source id — forwarding the record's
+  own `source_id` is refused with "unsupported application source", which reached the
+  user as a bare 502 on every Continue Watching card. For the same reason the Stremio
+  desktop entry is resolved from the host's application list by the URL scheme it
+  declares, never hardcoded: the id differs between a distribution package and a
+  Flatpak, and a guess that names nothing fails identically.
 
 ## Schema drift against `stremio-core`
 
