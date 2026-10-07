@@ -30,6 +30,12 @@ pub const RULE_LAST_PLAYED: &str = "last_played";
 pub const OWNER_SYSTEM: &str = "system";
 /// A person's own collections. Only a person adds to or removes from these.
 pub const OWNER_USER: &str = "user";
+/// The Stremio account's own rail, resolved from the catalog records the Stremio
+/// provider publishes rather than from anything stored.
+pub const OWNER_STREMIO: &str = "stremio";
+/// The Stremio rail's rule and slug, which are the same string for the same reason
+/// `laya:watch` is: an owner and the rail it owns.
+pub const RULE_CONTINUE_WATCHING: &str = "stremio:continue-watching";
 /// Collections an optional feature owns, such as the categorization model.
 ///
 /// One owner per feature, so a feature writes only under its own name and can
@@ -285,8 +291,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        CollectionItem, CollectionStore, KIND_MEMBERSHIP, KIND_RULE, OWNER_LAYA, OWNER_SYSTEM,
-        OwnedCollection, RULE_LAST_PLAYED,
+        CollectionItem, CollectionStore, KIND_MEMBERSHIP, KIND_RULE, OWNER_LAYA, OWNER_STREMIO,
+        OWNER_SYSTEM, OwnedCollection, RULE_CONTINUE_WATCHING, RULE_LAST_PLAYED,
     };
     use crate::database::Database;
 
@@ -317,12 +323,25 @@ mod tests {
         let collections = store.list().await.unwrap();
         let slugs: Vec<&str> = collections.iter().map(|one| one.slug.as_str()).collect();
 
-        assert_eq!(slugs, vec!["last-played", "favorites", "play-later"]);
+        assert_eq!(
+            slugs,
+            vec![
+                "last-played",
+                "favorites",
+                "play-later",
+                "stremio:continue-watching"
+            ]
+        );
         assert_eq!(collections[0].kind, KIND_RULE);
         assert_eq!(collections[0].rule.as_deref(), Some(RULE_LAST_PLAYED));
         assert_eq!(collections[1].kind, KIND_MEMBERSHIP);
         assert_eq!(collections[1].role, "favorite");
         assert_eq!(collections[2].role, "play_later");
+        // The Stremio rail is a rule too, owned by the feature that resolves it, and
+        // it holds nothing of its own: an unlinked account has published no records.
+        assert_eq!(collections[3].kind, KIND_RULE);
+        assert_eq!(collections[3].owner, OWNER_STREMIO);
+        assert_eq!(collections[3].rule.as_deref(), Some(RULE_CONTINUE_WATCHING));
         assert!(collections.iter().all(|one| one.items.is_empty()));
     }
 

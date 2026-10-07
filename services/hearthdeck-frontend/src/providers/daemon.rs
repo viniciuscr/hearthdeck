@@ -320,6 +320,13 @@ pub const MODEL_OWNER: &str = "laya";
 /// recognising the one rail it knows how to place.
 pub const WATCH_RAIL: &str = "watch";
 
+/// The Stremio account's rail.
+///
+/// Composed by the daemon from the records its Stremio provider published, so
+/// unlike the model's rail this slug is the same string on both sides rather than an
+/// owner plus an id.
+pub const CONTINUE_WATCHING_COLLECTION: &str = "stremio:continue-watching";
+
 /// One dashboard rail as the daemon composes it.
 ///
 /// Only the fields this client reads are declared: serde ignores the rest, so the

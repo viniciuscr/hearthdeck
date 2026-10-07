@@ -75,10 +75,10 @@ use crate::input_ownership::{
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::providers::GameRecord;
 use crate::providers::daemon::{
-    CATALOG_ENTRY_PREFIX, CategorizationSnapshot, Collection, CollectionItem, FAVORITES_COLLECTION,
-    LAST_PLAYED_COLLECTION, MODEL_OWNER, PLAY_LATER_COLLECTION, RetroDetails, RetroGameDetails,
-    RetroRomVersion, ScanReport, StremioConnection, StremioLink, WATCH_RAIL, retro_rom_versions,
-    retro_version_label,
+    CATALOG_ENTRY_PREFIX, CONTINUE_WATCHING_COLLECTION, CategorizationSnapshot, Collection,
+    CollectionItem, FAVORITES_COLLECTION, LAST_PLAYED_COLLECTION, MODEL_OWNER,
+    PLAY_LATER_COLLECTION, RetroDetails, RetroGameDetails, RetroRomVersion, ScanReport,
+    StremioConnection, StremioLink, WATCH_RAIL, retro_rom_versions, retro_version_label,
 };
 use crate::style::{
     DASHBOARD_GAME_ASPECT, DASHBOARD_RAIL_TILES, DETAILS_ACTION_WIDTH, DETAILS_FACT_LABEL_WIDTH,
@@ -405,6 +405,8 @@ struct HearthDeck {
     /// rail must draw entries, not ids, so the collection is resolved against the
     /// loaded library when it lands.
     watch_entries: Vec<Arc<DesktopEntryData>>,
+    /// The Stremio account's unfinished titles, as the daemon's rail composed them.
+    continue_watching_entries: Vec<Arc<DesktopEntryData>>,
     /// Cards for the favorites rail, rebuilt from those collections. The rail must
     /// not depend on an item happening to be in memory, which is what used to lose
     /// favorited RomM games whose console section was not loaded.
@@ -608,6 +610,7 @@ impl Default for HearthDeck {
             all_entries: Default::default(),
             recent_entries: Default::default(),
             watch_entries: Default::default(),
+            continue_watching_entries: Default::default(),
             collections: Default::default(),
             favorite_entries: Default::default(),
             menu: Default::default(),
@@ -866,6 +869,8 @@ struct ScrollAnimation {
 enum DashboardShelf {
     Recent,
     Favorites,
+    /// The Stremio account's unfinished titles, composed by the daemon.
+    ContinueWatching,
     Watch,
     Library,
 }
@@ -913,6 +918,7 @@ impl DashboardShelf {
         match self {
             Self::Recent => "recent",
             Self::Favorites => "favorites",
+            Self::ContinueWatching => "continue-watching",
             Self::Watch => "watch",
             Self::Library => "library",
         }
@@ -922,6 +928,7 @@ impl DashboardShelf {
         match self {
             Self::Recent => fl!("recently-played"),
             Self::Favorites => fl!("favorites"),
+            Self::ContinueWatching => fl!("continue-watching"),
             Self::Watch => fl!("watch"),
             Self::Library => "Games & apps".to_owned(),
         }
@@ -931,6 +938,7 @@ impl DashboardShelf {
         match self {
             Self::Recent => fl!("no-recently-played"),
             Self::Favorites => fl!("no-favorites"),
+            Self::ContinueWatching => fl!("no-continue-watching"),
             Self::Watch => fl!("no-watch"),
             Self::Library => fl!("library-empty"),
         }
@@ -1989,6 +1997,7 @@ impl HearthDeck {
         self.collections = collections;
         self.rebuild_favorite_entries();
         self.rebuild_watch_entries();
+        self.rebuild_continue_watching_entries();
         let plays = self.load_recent_plays();
         // Reporting "updated" for zero writes is the false positive this exists
         // to avoid: the stored report may simply imply no dashboard collection.
@@ -2939,6 +2948,37 @@ impl HearthDeck {
         self.watch_entries = resolved;
     }
 
+    /// Rebuilds the Continue Watching rail's cards from the daemon's collection.
+    ///
+    /// The daemon's items carry the catalog ids, so a card resolves against the
+    /// entries this session already loaded and keeps the icon its provider
+    /// published; anything not loaded falls back to the snapshot the item itself
+    /// carries. Bound before assigning for the same reason the Watch rail is.
+    fn rebuild_continue_watching_entries(&mut self) {
+        let resolved: Vec<Arc<DesktopEntryData>> =
+            collection_items(&self.collections, CONTINUE_WATCHING_COLLECTION)
+                .map(|item| {
+                    self.find_known_entry(&item.item_id)
+                        .cloned()
+                        .unwrap_or_else(|| Arc::new(snapshot_entry(item)))
+                })
+                .collect();
+        self.continue_watching_entries = resolved;
+    }
+
+    /// The Continue Watching shelf.
+    ///
+    /// Deliberately has no fallback, unlike the Watch shelf: there is nothing to
+    /// guess from here. An empty rail means no account is linked, or nothing on it
+    /// is unfinished, and a shelf invented from names would be a claim about somebody
+    /// else's watch history.
+    fn continue_watching_rail_entries(&self) -> Vec<&Arc<DesktopEntryData>> {
+        self.continue_watching_entries
+            .iter()
+            .take(DASHBOARD_RAIL_TILES)
+            .collect()
+    }
+
     fn dashboard_shelves(&self) -> Vec<(DashboardShelf, Vec<&Arc<DesktopEntryData>>)> {
         // "Recently Played" is a games shelf: launch activity for plain
         // applications is filtered out here, matching how the catalog already
@@ -2978,14 +3018,23 @@ impl HearthDeck {
         // splitting the catalog. Only shown when there is something to show, like
         // the console rail.
         let watch = self.watch_rail_entries();
+        let continue_watching = self.continue_watching_rail_entries();
         // The Library shelf is only a fallback when no curated shelf has
         // content. Otherwise Watch apps would appear once in Watch and again
         // in the all-apps fallback.
-        let show_library = recent.is_empty() && favorites.is_empty() && watch.is_empty();
+        let show_library = recent.is_empty()
+            && favorites.is_empty()
+            && continue_watching.is_empty()
+            && watch.is_empty();
         let mut shelves = vec![
             (DashboardShelf::Recent, recent),
             (DashboardShelf::Favorites, favorites),
         ];
+        // Unfinished content sits above the streaming apps: it is what the account
+        // was in the middle of, while the apps below it are only a way back in.
+        if !continue_watching.is_empty() {
+            shelves.push((DashboardShelf::ContinueWatching, continue_watching));
+        }
         if !watch.is_empty() {
             shelves.push((DashboardShelf::Watch, watch));
         }
@@ -4996,6 +5045,7 @@ impl cosmic::Application for HearthDeck {
                         self.collections = collections;
                         self.rebuild_favorite_entries();
                         self.rebuild_watch_entries();
+                        self.rebuild_continue_watching_entries();
                         // A rail's cards are drawn from the collection's own items,
                         // so a rail that just arrived has to be redrawn from them.
                         return self.load_recent_plays();
@@ -7895,6 +7945,26 @@ mod tests {
         }
     }
 
+    /// The rail the daemon composes for a linked Stremio account. Its items carry
+    /// catalog ids, which is what a card resolves and launches with.
+    fn continue_watching_collection(ids: &[&str]) -> crate::providers::daemon::Collection {
+        use crate::providers::daemon::{CONTINUE_WATCHING_COLLECTION, Collection, CollectionItem};
+
+        Collection {
+            slug: CONTINUE_WATCHING_COLLECTION.to_owned(),
+            owner: "stremio".to_owned(),
+            items: ids
+                .iter()
+                .map(|id| CollectionItem {
+                    item_id: (*id).to_owned(),
+                    name: (*id).to_owned(),
+                    icon: None,
+                    played: None,
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn the_menu_rows_carry_their_own_state_and_action() {
         let mut app = HearthDeck {
@@ -9176,6 +9246,88 @@ mod tests {
             .find(|(shelf, _)| *shelf == DashboardShelf::Watch)
             .expect("a watch shelf");
         assert_eq!(shelf.len(), 1);
+    }
+
+    /// The Continue Watching rail is drawn from the daemon's collection, and it sits
+    /// above the streaming apps.
+    #[test]
+    fn the_continue_watching_shelf_follows_the_daemons_collection() {
+        let mut app = HearthDeck {
+            all_entries: vec![entry("stremio:tt0149460"), entry("stremio:tt2654620")],
+            collections: vec![continue_watching_collection(&[
+                "stremio:tt0149460",
+                "stremio:tt2654620",
+            ])],
+            ..Default::default()
+        };
+        app.rebuild_continue_watching_entries();
+
+        let ids: Vec<&str> = app
+            .continue_watching_rail_entries()
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["stremio:tt0149460", "stremio:tt2654620"]);
+
+        // The same answer is what the dashboard draws.
+        let (_, shelf) = app
+            .dashboard_shelves()
+            .into_iter()
+            .find(|(shelf, _)| *shelf == DashboardShelf::ContinueWatching)
+            .expect("a continue watching shelf");
+        assert_eq!(shelf.len(), 2);
+
+        let keys: Vec<&str> = app
+            .dashboard_shelves()
+            .into_iter()
+            .map(|(shelf, _)| shelf.key())
+            .collect();
+        let content = keys
+            .iter()
+            .position(|key| *key == "continue-watching")
+            .expect("the rail's key");
+        if let Some(apps) = keys.iter().position(|key| *key == "watch") {
+            assert!(
+                content < apps,
+                "unfinished content belongs above the watch apps: {keys:?}"
+            );
+        }
+    }
+
+    /// A machine with no linked account, or with nothing unfinished on it, has no
+    /// rail. Unlike the Watch shelf this one is never guessed from names.
+    #[test]
+    fn an_account_with_nothing_unfinished_has_no_continue_watching_shelf() {
+        let mut app = HearthDeck {
+            all_entries: vec![entry("stremio:tt0149460")],
+            ..Default::default()
+        };
+        app.rebuild_continue_watching_entries();
+
+        assert!(app.continue_watching_rail_entries().is_empty());
+        assert!(
+            !app.dashboard_shelves()
+                .into_iter()
+                .any(|(shelf, _)| shelf == DashboardShelf::ContinueWatching)
+        );
+    }
+
+    /// An item this session has not loaded is still drawn, from the snapshot the
+    /// collection carries, so a link shows its rail before the catalog reloads.
+    #[test]
+    fn a_continue_watching_item_the_session_has_not_loaded_still_draws() {
+        let mut app = HearthDeck {
+            collections: vec![continue_watching_collection(&["stremio:tt9999999"])],
+            ..Default::default()
+        };
+        app.rebuild_continue_watching_entries();
+
+        let ids: Vec<&str> = app
+            .continue_watching_rail_entries()
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["stremio:tt9999999"]);
     }
 
     #[test]

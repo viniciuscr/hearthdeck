@@ -1430,6 +1430,10 @@ async fn list_collections(
     for collection in &mut collections {
         if collection.owner == collections::OWNER_LAYA {
             collection.items = modeled_rail_items(&state, collection).await?;
+        } else if collection.owner == collections::OWNER_STREMIO
+            && collection.rule.as_deref() == Some(collections::RULE_CONTINUE_WATCHING)
+        {
+            collection.items = continue_watching_items(&state).await?;
         } else if collection.owner == collections::OWNER_SYSTEM
             && collection.rule.as_deref() == Some(collections::RULE_LAST_PLAYED)
         {
@@ -1511,6 +1515,35 @@ fn played_collection_item(play: RecentActivity) -> CollectionItem {
         icon: play.entry.icon.clone(),
         played: Some(play),
     }
+}
+
+/// The Stremio account's unfinished titles, as rail items.
+///
+/// Read from the records the Stremio provider published rather than from the
+/// account: the provider has already applied Stremio's own rule for what belongs in
+/// this row, so all that is left is the order and the two fields a card draws with.
+///
+/// The ids are the *catalog* ids, not the `hearthdeck:`-prefixed form the model's
+/// rails use, because a client activates one by handing it straight back to
+/// `/v1/apps/{id}/launch`, which resolves it against the catalog to find the Stremio
+/// desktop entry the record carries. Nothing an account is not linked to is here:
+/// an unlinked account has published no records, and a link that was removed took
+/// its records with it.
+async fn continue_watching_items(state: &SharedState) -> Result<Vec<CollectionItem>, ApiError> {
+    let records = state
+        .catalog
+        .list_source(stremio::SOURCE_ID, COLLECTION_RULE_ITEM_LIMIT as usize)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(records
+        .into_iter()
+        .map(|record| CollectionItem {
+            item_id: record.id,
+            name: record.title,
+            icon: record.icon,
+            played: None,
+        })
+        .collect())
 }
 
 #[derive(Deserialize)]
@@ -1960,6 +1993,96 @@ mod tests {
                 "{method} {path} must require authentication"
             );
         }
+    }
+
+    /// The Stremio rail is composed from what the provider published: only that
+    /// source's records, newest change first, and carrying the catalog ids a client
+    /// hands straight back to the launch route.
+    #[tokio::test]
+    async fn the_stremio_rail_reads_the_records_the_provider_published() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.socket"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+            },
+            database,
+        ));
+
+        let record = |id: &str, title: &str, updated_at: &str| CatalogRecord {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            kind: "movie".to_owned(),
+            launch_id: Some("com.stremio.Stremio.desktop".to_owned()),
+            icon: Some("https://images.metahub.space/poster/medium/tt1/img".to_owned()),
+            metadata: serde_json::json!({"source": "stremio", "progress": 0.34}),
+            updated_at: updated_at.to_owned(),
+        };
+        state
+            .catalog
+            .replace_source(
+                "stremio",
+                vec![
+                    record("stremio:tt1", "Older", "2026-01-01T00:00:00Z"),
+                    record("stremio:tt2", "Newer", "2026-02-01T00:00:00Z"),
+                ],
+            )
+            .await
+            .unwrap();
+        // Another source's records must not leak into this rail.
+        state
+            .catalog
+            .replace_source(
+                "desktop-apps",
+                vec![CatalogRecord {
+                    id: "desktop:other.desktop".to_owned(),
+                    title: "Not Stremio".to_owned(),
+                    kind: "application".to_owned(),
+                    launch_id: None,
+                    icon: None,
+                    metadata: serde_json::Value::Null,
+                    updated_at: "2026-03-01T00:00:00Z".to_owned(),
+                }],
+            )
+            .await
+            .unwrap();
+
+        // `ApiError` carries no `Debug`, so a failure is reported by its message
+        // rather than unwrapped.
+        let items = match super::continue_watching_items(&state).await {
+            Ok(items) => items,
+            Err(error) => panic!("the rail should have composed: {}", error.message),
+        };
+        let ids: Vec<&str> = items.iter().map(|item| item.item_id.as_str()).collect();
+        assert_eq!(ids, vec!["stremio:tt2", "stremio:tt1"]);
+        assert_eq!(items[0].name, "Newer");
+        assert!(items[0].icon.is_some());
+        // The play record rides along only for the rules that have one.
+        assert!(items[0].played.is_none());
+
+        // Nothing published yet reads as an empty rail rather than a failure.
+        state
+            .catalog
+            .replace_source("stremio", Vec::new())
+            .await
+            .unwrap();
+        let empty = match super::continue_watching_items(&state).await {
+            Ok(items) => items,
+            Err(error) => panic!(
+                "an unlinked account composes an empty rail: {}",
+                error.message
+            ),
+        };
+        assert!(empty.is_empty());
     }
 
     #[tokio::test]

@@ -199,6 +199,17 @@ impl Database {
         sqlx::query("UPDATE collections SET owner = 'system' WHERE slug = 'last-played'")
             .execute(&self.pool)
             .await?;
+        // The Stremio rail, seeded rather than published on link: it is empty until
+        // an account is linked and the provider has published, so a row that always
+        // exists costs nothing and saves the link path a lifecycle to maintain. Its
+        // position is the same convention a feature's own rails use, so it sorts
+        // after the hand-ordered ones.
+        sqlx::query(
+            "INSERT OR IGNORE INTO collections (slug, kind, rule, role, position, created_at, owner, name) \
+             VALUES ('stremio:continue-watching', 'rule', 'stremio:continue-watching', 'none', 100, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'stremio', NULL)",
+        )
+        .execute(&self.pool)
+        .await?;
         // Versions 1 and 2 rebuild `user_settings` with the same column list; the
         // second was a copy of the first. Recording both keeps the ledger
         // continuous for a future `> N` check, but the table is rewritten at most
@@ -346,12 +357,14 @@ mod tests {
         assert_eq!(owner, "system");
         assert_eq!(name, None);
 
-        // The two other built-ins are seeded alongside the pre-existing row.
+        // The other built-ins are seeded alongside the pre-existing row, including
+        // the Stremio rail, which the daemon owns and resolves from the records its
+        // provider published.
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM collections")
             .fetch_one(database.pool())
             .await
             .unwrap();
-        assert_eq!(count, 3);
+        assert_eq!(count, 4);
     }
 
     /// A database created before Stremio support gains its table on the next

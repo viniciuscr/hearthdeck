@@ -221,10 +221,16 @@ authoritative would drop usable fields:
 5. **Change detection is `datastoreMeta`, not a full read.** Its `[id, epoch_ms]`
    pairs are tiny; only call `datastoreGet` when they move. A refresh interval of
    a few minutes is enough — this is a dashboard, not a live view.
-6. **The rail is a feature-owned rule collection**, `stremio:continue-watching`,
-   using the existing `owned_rule(owner, rule_id)` mechanism. It flows through
-   the ordinary Collections → rail pipeline, and `CollectionItem` already carries
-   the name and icon a card needs, so no rail code resolves Stremio itself.
+6. **The rail is a feature-owned rule collection**, `stremio:continue-watching`, using
+   the same mechanism as the model's own rails. **Implemented.** The row is seeded in
+   `database.rs::migrate()` rather than published on link — an empty rule costs
+   nothing, and a seeded row saves the link path a lifecycle to maintain — and
+   `list_collections` resolves it from the records the provider published, newest
+   change first. Its items carry the **catalog** ids, not the `hearthdeck:`-prefixed
+   form the model's rails use, because a client activates a card by handing that id
+   straight back to `/v1/apps/{id}/launch`, which resolves it against the catalog to
+   find the Stremio desktop entry the record carries. That is what lets the rail
+   launch with no new launch code at all.
 7. **Season and episode come from `video_id`**, never from `state.season` /
    `state.episode`.
 8. **Launch is a deep link, assembled by the bridge from typed fields** (`type`,
@@ -274,8 +280,8 @@ existing `collections` table upgrade does.
   `app_group.rs::is_watch_entry` identifies streaming *services* by id and exec
   line — deliberately not by category, since `AudioVideo`/`Video` also match
   volume mixers and capture tools. So a Stremio film lands in Applications
-  whatever it carries, and the rail is real frontend work in Phase 5 rather than
-  a value to pick here.
+  whatever it carries, which is why the rail is its own shelf rather than a value to
+  pick here (Phase 5, built).
 
 ## Open questions
 
@@ -341,14 +347,21 @@ Each phase is scoped to be doable in one sitting and independently useful.
   controller reaches them, and the section sits *below* categorization so the screen
   a user already knows, and its pad behaviour, are unchanged.
 
-  Two pieces remain. The **rail**: no catalog item can reach a shelf today (see the
-  mapping note above), so it needs a `DashboardShelf` variant, a card source and a
-  progress affordance. And the **QR image**: decision 9 called for the daemon to
+  The dashboard **rail** is in as well: a Continue Watching shelf, drawn from the
+  daemon's `stremio:continue-watching` collection and placed above the streaming apps.
+  It deliberately has no fallback, unlike the Watch shelf — an empty rail means no
+  account is linked or nothing on it is unfinished, and a shelf guessed from names
+  would be a claim about somebody else's watch history.
+
+  Two pieces remain, both small. The **QR image**: decision 9 called for the daemon to
   produce it, which means either a `qrcode` dependency in the daemon plus a route, or
-  proxying the PNG Stremio already returns through a daemon route — the second adds
-  no crate. Neither is in yet, so the screen shows the code and the link and nothing
-  else. That is polish rather than a blocker, since `link.stremio.com/<code>` needs no
-  typing when it is opened on a phone that is already signed in.
+  proxying the PNG Stremio already returns through a daemon route — the second adds no
+  crate. Until one of them lands, the screen shows the code and the link, which is what
+  makes the flow work without typing at all. And the **progress affordance**: the cards
+  are name and artwork only, because `CollectionItem` carries no progress and neither
+  does the shelf's card type. "23 min left" therefore needs the value to reach the card
+  — either by extending `CollectionItem` (the daemon already has it in the catalog
+  record's metadata) or by correlating the card with the catalog item on the client.
 - **Phase 6 — Launch.** The typed `LaunchStremio` request, the bridge building
   the URI from validated components, and the app-level launch kept as the
   fallback path.
