@@ -31,6 +31,18 @@ pub enum BridgeRequest {
         #[serde(default)]
         input_profile: InputProfile,
     },
+    /// Opens a title's own page in Stremio.
+    ///
+    /// Carries the video id and nothing else — not a URL — so the bridge validates the
+    /// id and builds the `stremio://` URI itself. A client can therefore never hand the
+    /// bridge a link to run, which is the same rule `LaunchRetroGame` follows with a
+    /// core path and a ROM path.
+    LaunchStremioTitle {
+        video_id: String,
+        session_id: String,
+        #[serde(default)]
+        input_profile: InputProfile,
+    },
     LaunchHeroicGame {
         runner: HeroicRunner,
         application_id: String,

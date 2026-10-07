@@ -14,7 +14,7 @@ mod linux;
 #[cfg(any(target_os = "linux", test))]
 pub use linux::{
     discover_applications, launch_application, launch_heroic_game, launch_retro_game,
-    set_input_profile,
+    launch_stremio_title, set_input_profile,
 };
 
 #[cfg(all(not(target_os = "linux"), not(test)))]

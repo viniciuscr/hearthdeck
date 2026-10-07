@@ -905,12 +905,24 @@ async fn launch_app(
         .ok_or_else(ApiError::not_found)?;
     let launch_id = item.launch_id.as_deref().ok_or_else(ApiError::not_found)?;
     let session_id = Uuid::new_v4().to_string();
+    let stremio_title = (item.source_id == stremio::SOURCE_ID)
+        .then(|| stremio_video_id(&item))
+        .flatten();
     let request = if item.source_id == "heroic" {
         let (runner, application_id) =
             heroic_launch_target(launch_id).ok_or_else(ApiError::not_found)?;
         BridgeRequest::LaunchHeroicGame {
             runner,
             application_id,
+            session_id,
+            input_profile: options.input_profile,
+        }
+    } else if let Some(video_id) = stremio_title {
+        // A Stremio record names a title, so the bridge is asked for that title rather
+        // than for the application the record carries. The id travels, not a URL: the
+        // bridge validates it and builds the URI itself.
+        BridgeRequest::LaunchStremioTitle {
+            video_id,
             session_id,
             input_profile: options.input_profile,
         }
@@ -963,6 +975,22 @@ struct LaunchOptions {
 #[derive(Deserialize)]
 struct RecentActivityQuery {
     limit: Option<u32>,
+}
+
+/// The Stremio title a record names, when it names one.
+///
+/// The provider publishes it in the record's own metadata, which the catalog keeps
+/// under `discovery`. A record without one is launched as a plain application instead:
+/// an older record, or one whose account has since been unlinked. Either way the card
+/// does something rather than failing.
+fn stremio_video_id(item: &crate::catalog::CatalogItem) -> Option<String> {
+    item.metadata
+        .get("discovery")?
+        .get("video_id")?
+        .as_str()
+        .map(str::trim)
+        .filter(|video_id| !video_id.is_empty())
+        .map(str::to_owned)
 }
 
 fn catalog_activity_entry(item: &crate::catalog::CatalogItem) -> ActivityEntry {
@@ -2012,6 +2040,154 @@ mod tests {
                 "{method} {path} must require authentication"
             );
         }
+    }
+
+    /// A Stremio record asks the bridge to open the *title*, not merely the application:
+    /// the video id travels and the bridge builds the URI from it.
+    #[tokio::test]
+    async fn launching_a_stremio_record_opens_the_title() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.socket"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+            },
+            database,
+        ));
+
+        state
+            .catalog
+            .replace_source(
+                "stremio",
+                vec![
+                    CatalogRecord {
+                        id: "stremio:tt0149460".to_owned(),
+                        title: "Futurama".to_owned(),
+                        kind: "series".to_owned(),
+                        launch_id: Some("com.stremio.Stremio.desktop".to_owned()),
+                        icon: None,
+                        // The provider's own payload: the catalog wraps it under
+                        // `discovery` when it serves the record, which is the shape
+                        // `stremio_video_id` reads back.
+                        metadata: serde_json::json!({
+                            "source": "stremio",
+                            "video_id": "tt0149460:4:7"
+                        }),
+                        updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                    },
+                    // Published before the provider carried video ids, so it has none.
+                    CatalogRecord {
+                        id: "stremio:tt0373074".to_owned(),
+                        title: "Kung Fu Hustle".to_owned(),
+                        kind: "movie".to_owned(),
+                        launch_id: Some("com.stremio.Stremio.desktop".to_owned()),
+                        icon: None,
+                        metadata: serde_json::json!({"source": "stremio"}),
+                        updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+
+        // The launch route is authenticated, so pair first.
+        let (_, pairing) = response_json(
+            local_router(state.clone()),
+            Request::post("/v1/pairing").body(Body::empty()).unwrap(),
+        )
+        .await;
+        let code = pairing["code"].as_str().unwrap();
+        let (_, paired) = response_json(
+            router(state.clone()),
+            Request::post("/v1/pairing/complete")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"code": code, "client_name": "launch-test"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        let token = paired["token"].as_str().unwrap().to_owned();
+
+        let bridge = spawn_fake_bridge(state.config.bridge_socket_path.clone(), |request| {
+            let BridgeRequest::LaunchStremioTitle {
+                video_id,
+                session_id,
+                input_profile,
+            } = request
+            else {
+                panic!("expected a LaunchStremioTitle request, got {request:?}");
+            };
+            assert_eq!(video_id, "tt0149460:4:7");
+            assert_eq!(input_profile, InputProfile::Desktop);
+            BridgeResponse::LaunchAccepted {
+                session: ApplicationSession {
+                    id: session_id,
+                    source_id: "desktop-apps".to_owned(),
+                    application_id: "com.stremio.Stremio.desktop".to_owned(),
+                    state: ApplicationSessionState::Running,
+                },
+            }
+        });
+
+        let (status, launched) = response_json(
+            router(state.clone()),
+            Request::post("/v1/apps/stremio:tt0149460/launch?input_profile=desktop")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // The session is the desktop application underneath, so it reports that.
+        assert_eq!(launched["source_id"], "desktop-apps");
+        assert_eq!(launched["application_id"], "com.stremio.Stremio.desktop");
+        bridge.await.unwrap();
+
+        // A record with no video id falls back to opening the application: the rail
+        // keeps working for anything published before the ids existed. The first fake
+        // bridge leaves its socket file behind, and binding a path that exists fails.
+        let _ = std::fs::remove_file(&state.config.bridge_socket_path);
+        let fallback = spawn_fake_bridge(state.config.bridge_socket_path.clone(), |request| {
+            let BridgeRequest::LaunchApplication {
+                source_id,
+                application_id,
+                session_id,
+                ..
+            } = request
+            else {
+                panic!("expected a LaunchApplication request, got {request:?}");
+            };
+            assert_eq!(source_id, "desktop-apps");
+            assert_eq!(application_id, "com.stremio.Stremio.desktop");
+            BridgeResponse::LaunchAccepted {
+                session: ApplicationSession {
+                    id: session_id,
+                    source_id,
+                    application_id,
+                    state: ApplicationSessionState::Running,
+                },
+            }
+        });
+        let (status, _) = response_json(
+            router(state.clone()),
+            Request::post("/v1/apps/stremio:tt0373074/launch")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        fallback.await.unwrap();
     }
 
     /// The Stremio rail is composed from what the provider published: only that

@@ -242,10 +242,18 @@ authoritative would drop usable fields:
    reason `activate_dashboard_app` now also looks in the rail's own entry lists.)
 7. **Season and episode come from `video_id`**, never from `state.season` /
    `state.episode`.
-8. **Launch is a deep link, assembled by the bridge from typed fields** (`type`,
-   media id, season, episode) — a validated `LaunchStremio` request, not a URL
-   string. The app-level launch of `com.stremio.Stremio.desktop` is the fallback
-   until the scheme is confirmed on hardware (Phase 1).
+8. **Launch is a deep link, assembled by the bridge from a validated id** —
+   `LaunchStremioTitle { video_id }`, not a URL string: the bridge checks the id and
+   builds the `stremio://` URI itself. **Implemented, and verified on real hardware.**
+   The shape is `stremio:///detail/movie/<tt-id>` for a film and
+   `stremio:///detail/series/<tt-id>/<tt-id>:<season>:<episode>` for an episode; both
+   open the title's own page rather than Stremio's home screen. The id arrives as
+   `argv[1]`, which Stremio's shell forwards to its web UI as an `open-media` event —
+   queued until the UI is ready, so a cold start works exactly like one where Stremio
+   is already running. It opens the title's *page*, not the player: playing needs a
+   stream chosen, which is the user's step in Stremio's own UI, and this is the
+   deliberate stopping point. A record with no video id launches the plain application
+   instead, so a rail keeps working for anything published before the ids existed.
 9. **The QR image is produced by the daemon from a link URL it already holds**, and
    served through the same authenticated asset path the frontend already renders
    RomM artwork from. The four-character code and the link are always shown as text
@@ -325,11 +333,13 @@ Each phase is scoped to be doable in one sitting and independently useful.
 - **Phase 0 — Doc and seam registration. This change.** Write this doc, register
   it in the docs map, and record the verified shapes so the mapping phases do not
   have to re-derive them.
-- **Phase 1 — Hardware verification gate. Blocking, no code.** On the kiosk:
-  confirm the `stremio://` scheme is registered, find its exact working form, and
-  confirm it resumes at the right position. The output decides whether Phase 6
-  ships deep links or falls back to an app-level launch. Do not start Phase 6
-  before this answers.
+- **Phase 1 — Hardware verification gate. ANSWERED.** The scheme is registered and the
+  working form is known: `stremio:///detail/movie/<tt-id>` and
+  `stremio:///detail/series/<tt-id>/<tt-id>:<s>:<e>` each open the title's page in the
+  installed app, whether Stremio was closed or already running. It does not resume a
+  position and cannot: the URI opens a page, and starting playback needs a stream
+  picked first. So Phase 6 shipped the details-page launch and the position half is
+  dropped rather than waiting on a check nobody needs any more.
 - **Phase 2 — Daemon: credential and link session. DONE.** `stremio_settings` with
   an upgrade test; the link flow over `link.stremio.com/api/create` + `/api/read`;
   the session key never serializable, never logged, and never quoted in an error;
@@ -374,9 +384,14 @@ Each phase is scoped to be doable in one sitting and independently useful.
   does the shelf's card type. "23 min left" therefore needs the value to reach the card
   — either by extending `CollectionItem` (the daemon already has it in the catalog
   record's metadata) or by correlating the card with the catalog item on the client.
-- **Phase 6 — Launch.** The typed `LaunchStremio` request, the bridge building
-  the URI from validated components, and the app-level launch kept as the
-  fallback path.
+- **Phase 6 — Launch. DONE, to the details page.** `LaunchStremioTitle { video_id }`
+  added to the protocol; the bridge validates that id, finds the Stremio entry by the
+  scheme it declares rather than by a guessed file name, builds the URI and appends it
+  to that entry's own command. Not through `xdg-open`: on this session that finds no
+  desktop environment to delegate to and gives up, which is the same reason Heroic is
+  exec'd directly. The plain application launch stays as the fallback for a record with
+  no video id. Auto-play is deliberately out of scope — it needs a stream chosen, which
+  belongs to Stremio's own UI and the person watching.
 - **Phase 7 — Stretch: keyring-backed `SecretStore`.** Only worth doing if the
   session grows a way to unlock a collection unattended, or the hardware gains a
   TPM. Until then this is the decision above, not a task.

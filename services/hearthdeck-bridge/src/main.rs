@@ -244,6 +244,57 @@ async fn handle_request(
                 }
             }
         }
+        BridgeRequest::LaunchStremioTitle {
+            video_id,
+            session_id,
+            input_profile,
+        } => {
+            let _transition = session_transition.lock().await;
+            // A Stremio title is a desktop application launch underneath, so it occupies
+            // the same single-session slot and is registered under the same source.
+            if let Err(error) = stop_other_active_sessions(
+                platform::DESKTOP_APPS_SOURCE,
+                sessions,
+                session_directory,
+            )
+            .await
+            {
+                warn!(video_id, %error, "stremio launch rejected");
+                return BridgeResponse::Error {
+                    code: BridgeErrorCode::LaunchFailed,
+                    message: error.to_string(),
+                };
+            }
+            if let Err(error) = platform::set_input_profile(input_profile, false).await {
+                warn!(video_id, %error, "input compatibility profile rejected");
+                return BridgeResponse::Error {
+                    code: BridgeErrorCode::LaunchFailed,
+                    message: error.to_string(),
+                };
+            }
+            match platform::launch_stremio_title(&video_id, &session_id).await {
+                Ok((application_id, launched)) => {
+                    register_launch(
+                        sessions,
+                        session_directory,
+                        platform::DESKTOP_APPS_SOURCE.to_owned(),
+                        application_id,
+                        session_id,
+                        launched,
+                        input_profile,
+                    )
+                    .await
+                }
+                Err(error) => {
+                    sync_input_profile(sessions, session_directory).await;
+                    warn!(video_id, %error, "stremio launch rejected");
+                    BridgeResponse::Error {
+                        code: BridgeErrorCode::LaunchFailed,
+                        message: error.to_string(),
+                    }
+                }
+            }
+        }
         BridgeRequest::LaunchHeroicGame {
             runner,
             application_id,

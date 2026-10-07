@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use hearthdeck_protocol::{DiscoveredApplication, HeroicRunner, InputProfile};
 use tokio::net::UnixDatagram;
 use tokio::process::Command;
@@ -150,6 +150,134 @@ pub async fn launch_application(
     let launch = command_for_desktop_entry(&path).await?;
     let unit_name = format!("hearthdeck-app-{session_id}.service");
     launch_with_systemd(&unit_name, launch.command, launch.working_directory).await
+}
+
+/// The URL scheme Stremio's own desktop entry declares.
+const STREMIO_SCHEME: &str = "stremio";
+
+/// Opens a title's own page in Stremio, returning the entry that was launched.
+///
+/// The application is found by the scheme its entry declares rather than by a guessed
+/// file name, and the URI is appended to the entry's own command instead of going
+/// through `xdg-open` — the same rule Heroic's launches follow, because `gio` moves the
+/// process into a scope of its own and the session stops tracking it.
+pub async fn launch_stremio_title(
+    video_id: &str,
+    session_id: &str,
+) -> Result<(String, LaunchedApplication)> {
+    let uri = stremio_detail_uri(video_id)?;
+    let applications = discover_applications(DESKTOP_APPS_SOURCE).await?;
+    let entry = applications
+        .iter()
+        .find(|application| application.launch_scheme.as_deref() == Some(STREMIO_SCHEME))
+        .ok_or_else(|| anyhow!("no desktop entry declares the {STREMIO_SCHEME} scheme"))?;
+    let path = desktop_entry_path(DESKTOP_APPS_SOURCE, &entry.application_id).await?;
+    let launch = command_for_desktop_entry(&path).await?;
+    // The entry's command, with the URI where its `%u` field code was. Stremio reads
+    // it from its own argv and forwards it to the running instance if there is one, so
+    // this works whether the app is already open or not.
+    let mut command = launch.command;
+    command.push(OsString::from(uri));
+    let launched = launch_with_systemd(
+        &format!("hearthdeck-app-{session_id}.service"),
+        command,
+        launch.working_directory,
+    )
+    .await?;
+    Ok((entry.application_id.clone(), launched))
+}
+
+/// The `stremio://` URI for a video id, built from that id alone.
+///
+/// `tt0373074` is a film; `tt0149460:4:7` is season 4, episode 7 of a series. The shape
+/// is the one Stremio's own web UI parses, and it was verified against the installed
+/// app: both forms open the title's page rather than the home screen.
+fn stremio_detail_uri(video_id: &str) -> Result<String> {
+    let mut parts = video_id.split(':');
+    let base = parts.next().unwrap_or_default();
+    if !is_imdb_id(base) {
+        bail!("a video id must be an IMDb id")
+    }
+    let season = parts.next();
+    let episode = parts.next();
+    if parts.next().is_some() {
+        bail!("a video id has at most a season and an episode")
+    }
+    match (season, episode) {
+        (None, None) => Ok(format!("stremio:///detail/movie/{base}")),
+        (Some(season), Some(episode)) => {
+            if !is_small_number(season) || !is_small_number(episode) {
+                bail!("a season and an episode must be numbers")
+            }
+            Ok(format!(
+                "stremio:///detail/series/{base}/{base}:{season}:{episode}"
+            ))
+        }
+        // A season without an episode names no video, so it is refused rather than
+        // guessed at.
+        _ => bail!("a video id needs both a season and an episode"),
+    }
+}
+
+/// Whether `value` is an IMDb id: `tt` and digits, nothing else.
+fn is_imdb_id(value: &str) -> bool {
+    value.strip_prefix("tt").is_some_and(|digits| {
+        !digits.is_empty() && digits.len() <= 10 && digits.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// Whether `value` is a season or episode number: digits, and not absurdly large.
+fn is_small_number(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 4
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && value != "0"
+}
+
+#[cfg(test)]
+mod stremio_uri_tests {
+    use super::stremio_detail_uri;
+
+    #[test]
+    fn a_film_opens_its_own_page_and_a_series_opens_its_episode() {
+        assert_eq!(
+            stremio_detail_uri("tt0373074").unwrap(),
+            "stremio:///detail/movie/tt0373074"
+        );
+        assert_eq!(
+            stremio_detail_uri("tt0149460:4:7").unwrap(),
+            "stremio:///detail/series/tt0149460/tt0149460:4:7"
+        );
+        // A season with a multi-digit episode, which Stremio itself produces.
+        assert_eq!(
+            stremio_detail_uri("tt2654620:2:10").unwrap(),
+            "stremio:///detail/series/tt2654620/tt2654620:2:10"
+        );
+    }
+
+    /// The id arrives from a catalog record, so nothing about it is trusted: it becomes
+    /// the path of a URI the host will hand to an application.
+    #[test]
+    fn refuses_anything_that_is_not_a_video_id() {
+        for refused in [
+            "",
+            "tt",
+            "ttabc",
+            "0149460",
+            "tt0149460:4",
+            "tt0149460:4:7:9",
+            "tt0149460:0:7",
+            "tt0149460::7",
+            "../../etc/passwd",
+            "tt0149460/../../x",
+            "stremio:///detail/movie/tt0149460",
+        ] {
+            assert!(
+                stremio_detail_uri(refused).is_err(),
+                "{refused} should be refused"
+            );
+        }
+    }
 }
 
 /// Heroic itself - not a specific game - is the resource Hearthdeck manages
