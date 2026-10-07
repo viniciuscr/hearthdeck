@@ -336,6 +336,51 @@ pub struct Collection {
 
 /// One rail item, carrying the display name and icon stored with it so a rail can
 /// draw it without resolving the item itself.
+/// A Stremio link the user approves on another device.
+///
+/// The daemon's answer also carries Stremio's `qr` image URL, and this client does
+/// not model it: nothing draws that image yet (Phase 5 in
+/// `docs/stremio-integration.md`), and a field nothing reads is a field that quietly
+/// rots.
+#[derive(Clone, Debug, Deserialize)]
+pub struct StremioLinkOffer {
+    /// The four characters the user enters in the Stremio app or site.
+    pub code: String,
+    /// The link to open, which already carries the code.
+    pub link: String,
+    /// How long the daemon will keep polling for this code.
+    pub expires_in_seconds: u64,
+}
+
+/// The linked account, as the daemon reports it.
+///
+/// There is no field for the session: the daemon holds that and never sends it,
+/// which is the whole reason the frontend can offer linking without ever seeing a
+/// credential. `updated_at` is left out deliberately — the screen says when the
+/// account was linked, and a re-link keeps that original time.
+#[derive(Clone, Debug, Deserialize)]
+pub struct StremioConnection {
+    pub linked_at: String,
+}
+
+/// Where a pending link stands.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum StremioLink {
+    /// No link is pending: never asked for, or already resolved.
+    Idle,
+    /// The window closed while the user was still deciding.
+    Expired,
+    /// Waiting on the user, who is approving `code` on another device.
+    Waiting {
+        code: String,
+        link: String,
+        seconds_left: u64,
+    },
+    /// Linked and stored by the daemon.
+    Linked { connection: StremioConnection },
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct CollectionItem {
     pub item_id: String,
@@ -993,6 +1038,90 @@ impl DaemonClient {
         }
 
         response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    /// Asks the daemon for a Stremio link code.
+    ///
+    /// The code is approved on another device, which is why nothing here sends a
+    /// password: the daemon does not accept one, so there is none to send.
+    pub async fn start_stremio_link(&self) -> Result<StremioLinkOffer, DaemonError> {
+        let response = self
+            .http
+            .post(self.api_url("/v1/stremio/link"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    /// One poll of the pending link.
+    ///
+    /// The daemon is what talks to Stremio, so neither the code nor the session
+    /// crosses this call: it only asks what the daemon found.
+    pub async fn poll_stremio_link(&self) -> Result<StremioLink, DaemonError> {
+        let response = self
+            .http
+            .get(self.api_url("/v1/stremio/link"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    /// The linked Stremio account, or `None` when none is linked.
+    pub async fn stremio_connection(&self) -> Result<Option<StremioConnection>, DaemonError> {
+        let response = self
+            .http
+            .get(self.api_url("/v1/stremio/settings"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    /// Unlinks the account: the session and the rows it published go together.
+    pub async fn unlink_stremio(&self) -> Result<(), DaemonError> {
+        let response = self
+            .http
+            .delete(self.api_url("/v1/stremio/settings"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        Ok(())
+    }
+
+    /// Asks the daemon to refresh one discovery source now.
+    ///
+    /// Used after a Stremio link resolves: the provider would get there on its own
+    /// interval, but a person who just approved a code expects the dashboard to
+    /// fill in front of them.
+    pub async fn refresh_source(&self, source_id: &str) -> Result<(), DaemonError> {
+        self.post_empty(&format!("/v1/discovery/{source_id}/refresh"))
+            .await
     }
 
     /// Adds or removes one game from the user's RomM favorites, returning the

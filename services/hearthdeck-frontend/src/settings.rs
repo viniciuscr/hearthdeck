@@ -20,8 +20,11 @@ use crate::providers::daemon::{
     CategorizationPhase, CategorizationSnapshot, ModelStatus, ScanReport,
 };
 use crate::style::{
-    TEXT_TITLE, destructive_button_class, primary_action_button_class, standard_button_class,
+    TEXT_HEADER, TEXT_TITLE, destructive_button_class, primary_action_button_class,
+    standard_button_class,
 };
+
+pub mod stremio;
 
 /// What a first download costs. Named once, so the sentence that warns about it
 /// cannot drift away from the number the operator reads in the docs.
@@ -182,10 +185,30 @@ pub struct Panel {
     pub snapshot: Option<CategorizationSnapshot>,
 }
 
-pub fn view(panel: &Panel) -> Element<'static, Message> {
+/// The whole screen: its title, this file's own subject, then the Stremio section.
+///
+/// Both sections are built into one body rather than two frames, so the screen is a
+/// single scrolling column instead of two. Categorization stays above Stremio so the
+/// screen a user already knows is unchanged at the top, and so the pad still lands
+/// where it always did.
+pub fn view(panel: &Panel, stremio: &stremio::Panel) -> Element<'static, Message> {
+    let spacing = theme::spacing();
+    let body = column![
+        text(fl!("settings-title")).size(TEXT_TITLE),
+        categorization(panel),
+        stremio::view(stremio),
+    ]
+    .spacing(spacing.space_l)
+    .width(Length::Fill);
+    frame(body)
+}
+
+/// Smart categorization: the subject this module was written for, and the one thing
+/// here that both costs something and changes something.
+fn categorization(panel: &Panel) -> Element<'static, Message> {
     let spacing = theme::spacing();
     let mut body = column![
-        text(fl!("settings-title")).size(TEXT_TITLE),
+        text(fl!("categorization-heading")).size(TEXT_HEADER),
         text::body(fl!("categorization-intro", size = DOWNLOAD_SIZE)),
     ]
     .spacing(spacing.space_s)
@@ -198,11 +221,11 @@ pub fn view(panel: &Panel) -> Element<'static, Message> {
         Some(false) => {
             body = body.push(note(fl!("categorization-unsupported")));
             body = body.push(text::caption(fl!("categorization-unsupported-hint")));
-            return frame(body);
+            return body.into();
         }
         None => {
             body = body.push(note(fl!("categorization-reading-status")));
-            return frame(body);
+            return body.into();
         }
     }
 
@@ -233,7 +256,7 @@ pub fn view(panel: &Panel) -> Element<'static, Message> {
             snapshot.status.last_completed_at.as_deref(),
         ));
     }
-    frame(body)
+    body.into()
 }
 
 /// The one line that says what is happening, or what the state is.

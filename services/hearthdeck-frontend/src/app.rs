@@ -77,7 +77,8 @@ use crate::providers::GameRecord;
 use crate::providers::daemon::{
     CATALOG_ENTRY_PREFIX, CategorizationSnapshot, Collection, CollectionItem, FAVORITES_COLLECTION,
     LAST_PLAYED_COLLECTION, MODEL_OWNER, PLAY_LATER_COLLECTION, RetroDetails, RetroGameDetails,
-    RetroRomVersion, ScanReport, WATCH_RAIL, retro_rom_versions, retro_version_label,
+    RetroRomVersion, ScanReport, StremioConnection, StremioLink, WATCH_RAIL, retro_rom_versions,
+    retro_version_label,
 };
 use crate::style::{
     DASHBOARD_GAME_ASPECT, DASHBOARD_RAIL_TILES, DETAILS_ACTION_WIDTH, DETAILS_FACT_LABEL_WIDTH,
@@ -164,6 +165,12 @@ const APPLICATIONS_SECTION: &str = "applications";
 const CATEGORIZATION_POLL_LIMIT: u32 = 800;
 const ROMM_PAGE_SIZE: u32 = 48;
 const ROMM_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+/// How often the settings screen asks the daemon about a pending Stremio link.
+///
+/// Short, because somebody is standing in front of the television waiting for the
+/// phone in their hand to finish. It is a local call: the daemon is the one that
+/// talks to Stremio, and what it reports is already polled and coalesced.
+const STREMIO_LINK_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 static REMOVE: LazyLock<String> = LazyLock::new(|| fl!("remove"));
 static FLATPAK: LazyLock<String> = LazyLock::new(|| fl!("flatpak"));
 static LOCAL: LazyLock<String> = LazyLock::new(|| fl!("local"));
@@ -469,6 +476,18 @@ struct HearthDeck {
     /// `None` until that reply arrives; `Some(false)` hides the whole feature
     /// rather than offering a button that fails.
     categorization_capable: Option<bool>,
+    /// The linked Stremio account, or `None` when none is linked. Read when the
+    /// settings screen opens, and settled by a completed link.
+    stremio_connection: Option<StremioConnection>,
+    /// The link the user is approving, while it is being approved.
+    stremio_pending: Option<crate::settings::stremio::Pending>,
+    /// A Stremio read is in flight, so the section says so rather than claiming
+    /// nothing is linked.
+    stremio_reading: bool,
+    /// A Stremio request is in flight, so its controls cannot be pressed twice.
+    stremio_busy: bool,
+    /// The last Stremio failure, in the daemon's or Stremio's own words.
+    stremio_error: Option<String>,
     /// Transient user-facing alerts, rendered with libcosmic's toaster so the
     /// dashboard stays a browsing surface instead of an alert log.
     toasts: Toasts<Message>,
@@ -628,6 +647,11 @@ impl Default for HearthDeck {
             categorization_polls: Default::default(),
             categorization: Default::default(),
             categorization_capable: Default::default(),
+            stremio_connection: None,
+            stremio_pending: None,
+            stremio_reading: false,
+            stremio_busy: false,
+            stremio_error: None,
             toasts: Toasts::new(Message::DismissToast),
             backend_available: None,
             degraded_providers: Vec::new(),
@@ -1298,6 +1322,16 @@ pub(crate) enum Message {
     OpenSettings,
     /// The user flipped the AI switch. Turning it on installs and activates the
     /// model; turning it off restores the derived categories.
+    /// The Stremio settings section: asking for a link code, polling the pending
+    /// one, reading whether an account is linked, and letting it go.
+    StartStremioLink,
+    StremioLinkStarted(Result<crate::settings::stremio::Pending, String>),
+    StremioLinkPolled(Result<StremioLink, String>),
+    StremioConnectionLoaded(Result<Option<StremioConnection>, String>),
+    UnlinkStremio,
+    StremioUnlinked(Result<(), String>),
+    /// The Stremio source was asked to refresh. Carries the failure only.
+    StremioSourceRefreshed(Result<(), String>),
     ToggleCategorization,
     /// The user asked for the last scan's rails to be published as dashboard
     /// collections, without classifying the library again.
@@ -1421,6 +1455,210 @@ impl HearthDeck {
     fn focus_text_input(&mut self, id: widget::Id) -> Task<Message> {
         self.focused_id = Some(id.clone());
         Task::batch([text_input::focus(id), self.request_virtual_keyboard(true)])
+    }
+
+    /// Reads whether a Stremio account is linked. Run when the settings screen
+    /// opens, and again if a pending link resolves without saying so.
+    fn load_stremio_connection(&mut self) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        self.stremio_reading = true;
+        Task::perform(
+            async move {
+                client
+                    .stremio_connection()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::StremioConnectionLoaded(result)),
+        )
+    }
+
+    /// Asks the daemon for a link code.
+    ///
+    /// The code is what the user approves on another device, which is why this
+    /// screen builds no password field: there is no secret for it to collect.
+    fn start_stremio_link(&mut self) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        self.stremio_busy = true;
+        self.stremio_error = None;
+        Task::perform(
+            async move {
+                client
+                    .start_stremio_link()
+                    .await
+                    .map(|offer| crate::settings::stremio::Pending {
+                        code: offer.code,
+                        link: offer.link,
+                        seconds_left: offer.expires_in_seconds,
+                    })
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::StremioLinkStarted(result)),
+        )
+    }
+
+    /// One poll of the pending link, after `delay`.
+    ///
+    /// Self-rescheduling rather than a subscription: the wait is bounded by the
+    /// link window, and the chain ends the moment the daemon stops reporting that
+    /// the link is waiting, so there is nothing to unsubscribe from.
+    fn poll_stremio_link(&self, delay: std::time::Duration) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                tokio::time::sleep(delay).await;
+                client
+                    .poll_stremio_link()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::StremioLinkPolled(result)),
+        )
+    }
+
+    /// Asks for the Stremio source to be refreshed now.
+    fn refresh_stremio_source(&self) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                client
+                    .refresh_source("stremio")
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::StremioSourceRefreshed(result)),
+        )
+    }
+
+    fn settle_stremio_link_started(
+        &mut self,
+        result: Result<crate::settings::stremio::Pending, String>,
+    ) -> Task<Message> {
+        self.stremio_busy = false;
+        let pending = match result {
+            Ok(pending) => pending,
+            Err(error) => {
+                warn!("could not start the Stremio link: {error}");
+                self.stremio_error = Some(error);
+                return Task::none();
+            }
+        };
+        self.stremio_error = None;
+        self.stremio_pending = Some(pending);
+        // The wait belongs to the phone in somebody's hand, so keep asking until
+        // the daemon stops saying the link is pending.
+        self.poll_stremio_link(STREMIO_LINK_POLL_INTERVAL)
+    }
+
+    fn settle_stremio_link_polled(&mut self, result: Result<StremioLink, String>) -> Task<Message> {
+        match result {
+            Ok(StremioLink::Waiting {
+                code,
+                link,
+                seconds_left,
+            }) => {
+                self.stremio_pending = Some(crate::settings::stremio::Pending {
+                    code,
+                    link,
+                    seconds_left,
+                });
+                self.poll_stremio_link(STREMIO_LINK_POLL_INTERVAL)
+            }
+            Ok(StremioLink::Linked { connection }) => {
+                self.stremio_pending = None;
+                self.stremio_error = None;
+                self.stremio_connection = Some(connection);
+                log::info!("stremio account linked");
+                let toast = self.push_alert(fl!("stremio-linked-toast"), false);
+                let focus = self.refresh_settings_focus();
+                // Publish the account's unfinished titles now, rather than leaving
+                // the dashboard empty until the provider's own interval elapses.
+                let refresh = self.refresh_stremio_source();
+                Task::batch([toast, focus, refresh])
+            }
+            Ok(StremioLink::Expired) => {
+                self.stremio_pending = None;
+                self.stremio_error = None;
+                self.push_alert(fl!("stremio-link-expired"), true)
+            }
+            // Nothing was pending: the link resolved between polls, or the daemon
+            // restarted. Re-read rather than guess which.
+            Ok(StremioLink::Idle) => {
+                self.stremio_pending = None;
+                self.load_stremio_connection()
+            }
+            Err(error) => {
+                warn!("could not poll the Stremio link: {error}");
+                self.stremio_pending = None;
+                self.stremio_error = Some(error);
+                Task::none()
+            }
+        }
+    }
+
+    fn settle_stremio_connection(
+        &mut self,
+        result: Result<Option<StremioConnection>, String>,
+    ) -> Task<Message> {
+        self.stremio_reading = false;
+        match result {
+            Ok(connection) => {
+                self.stremio_connection = connection;
+                self.stremio_error = None;
+            }
+            Err(error) => {
+                warn!("could not read the Stremio connection: {error}");
+                self.stremio_error = Some(error);
+            }
+        }
+        // The reply decides which controls the section has, so the pad is
+        // re-pointed before the row is drawn without the one it was on.
+        self.refresh_settings_focus()
+    }
+
+    fn unlink_stremio(&mut self) -> Task<Message> {
+        let Some(client) = self.daemon_client.clone() else {
+            return Task::none();
+        };
+        self.stremio_busy = true;
+        self.stremio_error = None;
+        Task::perform(
+            async move {
+                client
+                    .unlink_stremio()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::StremioUnlinked(result)),
+        )
+    }
+
+    fn settle_stremio_unlinked(&mut self, result: Result<(), String>) -> Task<Message> {
+        self.stremio_busy = false;
+        match result {
+            Ok(()) => {
+                self.stremio_connection = None;
+                self.stremio_pending = None;
+                self.stremio_error = None;
+                log::info!("stremio account unlinked");
+                let toast = self.push_alert(fl!("stremio-unlinked-toast"), false);
+                let focus = self.refresh_settings_focus();
+                Task::batch([toast, focus])
+            }
+            Err(error) => {
+                warn!("could not unlink the Stremio account: {error}");
+                self.stremio_error = Some(error);
+                Task::none()
+            }
+        }
     }
 
     fn load_romm_platforms(&self, delay: std::time::Duration) -> Task<Message> {
@@ -4859,6 +5097,17 @@ impl cosmic::Application for HearthDeck {
                     }
                     return Task::none();
                 }
+                if let Some(action) = crate::settings::stremio::action(&focused) {
+                    // The same rule for the other section, and for the same reason:
+                    // the row and this lookup read one list.
+                    let panel = self.stremio_panel();
+                    if crate::settings::stremio::actions(&panel).contains(&action)
+                        && crate::settings::stremio::pressable(action, &panel)
+                    {
+                        return self.update(action.message());
+                    }
+                    return Task::none();
+                }
                 if self.page == Page::Dashboard {
                     if let Some(index) = self.dashboard_console_id_for_widget(&focused) {
                         return self.open_console(index);
@@ -5402,22 +5651,49 @@ impl cosmic::Application for HearthDeck {
             }
             Message::OpenSettings => {
                 self.switch_page(Page::Settings);
-                // Nothing to read in a deployment that does not provide the
-                // service; it has already told us so on `/v1/health`.
-                if self.categorization_capable == Some(false) {
-                    return Task::none();
-                }
-                // Read on the way in: the screen has nothing to show until it
-                // knows whether a checkpoint is even on disk. Focusing here rather
-                // than in a reply keeps the pad on the screen the user just
-                // opened, whatever the read turns out to say.
+                // The Stremio half has something to read whatever the deployment
+                // provides, so this read is not behind a capability check.
+                let stremio = self.load_stremio_connection();
+                // Focus the first control the screen actually has, before deciding
+                // what else to read. With the feature unavailable that control is
+                // the Stremio one, and the pad still needs somewhere to be —
+                // otherwise nothing on the page could be reached at all.
                 let focus = self
                     .settings_targets()
                     .first()
                     .cloned()
                     .map(|id| self.settings_move_to(id))
                     .unwrap_or_else(Task::none);
-                return Task::batch([focus, self.poll_categorization(std::time::Duration::ZERO)]);
+                // Nothing to read in a deployment that does not provide the
+                // service; it has already told us so on `/v1/health`.
+                if self.categorization_capable == Some(false) {
+                    return Task::batch([focus, stremio]);
+                }
+                // Read on the way in: the screen has nothing to show until it
+                // knows whether a checkpoint is even on disk.
+                return Task::batch([
+                    focus,
+                    self.poll_categorization(std::time::Duration::ZERO),
+                    stremio,
+                ]);
+            }
+            Message::StartStremioLink => return self.start_stremio_link(),
+            Message::StremioLinkStarted(result) => {
+                return self.settle_stremio_link_started(result);
+            }
+            Message::StremioLinkPolled(result) => return self.settle_stremio_link_polled(result),
+            Message::StremioConnectionLoaded(result) => {
+                return self.settle_stremio_connection(result);
+            }
+            Message::UnlinkStremio => return self.unlink_stremio(),
+            Message::StremioUnlinked(result) => return self.settle_stremio_unlinked(result),
+            Message::StremioSourceRefreshed(result) => {
+                if let Err(error) = result {
+                    // Nothing for the user to do about it: the provider's own
+                    // interval will try again, and `/v1/health` reports it.
+                    warn!("could not refresh the Stremio source: {error}");
+                }
+                return Task::none();
             }
             Message::ToggleCategorization => return self.toggle_categorization(),
             Message::CreateCategorizationCollections => {
@@ -5837,7 +6113,7 @@ impl HearthDeck {
     /// The settings screen. It owns the categorization story, so the dashboard
     /// does not have to: what it costs, whether it is on, and the way back.
     fn view_settings(&self) -> Element<'_, Message> {
-        crate::settings::view(&self.settings_panel())
+        crate::settings::view(&self.settings_panel(), &self.stremio_panel())
     }
 
     /// What the settings screen renders, gathered in one place so the screen and
@@ -5849,21 +6125,48 @@ impl HearthDeck {
         }
     }
 
+    /// What the Stremio half of the settings screen renders, gathered the same way
+    /// and for the same reason.
+    fn stremio_panel(&self) -> crate::settings::stremio::Panel {
+        crate::settings::stremio::Panel {
+            connection: self.stremio_connection.clone(),
+            reading: self.stremio_reading,
+            pending: self.stremio_pending.clone(),
+            busy: self.stremio_busy,
+            error: self.stremio_error.clone(),
+        }
+    }
+
     /// The settings buttons a controller may land on, left to right.
     ///
     /// A deployment without the feature has none, so the page is a statement with
     /// nothing to press — which is why the whole feature stays behind
     /// `capabilities.categorization` rather than needing to fail at a click.
     fn settings_targets(&self) -> Vec<widget::Id> {
-        if self.categorization_capable != Some(true) {
-            return Vec::new();
+        // Ordered as the screen draws them, so the pad's walk matches the eye's:
+        // categorization first, then the Stremio controls below it. The Stremio
+        // ones are gathered outside the capability check rather than behind it,
+        // because linking an account needs nothing of the deployment.
+        let mut targets: Vec<widget::Id> = Vec::new();
+
+        if self.categorization_capable == Some(true) {
+            let panel = self.settings_panel();
+            targets.extend(
+                crate::settings::actions(&panel)
+                    .into_iter()
+                    .filter(|action| crate::settings::pressable(*action, &panel))
+                    .map(|action| action.id().clone()),
+            );
         }
-        let panel = self.settings_panel();
-        crate::settings::actions(&panel)
-            .into_iter()
-            .filter(|action| crate::settings::pressable(*action, &panel))
-            .map(|action| action.id().clone())
-            .collect()
+
+        let stremio = self.stremio_panel();
+        targets.extend(
+            crate::settings::stremio::actions(&stremio)
+                .into_iter()
+                .filter(|action| crate::settings::stremio::pressable(*action, &stremio))
+                .map(|action| action.id().clone()),
+        );
+        targets
     }
 
     /// The next settings button along, or `None` when the row has run out or the
@@ -7990,13 +8293,47 @@ mod tests {
     fn the_settings_view_builds_for_every_capability_state() {
         // Building the view evaluates every localised label the screen uses, so
         // a key missing from the fluent catalogue fails here instead of at
-        // runtime.
+        // runtime. The Stremio half is walked through its own states for the same
+        // reason: a label is only built by the state that shows it, so a state left
+        // out here is a key left unchecked.
+        let stremio_states = [
+            crate::settings::stremio::Panel {
+                connection: None,
+                reading: false,
+                pending: None,
+                busy: false,
+                error: None,
+            },
+            crate::settings::stremio::Panel {
+                connection: None,
+                reading: true,
+                pending: Some(crate::settings::stremio::Pending {
+                    code: "ABCD".to_owned(),
+                    link: "https://link.stremio.com/ABCD".to_owned(),
+                    seconds_left: 120,
+                }),
+                busy: false,
+                error: Some("offline".to_owned()),
+            },
+            crate::settings::stremio::Panel {
+                connection: Some(crate::providers::daemon::StremioConnection {
+                    linked_at: "2026-10-07T10:00:00Z".to_owned(),
+                }),
+                reading: false,
+                pending: None,
+                busy: true,
+                error: None,
+            },
+        ];
+
         for capable in [None, Some(false), Some(true)] {
             let panel = crate::settings::Panel {
                 capable,
                 snapshot: None,
             };
-            let _ = crate::settings::view(&panel);
+            for stremio in &stremio_states {
+                let _ = crate::settings::view(&panel, stremio);
+            }
         }
 
         let idle: CategorizationSnapshot =
@@ -8008,7 +8345,9 @@ mod tests {
                 capable: Some(true),
                 snapshot: Some(snapshot),
             };
-            let _ = crate::settings::view(&panel);
+            for stremio in &stremio_states {
+                let _ = crate::settings::view(&panel, stremio);
+            }
         }
     }
 
@@ -8035,11 +8374,22 @@ mod tests {
         assert_eq!(app.focused_id.as_ref(), Some(Action::Reset.id()));
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
         assert_eq!(app.focused_id.as_ref(), Some(Action::RemoveModel.id()));
-        // Clamped at the end, like the dashboard's own navigation.
+        // The Stremio section sits below this one, so its link control is the last
+        // thing the pad reaches — and the row clamps there, like the dashboard's own
+        // navigation.
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
-        assert_eq!(app.focused_id.as_ref(), Some(Action::RemoveModel.id()));
+        assert_eq!(
+            app.focused_id.as_ref(),
+            Some(crate::settings::stremio::Action::Link.id())
+        );
+        let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
+        assert_eq!(
+            app.focused_id.as_ref(),
+            Some(crate::settings::stremio::Action::Link.id()),
+            "the row ends at the Stremio control"
+        );
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::PrevCol);
-        assert_eq!(app.focused_id.as_ref(), Some(Action::Reset.id()));
+        assert_eq!(app.focused_id.as_ref(), Some(Action::RemoveModel.id()));
     }
 
     #[test]
@@ -8108,7 +8458,7 @@ mod tests {
     }
 
     #[test]
-    fn a_deployment_without_the_feature_has_no_settings_targets() {
+    fn a_deployment_without_the_feature_offers_only_the_stremio_control() {
         let mut app = HearthDeck {
             categorization_capable: Some(false),
             categorization: Some(serde_json::from_value(snapshot_json(false, true)).unwrap()),
@@ -8117,10 +8467,19 @@ mod tests {
 
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::OpenSettings);
         assert_eq!(app.page, super::Page::Settings);
-        assert_eq!(app.focused_id, None);
+        // Linking an account needs nothing of the deployment, so this is the one
+        // control the screen has — and the pad lands on it rather than nowhere.
+        assert_eq!(
+            app.focused_id.as_ref(),
+            Some(crate::settings::stremio::Action::Link.id())
+        );
 
         let _ = <HearthDeck as cosmic::Application>::update(&mut app, super::Message::NextRow);
-        assert_eq!(app.focused_id, None, "nothing on the page can be pressed");
+        assert_eq!(
+            app.focused_id.as_ref(),
+            Some(crate::settings::stremio::Action::Link.id()),
+            "the only control on the page is the Stremio one"
+        );
     }
 
     #[test]

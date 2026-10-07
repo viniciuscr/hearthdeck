@@ -231,10 +231,14 @@ authoritative would drop usable fields:
    media id, season, episode) — a validated `LaunchStremio` request, not a URL
    string. The app-level launch of `com.stremio.Stremio.desktop` is the fallback
    until the scheme is confirmed on hardware (Phase 1).
-9. **The QR image is produced by the daemon** from a link URL it already holds,
-   and served through the same authenticated asset path the frontend already
-   renders RomM artwork from. The four-character code and the link are always
-   shown as text as well, so the screen is useful even if the image fails.
+9. **The QR image is produced by the daemon from a link URL it already holds**, and
+   served through the same authenticated asset path the frontend already renders
+   RomM artwork from. The four-character code and the link are always shown as text
+   as well, so the screen is useful even if the image fails.
+   **Not implemented yet.** The daemon can either generate the image (a `qrcode`
+   dependency) or proxy the PNG Stremio already returns for the link, and the second
+   needs no new crate. The screen currently ships the code and the link only, which
+   is the half that makes the flow work without typing.
 10. **Unlinking removes both the credential and the catalog rows** that source
     owns, so a stale rail cannot outlive the account it came from.
 
@@ -327,13 +331,24 @@ Each phase is scoped to be doable in one sitting and independently useful.
 - **Phase 4 — API and contract.** The routes above plus their schemas in
   `contracts/openapi.yaml`, keeping the credential out of every response, in the
   style `getRommSettings` already sets.
-- **Phase 5 — Frontend: settings and rail.** A Settings section (link with a
-  code → QR + code + link, poll status, unlink) and a dashboard rail. Both are
-  genuinely new frontend work rather than a mapping: today's shelves are built
-  from desktop entries, and `is_watch_entry` identifies streaming services by
-  exec line, so no catalog record can reach a shelf at all. The rail needs a
-  `DashboardShelf` variant, a card source, and a progress affordance; the existing
-  `CollectionItem` → card conversion is the path to reuse for the cards.
+- **Phase 5 — Frontend: settings and rail. Settings half DONE, rail not started.**
+  The Settings screen has a Stremio section: it links with a code, draws that code
+  and the link with a countdown, polls the daemon every two seconds until the link
+  resolves, asks the source to refresh so the catalog fills immediately, and unlinks.
+  Because both the code and the link are on screen, authenticating needs no typing on
+  a television — the link opens on any device already signed in. The controls go
+  through the same `actions`/`pressable` list the categorization half uses, so the
+  controller reaches them, and the section sits *below* categorization so the screen
+  a user already knows, and its pad behaviour, are unchanged.
+
+  Two pieces remain. The **rail**: no catalog item can reach a shelf today (see the
+  mapping note above), so it needs a `DashboardShelf` variant, a card source and a
+  progress affordance. And the **QR image**: decision 9 called for the daemon to
+  produce it, which means either a `qrcode` dependency in the daemon plus a route, or
+  proxying the PNG Stremio already returns through a daemon route — the second adds
+  no crate. Neither is in yet, so the screen shows the code and the link and nothing
+  else. That is polish rather than a blocker, since `link.stremio.com/<code>` needs no
+  typing when it is opened on a phone that is already signed in.
 - **Phase 6 — Launch.** The typed `LaunchStremio` request, the bridge building
   the URI from validated components, and the app-level launch kept as the
   fallback path.
