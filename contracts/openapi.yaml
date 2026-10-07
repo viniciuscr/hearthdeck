@@ -622,6 +622,61 @@ paths:
       responses:
         '501':
           description: Host-side install approval is not implemented
+  /v1/stremio/link:
+    post:
+      operationId: startStremioLink
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: >-
+            A fresh link code, its link, and Stremio's QR image. The user approves
+            the code on a device where they are already signed in; no endpoint here
+            accepts a password, so there is no password to store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StremioLinkOffer'
+        '502':
+          description: The Stremio link service could not be reached, or refused the request
+    get:
+      operationId: pollStremioLink
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: >-
+            The pending link's state. Never carries the session key: a linked
+            account is reported as linked, and the credential stays in the daemon.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StremioLinkStatus'
+        '502':
+          description: The Stremio link service could not be reached
+  /v1/stremio/settings:
+    get:
+      operationId: getStremioSettings
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The linked Stremio account without its credential
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/StremioConnection'
+                  - type: 'null'
+    delete:
+      operationId: unlinkStremio
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: >-
+            Unlinked: the session is gone, and the catalog rows that source owned
+            are removed with it, so no rail can outlive the account it came from.
 components:
   securitySchemes:
     bearerAuth:
@@ -1017,6 +1072,57 @@ components:
       properties:
         base_url: { type: string, format: uri, maxLength: 2048 }
         token: { type: string, minLength: 1, maxLength: 2048 }
+    StremioLinkOffer:
+      type: object
+      required: [code, link, qr, expires_in_seconds]
+      properties:
+        code:
+          type: string
+          description: The four characters the user enters in the Stremio app or site.
+        link: { type: string, format: uri }
+        qr: { type: string, format: uri }
+        expires_in_seconds:
+          type: integer
+          description: >-
+            Hearthdeck's own window, not Stremio's: the upstream expiry is
+            undocumented, and a live code and a dead one answer identically, so
+            only this countdown can end the wait.
+    StremioConnection:
+      type: object
+      description: >-
+        The linked account. Deliberately has no field for the session key, and no
+        account name: the link flow answers with a key and nothing else.
+      required: [linked_at, updated_at]
+      properties:
+        linked_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    StremioLinkStatus:
+      description: >-
+        The pending link's state, tagged by `status`. No case carries the session
+        key: a linked account is reported as linked, and the credential stays in
+        the daemon.
+      oneOf:
+        - type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [idle] }
+        - type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [expired] }
+        - type: object
+          required: [status, code, link, qr, seconds_left]
+          properties:
+            status: { type: string, enum: [waiting] }
+            code: { type: string }
+            link: { type: string, format: uri }
+            qr: { type: string, format: uri }
+            seconds_left: { type: integer }
+        - type: object
+          required: [status, connection]
+          properties:
+            status: { type: string, enum: [linked] }
+            connection: { $ref: '#/components/schemas/StremioConnection' }
     CategorizationResponse:
       type: object
       required: [enabled, status, report]

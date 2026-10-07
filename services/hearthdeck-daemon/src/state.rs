@@ -5,10 +5,17 @@ use hearthdeck_protocol::ApplicationSession;
 use tokio::sync::broadcast;
 
 use crate::{
-    activity::ActivityStore, auth::AuthRepository, catalog::CatalogStore,
-    categorizer::CategorizationService, collections::CollectionStore, config::Config,
-    database::Database, discovery::DiscoveryService, enrichment::EnrichmentService,
+    activity::ActivityStore,
+    auth::AuthRepository,
+    catalog::CatalogStore,
+    categorizer::CategorizationService,
+    collections::CollectionStore,
+    config::Config,
+    database::Database,
+    discovery::DiscoveryService,
+    enrichment::EnrichmentService,
     settings::SettingsRepository,
+    stremio::{LinkState, StremioRepository},
 };
 
 #[derive(Clone)]
@@ -19,6 +26,12 @@ pub struct AppState {
     pub catalog: CatalogStore,
     pub collections: CollectionStore,
     pub settings: SettingsRepository,
+    /// The Stremio account link: the stored session, plus the one link a user may
+    /// be waiting on. The stored session is a credential and is read only by the
+    /// provider; the pending link lives in memory, because a link is approved
+    /// within minutes or not at all.
+    pub stremio: StremioRepository,
+    pub stremio_link: LinkState,
     pub discovery: Option<DiscoveryService>,
     pub enrichment: Option<EnrichmentService>,
     /// Always present on Linux. It stays an `Option` for the same reason
@@ -115,6 +128,8 @@ impl AppState {
             catalog: CatalogStore::new(database.pool().clone()),
             collections: CollectionStore::new(database.pool().clone()),
             settings: SettingsRepository::new(database.pool().clone()),
+            stremio: StremioRepository::new(database.pool().clone()),
+            stremio_link: LinkState::new(),
             discovery: None,
             enrichment: None,
             categorization: None,

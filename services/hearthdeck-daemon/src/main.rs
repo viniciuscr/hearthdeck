@@ -14,6 +14,7 @@ mod provider_worker;
 mod retro;
 mod settings;
 mod state;
+mod stremio;
 
 use std::{net::TcpListener as StdTcpListener, sync::Arc};
 

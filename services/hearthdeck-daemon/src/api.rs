@@ -30,6 +30,7 @@ use crate::{
         BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
     },
     state::{ProviderHealth, ServerEvent, SharedState},
+    stremio::{self, LinkOffer, LinkPoll, StremioConnection},
 };
 
 pub fn router(state: SharedState) -> Router {
@@ -57,6 +58,14 @@ pub fn router(state: SharedState) -> Router {
             get(get_romm_settings)
                 .put(update_romm_settings)
                 .delete(clear_romm_settings),
+        )
+        .route(
+            "/v1/stremio/link",
+            post(start_stremio_link).get(poll_stremio_link),
+        )
+        .route(
+            "/v1/stremio/settings",
+            get(get_stremio_settings).delete(unlink_stremio),
         )
         .route("/v1/library/rescan", post(rescan_library))
         .route("/v1/categorization", get(categorization))
@@ -459,6 +468,118 @@ async fn clear_romm_settings(
         .clear_romm()
         .await
         .map_err(ApiError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The pending-link poll's answer.
+///
+/// Tagged by `status`, so a client cannot read the fields of the wrong case, and
+/// carrying the session key in none of them: a linked account says that it
+/// linked, and the credential stays inside the daemon.
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum StremioLinkResponse {
+    /// No link is pending: never asked for, or already resolved.
+    Idle,
+    /// The window closed while the user was still deciding.
+    Expired,
+    /// Waiting on the user, who is approving the code on another device.
+    Waiting {
+        code: String,
+        link: String,
+        qr: String,
+        seconds_left: u64,
+    },
+    /// Linked and stored. The connection is the credential-free view of it.
+    Linked { connection: StremioConnection },
+}
+
+/// Asks Stremio for a link code and holds it as the pending link.
+///
+/// The user approves the code on a device where they are already signed in, which
+/// is why no endpoint here accepts a password: there is nothing to encrypt but the
+/// key that comes back, and nothing to store but that key.
+async fn start_stremio_link(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<LinkOffer>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let offer = stremio::request_link()
+        .await
+        .map_err(ApiError::stremio_link)?;
+    info!(code = %offer.code, "stremio link code issued");
+    state.stremio_link.start(offer.clone()).await;
+    Ok(Json(offer))
+}
+
+/// One poll of the pending link.
+///
+/// The session key is stored here and goes no further: the response reports that
+/// the account linked, and says nothing about the credential.
+async fn poll_stremio_link(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<StremioLinkResponse>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let response = match state
+        .stremio_link
+        .poll()
+        .await
+        .map_err(ApiError::stremio_link)?
+    {
+        LinkPoll::Idle => StremioLinkResponse::Idle,
+        LinkPoll::Expired => StremioLinkResponse::Expired,
+        LinkPoll::Waiting(offer, seconds_left) => StremioLinkResponse::Waiting {
+            code: offer.code,
+            link: offer.link,
+            qr: offer.qr,
+            seconds_left,
+        },
+        LinkPoll::Linked(auth_key) => {
+            let connection = state
+                .stremio
+                .save_session(&auth_key)
+                .await
+                .map_err(ApiError::stremio_link)?;
+            info!("stremio account linked");
+            StremioLinkResponse::Linked { connection }
+        }
+    };
+    Ok(Json(response))
+}
+
+async fn get_stremio_settings(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<Option<StremioConnection>>, ApiError> {
+    authenticate(&state, &headers).await?;
+    state
+        .stremio
+        .connection()
+        .await
+        .map(Json)
+        .map_err(ApiError::internal)
+}
+
+/// Unlinks the account, and takes the catalog rows with it.
+///
+/// Both halves matter. A session that is gone while its rows survive would leave a
+/// Continue Watching rail listing somebody's unfinished films on a box where
+/// nobody is linked — so the pending link is dropped first, then the session, then
+/// the source's rows (the decision recorded in `docs/stremio-integration.md`).
+async fn unlink_stremio(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    state.stremio_link.cancel().await;
+    state.stremio.clear().await.map_err(ApiError::internal)?;
+    state
+        .catalog
+        .replace_source(stremio::SOURCE_ID, Vec::new())
+        .await
+        .map_err(ApiError::internal)?;
+    info!("stremio account unlinked");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1599,6 +1720,22 @@ impl ApiError {
         }
     }
 
+    /// The link flow could not be completed.
+    ///
+    /// Every failure here is upstream's, or is upstream's answer being unusable:
+    /// this daemon contributes nothing to the flow but the token that
+    /// authenticates the client asking for it. The message is deliberately the
+    /// upstream's own wording, and it never contains the session key — see
+    /// `stremio::save_session`, whose refusals describe the key without quoting
+    /// it.
+    fn stremio_link(error: impl std::fmt::Display) -> Self {
+        Self {
+            status: StatusCode::BAD_GATEWAY,
+            message: error.to_string(),
+            settings: None,
+        }
+    }
+
     fn invalid_romm_settings(error: impl std::fmt::Display) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
@@ -1772,6 +1909,56 @@ mod tests {
                 metadata: serde_json::Value::Null,
                 updated_at: "2026-01-01T00:00:00Z".to_owned(),
             }])
+        }
+    }
+
+    /// The Stremio routes sit behind the daemon's own authentication like every
+    /// other account-touching route. One of them starts a session and another says
+    /// whether a session exists, so an unpaired client on the LAN must reach
+    /// neither. Authentication is checked before anything is dialled, so this
+    /// holds without a network and without a Stremio account.
+    #[tokio::test]
+    async fn the_stremio_routes_require_authentication() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.sock"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+            },
+            database,
+        ));
+
+        for request in [
+            Request::post("/v1/stremio/link")
+                .body(Body::empty())
+                .unwrap(),
+            Request::get("/v1/stremio/link")
+                .body(Body::empty())
+                .unwrap(),
+            Request::get("/v1/stremio/settings")
+                .body(Body::empty())
+                .unwrap(),
+            Request::delete("/v1/stremio/settings")
+                .body(Body::empty())
+                .unwrap(),
+        ] {
+            let method = request.method().clone();
+            let path = request.uri().path().to_owned();
+            let response = router(state.clone()).oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {path} must require authentication"
+            );
         }
     }
 

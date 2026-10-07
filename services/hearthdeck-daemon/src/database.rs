@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
+use tracing::warn;
 
 #[derive(Clone)]
 pub struct Database {
@@ -18,9 +19,12 @@ impl Database {
             .create_if_missing(true)
             .foreign_keys(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
-        Ok(Self {
-            pool: SqlitePool::connect_with(options).await?,
-        })
+        let pool = SqlitePool::connect_with(options).await?;
+        // The pool is connected, so the file exists — SQLite creates it before
+        // the first statement runs, and this must happen before the first write
+        // so the WAL siblings inherit the narrowed mode too.
+        restrict_to_owner(path).await;
+        Ok(Self { pool })
     }
 
     pub async fn migrate(&self) -> Result<()> {
@@ -69,6 +73,24 @@ impl Database {
               id INTEGER PRIMARY KEY CHECK (id = 1),
               base_url TEXT NOT NULL,
               token TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            -- The Stremio account link. One row, and the only thing in it that is
+            -- not a timestamp is the session key the link flow produced.
+            --
+            -- `auth_key` is a bearer token with no expiry and no refresh token, so
+            -- it is read by the provider and nothing else: no handler returns it,
+            -- no log line names it, and the settings screen is served only the
+            -- timestamps below. It is also the reason the database file itself is
+            -- narrowed to its owner (see `restrict_to_owner`).
+            --
+            -- There is no user or account column because the link flow has none to
+            -- give: `/api/read` answers with a key and nothing else, so the link
+            -- time is all there is to show.
+            CREATE TABLE IF NOT EXISTS stremio_settings (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              auth_key TEXT NOT NULL,
+              linked_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS hearthdeck_schema_migrations (
@@ -233,6 +255,37 @@ impl Database {
     }
 }
 
+/// Narrows the database file to its owner.
+///
+/// The database holds bearer-equivalent credentials — the RomM token, and now the
+/// Stremio session — while SQLite creates the file subject to the umask, which a
+/// default login leaves at `0644`, readable by every account on the box. The WAL
+/// and SHM siblings take the database file's mode when they are created, so doing
+/// this before the first write covers them as well.
+///
+/// A filesystem that refuses the change is reported and tolerated rather than
+/// fatal: refusing to start over a permission quirk on a mounted share would be a
+/// worse outcome than a database that is more readable than intended.
+async fn restrict_to_owner(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let owner_only = std::fs::Permissions::from_mode(0o600);
+        if let Err(error) = tokio::fs::set_permissions(path, owner_only).await {
+            warn!(
+                path = %path.display(),
+                %error,
+                "could not restrict the database file to its owner"
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
 /// Runs an `ALTER TABLE ... ADD COLUMN`, tolerating only the one benign failure.
 ///
 /// SQLite has no `ADD COLUMN IF NOT EXISTS`, so a column that is already present
@@ -299,6 +352,83 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 3);
+    }
+
+    /// A database created before Stremio support gains its table on the next
+    /// migrate, keeps a session it already holds across a re-migration, and
+    /// refuses a second row.
+    #[tokio::test]
+    async fn adds_the_stremio_table_to_an_existing_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+
+        // Stand in for a database migrated before this table existed: its
+        // neighbours are there, `stremio_settings` is not.
+        sqlx::query(
+            "CREATE TABLE romm_settings (\
+             id INTEGER PRIMARY KEY CHECK (id = 1), base_url TEXT NOT NULL, \
+             token TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+
+        database.migrate().await.unwrap();
+
+        let present: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'stremio_settings'",
+        )
+        .fetch_one(database.pool())
+        .await
+        .unwrap();
+        assert_eq!(present, 1);
+
+        sqlx::query(
+            "INSERT INTO stremio_settings (id, auth_key, linked_at, updated_at) \
+             VALUES (1, 'linked_key', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+
+        // The upgrade path for a database that already migrated: a no-op.
+        database.migrate().await.unwrap();
+
+        let auth_key: Option<String> =
+            sqlx::query_scalar("SELECT auth_key FROM stremio_settings WHERE id = 1")
+                .fetch_optional(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(auth_key.as_deref(), Some("linked_key"));
+
+        // `CHECK (id = 1)` is what makes this a single-session table.
+        let second_row = sqlx::query(
+            "INSERT INTO stremio_settings (id, auth_key, linked_at, updated_at) \
+             VALUES (2, 'other_key', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(database.pool())
+        .await;
+        assert!(second_row.is_err(), "a second session row must be refused");
+    }
+
+    /// The database holds bearer-equivalent credentials, so it is owner-only.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn restricts_the_database_file_to_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hearthdeck.db");
+        let database = Database::connect(&path).await.unwrap();
+        database.migrate().await.unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "the database should be readable only by its owner"
+        );
     }
 
     #[tokio::test]
