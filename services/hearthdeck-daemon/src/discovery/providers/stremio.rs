@@ -168,9 +168,7 @@ async fn datastore(path: &str, auth_key: &str, body: Value) -> Result<Value> {
 
 /// The identity of a datastore state: the metadata's own serialization.
 fn digest_of(meta: &Value) -> String {
-    meta.get("result")
-        .map(Value::to_string)
-        .unwrap_or_else(String::new)
+    meta.get("result").map(Value::to_string).unwrap_or_default()
 }
 
 /// The unfinished titles, newest first, capped at Stremio's own row length.
@@ -187,14 +185,12 @@ fn continue_watching(library: &Value) -> Result<Vec<CatalogRecord>> {
     // Sorted by `_mtime`, which is what Stremio sorts its own row by. `lastWatched`
     // is when the title was actually played and can be weeks earlier — on one
     // account it differed by nineteen days — so only `_mtime` reproduces what a
-    // Stremio user sees.
-    unfinished.sort_by(|left, right| mtime(right).cmp(&mtime(left)));
+    // Stremio user sees. Reversed rather than compared by hand, which also leaves an
+    // unreadable `_mtime` last rather than first.
+    unfinished.sort_by_key(|item| std::cmp::Reverse(mtime(item)));
     unfinished.truncate(CONTINUE_WATCHING_LIMIT);
 
-    Ok(unfinished
-        .into_iter()
-        .filter_map(|item| catalog_record(item))
-        .collect())
+    Ok(unfinished.into_iter().filter_map(catalog_record).collect())
 }
 
 /// Stremio's own predicate, from `library_item.rs::is_in_continue_watching`.
@@ -463,10 +459,13 @@ mod tests {
         assert_eq!(records[0].id, "stremio:tt0000011");
         assert_eq!(records[9].id, "stremio:tt0000002");
 
+        // Newest first, checked pairwise rather than by sorting a copy: the assertion
+        // then names the pair that broke the order instead of showing two lists.
         let times: Vec<&String> = records.iter().map(|record| &record.updated_at).collect();
-        let mut sorted = times.clone();
-        sorted.sort_by(|left, right| right.cmp(left));
-        assert_eq!(times, sorted, "records must be newest first");
+        assert!(
+            times.windows(2).all(|pair| pair[0] >= pair[1]),
+            "records must be newest first: {times:?}"
+        );
     }
 
     /// A record with no poster, or a small one, still yields a usable card.
@@ -490,7 +489,9 @@ mod tests {
     #[test]
     fn the_digest_tracks_the_metadata_and_ignores_what_it_does_not_carry() {
         let before = json!({ "result": [["tt1", 1], ["tt2", 2]] });
-        assert_eq!(digest_of(&before), digest_of(&before.clone()));
+        // Pinned, not merely self-consistent: the digest is how a refresh decides
+        // there is nothing to fetch.
+        assert_eq!(digest_of(&before), r#"[["tt1",1],["tt2",2]]"#);
 
         let moved = json!({ "result": [["tt1", 1], ["tt2", 3]] });
         assert_ne!(digest_of(&before), digest_of(&moved));
