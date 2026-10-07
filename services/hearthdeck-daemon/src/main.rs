@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
 
     let state = AppState::new(config.clone(), database);
     let discovery = discovery::DiscoveryService::start(
-        discovery_providers(&config),
+        discovery_providers(&config, state.stremio.clone()),
         state.catalog.clone(),
         state.events.clone(),
     );
@@ -194,7 +194,10 @@ fn notify_ready() -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn discovery_providers(config: &Config) -> Vec<Arc<dyn discovery::DiscoveryProvider>> {
+fn discovery_providers(
+    config: &Config,
+    stremio: stremio::StremioRepository,
+) -> Vec<Arc<dyn discovery::DiscoveryProvider>> {
     vec![
         Arc::new(
             discovery::providers::desktop_apps::DesktopAppsProvider::new(
@@ -202,6 +205,10 @@ fn discovery_providers(config: &Config) -> Vec<Arc<dyn discovery::DiscoveryProvi
             ),
         ),
         Arc::new(discovery::providers::heroic::HeroicInstalledProvider::from_system()),
+        // Publishes the account's Continue Watching list. It reads the session from
+        // the same store the settings endpoints write, so linking an account in the
+        // UI is all it takes for the next refresh to have something to publish.
+        Arc::new(discovery::providers::stremio::StremioProvider::new(stremio)),
     ]
 }
 

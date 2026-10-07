@@ -243,6 +243,7 @@ fn metadata_object(metadata: Option<&Value>, key: &str) -> Option<Map<String, Va
 
 pub use hearthdeck_protocol::CatalogItem;
 
+#[derive(Clone)]
 pub struct CatalogRecord {
     pub id: String,
     pub title: String,

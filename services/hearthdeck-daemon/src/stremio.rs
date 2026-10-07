@@ -92,7 +92,6 @@ pub struct StremioConnection {
 /// that cannot be serialized cannot be returned by a handler, or written out by
 /// a log line that formatted the wrong struct, by accident.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct StremioCredentials {
     pub auth_key: String,
 }
@@ -118,11 +117,10 @@ impl StremioRepository {
         }))
     }
 
-    /// The session, for the calls that need it. Never served to a client.
+    /// The session, for the calls that need it.
     ///
-    /// Unread until the discovery provider lands, which is the only caller it
-    /// will ever have: nothing else in the daemon may hold this key.
-    #[allow(dead_code)]
+    /// Never served to a client: the discovery provider is the only caller, and
+    /// nothing else in the daemon may hold this key.
     pub async fn credentials(&self) -> Result<Option<StremioCredentials>> {
         let row = sqlx::query("SELECT auth_key FROM stremio_settings WHERE id = 1")
             .fetch_optional(&self.pool)

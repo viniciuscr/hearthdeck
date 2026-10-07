@@ -257,12 +257,21 @@ existing `collections` table upgrade does.
 - **`DELETE /v1/stremio/settings`** → unlink, per decision 10.
 - **`GET /v1/stremio/qr`** → the QR image (decision 9).
 - **Refresh** reuses `POST /v1/discovery/stremio/refresh`, which already exists.
-- **`CatalogRecord` mapping**: `id: "stremio:<imdbid>"` (namespaced, as the
-  provider contract requires), `title: name`, `icon: poster` with the size
-  segment normalised, and `metadata` carrying `type`, `video_id`, `season`,
-  `episode`, `timeOffset`, `duration`, `progress`, `lastWatched`. **Confirm the
-  `kind` and `metadata.categories` values the frontend classifier accepts**, so
-  these cards land in a video rail rather than being classified as Games or Apps.
+- **`CatalogRecord` mapping** (implemented): `id: "stremio:<imdbid>"` (namespaced,
+  as the provider contract requires), `title: name`, `icon: poster` with the size
+  segment normalised, `launch_id` set to `com.stremio.Stremio.desktop` as the
+  decision-8 fallback, and `metadata` carrying `type`, `video_id`, `season`,
+  `episode`, `progress`, `time_offset_ms`, `duration_ms`, `minutes_left`,
+  `last_watched`, `times_watched` and `year`.
+
+  **Answered, and the answer is not a mapping choice.** No `kind` or category
+  value can put these cards on a video rail, because no such value exists:
+  `Section` has only PC Games, Console Games and Applications, and
+  `app_group.rs::is_watch_entry` identifies streaming *services* by id and exec
+  line — deliberately not by category, since `AudioVideo`/`Video` also match
+  volume mixers and capture tools. So a Stremio film lands in Applications
+  whatever it carries, and the rail is real frontend work in Phase 5 rather than
+  a value to pick here.
 
 ## Open questions
 
@@ -302,23 +311,29 @@ Each phase is scoped to be doable in one sitting and independently useful.
   confirm it resumes at the right position. The output decides whether Phase 6
   ships deep links or falls back to an app-level launch. Do not start Phase 6
   before this answers.
-- **Phase 2 — Daemon: credential and link session.** `stremio_settings` in
-  `migrate()` with an upgrade test; the link state machine over
-  `link.stremio.com/api/create` + `/api/read`; one-shot codes; the `authKey`
-  never logged; `0600` confirmed on both the row and the database file.
-- **Phase 3 — Daemon: provider and mapping.** `StremioProvider` with
-  `source_id: "stremio"`: `datastoreMeta` change detection, `datastoreGet`, the
-  Continue Watching predicate, `video_id` parsing, millisecond progress, poster
-  normalisation, and a refresh interval. Independence from the other providers
-  comes free from the worker set.
+- **Phase 2 — Daemon: credential and link session. DONE.** `stremio_settings` with
+  an upgrade test; the link flow over `link.stremio.com/api/create` + `/api/read`;
+  the session key never serializable, never logged, and never quoted in an error;
+  and `Database::connect` now narrows the database file to `0600`. The endpoints
+  are `POST`/`GET /v1/stremio/link` and `GET`/`DELETE /v1/stremio/settings`.
+- **Phase 3 — Daemon: provider and mapping. DONE.** `StremioProvider` with
+  `source_id: "stremio"`, a five-minute refresh, `datastoreMeta` change detection
+  (the digest is the metadata's own serialization), the Continue Watching
+  predicate, `video_id`-derived season and episode, millisecond progress, poster
+  normalisation, and the app-level launch as the decision-8 fallback. An account
+  that is not linked publishes an empty snapshot rather than failing, so an unlink
+  cannot leave a degraded provider behind. `CatalogRecord` gained `Clone` for the
+  snapshot cache.
 - **Phase 4 — API and contract.** The routes above plus their schemas in
   `contracts/openapi.yaml`, keeping the credential out of every response, in the
   style `getRommSettings` already sets.
 - **Phase 5 — Frontend: settings and rail.** A Settings section (link with a
-  code → QR + code + link, poll status, unlink) and a dashboard rail. The rail
-  needs a `DashboardShelf` variant and a card source, since today's shelves are
-  built around desktop entries; the existing `CollectionItem` → card conversion
-  is the path to reuse.
+  code → QR + code + link, poll status, unlink) and a dashboard rail. Both are
+  genuinely new frontend work rather than a mapping: today's shelves are built
+  from desktop entries, and `is_watch_entry` identifies streaming services by
+  exec line, so no catalog record can reach a shelf at all. The rail needs a
+  `DashboardShelf` variant, a card source, and a progress affordance; the existing
+  `CollectionItem` → card conversion is the path to reuse for the cards.
 - **Phase 6 — Launch.** The typed `LaunchStremio` request, the bridge building
   the URI from validated components, and the app-level launch kept as the
   fallback path.
