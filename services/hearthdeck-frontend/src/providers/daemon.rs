@@ -1541,7 +1541,7 @@ fn cache_icon(url: &str) -> Option<String> {
     Some(cached.to_string_lossy().into_owned())
 }
 
-fn cached_icon(key: &str) -> Option<String> {
+pub(crate) fn cached_icon(key: &str) -> Option<String> {
     let mut hasher = DefaultHasher::new();
     hasher.write(key.as_bytes());
     let stem = format!("{:016x}", hasher.finish());

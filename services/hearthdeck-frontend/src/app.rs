@@ -7595,7 +7595,17 @@ fn snapshot_entry(item: &CollectionItem) -> DesktopEntryData {
         id: item.item_id.clone(),
         name: item.name.clone(),
         exec: item.item_id.strip_prefix("romm:").map(str::to_owned),
-        icon: item.icon.clone(),
+        // A poster arrives as a URL and a rail draws on a frame, so it cannot fetch one:
+        // the card gets the copy the catalog refresh already cached, which is the local
+        // path an application entry would have carried. Without this a composed rail
+        // showed placeholder squares, because nothing ever turned the URL into a file.
+        // Nothing cached yet leaves the URL in place and the card draws its placeholder
+        // until the next refresh has cached it.
+        icon: item
+            .icon
+            .as_deref()
+            .and_then(crate::providers::daemon::cached_icon)
+            .or_else(|| item.icon.clone()),
         path: None,
         categories: vec!["Game".to_owned()],
         terminal: false,
