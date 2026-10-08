@@ -6,7 +6,7 @@ use std::{
     env,
     hash::{DefaultHasher, Hasher},
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 use tokio::sync::OnceCell;
@@ -1502,24 +1502,15 @@ fn belongs_in_the_app_library(item: &CatalogItem) -> bool {
 }
 
 fn cache_icon(url: &str) -> Option<String> {
-    let cache_dir = icon_cache_dir();
-    let _ = std::fs::create_dir_all(&cache_dir);
-    let extension = url::Url::parse(url)
-        .ok()
-        .and_then(|parsed| {
-            Path::new(parsed.path())
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .map(str::to_ascii_lowercase)
-        })
-        .filter(|extension| matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "svg" | "webp"))
-        .unwrap_or_else(|| "png".to_string());
-    let mut hasher = DefaultHasher::new();
-    hasher.write(url.as_bytes());
-    let cached = cache_dir.join(format!("{:016x}.{extension}", hasher.finish()));
-
-    if cached.metadata().is_ok_and(|metadata| metadata.len() >= 16) {
-        return Some(cached.to_string_lossy().into_owned());
+    // A poster URL frequently carries no extension at all — Metahub serves
+    // `/poster/medium/tt0149460/img` — so the format cannot be read off the URL.
+    // Deriving the extension there made every such file `<hash>.png`, and the
+    // half of the covers the server sends as webp were then saved with an
+    // extension the image decoder refuses: the placeholder. The extension is now
+    // taken from the response after the fetch, and the early return probes every
+    // extension the cache can hold rather than one guessed from the URL.
+    if let Some(cached) = cached_icon(url) {
+        return Some(cached);
     }
 
     // `ureq` is blocking, and that is deliberate: this function runs inside
@@ -1527,32 +1518,45 @@ fn cache_icon(url: &str) -> Option<String> {
     // is the honest choice. `reqwest` is async and would want a runtime handle this
     // call does not have.
     let response = ureq::get(url).call().ok()?;
+    // Resolved to a `&'static str` here, before `response` is consumed below, so
+    // the borrow of its headers does not outlive the move into the body reader.
+    let extension = image_extension(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+    );
     let mut body = Vec::new();
     response
         .into_body()
         .into_reader()
         .read_to_end(&mut body)
         .ok()?;
-    if body.len() < 16 {
-        return None;
-    }
-    let mut file = std::fs::File::create(&cached).ok()?;
-    file.write_all(&body).ok()?;
-    Some(cached.to_string_lossy().into_owned())
+    cache_icon_bytes(url, extension, &body)
 }
 
 pub(crate) fn cached_icon(key: &str) -> Option<String> {
-    let mut hasher = DefaultHasher::new();
-    hasher.write(key.as_bytes());
-    let stem = format!("{:016x}", hasher.finish());
     // `svg` and `ico` matter for RomM's bundled console art, which is served
     // in those formats; omitting them made platform icons re-download on every
     // refresh because the cache lookup never matched.
     ["jpg", "jpeg", "png", "webp", "svg", "ico"]
         .into_iter()
-        .map(|extension| icon_cache_dir().join(format!("{stem}.{extension}")))
+        .map(|extension| icon_cache_dir().join(cache_file_name(key, extension)))
         .find(|path| path.metadata().is_ok_and(|metadata| metadata.len() >= 16))
         .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// The file name a cached download is stored under: a stable hash of its key,
+/// then the given extension.
+///
+/// Pure and free of any network or disk access, which is the point: the whole of
+/// the extension-mismatch bug lived in this naming decision, so a test can pin it
+/// here. Every writer names its file through it, and `cached_icon`'s probe
+/// rebuilds the same names, so what one writes the others find.
+fn cache_file_name(key: &str, extension: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    hasher.write(key.as_bytes());
+    format!("{:016x}.{extension}", hasher.finish())
 }
 
 fn cache_icon_bytes(key: &str, extension: &str, bytes: &[u8]) -> Option<String> {
@@ -1561,9 +1565,7 @@ fn cache_icon_bytes(key: &str, extension: &str, bytes: &[u8]) -> Option<String> 
     }
     let cache_dir = icon_cache_dir();
     std::fs::create_dir_all(&cache_dir).ok()?;
-    let mut hasher = DefaultHasher::new();
-    hasher.write(key.as_bytes());
-    let cached = cache_dir.join(format!("{:016x}.{extension}", hasher.finish()));
+    let cached = cache_dir.join(cache_file_name(key, extension));
     std::fs::File::create(&cached).ok()?.write_all(bytes).ok()?;
     Some(cached.to_string_lossy().into_owned())
 }
@@ -1615,9 +1617,37 @@ pub struct RetroRecordPage {
 mod tests {
     use super::{
         CatalogItem, DaemonError, RecentActivityItem, RetroGame, RetroRomVersion,
-        belongs_in_the_app_library, catalog_item_to_game_record, daemon_error_from_body,
-        retro_game_to_game_record, retro_rom_versions, retro_version_label,
+        belongs_in_the_app_library, cache_file_name, catalog_item_to_game_record,
+        daemon_error_from_body, image_extension, retro_game_to_game_record, retro_rom_versions,
+        retro_version_label,
     };
+
+    /// The extension a cached cover is stored with must come from the response,
+    /// not the URL. Metahub poster URLs carry no extension, so the old URL-derived
+    /// name was always `<hash>.png` — and a webp poster saved as `.png` is a file
+    /// the image decoder refuses, which draws the placeholder. That is exactly why
+    /// only some Continue Watching tiles were blank, and always the same ones.
+    #[test]
+    fn cached_icon_name_follows_the_response_content_type() {
+        let poster = "https://images.metahub.space/poster/medium/tt0149460/img";
+
+        assert_eq!(image_extension(Some("image/webp")), "webp");
+        assert_eq!(image_extension(Some("image/jpeg")), "jpg");
+        assert_eq!(image_extension(Some("image/png")), "png");
+
+        // An extension-free URL no longer forces "png": the name carries the
+        // extension the response asked for.
+        assert!(cache_file_name(poster, image_extension(Some("image/webp"))).ends_with(".webp"));
+        assert!(cache_file_name(poster, image_extension(Some("image/jpeg"))).ends_with(".jpg"));
+
+        // One URL, any extension: one stem. That is what lets `cached_icon`'s
+        // multi-extension probe find whatever `cache_icon` wrote.
+        let stem = |name: String| name.rsplit_once('.').unwrap().0.to_string();
+        assert_eq!(
+            stem(cache_file_name(poster, "png")),
+            stem(cache_file_name(poster, "webp"))
+        );
+    }
 
     /// A film or a series is not an application. The daemon serves both from one
     /// endpoint, and without this rule a Continue Watching title was listed in All Apps
