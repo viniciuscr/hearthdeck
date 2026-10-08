@@ -1471,8 +1471,34 @@ impl GameProvider for DaemonProvider {
         }))
         .await;
 
-        Ok(items.into_iter().map(catalog_item_to_game_record).collect())
+        // Films and series are not applications. The rail draws them from the daemon's
+        // own collection, so leaving them here only put them in the All Apps grid,
+        // sorted in among the programs.
+        Ok(items
+            .into_iter()
+            .filter(belongs_in_the_app_library)
+            .map(catalog_item_to_game_record)
+            .collect())
     }
+}
+
+/// Whether a catalog record belongs in the application library.
+///
+/// A streaming provider publishes films and series so the dashboard can draw a rail, and
+/// the daemon serves them from the same endpoint as desktop entries, so without this a
+/// Continue Watching film appeared in the All Apps list beside the programs, with the
+/// same open-it action as one.
+///
+/// Keyed on the record's own kind rather than on which provider published it: the rule is
+/// *a television title is not an application*, not *Stremio is special*, so the next
+/// media provider inherits it. A record with no kind at all is kept, because dropping
+/// something unrecognised from the library is worse than showing it.
+fn belongs_in_the_app_library(item: &CatalogItem) -> bool {
+    let kind = item.kind.trim();
+    if kind.is_empty() {
+        return true;
+    }
+    matches!(kind.to_ascii_lowercase().as_str(), "game" | "application")
 }
 
 fn cache_icon(url: &str) -> Option<String> {
@@ -1589,9 +1615,43 @@ pub struct RetroRecordPage {
 mod tests {
     use super::{
         CatalogItem, DaemonError, RecentActivityItem, RetroGame, RetroRomVersion,
-        catalog_item_to_game_record, daemon_error_from_body, retro_game_to_game_record,
-        retro_rom_versions, retro_version_label,
+        belongs_in_the_app_library, catalog_item_to_game_record, daemon_error_from_body,
+        retro_game_to_game_record, retro_rom_versions, retro_version_label,
     };
+
+    /// A film or a series is not an application. The daemon serves both from one
+    /// endpoint, and without this rule a Continue Watching title was listed in All Apps
+    /// beside the programs. It is keyed on the record's own kind, so the next media
+    /// provider inherits it rather than needing to be named here.
+    #[test]
+    fn only_applications_and_games_reach_the_app_library() {
+        let item = |kind: &str| -> CatalogItem {
+            serde_json::from_value(serde_json::json!({
+                "id": "stremio:tt1",
+                "source_id": "stremio",
+                "title": "A title",
+                "kind": kind,
+                "launch_id": null,
+                "icon": null,
+                "metadata": {},
+            }))
+            .unwrap()
+        };
+
+        assert!(belongs_in_the_app_library(&item("application")));
+        assert!(belongs_in_the_app_library(&item("game")));
+        assert!(belongs_in_the_app_library(&item("GAME")));
+
+        // What this rule exists for.
+        assert!(!belongs_in_the_app_library(&item("movie")));
+        assert!(!belongs_in_the_app_library(&item("series")));
+        // And anything else a provider invents, without that provider being named.
+        assert!(!belongs_in_the_app_library(&item("channel")));
+
+        // A record with no kind is kept: losing something from the library would be
+        // worse than showing it.
+        assert!(belongs_in_the_app_library(&item("")));
+    }
 
     #[test]
     fn daemon_error_bodies_surface_the_bridge_launch_reason() {
