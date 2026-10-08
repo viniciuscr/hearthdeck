@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use hearthdeck_protocol::{DiscoveredApplication, HeroicRunner, InputProfile};
 use tokio::net::UnixDatagram;
 use tokio::process::Command;
@@ -152,39 +152,37 @@ pub async fn launch_application(
     launch_with_systemd(&unit_name, launch.command, launch.working_directory).await
 }
 
-/// The URL scheme Stremio's own desktop entry declares.
-const STREMIO_SCHEME: &str = "stremio";
-
-/// Opens a title's own page in Stremio, returning the entry that was launched.
+/// Opens a title's own page in Stremio.
 ///
-/// The application is found by the scheme its entry declares rather than by a guessed
-/// file name, and the URI is appended to the entry's own command instead of going
-/// through `xdg-open` — the same rule Heroic's launches follow, because `gio` moves the
-/// process into a scope of its own and the session stops tracking it.
+/// The entry comes from the caller rather than being searched for here: the caller
+/// resolved it against this host's application list already, and a second lookup with
+/// its own matching rules is how a working launch turned into "no desktop entry
+/// declares the stremio scheme". The id is still validated exactly as a plain
+/// application launch validates it — a bare file name inside the desktop-entry
+/// directories, never a path — so nothing new is trusted.
+///
+/// The URI is appended to the entry's own command rather than going through `xdg-open`:
+/// that finds no desktop environment to delegate to on this session and gives up, which
+/// is the same reason Heroic is exec'd directly.
 pub async fn launch_stremio_title(
+    application_id: &str,
     video_id: &str,
     session_id: &str,
-) -> Result<(String, LaunchedApplication)> {
+) -> Result<LaunchedApplication> {
     let uri = stremio_detail_uri(video_id)?;
-    let applications = discover_applications(DESKTOP_APPS_SOURCE).await?;
-    let entry = applications
-        .iter()
-        .find(|application| application.launch_scheme.as_deref() == Some(STREMIO_SCHEME))
-        .ok_or_else(|| anyhow!("no desktop entry declares the {STREMIO_SCHEME} scheme"))?;
-    let path = desktop_entry_path(DESKTOP_APPS_SOURCE, &entry.application_id).await?;
+    let path = desktop_entry_path(DESKTOP_APPS_SOURCE, application_id).await?;
     let launch = command_for_desktop_entry(&path).await?;
-    // The entry's command, with the URI where its `%u` field code was. Stremio reads
-    // it from its own argv and forwards it to the running instance if there is one, so
-    // this works whether the app is already open or not.
+    // The entry's command, with the URI where its `%u` field code was. Stremio reads it
+    // from its own argv and forwards it to the running instance if there is one, so this
+    // works whether the app is already open or not.
     let mut command = launch.command;
     command.push(OsString::from(uri));
-    let launched = launch_with_systemd(
+    launch_with_systemd(
         &format!("hearthdeck-app-{session_id}.service"),
         command,
         launch.working_directory,
     )
-    .await?;
-    Ok((entry.application_id.clone(), launched))
+    .await
 }
 
 /// The `stremio://` URI for a video id, built from that id alone.

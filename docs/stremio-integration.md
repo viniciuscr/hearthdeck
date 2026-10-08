@@ -198,6 +198,15 @@ These were all observed in real data. Each one silently produces a wrong rail.
   desktop entry is resolved from the host's application list by the URL scheme it
   declares, never hardcoded: the id differs between a distribution package and a
   Flatpak, and a guess that names nothing fails identically.
+- **Do not depend on the desktop entry having registered the URI scheme.** The
+  `stremio://` URIs work because Stremio parses its own argv, not because
+  `x-scheme-handler/stremio` is registered — the entry does not appear to declare it, and
+  that is why `xdg-open` never had a method for one either. Matching the entry *by*
+  scheme is therefore a nicety that needs a name fallback, which is where the two
+  implementations of that lookup diverged: the provider fell back to the name and found
+  the app, the bridge did not and refused every launch. The bridge no longer looks the
+  entry up at all — the request carries the id discovery already produced, and the
+  bridge validates it exactly as it validates any application id.
 
 ## Schema drift against `stremio-core`
 

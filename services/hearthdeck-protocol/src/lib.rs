@@ -33,11 +33,18 @@ pub enum BridgeRequest {
     },
     /// Opens a title's own page in Stremio.
     ///
-    /// Carries the video id and nothing else — not a URL — so the bridge validates the
-    /// id and builds the `stremio://` URI itself. A client can therefore never hand the
-    /// bridge a link to run, which is the same rule `LaunchRetroGame` follows with a
-    /// core path and a ROM path.
+    /// Carries the video id and nothing else about the title — not a URL — so the bridge
+    /// validates the id and builds the `stremio://` URI itself. A client can therefore
+    /// never hand the bridge a link to run, which is the same rule `LaunchRetroGame`
+    /// follows with a core path and a ROM path.
+    ///
+    /// `application_id` is the desktop entry that opens titles, discovered the same way
+    /// any application id is. The bridge does not look it up again: the caller already
+    /// resolved it against this host's own application list, and a second, stricter
+    /// lookup in the bridge is how a working launch became "no desktop entry declares
+    /// the stremio scheme".
     LaunchStremioTitle {
+        application_id: String,
         video_id: String,
         session_id: String,
         #[serde(default)]

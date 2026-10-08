@@ -922,6 +922,10 @@ async fn launch_app(
         // than for the application the record carries. The id travels, not a URL: the
         // bridge validates it and builds the URI itself.
         BridgeRequest::LaunchStremioTitle {
+            // The entry the provider resolved from this host's own application list,
+            // which is also what a plain application launch carries. The bridge validates
+            // it and the video id, and builds the URI itself.
+            application_id: launch_id.to_owned(),
             video_id,
             session_id,
             input_profile: options.input_profile,
@@ -2120,6 +2124,7 @@ mod tests {
 
         let bridge = spawn_fake_bridge(state.config.bridge_socket_path.clone(), |request| {
             let BridgeRequest::LaunchStremioTitle {
+                application_id,
                 video_id,
                 session_id,
                 input_profile,
@@ -2127,6 +2132,9 @@ mod tests {
             else {
                 panic!("expected a LaunchStremioTitle request, got {request:?}");
             };
+            // The entry the provider resolved travels with the request, so the bridge
+            // never has to recognise Stremio itself.
+            assert_eq!(application_id, "com.stremio.Stremio.desktop");
             assert_eq!(video_id, "tt0149460:4:7");
             assert_eq!(input_profile, InputProfile::Desktop);
             BridgeResponse::LaunchAccepted {
