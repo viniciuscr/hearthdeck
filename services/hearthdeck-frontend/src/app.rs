@@ -4579,6 +4579,12 @@ impl cosmic::Application for HearthDeck {
                 }
                 self.sort_catalog();
                 self.sync_category_groups();
+                // A rail card's poster is drawn from the icon cache, and this very
+                // delivery is what fills it. Without re-reading the collection here, a
+                // card whose poster was cached *after* the collections were last read kept
+                // the bare URL and showed a placeholder until something else happened to
+                // reload them — which is why only some cards were blank.
+                self.rebuild_continue_watching_entries();
                 if let Some(helper) = AppLibraryConfig::helper() {
                     let _ = self.config.write_entry(&helper);
                 }
