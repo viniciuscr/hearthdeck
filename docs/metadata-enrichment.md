@@ -29,8 +29,10 @@ metadata provider matches it:
 - provenance: the winning metadata provider or `desktop-entry`.
 
 The client uses these categories as app-library tabs rather than placing every
-desktop application in one provider-wide list. A desktop entry with the
-Freedesktop `Game` category is classified as a game; future game providers own
+desktop application in one provider-wide list. Enrichment settles a record's
+tabs, not its kind: whether a record is a game is decided by the provider that
+discovered it, not by a category (see
+[`product-foundations.md`](product-foundations.md)). Future game providers own
 their more specific genres and store categories.
 
 Project HTTP(S) URLs are emitted as typed metadata URL entries. The client

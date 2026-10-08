@@ -168,8 +168,17 @@ Classification has three layers:
 
 The current Linux rules are deliberately conservative:
 
-- A Freedesktop entry with the `Game` category becomes a game, except known
-  game-launcher applications such as Steam, Lutris, Heroic, and Hearthdeck.
+- A PC game is a game only when Heroic discovered it. `Game` in a desktop entry's
+  `Categories` is a claim by whoever wrote the entry, and the programs that
+  configure, patch, stream or launch games make it too: Goverlay configures
+  MangoHud and vkBasalt overlays and declares `Categories=Game;`. That claim is
+  therefore not evidence on its own, so the daemon settles a record's kind by the
+  provider that found it rather than by its categories, and does so without
+  leaning on AppStream enrichment, which does not match on every machine. Steam,
+  Lutris, Heroic and Hearthdeck are applications for the same reason as every
+  other desktop entry. A standalone desktop game such as SuperTux leaves the
+  games section with them — the accepted trade-off for a rule stated once that
+  cannot drift, and which no category can talk its way past.
 - Other desktop entries are applications and are grouped by recognized
   AppStream or Freedesktop categories such as Media, Network, Office, System,
   or Utility.

@@ -191,16 +191,53 @@ fn catalog_item_from_row(row: SqliteRow) -> CatalogItem {
         .and_then(|payload| serde_json::from_str(&payload).ok());
     let enrichment_provider: Option<String> = row.get("enrichment_provider_id");
     let title: String = row.get("title");
+    let source_id: String = row.get("source_id");
+    let metadata = merged_metadata(&title, &discovery, enrichment.as_ref(), enrichment_provider);
+    let kind = served_kind(&source_id, &row.get::<String, _>("kind"));
     CatalogItem {
         id: row.get("id"),
-        source_id: row.get("source_id"),
-        title: title.clone(),
-        kind: row.get("kind"),
+        source_id,
+        title,
+        kind,
         launch_id: row.get("launch_id"),
         icon: row
             .get::<Option<String>, _>("icon")
             .or_else(|| metadata_string(enrichment.as_ref(), "icon")),
-        metadata: merged_metadata(&title, &discovery, enrichment.as_ref(), enrichment_provider),
+        metadata,
+    }
+}
+
+/// The provider whose records are the only ones served as games.
+const HEROIC_SOURCE: &str = "heroic";
+
+/// The kind for a record the library plays.
+const GAME: &str = "game";
+
+/// The kind for a record the library runs.
+///
+/// These two are the daemon's own vocabulary for what it serves, so they live here
+/// rather than being borrowed from the categorizer: the categorizer reads records,
+/// it does not own what the catalog serves.
+const APPLICATION: &str = "application";
+
+/// The kind a record is served with.
+///
+/// The product files a PC game only when Heroic discovered it: Heroic is the
+/// one provider in this crate that finds the Epic and GOG games the library can
+/// launch, so nothing else is a game. A desktop entry describes a program the
+/// library runs rather than a game it plays, however its own `Categories` list
+/// is spelled — Goverlay configures MangoHud and vkBasalt overlays and declares
+/// `Game` — and a streaming record is a film or a series. Settling the served
+/// kind by the source instead of by the categories is what keeps a tool out of
+/// the games section, and it does so without leaning on AppStream enrichment,
+/// which does not match on every machine. A standalone desktop game such as
+/// SuperTux therefore leaves the section as well, a trade-off the product
+/// accepted.
+fn served_kind(source_id: &str, claimed: &str) -> String {
+    if claimed.eq_ignore_ascii_case(GAME) && source_id != HEROIC_SOURCE {
+        APPLICATION.to_owned()
+    } else {
+        claimed.to_owned()
     }
 }
 
@@ -305,7 +342,7 @@ mod tests {
     use sqlx::Row;
     use tempfile::tempdir;
 
-    use super::{CatalogStore, EnrichmentRecord, merged_metadata};
+    use super::{CatalogRecord, CatalogStore, EnrichmentRecord, merged_metadata};
     use crate::database::Database;
 
     #[tokio::test]
@@ -350,6 +387,83 @@ mod tests {
             serde_json::from_str(&row.get::<String, _>("payload_json")).unwrap();
 
         assert_eq!(payload["summary"], "Second");
+    }
+
+    /// The serving rule since the desktop games were removed: a PC game is a
+    /// game only when Heroic discovered it. A desktop entry that declares the
+    /// `Game` category is still a program — Goverlay only configures game
+    /// overlays, and SuperTux is a game the library does not run through
+    /// Heroic — so only a Heroic record is served as a game.
+    #[tokio::test]
+    async fn serves_a_game_only_when_heroic_discovered_it() {
+        let directory = tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let catalog = CatalogStore::new(database.pool().clone());
+
+        let desktop_record =
+            |application_id: &str, title: &str, categories: &[&str]| CatalogRecord {
+                id: format!("desktop:{application_id}"),
+                title: title.to_owned(),
+                kind: "game".to_owned(),
+                launch_id: Some(application_id.to_owned()),
+                icon: None,
+                metadata: serde_json::json!({ "categories": categories }),
+                updated_at: "2026-01-01T00:00:00Z".to_owned(),
+            };
+        catalog
+            .replace_source(
+                "desktop-apps",
+                vec![
+                    desktop_record(
+                        "io.github.benjamimgois.goverlay.desktop",
+                        "Goverlay",
+                        &["Game"],
+                    ),
+                    desktop_record("super-tux.desktop", "SuperTux", &["Game", "ActionGame"]),
+                ],
+            )
+            .await
+            .unwrap();
+        catalog
+            .replace_source(
+                "heroic",
+                vec![CatalogRecord {
+                    id: "heroic:epic:Fortnite".to_owned(),
+                    title: "Fortnite".to_owned(),
+                    kind: "game".to_owned(),
+                    launch_id: Some("epic:Fortnite".to_owned()),
+                    icon: None,
+                    metadata: serde_json::json!({ "categories": ["Action"], "store": "Epic" }),
+                    updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                }],
+            )
+            .await
+            .unwrap();
+
+        let items = catalog.list().await.unwrap();
+        let kind = |id: &str| {
+            items
+                .iter()
+                .find(|item| item.id == id)
+                .unwrap_or_else(|| panic!("{id} is missing from the library"))
+                .kind
+                .clone()
+        };
+
+        // The tool: a desktop entry that claims a game, but nothing the desktop
+        // provider discovers is a game any more.
+        assert_eq!(
+            kind("desktop:io.github.benjamimgois.goverlay.desktop"),
+            "application"
+        );
+        // The standalone game: it left the games section with the rest of the
+        // desktop entries, the accepted trade-off.
+        assert_eq!(kind("desktop:super-tux.desktop"), "application");
+        // The only games that remain are the ones Heroic found.
+        assert_eq!(kind("heroic:epic:Fortnite"), "game");
     }
 
     #[test]

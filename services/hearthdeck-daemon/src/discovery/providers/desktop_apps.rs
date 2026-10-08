@@ -16,40 +16,6 @@ impl DesktopAppsProvider {
     }
 }
 
-const GAME_LAUNCHER_IDS: &[&str] = &[
-    "steam.desktop",
-    "com.valvesoftware.steam.desktop",
-    "lutris.desktop",
-    "net.lutris.lutris.desktop",
-    "heroic.desktop",
-    "com.heroicgameslauncher.hgl.desktop",
-    "hearthdeck.desktop",
-    "dev.hearthdeck.hearthdeck.desktop",
-    "com.hearthdeck.hearthdeck.desktop",
-];
-const GAME_LAUNCHER_NAMES: &[&str] = &[
-    "steam",
-    "lutris",
-    "heroic",
-    "heroic games launcher",
-    "hearthdeck",
-];
-
-fn content_kind(application_id: &str, name: &str, categories: &[String]) -> &'static str {
-    let normalized_id = application_id.to_ascii_lowercase();
-    let normalized_name = name.trim().to_ascii_lowercase();
-    if categories
-        .iter()
-        .any(|category| category.eq_ignore_ascii_case("Game"))
-        && !GAME_LAUNCHER_IDS.contains(&normalized_id.as_str())
-        && !GAME_LAUNCHER_NAMES.contains(&normalized_name.as_str())
-    {
-        "game"
-    } else {
-        "application"
-    }
-}
-
 #[async_trait]
 impl DiscoveryProvider for DesktopAppsProvider {
     fn source_id(&self) -> &'static str {
@@ -77,71 +43,23 @@ impl DiscoveryProvider for DesktopAppsProvider {
         Ok(applications
             .into_iter()
             .filter(|application| application.launch_scheme.as_deref() != Some("heroic"))
-            .map(|application| {
-                let kind = content_kind(
-                    &application.application_id,
-                    &application.name,
-                    &application.categories,
-                )
-                .to_owned();
-                CatalogRecord {
-                    id: format!("desktop:{}", application.application_id),
-                    title: application.name,
-                    kind,
-                    launch_id: Some(application.application_id),
-                    icon: application.icon,
-                    metadata: serde_json::json!({
-                        "categories": application.categories,
-                        "comment": application.comment,
-                    }),
-                    updated_at: updated_at.clone(),
-                }
+            .map(|application| CatalogRecord {
+                id: format!("desktop:{}", application.application_id),
+                title: application.name,
+                // A desktop entry is never a game. The product files a PC game
+                // only when Heroic discovered it, so however the entry's own
+                // `Categories` list is spelled — Goverlay configures game
+                // overlays and declares `Game` — what is discovered here is a
+                // program the library runs.
+                kind: "application".to_owned(),
+                launch_id: Some(application.application_id),
+                icon: application.icon,
+                metadata: serde_json::json!({
+                    "categories": application.categories,
+                    "comment": application.comment,
+                }),
+                updated_at: updated_at.clone(),
             })
             .collect())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::content_kind;
-
-    #[test]
-    fn classifies_freedesktop_games_as_games() {
-        assert_eq!(
-            content_kind(
-                "super-tux.desktop",
-                "SuperTux",
-                &["Game".to_owned(), "ActionGame".to_owned()]
-            ),
-            "game"
-        );
-        assert_eq!(
-            content_kind("utility.desktop", "Utility", &["Utility".to_owned()]),
-            "application"
-        );
-    }
-
-    #[test]
-    fn classifies_game_launchers_as_applications() {
-        assert_eq!(
-            content_kind("steam.desktop", "Steam", &["Game".to_owned()]),
-            "application"
-        );
-        assert_eq!(
-            content_kind("net.lutris.Lutris.desktop", "Lutris", &["Game".to_owned()]),
-            "application"
-        );
-        assert_eq!(
-            content_kind(
-                "com.heroicgameslauncher.hgl.desktop",
-                "Heroic Games Launcher",
-                &["Game".to_owned()]
-            ),
-            "application"
-        );
-        assert_eq!(
-            content_kind("custom.desktop", "Hearthdeck", &["Game".to_owned()]),
-            "application"
-        );
     }
 }
