@@ -1,6 +1,12 @@
 set shell := ["zsh", "-cu"]
 services_manifest := "services/Cargo.toml"
 
+# Recipes call `cargo` directly. `cargo` resolves to the toolchain pinned in
+# mise.toml through mise's shims / activate hook, so wrapping every command in
+# `mise exec --` was redundant. It also forced *every* pinned tool to be
+# installed first — including ruby, which cargo does not need — before any Rust
+# command could run. `just setup` still installs the toolchains.
+
 default:
   @just --list
 
@@ -22,29 +28,29 @@ dev-local:
 
 # Format Rust source files.
 format:
-  mise exec -- cargo fmt --manifest-path {{services_manifest}} --all
+  cargo fmt --manifest-path {{services_manifest}} --all
 
 # Build, test, and lint the Rust backend workspace.
 check-services:
-  mise exec -- cargo check --manifest-path {{services_manifest}} --workspace
-  mise exec -- cargo test --manifest-path {{services_manifest}} --workspace
-  mise exec -- cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets -- -D warnings
+  cargo check --manifest-path {{services_manifest}} --workspace
+  cargo test --manifest-path {{services_manifest}} --workspace
+  cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets -- -D warnings
 
 # Build optimized Linux-host service binaries.
 build-services:
-  mise exec -- cargo build --manifest-path {{services_manifest}} --workspace --release
+  cargo build --manifest-path {{services_manifest}} --workspace --release
 
 # Build debug service binaries for the combined development target.
 build-services-debug:
-  mise exec -- cargo build --manifest-path {{services_manifest}} --workspace
+  cargo build --manifest-path {{services_manifest}} --workspace
 
 # Run the Linux integration bridge in the foreground.
 bridge:
-  mise exec -- cargo run --manifest-path {{services_manifest}} -p hearthdeck-bridge
+  cargo run --manifest-path {{services_manifest}} -p hearthdeck-bridge
 
 # Run the local API daemon in the foreground.
 daemon:
-  mise exec -- cargo run --manifest-path {{services_manifest}} -p hearthdeck-daemon
+  cargo run --manifest-path {{services_manifest}} -p hearthdeck-daemon
 
 # Request a one-time pairing code from the loopback admin listener.
 pairing-code:
@@ -64,11 +70,11 @@ categorization url token:
 
 # Build the COSMIC frontend.
 build-frontend:
-  mise exec -- cargo build --manifest-path {{services_manifest}} -p hearthdeck-frontend --release
+  cargo build --manifest-path {{services_manifest}} -p hearthdeck-frontend --release
 
 # Build debug COSMIC frontend.
 build-frontend-debug:
-  mise exec -- cargo build --manifest-path {{services_manifest}} -p hearthdeck-frontend
+  cargo build --manifest-path {{services_manifest}} -p hearthdeck-frontend
 
 # Run the COSMIC frontend.
 run-frontend: build-frontend
@@ -80,14 +86,31 @@ run-frontend-debug: build-frontend-debug
 
 # Check and lint the COSMIC frontend.
 check-frontend:
-  mise exec -- cargo clippy --manifest-path {{services_manifest}} -p hearthdeck-frontend --all-targets -- -D warnings
+  cargo clippy --manifest-path {{services_manifest}} -p hearthdeck-frontend --all-targets -- -D warnings
 
 # Test the COSMIC frontend.
 test-frontend:
-  mise exec -- cargo test --manifest-path {{services_manifest}} -p hearthdeck-frontend
+  cargo test --manifest-path {{services_manifest}} -p hearthdeck-frontend
+
+# Usage: just check-fast [crate]   (default: hearthdeck-frontend)
+# Mirrors the CI gates (fmt + clippy -D warnings + tests) for one crate only.
+# Run `just check` before calling work done.
+# Fast, narrow validation loop for a single crate: format, lint, test.
+check-fast crate="hearthdeck-frontend":
+  cargo fmt --manifest-path {{services_manifest}} --all
+  cargo clippy --manifest-path {{services_manifest}} -p {{crate}} --all-targets -- -D warnings
+  cargo test --manifest-path {{services_manifest}} -p {{crate}}
 
 # Run all portable project checks.
 check: format check-services check-frontend test-frontend
+
+# Usage: just lint-strict [crate]   (default: whole workspace)
+# Opt-in and LOCAL ONLY: clippy::pedantic and clippy::nursery are opinionated,
+# so this is not a gate. It is deliberately NOT wired into CI or pre-push.
+# See .agents/skills/rust-llm-pitfalls for the habits it is meant to surface.
+# Ranked summary of clippy::pedantic and clippy::nursery findings, most common first.
+lint-strict crate="":
+  @cargo clippy --manifest-path {{services_manifest}} {{ if crate == "" { "--workspace" } else { "-p " + crate } }} --all-targets --message-format=json -- -W clippy::pedantic -W clippy::nursery 2>/dev/null | grep -o '"code":"clippy::[a-z_]*"' | sed 's/.*clippy:://; s/"$//' | sort | uniq -c | sort -rn | head -40
 
 # Validate code before pushing: format check, release build, and clippy lint.
 pre-push-check:
@@ -95,15 +118,15 @@ pre-push-check:
   @echo "Running local checks before push..."
   @echo ""
   @echo "⏳ [1/3] Checking Rust code formatting..."
-  mise exec -- cargo fmt --manifest-path {{services_manifest}} --all -- --check
+  cargo fmt --manifest-path {{services_manifest}} --all -- --check
   @echo "✅ Formatting check passed"
   @echo ""
   @echo "⏳ [2/3] Building services in release mode..."
-  mise exec -- cargo build --manifest-path {{services_manifest}} --workspace --release
+  cargo build --manifest-path {{services_manifest}} --workspace --release
   @echo "✅ Release build passed"
   @echo ""
   @echo "⏳ [3/3] Running Clippy lint checks (release mode)..."
-  mise exec -- cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets --release -- -D warnings
+  cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets --release -- -D warnings
   @echo "✅ Clippy check passed"
   @echo ""
   @echo "✨ All checks passed! Push when ready."

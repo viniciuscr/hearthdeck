@@ -14,11 +14,14 @@ That's it! The pre-push hook will now run automatically before every push.
 
 ## What the Pre-Push Hook Does
 
-When you run `git push`, the `.githooks/pre-push` script automatically:
+When you run `git push`, the `.githooks/pre-push` script runs `just pre-push-check`, which:
 
 1. **Checks Rust formatting**: Ensures `cargo fmt` has been applied
 2. **Builds all services**: Compiles in release mode (same as CI)
 3. **Runs Clippy linting**: Catches warnings before they fail CI
+
+The hook itself contains no cargo commands. `just pre-push-check` is the single
+definition of this gate, so the hook and the recipe cannot drift apart.
 
 If any check fails, the push is blocked and the hook provides detailed instructions to fix the problem.
 
@@ -77,14 +80,15 @@ git config core.hooksPath .githooks
 
 ### Hook Command Not Found
 
-Make sure Rust and Cargo are installed:
+The hook needs `just` as well as the Rust toolchain. Check all three:
 
 ```bash
+just --version
 rustc --version
 cargo --version
 ```
 
-If you're using `mise` (recommended), initialize your shell:
+If any is missing, install the project-pinned toolchains:
 
 ```bash
 mise install

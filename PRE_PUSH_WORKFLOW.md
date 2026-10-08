@@ -67,12 +67,15 @@ Troubleshooting
 
 **Functionality**:
 - ✅ Executable bash script that runs on every `git push`
+- ✅ Delegates to `just pre-push-check`, which is the single definition of the gate —
+  the hook holds no cargo commands of its own, so the two cannot drift apart
 - ✅ Three validation stages with clear output:
   1. **Formatting Check**: `cargo fmt --all -- --check`
   2. **Release Build**: `cargo build --workspace --release`
   3. **Clippy Lint**: `cargo clippy --workspace --all-targets --release -- -D warnings`
 - ✅ Colored output (RED for errors, GREEN for success, YELLOW for progress)
 - ✅ Detailed error messages with exact fix commands
+- ✅ Fails with setup guidance if `just` is not installed
 - ✅ Can be bypassed with `git push --no-verify` (if absolutely necessary)
 
 **Setup**:
@@ -114,7 +117,7 @@ This recipe runs the same validation as the git hook but without attempting a pu
 - Explicit pre-push validation in scripts
 
 **Implementation Details**:
-- Uses `mise exec --` to ensure proper environment
+- Calls `cargo` directly; the pinned toolchain is selected by mise
 - Runs all three validation stages in sequence
 - Fails fast on first error
 - Provides clear, colored output
@@ -275,7 +278,7 @@ git push
 
 ## Maintenance Notes
 
-- **Pre-push hook** runs `mise exec --` to access project toolchains
+- **Pre-push hook** calls `cargo` directly; the pinned toolchain comes from mise's shims
 - **CI workflow** uses Arch Linux container (matches CI build environment)
 - **Rust version pinned** to 1.97.1 (dtolnay/rust-toolchain@1.97.1)
 - **Cache** strategy prevents rebuild on every push (after first push)
@@ -287,4 +290,4 @@ git push
 - **Setup questions**: See `.githooks/README.md`
 - **Development workflow**: See `CONTRIBUTING.md`
 - **Specific errors**: See `CONTRIBUTING.md` → Common Errors section
-- **Extending validation**: Modify `.githooks/pre-push` or `justfile` `pre-push-check` recipe
+- **Extending validation**: Modify the `justfile` `pre-push-check` recipe. The hook delegates to it, so that is the only place to change.

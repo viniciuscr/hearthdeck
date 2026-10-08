@@ -128,8 +128,8 @@ summary. A provider failure cannot erase another source's catalog records.
 ## Development
 
 ```sh
-mise exec -- cargo run -p hearthdeck-bridge
-mise exec -- cargo run -p hearthdeck-daemon
+cargo run -p hearthdeck-bridge
+cargo run -p hearthdeck-daemon
 ```
 
 In a separate shell, create a pairing code:
