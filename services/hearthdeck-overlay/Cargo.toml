@@ -18,13 +18,16 @@ PKGBUILD builds and installs it for the Hearthdeck session.
 """
 
 [target.'cfg(target_os = "linux")'.dependencies]
-cosmic-config = { git = "https://github.com/pop-os/libcosmic/", rev = "dc1cf9f00cbe2902a52166492654bb9fee8a73d1" }
-cosmic-settings-config = { git = "https://github.com/pop-os/cosmic-settings-daemon/", package = "cosmic-settings-config", rev = "21a9692b53fcbffa0f18f7d0a12bf0f9d5bd0590" }
+cosmic-config = { git = "https://github.com/pop-os/libcosmic" }  # bare URL, no rev: see the note on libcosmic below
+cosmic-settings-config = { git = "https://github.com/pop-os/cosmic-settings-daemon", package = "cosmic-settings-config" }  # bare URL: must match the source libcosmic itself requires
 evdev = { version = "0.13", features = ["tokio"] }
 futures-channel = "0.3"
 futures-util = "0.3"
 hearthdeck-protocol = { path = "../hearthdeck-protocol" }
-libcosmic = { git = "https://github.com/pop-os/libcosmic/", rev = "dc1cf9f00cbe2902a52166492654bb9fee8a73d1", features = [
+# Bare URL, deliberately: cargo treats "git+URL" and "git+URL?rev=..." as different
+# sources, and cosmic-app-list-config requires this same bare URL. Any rev here
+# would compile the whole libcosmic workspace twice. Cargo.lock pins the commit.
+libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
   "wayland",
   "winit",
   "wgpu",

@@ -286,8 +286,6 @@ pub fn details_action_bar_padding() -> u16 {
 /// Widest the details screen's disc picker panel may grow.
 pub const DETAILS_PICKER_WIDTH: f32 = 460.0;
 
-/// Size of the drag-preview icon shown while dragging a tile.
-pub const TILE_DRAG_ICON: f32 = 88.0;
 /// Size of the source badge overlaid on the tile artwork corner.
 pub const SOURCE_BADGE: f32 = 28.0;
 
@@ -441,12 +439,6 @@ pub fn artwork_fit<'a, M: 'a>(
     }
 }
 
-/// Artwork scaled to fill its bounds without distortion, for cover art that is
-/// expected to be cropped to the surface.
-pub fn artwork<'a, M: 'a>(handle: &icon::Handle, width: Length, height: Length) -> Element<'a, M> {
-    artwork_fit(handle, ContentFit::Cover, width, height)
-}
-
 /// Artwork scaled to *fit* inside its bounds, whole: the image is resized to the
 /// largest size that still fits and centred, so a cover whose aspect ratio does
 /// not match the tile is neither stretched nor cropped to match it. This is what
@@ -465,24 +457,23 @@ pub fn artwork_contained<'a, M: 'a>(
 // Container styles
 // ---------------------------------------------------------------------------
 
-/// Dark semi-transparent overlay for tile labels at the bottom of game cards.
+/// Translucent scrim behind a tile's label, drawn over the bottom of the cover
+/// art.
 ///
-/// The scrim is always dark because it sits on top of cover artwork, not on
-/// the theme background, so the label uses a fixed light color instead of the
-/// theme's `on_bg_color` - that is *dark* under a light theme and would be
-/// unreadable here. Only the bottom corners follow the tile radius; the top
-/// edge meets the artwork and stays square.
+/// The label sits on artwork, not on the page, so it needs a scrim to stay
+/// readable. The scrim is the theme's background at partial opacity and the text
+/// its `on_bg_color`, so it follows the palette under both themes while the art
+/// shows through. Only the bottom corners follow the tile radius; the top edge
+/// meets the artwork and stays square.
 pub fn tile_label_overlay(theme: &Theme) -> container::Style {
     let radius = surface_radius(theme);
+    let t = theme.cosmic();
+    let mut background: Color = t.bg_color().into();
+    background.a = 0.7;
     container::Style {
-        text_color: Some(Color::WHITE),
-        icon_color: Some(Color::WHITE),
-        background: Some(Background::Color(Color {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 0.65,
-        })),
+        text_color: Some(t.on_bg_color().into()),
+        icon_color: Some(t.on_bg_color().into()),
+        background: Some(Background::Color(background)),
         border: Border {
             radius: [0.0, 0.0, radius[2], radius[3]].into(),
             width: 0.0,

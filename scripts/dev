@@ -12,19 +12,7 @@ admin_port="${HEARTHDECK_DEV_ADMIN_PORT:-38401}"
 backend_url="http://127.0.0.1:$api_port"
 admin_url="http://127.0.0.1:$admin_port"
 
-port_is_free() {
-  ruby -rsocket -e 'TCPServer.new("127.0.0.1", ARGV[0].to_i).close' "$1" 2>/dev/null
-}
 
-# Refuse to start on occupied ports: otherwise the health and pairing calls
-# below would silently succeed against a foreign daemon while our own exits.
-for port in "$api_port" "$admin_port"; do
-  if ! port_is_free "$port"; then
-    print -u2 "Hearthdeck port $port is already in use."
-    print -u2 "An installed hearthdeck.target may be running; use 'just dev-local' for alternate ports."
-    exit 1
-  fi
-done
 
 # Build through the project task runner before isolating service runtime state.
 just build-services-debug
@@ -89,17 +77,15 @@ if ! curl --fail --silent "$backend_url/v1/health" > /dev/null; then
   exit 1
 fi
 
-pairing_code=$(curl --fail --silent -X POST "$admin_url/v1/pairing" | \
-  ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("code")')
+pairing_code=$(curl --fail --silent -X POST "$admin_url/v1/pairing" | jq -er '.code')
 pairing_token=$(curl --fail --silent -X POST "$backend_url/v1/pairing/complete" \
   -H 'content-type: application/json' \
-  --data "{\"code\":\"$pairing_code\",\"client_name\":\"hearthdeck-dev\"}" | \
-  ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("token")')
+  --data "{\"code\":\"$pairing_code\",\"client_name\":\"hearthdeck-dev\"}" | jq -er '.token')
 
 for attempt in {1..100}; do
   catalog=$(curl --fail --silent "$backend_url/v1/library" \
     -H "authorization: Bearer $pairing_token")
-  catalog_count=$(printf '%s' "$catalog" | ruby -rjson -e 'print JSON.parse(STDIN.read).length')
+  catalog_count=$(printf '%s' "$catalog" | jq 'length')
   if [[ "$catalog_count" -gt 0 ]]; then
     print "Hearthdeck catalog ready: $catalog_count discovered items"
     break

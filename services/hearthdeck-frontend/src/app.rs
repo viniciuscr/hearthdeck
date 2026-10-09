@@ -15,7 +15,7 @@ use cosmic::{
     cosmic_config::{Config, ConfigGet, CosmicConfigEntry},
     cosmic_theme::Spacing,
     dbus_activation,
-    desktop::{DesktopEntryData, fde::IconSource, fde::PathSource, load_desktop_file},
+    desktop::{DesktopEntryData, fde::IconSource, fde::PathSource},
     iced::{
         self, Alignment, ContentFit, Length, Subscription,
         event::listen_with,
@@ -40,7 +40,7 @@ use cosmic::{
             destroy_layer_surface, get_layer_surface,
         },
         runtime::{
-            self as iced_runtime, dnd::end_dnd,
+            self as iced_runtime,
             platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings,
         },
     },
@@ -50,9 +50,7 @@ use cosmic::{
         self,
         autosize::autosize,
         button::{self},
-        context_drawer,
-        dnd_destination::dnd_destination_for_data,
-        icon, list,
+        context_drawer, icon, list,
         list::list_column,
         scrollable, space, text, text_input,
         toaster::{self, Toast, ToastId, Toasts},
@@ -102,7 +100,7 @@ use crate::style::{
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
 use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
-use crate::widgets::application::{AppletString, ApplicationButton};
+use crate::widgets::application::{Selection, app_tile};
 use crate::widgets::controller_key::{FaceButton, controller_hint};
 use crate::widgets::menu::{self, Menu, Row};
 use crate::widgets::rail::{rail, rail_item};
@@ -238,21 +236,9 @@ fn current_user_name() -> String {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_default();
-    let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
-    for line in passwd.lines() {
-        let mut fields = line.split(':');
-        if fields.next() == Some(&user) {
-            if let Some(gecos) = fields.nth(3) {
-                let name = gecos.split(',').next().unwrap_or_default().trim();
-                if !name.is_empty() {
-                    return name.to_string();
-                }
-            }
-            break;
-        }
-    }
+
     if user.is_empty() {
-        "User".to_string()
+        "Unknown".to_string()
     } else {
         user
     }
@@ -419,8 +405,6 @@ struct HearthDeck {
     cur_section: Section,
     cur_group: Option<usize>,
     edit_name: Option<String>,
-    dnd_icon: Option<usize>,
-    offer_group: Option<Option<usize>>,
     scroll_offset: f32,
     viewport_height: f32,
     /// Horizontal scroll offset and visible width of each dashboard rail,
@@ -621,8 +605,6 @@ impl Default for HearthDeck {
             user_name: String::new(),
             disk_free: String::new(),
             edit_name: Default::default(),
-            dnd_icon: Default::default(),
-            offer_group: Default::default(),
             scroll_offset: Default::default(),
             viewport_height: Default::default(),
             dashboard_rail_scroll: Default::default(),
@@ -1259,12 +1241,6 @@ pub(crate) enum Message {
     /// Confirm the highlighted entry of an open context menu (keyboard Enter).
     MenuConfirm,
     SelectAction(MenuAction),
-    StartDrag(usize),
-    FinishDrag(bool),
-    CancelDrag,
-    StartDndOffer(Option<usize>),
-    FinishDndOffer(Option<usize>, Option<DesktopEntryData>),
-    LeaveDndOffer(Option<usize>),
     ScrollYOffset(f32, f32),
     ViewportHeight(f32),
     /// The section tab strip's live horizontal offset, tracked so a
@@ -2875,13 +2851,6 @@ impl HearthDeck {
     }
 
     pub fn close(&mut self) -> Task<Message> {
-        // cancel existing dnd if it exists then try again...
-        if self.dnd_icon.take().is_some() {
-            return Task::batch(vec![
-                end_dnd(),
-                Task::perform(async {}, |_| cosmic::Action::App(Message::Close)),
-            ]);
-        }
         self.focused_id = None;
         self.entry_ids.clear();
         self.search_value.clear();
@@ -5394,47 +5363,6 @@ impl cosmic::Application for HearthDeck {
                 }
                 return Task::batch(tasks);
             }
-            Message::StartDrag(i) => {
-                self.dnd_icon = Some(i);
-            }
-            Message::FinishDrag(copy) => {
-                if !copy
-                    && let Some(info) = self
-                        .dnd_icon
-                        .take()
-                        .and_then(|i| self.entry_path_input.get(i))
-                {
-                    self.config
-                        .remove_entry(self.cur_section, self.cur_group, &info.id);
-                    if let Some(helper) = self.helper.as_ref()
-                        && let Err(err) = self.config.write_entry(helper)
-                    {
-                        error!("{:?}", err);
-                    }
-                    return self.reload_grid();
-                }
-            }
-            Message::CancelDrag => {
-                self.dnd_icon = None;
-            }
-            Message::StartDndOffer(group) => {
-                self.offer_group = Some(group);
-            }
-            Message::FinishDndOffer(group, entry) => {
-                self.offer_group = None;
-                let Some(entry) = entry else {
-                    return Task::none();
-                };
-                self.config.add_entry(self.cur_section, group, &entry.id);
-                if let Some(helper) = self.helper.as_ref()
-                    && let Err(err) = self.config.write_entry(helper)
-                {
-                    error!("{:?}", err);
-                }
-            }
-            Message::LeaveDndOffer(group) => {
-                self.offer_group = self.offer_group.filter(|g| *g != group);
-            }
             Message::ScrollYOffset(y, viewport_height) => {
                 self.scroll_offset = y;
                 self.viewport_height = viewport_height;
@@ -7151,23 +7079,12 @@ impl HearthDeck {
             };
 
         let build_group_tab = |i: usize, key: u64, group: &crate::app_group::AppGroup| {
-            dnd_destination_for_data::<AppletString, Message>(
-                build_tab(
-                    self.cur_group == Some(i),
-                    group.name(),
-                    (!self.menu.is_open()).then_some(Message::SelectGroup(Some(i))),
-                    Some(group_tab_id(key)),
-                ),
-                move |data, _| {
-                    Message::FinishDndOffer(
-                        Some(i),
-                        data.and_then(|data| load_desktop_file(&[], data.0)),
-                    )
-                },
+            build_tab(
+                self.cur_group == Some(i),
+                group.name(),
+                (!self.menu.is_open()).then_some(Message::SelectGroup(Some(i))),
+                Some(group_tab_id(key)),
             )
-            .drag_id(i as u64 + 1)
-            .on_enter(move |_, _, _| Message::StartDndOffer(Some(i)))
-            .on_leave(move || Message::LeaveDndOffer(Some(i)))
         };
 
         let all_apps_tab = build_tab(
@@ -7304,33 +7221,33 @@ impl HearthDeck {
                     .and_then(|path| self.duplicates.get(path));
                 // The tile the menu is open on stays highlighted behind the
                 // scrim, so the menu is visibly attached to an entry.
-                let selected = self.menu.target() == Some(i);
+                let selection = if self.menu.target() == Some(i) {
+                    Selection::Selected
+                } else {
+                    Selection::Unselected
+                };
 
-                let b = ApplicationButton::new(
+                let b = app_tile(
                     id.clone(),
                     &entry.name,
                     icon_handle,
-                    &entry.path,
                     tile_w,
                     tile_h,
                     self.romm_versions
                         .get(&entry.id)
                         .map_or(1, |versions| versions.len()),
-                    move || Message::OpenContextMenu(i),
+                    Message::OpenContextMenu(i),
                     if self.menu.is_open() {
-                        selected.then_some(Message::CloseContextMenu)
+                        selection.is_selected().then_some(Message::CloseContextMenu)
                     } else {
                         Some(Message::ActivateApp(i))
                     },
                     // TODO add icon and text if duplicated
                     dup,
-                    selected,
-                    (!self.menu.is_open()).then_some(Message::StartDrag(i)),
-                    (!self.menu.is_open()).then_some(Message::FinishDrag(false)),
-                    (!self.menu.is_open()).then_some(Message::CancelDrag),
+                    selection,
                 );
 
-                children.push(b.into());
+                children.push(b);
             }
             let missing = columns - children.len();
             if missing > 0 {

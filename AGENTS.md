@@ -92,7 +92,9 @@ Pick the row for what you touched. When unsure, take the wider option — it is 
 | Before pushing | `just pre-push-check` |
 
 `just check` is the full portable suite: format, then backend check/test/clippy, then frontend
-clippy and tests. `just pre-push-check` additionally builds release the way CI does.
+clippy and tests. `just pre-push-check` runs those same gates in **debug**, on purpose: compiling the
+~1000-crate dependency tree in release is what made the gate take ~19 minutes. CI runs the release
+build and the release clippy on the pinned toolchain, so release-only lints are caught there.
 
 ### Optional: strict linting
 

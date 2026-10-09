@@ -12,6 +12,11 @@ wgpu = ["libcosmic/wgpu"]
 
 [dependencies]
 # COSMIC framework
+# No `rev`: cosmic-app-list-config (a transitive dep) requires libcosmic from this
+# same bare URL, and cargo treats "git+URL" and "git+URL?rev=..." as *different*
+# sources -- pinning a rev here compiles the whole 18-crate libcosmic workspace,
+# including its vendored iced fork, a second time. The exact commit is pinned by
+# the committed Cargo.lock instead.
 libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
     "dbus-config",
     "desktop",
@@ -53,7 +58,7 @@ clap = { version = "4.5", features = ["derive"] }
 # System integration
 gilrs = "0.11.2"
 nix = { version = "0.30", features = ["fs"] }
-cosmic-app-list-config = { git = "https://github.com/pop-os/cosmic-applets" }
+cosmic-app-list-config = { git = "https://github.com/pop-os/cosmic-applets", rev = "1aa03111c5cd92051c9af28b43cb1ee9f43dbb25" }
 
 # HTTP client for daemon communication
 ureq = "3"

@@ -17,7 +17,7 @@ That's it! The pre-push hook will now run automatically before every push.
 When you run `git push`, the `.githooks/pre-push` script runs `just pre-push-check`, which:
 
 1. **Checks Rust formatting**: Ensures `cargo fmt` has been applied
-2. **Builds all services**: Compiles in release mode (same as CI)
+2. **Builds all services**: Compiles in debug mode (release is left to CI)
 3. **Runs Clippy linting**: Catches warnings before they fail CI
 
 The hook itself contains no cargo commands. `just pre-push-check` is the single
@@ -96,9 +96,15 @@ mise install
 
 ### Build Takes Too Long
 
-First release build can take several minutes. Subsequent pushes are faster due to incremental compilation.
+A cold build of the full dependency tree can take many minutes; later pushes take seconds, because
+cargo reuses what is already compiled.
 
-**Tip**: During development, use `just check` (debug builds) locally, then `just pre-push-check` before the final push.
+The gate builds in **debug** for exactly this reason. A cold *release* build of the ~1000-crate tree
+took about 19 minutes, and CI already runs the release build and release clippy on the pinned
+toolchain, so nothing is lost by leaving release to CI.
+
+**Tip**: while iterating, use `just check-fast <crate>` — it is scoped to a single crate and skips
+the GUI dependency stack unless you are working on the frontend.
 
 ### Specific Error: "State enum not in scope"
 

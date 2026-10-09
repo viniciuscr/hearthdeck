@@ -596,10 +596,43 @@ mod tests {
         let _ = std::fs::remove_file(socket_path);
     }
 
+    /// The `libcosmic = …` line from a manifest, without its continuation lines.
+    fn libcosmic_source(manifest: &str) -> &str {
+        manifest
+            .lines()
+            .find(|line| line.starts_with("libcosmic = "))
+            .expect("manifest declares a libcosmic dependency")
+    }
+
     #[test]
     fn overlay_dependency_and_service_wiring_stay_pinned() {
         let manifest = include_str!("../Cargo.toml");
-        assert!(manifest.contains("dc1cf9f00cbe2902a52166492654bb9fee8a73d1"));
+        let frontend = include_str!("../../hearthdeck-frontend/Cargo.toml");
+
+        // Both GUI crates must name libcosmic by the same git source. Cargo treats
+        // "git+URL" and "git+URL?rev=..." as different sources, and compiles the whole
+        // 18-crate libcosmic workspace once per source -- including the iced fork it
+        // vendors. The overlay pinning a rev while the frontend did not is exactly what
+        // made that happen, so agreement is the invariant worth guarding.
+        //
+        // This replaces an assertion that the overlay pinned one particular rev. A rev
+        // here cannot be made to match the bare source cosmic-app-list-config requires;
+        // the commit is pinned by the committed Cargo.lock instead.
+        for (crate_name, source) in [
+            ("overlay", libcosmic_source(manifest)),
+            ("frontend", libcosmic_source(frontend)),
+        ] {
+            assert!(
+                source.contains("git = \"https://github.com/pop-os/libcosmic\""),
+                "{crate_name} libcosmic source drifted: {source}"
+            );
+            assert!(
+                !source.contains("rev ="),
+                "{crate_name} pins a libcosmic rev, which cannot match the bare source \
+                 cosmic-app-list-config requires and re-introduces a second compile of the \
+                 libcosmic workspace: {source}"
+            );
+        }
 
         let service = include_str!("../../../packaging/arch/hearthdeck-overlay.service");
         assert!(service.contains("ExecStart=/usr/lib/hearthdeck/hearthdeck-overlay"));

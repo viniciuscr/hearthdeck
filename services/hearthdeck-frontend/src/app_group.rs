@@ -654,26 +654,6 @@ impl AppLibraryConfig {
         }
     }
 
-    pub fn add_entry(&mut self, section: Section, group: Option<usize>, id: &str) {
-        if let Some(group) = group.and_then(|i| self.sections.get_mut(section).get_mut(i)) {
-            match &mut group.filter {
-                FilterType::AppIds(ids) => {
-                    if ids.iter().all(|s| s != id) {
-                        ids.push(id.to_string());
-                    }
-                }
-                FilterType::Categories {
-                    exclude, include, ..
-                } => {
-                    include.retain(|conf_id| conf_id != id);
-                    exclude.retain(|conf_id| conf_id != id);
-                    include.push(id.to_string());
-                }
-                FilterType::None => {}
-            }
-        }
-    }
-
     /// The entries one tab of one section shows: the section's records, the
     /// tab's group, the search box and the console filters, all applied.
     pub fn filtered(
@@ -871,8 +851,8 @@ impl AppLibraryConfig {
 
 /// True for a tab the user made by hand, which nothing may replace.
 ///
-/// A `Categories` filter can never be a user's: [`AppLibraryConfig::add`] and
-/// `add_entry` only ever produce `AppIds`, so a stored `Categories` group was
+/// A `Categories` filter can never be a user's: [`AppLibraryConfig::add`] only
+/// ever produces `AppIds`, so a stored `Categories` group was
 /// derived by this module and is free to drop. Testing the filter as well as the
 /// source is what keeps a config written before [`GroupSource`] existed — where
 /// every tab loads as [`GroupSource::Local`] — from having its derived tabs

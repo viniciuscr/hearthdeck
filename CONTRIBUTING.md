@@ -56,7 +56,7 @@ Runs format, check-services, check-frontend, and test-frontend in sequence. Use 
 ### Automatic Hook (If Configured)
 If you ran `git config core.hooksPath .githooks`, the pre-push hook runs automatically:
 - Checks Rust formatting: `cargo fmt --all -- --check`
-- Builds all services in release mode: `cargo build --workspace --release`
+- Builds all services in debug mode: `cargo build --workspace`
 - Runs strict Clippy checks across the workspace
 - Fails the push if any check fails
 
@@ -69,8 +69,11 @@ just pre-push-check
 
 This validates:
 1. ✅ No `cargo fmt` violations
-2. ✅ Full release build succeeds for all services
-3. ✅ No clippy warnings in release mode
+2. ✅ Full debug build succeeds for all services
+3. ✅ No clippy warnings
+
+It runs in debug on purpose: a cold release build of the ~1000-crate dependency tree took ~19
+minutes. CI runs the release build and the release clippy on the pinned toolchain.
 
 ## Common Errors and Fixes
 
@@ -233,7 +236,27 @@ git config --get core.hooksPath  # Should print .githooks
 ```
 
 ### Pre-push checks take too long
-**Solution**: The release build can be slow on first run. Subsequent pushes will be faster due to incremental compilation. For development, use `just check-services` (debug build) locally.
+**Solution**: A cold build of the full dependency tree can take many minutes; later pushes take seconds, because cargo reuses what is already compiled. The gate now builds in **debug**, which is far cheaper than the release build it used to run. While iterating, use `just check-fast <crate>`.
+
+### Faster rebuilds with sccache
+`just setup` installs `sccache`, but it is deliberately **not** enabled for you. To turn it on:
+
+```bash
+export RUSTC_WRAPPER=sccache
+```
+
+It is opt-in on purpose: setting `RUSTC_WRAPPER` changes cargo's fingerprints, so the first build
+afterwards is a full rebuild. Better to choose when you pay that than to have it happen silently.
+
+Honest scope of what it buys:
+- **Yes**: rebuilding or recreating a `target/` directory, and sharing a cache between machines.
+- **No**: it does **not** help across a toolchain change. sccache keys on the compiler, so bumping
+  the pinned rustc is a cold build either way.
+
+Most of the build-time pain in this repo was structural and is already fixed: the COSMIC/iced stack
+used to be compiled twice because two crates pinned different libcosmic revisions, and the local
+gate used to compile in release. Both are corrected, so reach for sccache only if you are still
+rebuilding from cold often (multiple checkouts, CI, or a frequently-cleaned `target/`).
 
 ### Environment variables or paths differ from CI
 **Solution**: The CI container is Arch Linux with specific packages. To match more closely:

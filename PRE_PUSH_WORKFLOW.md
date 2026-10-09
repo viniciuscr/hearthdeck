@@ -71,8 +71,10 @@ Troubleshooting
   the hook holds no cargo commands of its own, so the two cannot drift apart
 - ✅ Three validation stages with clear output:
   1. **Formatting Check**: `cargo fmt --all -- --check`
-  2. **Release Build**: `cargo build --workspace --release`
-  3. **Clippy Lint**: `cargo clippy --workspace --all-targets --release -- -D warnings`
+  2. **Debug Build**: `cargo build --workspace`
+  3. **Clippy Lint**: `cargo clippy --workspace --all-targets -- -D warnings`
+- ✅ Debug, not release. A cold release build of the ~1000-crate tree took ~19 minutes, and CI
+  runs the release build and release clippy on the pinned toolchain anyway
 - ✅ Colored output (RED for errors, GREEN for success, YELLOW for progress)
 - ✅ Detailed error messages with exact fix commands
 - ✅ Fails with setup guidance if `just` is not installed
@@ -157,8 +159,8 @@ Developer's Local Machine
 │   ↓
 │   [Pre-push hook runs automatically]
 │   ├─ 1. Formatting check (cargo fmt)
-│   ├─ 2. Release build (cargo build --release)
-│   └─ 3. Clippy linting (cargo clippy --release -- -D warnings)
+│   ├─ 2. Debug build (cargo build)
+│   └─ 3. Clippy linting (cargo clippy -- -D warnings)
 │   
 │   If any check fails:
 │   ├─ Push is BLOCKED
@@ -170,7 +172,7 @@ Developer's Local Machine
 
 GitHub (CI)
 └─ code-quality.yml workflow
-   ├─ Runs same local checks (redundant validation for confidence)
+   ├─ Re-runs the checks, plus the release build and release clippy
    ├─ Full test suites
    ├─ Package builds (Arch Linux)
    └─ Status reported on PR
@@ -202,8 +204,8 @@ just pre-push-check   # Manual validation (same as hook)
 # Follow the error message instructions
 # Usually involves:
 cargo fmt --manifest-path services/Cargo.toml --all  # Fix formatting
-cargo build --manifest-path services/Cargo.toml --workspace --release  # Fix build
-cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets --release
+cargo build --manifest-path services/Cargo.toml --workspace  # Fix build
+cargo clippy --manifest-path services/Cargo.toml --workspace --all-targets
 git add services/
 git commit --amend  # or create new commit
 git push
@@ -220,7 +222,7 @@ git push
 
 ✨ **Fast Feedback Loop**
 - Pre-push checks take ~2-5 minutes (first run slower)
-- Clippy warnings caught in release mode (matches CI exactly)
+- Clippy warnings caught locally in debug; CI re-runs them in release
 - Clear error output with actionable fixes
 
 ✨ **Optional but Recommended**
@@ -267,7 +269,7 @@ git push
 
 | Problem | Solution |
 |---------|----------|
-| "Code works locally, fails in CI" | Pre-push validates release build + clippy like CI does |
+| "Code works locally, fails in CI" | Pre-push validates build + clippy; CI adds the release gates, tests, and packaging |
 | "Force-push to fix formatting" | Auto-format with `just format`, checked by hook |
 | "Missing imports discovered in CI" | Hook fails fast with clear error message |
 | "Unsure what to run before pushing" | CONTRIBUTING.md has complete checklist |

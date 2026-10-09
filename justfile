@@ -4,7 +4,7 @@ services_manifest := "services/Cargo.toml"
 # Recipes call `cargo` directly. `cargo` resolves to the toolchain pinned in
 # mise.toml through mise's shims / activate hook, so wrapping every command in
 # `mise exec --` was redundant. It also forced *every* pinned tool to be
-# installed first — including ruby, which cargo does not need — before any Rust
+# installed first — including toolchains cargo does not need — before any Rust
 # command could run. `just setup` still installs the toolchains.
 
 default:
@@ -112,7 +112,11 @@ check: format check-services check-frontend test-frontend
 lint-strict crate="":
   @cargo clippy --manifest-path {{services_manifest}} {{ if crate == "" { "--workspace" } else { "-p " + crate } }} --all-targets --message-format=json -- -W clippy::pedantic -W clippy::nursery 2>/dev/null | grep -o '"code":"clippy::[a-z_]*"' | sed 's/.*clippy:://; s/"$//' | sort | uniq -c | sort -rn | head -40
 
-# Validate code before pushing: format check, release build, and clippy lint.
+# Validate code before pushing: format check, debug build, and clippy lint.
+# Debug on purpose. Compiling the ~1000-crate dependency tree in release is what made
+# this gate take ~19 minutes, and `just check-fast` never touches release either.
+# CI still runs the release build and release clippy on the pinned toolchain, so
+# release-only lints are caught there rather than here.
 pre-push-check:
   @echo "=== Pre-Push Validation ==="
   @echo "Running local checks before push..."
@@ -121,12 +125,12 @@ pre-push-check:
   cargo fmt --manifest-path {{services_manifest}} --all -- --check
   @echo "✅ Formatting check passed"
   @echo ""
-  @echo "⏳ [2/3] Building services in release mode..."
-  cargo build --manifest-path {{services_manifest}} --workspace --release
-  @echo "✅ Release build passed"
+  @echo "⏳ [2/3] Building services (debug)..."
+  cargo build --manifest-path {{services_manifest}} --workspace
+  @echo "✅ Build passed"
   @echo ""
-  @echo "⏳ [3/3] Running Clippy lint checks (release mode)..."
-  cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets --release -- -D warnings
+  @echo "⏳ [3/3] Running Clippy lint checks (debug)..."
+  cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets -- -D warnings
   @echo "✅ Clippy check passed"
   @echo ""
   @echo "✨ All checks passed! Push when ready."
