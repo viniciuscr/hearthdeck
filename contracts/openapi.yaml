@@ -280,6 +280,23 @@ paths:
           required: false
           description: Free-text search term, forwarded to RomM's own search.
           schema: { type: string, minLength: 1 }
+        - name: genre
+          in: query
+          required: false
+          description: >-
+            Narrow to games carrying this genre, forwarded to RomM's own `genres`
+            filter. The value is one of /v1/retro/facets' `genre` options, and the
+            filter is applied by the source, so it covers the whole library rather
+            than the pages already loaded.
+          schema: { type: string, minLength: 1 }
+        - name: region
+          in: query
+          required: false
+          description: >-
+            Narrow to games carrying this region, forwarded to RomM's own
+            `regions` filter. The value is one of /v1/retro/facets' `region`
+            options.
+          schema: { type: string, minLength: 1 }
         - name: limit
           in: query
           schema: { type: integer, minimum: 1, maximum: 100, default: 48 }
@@ -293,6 +310,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RetroGamePage'
+        '503':
+          description: RomM is not configured
+  /v1/retro/facets:
+    get:
+      operationId: listRetroFacets
+      summary: The filter dimensions the console grid can narrow by
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: platform_id
+          in: query
+          required: false
+          description: >-
+            Restrict the facets to one console. Omit to read the whole library's
+            filter values.
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: >-
+            One entry per filterable dimension, each listing every value the
+            source reports for the scope - not just the ones a loaded page
+            happens to carry, so the grid can offer complete options before it
+            pages anything. A dimension the source reported no values for is
+            dropped rather than returned empty.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RetroFacet'
+        '502':
+          description: RomM refused the query
         '503':
           description: RomM is not configured
   /v1/retro/roms/{id}:
@@ -941,6 +990,26 @@ components:
         artwork_paths:
           type: array
           items: { type: string }
+    RetroFacet:
+      type: object
+      required: [id, label, options]
+      properties:
+        # Stable id. It is also the query parameter name that narrows
+        # /v1/retro/roms by this dimension (`genre`, `region`).
+        id: { type: string }
+        label: { type: string }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/RetroFacetOption' }
+    RetroFacetOption:
+      type: object
+      required: [value, label]
+      properties:
+        # The value passed back in the matching query parameter on
+        # /v1/retro/roms.
+        value: { type: string }
+        # How the value reads to a user, which may differ from `value`.
+        label: { type: string }
     RetroGamePage:
       type: object
       required: [items, total, limit, offset]

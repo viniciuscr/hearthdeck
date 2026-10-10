@@ -47,6 +47,7 @@ pub fn router(state: SharedState) -> Router {
         )
         .route("/v1/retro/consoles", get(list_retro_consoles))
         .route("/v1/retro/roms", get(list_retro_roms))
+        .route("/v1/retro/facets", get(list_retro_facets))
         .route("/v1/retro/roms/{id}", get(retro_rom_details))
         .route("/v1/retro/roms/{id}/favorite", post(set_retro_favorite))
         .route("/v1/retro/roms/{id}/backlog", post(set_retro_backlogged))
@@ -243,10 +244,15 @@ async fn list_retro_roms(
     let limit = query.limit.unwrap_or(48).clamp(1, 100);
     let offset = query.offset.unwrap_or(0);
     let search_term = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
+    let filters = diagnostics::RommGameFilters {
+        genres: query.genre.into_iter().collect(),
+        regions: query.region.into_iter().collect(),
+    };
     let games = diagnostics::romm_games(
         &state.settings,
         query.platform_id,
         search_term,
+        &filters,
         limit,
         offset,
     )
@@ -258,6 +264,47 @@ async fn list_retro_roms(
         limit: games.limit,
         offset: games.offset,
     }))
+}
+
+/// The console grid's filter facets: every genre and region RomM knows for the
+/// scope, so the grid offers complete options without loading the library.
+///
+/// Facets with no values are dropped rather than returned empty, so the client
+/// never renders a filter row with nothing to pick.
+async fn list_retro_facets(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<RommFacetsQuery>,
+) -> Result<Json<Vec<RetroFacet>>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let values = diagnostics::romm_filter_values(&state.settings, query.platform_id)
+        .await
+        .map_err(ApiError::romm_query)?;
+    Ok(Json(retro_facets(values)))
+}
+
+/// Maps RomM's library-wide filter values onto the facets the grid shows. Only
+/// the fields Hearthdeck offers a chip row for become facets; the rest of
+/// RomM's filter dictionary stays unused until a screen asks for it.
+fn retro_facets(values: diagnostics::RommFilterValues) -> Vec<RetroFacet> {
+    [
+        ("genre", "Genre", values.genres),
+        ("region", "Region", values.regions),
+    ]
+    .into_iter()
+    .filter(|(_, _, options)| !options.is_empty())
+    .map(|(id, label, options)| RetroFacet {
+        id: id.to_owned(),
+        label: label.to_owned(),
+        options: options
+            .into_iter()
+            .map(|value| RetroFacetOption {
+                label: value.clone(),
+                value,
+            })
+            .collect(),
+    })
+    .collect()
 }
 
 /// Full detail for one ROM, backing the frontend's console-game details
@@ -1219,8 +1266,19 @@ struct RommGamesQuery {
     platform_id: Option<i64>,
     #[serde(default)]
     q: Option<String>,
+    /// Narrow to roms carrying this genre (RomM's `genres` filter).
+    #[serde(default)]
+    genre: Option<String>,
+    /// Narrow to roms carrying this region (RomM's `regions` filter).
+    #[serde(default)]
+    region: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct RommFacetsQuery {
+    platform_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -1234,6 +1292,21 @@ struct RommGamesResponse {
     total: u64,
     limit: u32,
     offset: u32,
+}
+
+/// One filter dimension the console grid can narrow by, and the values it
+/// offers. Matches the frontend's provider-agnostic `Facet`.
+#[derive(Serialize, Debug)]
+struct RetroFacet {
+    id: String,
+    label: String,
+    options: Vec<RetroFacetOption>,
+}
+
+#[derive(Serialize, Debug)]
+struct RetroFacetOption {
+    value: String,
+    label: String,
 }
 
 #[derive(Serialize)]
@@ -2654,6 +2727,62 @@ mod tests {
             None
         );
         assert_eq!(super::http_url(Some("not a url")), None);
+    }
+
+    /// The retro facets route is another account-touching frontier: it dials the
+    /// user's RomM server, so an unpaired client must not reach it. The check
+    /// runs before any HTTP, so this holds without a network.
+    #[tokio::test]
+    async fn the_retro_facets_route_requires_authentication() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.sock"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+            },
+            database,
+        ));
+
+        let response = router(state)
+            .oneshot(
+                Request::get("/v1/retro/facets")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Facets come from RomM's library-wide filter values: one chip row per
+    /// populated dimension, and no row for a dimension RomM reported empty.
+    #[test]
+    fn retro_facets_offer_populated_dimensions_only() {
+        let facets = super::retro_facets(crate::diagnostics::RommFilterValues {
+            genres: vec!["Action".to_owned(), "RPG".to_owned()],
+            regions: Vec::new(),
+        });
+
+        assert_eq!(facets.len(), 1, "facets: {facets:?}");
+        assert_eq!(facets[0].id, "genre");
+        assert_eq!(facets[0].label, "Genre");
+        assert_eq!(
+            facets[0]
+                .options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            ["Action", "RPG"]
+        );
     }
 
     fn romm_game_with_siblings(

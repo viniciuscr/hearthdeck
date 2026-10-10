@@ -106,6 +106,19 @@ pub struct RommGamePage {
     pub offset: u32,
 }
 
+/// The metadata a RomM rom query can be narrowed by, as Hearthdeck's own retro
+/// route receives it.
+///
+/// Only the multi-value fields the console grid filters on are modelled. RomM
+/// takes each as repeated query parameters plus a logic operator, and Hearthdeck
+/// always sends `any` (a rom carrying any of the listed values), which is what a
+/// single-select chip means.
+#[derive(Clone, Debug, Default)]
+pub struct RommGameFilters {
+    pub genres: Vec<String>,
+    pub regions: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct RommGame {
     pub id: i64,
@@ -412,6 +425,7 @@ pub async fn romm_games(
     settings: &SettingsRepository,
     platform_id: Option<i64>,
     search_term: Option<&str>,
+    filters: &RommGameFilters,
     limit: u32,
     offset: u32,
 ) -> std::result::Result<RommGamePage, RommQueryError> {
@@ -420,28 +434,89 @@ pub async fn romm_games(
         .await
         .map_err(RommQueryError::Failed)?
         .ok_or(RommQueryError::NotConfigured)?;
-    let mut request = http()
-        .get(format!("{}/api/roms", credentials.base_url))
-        .query(&[
-            ("limit", limit.to_string()),
-            ("offset", offset.to_string()),
-            ("with_char_index", "false".to_owned()),
-            ("with_filter_values", "false".to_owned()),
-            ("with_rom_id_index", "false".to_owned()),
-            // Collapse a game's variants (regions, revisions, discs) into one
-            // entry, with the rest carried in `sibling_roms`. Without this
-            // RomM pages each file separately, so a multi-disc title would
-            // occupy several grid tiles. RomM keeps `total` in terms of these
-            // collapsed groups, so pagination stays correct.
-            ("group_by_meta_id", "true".to_owned()),
-            ("order_by", "name".to_owned()),
-            ("order_dir", "asc".to_owned()),
-        ]);
+    let mut params: Vec<(&str, String)> = vec![
+        ("limit", limit.to_string()),
+        ("offset", offset.to_string()),
+        ("with_char_index", "false".to_owned()),
+        ("with_filter_values", "false".to_owned()),
+        ("with_rom_id_index", "false".to_owned()),
+        // Collapse a game's variants (regions, revisions, discs) into one
+        // entry, with the rest carried in `sibling_roms`. Without this RomM
+        // pages each file separately, so a multi-disc title would occupy
+        // several grid tiles. RomM keeps `total` in terms of these collapsed
+        // groups, so pagination stays correct.
+        ("group_by_meta_id", "true".to_owned()),
+        ("order_by", "name".to_owned()),
+        ("order_dir", "asc".to_owned()),
+    ];
     if let Some(platform_id) = platform_id {
-        request = request.query(&[("platform_ids", platform_id.to_string())]);
+        params.push(("platform_ids", platform_id.to_string()));
     }
     if let Some(search_term) = search_term {
-        request = request.query(&[("search_term", search_term)]);
+        params.push(("search_term", search_term.to_owned()));
+    }
+    // Each multi-value filter is repeated per value, with a `_logic` operator
+    // that says how to combine them: `any` matches a rom carrying any listed
+    // value, which is what selecting one chip means.
+    for genre in &filters.genres {
+        params.push(("genres", genre.clone()));
+    }
+    if !filters.genres.is_empty() {
+        params.push(("genres_logic", "any".to_owned()));
+    }
+    for region in &filters.regions {
+        params.push(("regions", region.clone()));
+    }
+    if !filters.regions.is_empty() {
+        params.push(("regions_logic", "any".to_owned()));
+    }
+    let response = http()
+        .get(format!("{}/api/roms", credentials.base_url))
+        .query(&params)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .bearer_auth(&credentials.token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(RommQueryError::Failed(anyhow::anyhow!(
+            "RomM returned {status}"
+        )));
+    }
+    response
+        .json::<RommGamePage>()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))
+}
+
+/// The complete set of filter values RomM reports for a library scope.
+///
+/// RomM keeps these on a dedicated endpoint rather than on the paged rom list,
+/// so the console grid can offer every genre and region without loading (or
+/// scanning) the whole library first. Only the fields Hearthdeck filters on are
+/// read; serde ignores the rest of RomM's filter dictionary.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct RommFilterValues {
+    #[serde(default)]
+    pub genres: Vec<String>,
+    #[serde(default)]
+    pub regions: Vec<String>,
+}
+
+pub async fn romm_filter_values(
+    settings: &SettingsRepository,
+    platform_id: Option<i64>,
+) -> std::result::Result<RommFilterValues, RommQueryError> {
+    let credentials = settings
+        .romm_credentials()
+        .await
+        .map_err(RommQueryError::Failed)?
+        .ok_or(RommQueryError::NotConfigured)?;
+    let mut request = http().get(format!("{}/api/roms/filters", credentials.base_url));
+    if let Some(platform_id) = platform_id {
+        request = request.query(&[("platform_ids", platform_id.to_string())]);
     }
     let response = request
         .header(reqwest::header::ACCEPT, "application/json")
@@ -457,7 +532,7 @@ pub async fn romm_games(
         )));
     }
     response
-        .json::<RommGamePage>()
+        .json::<RommFilterValues>()
         .await
         .map_err(|error| RommQueryError::Failed(error.into()))
 }
