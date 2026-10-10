@@ -105,6 +105,54 @@ impl Metrics {
             .min(total_rows);
         first.saturating_sub(GRID_OVERSCAN_ROWS).min(end)..end
     }
+
+    /// The offset that brings `row` fully into view, or `None` when it is
+    /// already there and the viewport should be left alone.
+    ///
+    /// The viewport does not track the cursor proportionally: it moves only when
+    /// the row the cursor is on would otherwise leave the visible area, and then
+    /// it pins that row to the nearest edge. A grid that slid forward on every
+    /// step would read as the list moving rather than the selection doing so.
+    ///
+    /// A row leaving through the bottom pins to the bottom edge, so stepping
+    /// down keeps it just inside the viewport; a row that left through the top
+    /// pins to the top, so stepping back up does the same. The result is clamped
+    /// to the furthest the list can scroll - the same clamp [`Self::row_window`]
+    /// applies when it decides which rows to build - so the offset returned here
+    /// and the rows that get built cannot disagree.
+    #[must_use]
+    pub fn scroll_to_row(
+        self,
+        entries: usize,
+        row: usize,
+        offset: f32,
+        viewport_height: f32,
+    ) -> Option<f32> {
+        let total_rows = self.rows(entries);
+        let row_height = self.row_height.max(1.0);
+        if total_rows <= 1 {
+            return None;
+        }
+        let visible = viewport_height.max(0.0) / row_height;
+        if visible >= total_rows as f32 {
+            return None;
+        }
+        let row = row as f32;
+        // The viewport's top edge in rows, as the renderer has it: fractional,
+        // because a pixel offset rarely lands on a row boundary.
+        let top = offset.max(0.0) / row_height;
+        if row >= top && row + 1.0 <= top + visible {
+            // The row is already fully inside the viewport.
+            return None;
+        }
+        let target = if row + 1.0 > top + visible {
+            (row + 1.0 - visible).max(0.0)
+        } else {
+            row
+        };
+        let furthest = (self.content_height(entries) - viewport_height).max(0.0);
+        Some((target * row_height).clamp(0.0, furthest))
+    }
 }
 
 /// The widget id of a tile, so the controller's cursor can address it.
@@ -116,19 +164,24 @@ pub fn tile_id(entry: &DesktopEntryData) -> Id {
     Id::new(format!("tile-{}", entry.id))
 }
 
-/// Sends the grid back to the top, for when the list it shows is replaced: a new
-/// list is read from its first row, not from wherever the list before it
-/// happened to be scrolled to.
-pub fn scroll_to_top() -> cosmic::app::Task<Message> {
-    // The grid only scrolls vertically, so the horizontal offset it is already
-    // at is the one to keep.
+/// Scrolls the grid to an absolute vertical offset.
+///
+/// The grid only scrolls vertically, so the horizontal offset stays where it is.
+pub fn scroll_to_offset(offset: f32) -> cosmic::app::Task<Message> {
     scroll_to(
         GRID_SCROLLABLE_ID.clone(),
         AbsoluteOffset {
             x: Some(0.0),
-            y: Some(0.0),
+            y: Some(offset),
         },
     )
+}
+
+/// Sends the grid back to the top, for when the list it shows is replaced: a new
+/// list is read from its first row, not from wherever the list before it
+/// happened to be scrolled to.
+pub fn scroll_to_top() -> cosmic::app::Task<Message> {
+    scroll_to_offset(0.0)
 }
 
 /// The catalog to draw and the window to lay it out for.
@@ -321,5 +374,68 @@ mod tests {
             reserved.as_widget().size().height,
             cosmic::iced::Length::Fixed(7.0 * metrics.row_height)
         );
+    }
+
+    /// A grid of 100px rows, four to a row, with no gap - so every expected
+    /// offset below is a whole row and the arithmetic is readable.
+    fn plain_grid() -> Metrics {
+        Metrics {
+            columns: 4,
+            tile_width: 100.0,
+            tile_height: 100.0,
+            gap: 0.0,
+            row_height: 100.0,
+        }
+    }
+
+    /// The viewport follows the cursor, but only when it has to: a step that
+    /// lands on a row the viewport already shows must not move the page, or the
+    /// grid would slide under every press.
+    #[test]
+    fn the_viewport_follows_the_cursor_only_when_a_row_would_leave_it() {
+        let grid = plain_grid();
+        let entries = 4 * 10; // ten rows
+        let viewport = 300.0; // three rows are visible
+
+        for row in 0..3 {
+            assert_eq!(
+                grid.scroll_to_row(entries, row, 0.0, viewport),
+                None,
+                "row {row} is already on screen"
+            );
+        }
+
+        // A row leaving through the bottom pins to the bottom edge, so stepping
+        // down keeps it just inside the viewport rather than jumping it to the
+        // top of the screen.
+        assert_eq!(grid.scroll_to_row(entries, 3, 0.0, viewport), Some(100.0));
+        assert_eq!(grid.scroll_to_row(entries, 4, 0.0, viewport), Some(200.0));
+
+        // One leaving through the top pins to the top, so stepping back up does
+        // not overshoot in the other direction.
+        assert_eq!(grid.scroll_to_row(entries, 1, 200.0, viewport), Some(100.0));
+        assert_eq!(grid.scroll_to_row(entries, 0, 200.0, viewport), Some(0.0));
+    }
+
+    #[test]
+    fn a_list_that_fits_its_viewport_is_never_scrolled() {
+        let grid = plain_grid();
+        let entries = 4 * 2; // two rows, in a viewport three rows tall
+
+        assert_eq!(grid.scroll_to_row(entries, 1, 0.0, 300.0), None);
+        // And an empty grid has no row to follow.
+        assert_eq!(grid.scroll_to_row(0, 0, 0.0, 300.0), None);
+    }
+
+    /// The last row cannot pin itself to the bottom edge without scrolling past
+    /// the end of the list, so the offset stops where the list stops - the same
+    /// clamp the rows-to-build window applies.
+    #[test]
+    fn following_the_cursor_stops_at_the_end_of_the_list() {
+        let grid = plain_grid();
+        let entries = 4 * 10; // 1000px of content
+        let viewport = 300.0; // furthest scroll is 700px
+
+        assert_eq!(grid.scroll_to_row(entries, 9, 0.0, viewport), Some(700.0));
     }
 }

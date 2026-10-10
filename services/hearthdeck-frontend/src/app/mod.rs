@@ -787,7 +787,9 @@ impl App {
             Outcome::Tile { tile, column } => {
                 self.cursors.tile = tile;
                 self.cursors.column = column;
-                self.focus_task()
+                let focus = self.focus_task();
+                let scroll = self.scroll_to_tile(tile);
+                Task::batch([focus, scroll])
             }
             // Inside the drawer the row is the control, so the cursor moves
             // between rows and nothing is repainted: the drawer draws its own
@@ -972,6 +974,34 @@ impl App {
         self.visible
             .get(self.cursors.tile)
             .map_or(Task::none(), |entry| widget_focus(grid::tile_id(entry)))
+    }
+
+    /// Moves the grid so the cursor stays on screen.
+    ///
+    /// The viewport follows the cursor rather than the other way round: a step
+    /// that would take the tile off the visible area scrolls the grid to put its
+    /// row back inside, and a step within the viewport does not move the page at
+    /// all. Without this the cursor walks off the bottom of the screen and the
+    /// grid behind it never moves.
+    ///
+    /// The new offset is recorded before the scrollable reports it, because the
+    /// grid is virtualized: the rows built are the rows around the offset, so a
+    /// row not yet inside it does not exist as a widget - and `focus` on a widget
+    /// that does not exist resolves to nothing. The scrollable confirms the
+    /// offset on the next frame, through `GridScrolled`.
+    fn scroll_to_tile(&mut self, tile: usize) -> Task<Message> {
+        let metrics = grid::metrics(self.window_width);
+        let row = tile / metrics.columns.max(1);
+        let Some(offset) = metrics.scroll_to_row(
+            self.visible.len(),
+            row,
+            self.grid_scroll_offset,
+            self.grid_viewport_height,
+        ) else {
+            return Task::none();
+        };
+        self.grid_scroll_offset = offset;
+        grid::scroll_to_offset(offset)
     }
 
     /// The locally-loaded sections derive their facets from the catalog they
@@ -1691,5 +1721,35 @@ mod tests {
         let _ = app.update(Message::InputChanged("game-0".to_owned()));
 
         assert_eq!(app.cursors.tile, 0, "only one entry matches now");
+    }
+
+    /// The pad walks the grid and the grid follows: steps inside the rows the
+    /// viewport already shows leave the page alone, and the step that would take
+    /// the cursor off them scrolls the grid instead of losing it. Without this
+    /// the selection walks off the bottom of the screen and the content never
+    /// moves - which is what the rewrite shipped without.
+    #[test]
+    fn the_grid_follows_the_cursor_out_of_the_viewport() {
+        // Far more rows than a viewport holds, so there is somewhere to scroll.
+        let mut app = showing(8 * 40);
+        let metrics = grid::metrics(app.window_width);
+        let visible_rows =
+            ((app.grid_viewport_height / metrics.row_height).floor() as usize).max(1);
+
+        // Down the rows the viewport already shows: the page stays where it is.
+        for _ in 0..visible_rows.saturating_sub(1) {
+            send(&mut app, GamepadEvent::MoveDown);
+        }
+        assert_eq!(
+            app.grid_scroll_offset, 0.0,
+            "a step inside the viewport moved the page"
+        );
+
+        // One more row down leaves through the bottom, and the grid follows.
+        send(&mut app, GamepadEvent::MoveDown);
+        assert!(
+            app.grid_scroll_offset > 0.0,
+            "the cursor left the viewport and the grid did not follow it"
+        );
     }
 }
