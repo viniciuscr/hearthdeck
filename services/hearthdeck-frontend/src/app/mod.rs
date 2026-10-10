@@ -106,6 +106,13 @@ pub enum Message {
     /// The console list a tab strip is built from: `(platform id, label)`.
     ConsolesLoaded(Vec<(i64, String)>),
     SelectSection(Section),
+    /// The dashboard's top bar: show the dashboard itself.
+    OpenDashboard,
+    /// The dashboard's top bar: show the library as it was left.
+    OpenLibrary,
+    /// The dashboard's top bar: show the library with the caret in its search
+    /// box, which is what this app's search means.
+    OpenSearch,
     /// A dashboard card was pressed: show the library at the section the entry
     /// on that card belongs to.
     ShowLibrary(Section),
@@ -576,6 +583,14 @@ impl Application for App {
             // A dashboard card is a way into the library, so pressing one leaves
             // the dashboard for it - which the section change itself does.
             Message::ShowLibrary(section) => return self.update(Message::SelectSection(section)),
+            Message::OpenDashboard => self.page = Page::Dashboard,
+            Message::OpenLibrary => self.page = Page::Library,
+            Message::OpenSearch => {
+                self.page = Page::Library;
+                // The caret goes in the search box, which the library header
+                // draws - so the page has to be the library first.
+                return self.focus_search();
+            }
             Message::GamepadEvent(event) => {
                 // A game owns the screen, or the window is not focused: the
                 // pad's events are not ours to act on. (This is what keeps a
@@ -645,6 +660,14 @@ impl Application for App {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
+        // The dashboard is a sibling of the library, not a page inside it: it
+        // carries its own top bar and has no sidebar, so it is the whole window.
+        // Drawing the library's shell around it would make it read as a section
+        // of the library, which is exactly what it is not.
+        if self.page == Page::Dashboard {
+            return self.view_dashboard();
+        }
+
         let sidebar = sidebar::view(
             Sidebar {
                 current: self.cur_section,
@@ -665,13 +688,6 @@ impl Application for App {
         // library behind it is no longer what the user is acting on.
         let content: Element<'_, Self::Message> = if self.launch_state.is_visible() {
             view_launch_overlay(&self.launch_state)
-        } else if self.page == Page::Dashboard {
-            dashboard::view(
-                &self.dashboard_shelves(),
-                self.window_width,
-                |rail, offset| Message::RailScrolled { rail, offset },
-                Message::PageScrolled,
-            )
         } else {
             let header = header::view(header::Header {
                 section: self.cur_section,
@@ -818,6 +834,39 @@ impl Application for App {
 }
 
 impl App {
+    /// The dashboard screen: the app's front door, with chrome of its own.
+    ///
+    /// It is drawn as the whole window rather than as the library's content, so
+    /// the library's sidebar never appears around it - the two are sibling
+    /// destinations, and the sidebar belongs to the library.
+    fn view_dashboard(&self) -> Element<'_, Message> {
+        let screen = dashboard::view(
+            &self.dashboard_shelves(),
+            dashboard::TopBar {
+                user_name: self.user_name.clone(),
+                app_icon: ui::app_icon(),
+                on_home: Message::OpenDashboard,
+                on_library: Message::OpenLibrary,
+                on_search: Message::OpenSearch,
+            },
+            self.window_width,
+            |rail, offset| Message::RailScrolled { rail, offset },
+            Message::PageScrolled,
+        );
+        // A launch is a layer over whatever page is behind it, the dashboard
+        // included.
+        let screen: Element<'_, Message> = if self.launch_state.is_visible() {
+            stack![screen, view_launch_overlay(&self.launch_state)].into()
+        } else {
+            screen
+        };
+        container(screen)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .class(theme::Container::Custom(Box::new(root_background)))
+            .into()
+    }
+
     /// Re-projects the current section into `visible`.
     ///
     /// The console grid arrives already narrowed: the daemon applies the facet
@@ -1154,12 +1203,15 @@ impl App {
         // width. The dashboard fills the content column, so the page's viewport
         // is the window's height.
         let heights = dashboard::rail_heights(&shelves, self.window_width);
+        // The page sits below the top bar, so its viewport is the window's height
+        // less the bar rather than the whole window.
+        let page_viewport = WINDOW_HEIGHT - dashboard::top_bar_height();
         if let Some(offset) = dashboard::focus::page_scroll_target(
             &heights,
             self.dashboard_cursor.rail,
             dashboard::rail_gap(),
             self.page_offset,
-            WINDOW_HEIGHT,
+            page_viewport,
         ) {
             tasks.push(dashboard::scroll_to_page(offset));
         }
