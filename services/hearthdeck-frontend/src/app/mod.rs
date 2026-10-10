@@ -27,6 +27,7 @@ use cosmic::iced::core::keyboard::{Key, key::Named};
 use cosmic::iced::core::widget::operation::focusable::focus;
 use cosmic::iced::core::window::{Event as WindowEvent, Id as SurfaceId};
 use cosmic::iced::event::{Status, listen_with};
+use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
 use cosmic::iced::widget::stack;
 use cosmic::iced::{self, Length, Subscription, runtime, window};
 use cosmic::theme;
@@ -45,14 +46,16 @@ use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchSt
 use crate::providers::GameProvider;
 use crate::providers::daemon::{DaemonClient, DaemonConfig, DaemonProvider};
 use crate::providers::filter::{Facet, cycle};
+use crate::screens::dashboard::{self, Card, Shelf};
 use crate::screens::library::console::{self, ConsoleListing};
 use crate::screens::library::focus::{self, Chrome, Confirm, Cursors, Direction, Layout, Outcome};
 use crate::screens::library::sidebar::{self, Sidebar};
 use crate::screens::library::{filters, grid, header};
 use crate::style::{
-    DIVIDER_WIDTH, ICON_LARGE, WINDOW_HEIGHT, WINDOW_WIDTH, content_horizontal_padding,
-    filter_drawer_width, grid_viewport_height_fallback, launch_overlay,
-    primary_action_button_class, root_background, sidebar_divider,
+    DASHBOARD_RAIL_TILES, DIVIDER_WIDTH, ICON_LARGE, WINDOW_HEIGHT, WINDOW_WIDTH,
+    content_horizontal_padding, dashboard_tile_size, filter_drawer_width,
+    grid_viewport_height_fallback, launch_overlay, primary_action_button_class, root_background,
+    sidebar_divider,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
@@ -99,6 +102,9 @@ pub enum Message {
     /// The console list a tab strip is built from: `(platform id, label)`.
     ConsolesLoaded(Vec<(i64, String)>),
     SelectSection(Section),
+    /// A dashboard card was pressed: show the library at the section the entry
+    /// on that card belongs to.
+    ShowLibrary(Section),
     SelectGroup(Option<usize>),
     InputChanged(String),
     /// A filter chip was pressed: set (or clear) one facet's value.
@@ -123,6 +129,12 @@ pub enum Message {
     TileContext(usize),
     /// The menu's scrim was pressed: close it.
     CloseMenu,
+    /// A dashboard rail scrolled: remembered, so the next step can tell whether
+    /// the card it lands on would leave the view.
+    RailScrolled {
+        rail: usize,
+        offset: f32,
+    },
     /// A navigation event, from the pad or from the keyboard - both speak this
     /// one vocabulary, so there is a single place that moves the cursor.
     GamepadEvent(GamepadEvent),
@@ -155,8 +167,22 @@ pub enum Message {
     WindowFocusChanged(bool),
 }
 
+/// Which page the shell is showing.
+///
+/// The dashboard is where the app opens, matching the inherited app: a front
+/// door onto the library rather than a section of it. Everything that is not the
+/// dashboard is reached from it, and Back comes back here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Page {
+    #[default]
+    Dashboard,
+    Library,
+}
+
 pub struct App {
     core: Core,
+    /// Which page the shell is showing.
+    page: Page,
     config: AppLibraryConfig,
     /// The config file the shell writes through, resolved once at startup so the
     /// shell has exactly one write target. `None` when there is no store to
@@ -191,6 +217,13 @@ pub struct App {
     /// to act on what the user can see is highlighted; iced is told about it
     /// afterwards, to paint the ring.
     cursors: Cursors,
+    /// Where the pad is on the dashboard, which is a different surface with a
+    /// different shape: rails of cards rather than a grid of tiles.
+    dashboard_cursor: dashboard::focus::Cursor,
+    /// Where each dashboard rail is scrolled to, by rail index. The shell keeps
+    /// it because the rail cannot: the movement rules need to know whether the
+    /// card the cursor lands on would leave the view.
+    rail_offsets: Vec<f32>,
     search_value: String,
     user_name: String,
     /// Free space on the home filesystem, as the last poll read it. Blank until
@@ -267,6 +300,7 @@ impl Application for App {
 
         let app = Self {
             core,
+            page: Page::default(),
             config,
             config_store,
             daemon_client,
@@ -282,6 +316,8 @@ impl Application for App {
             // The first tile: with nothing loaded yet there is nothing to point
             // at, and every read of the cursor tolerates that.
             cursors: Cursors::default(),
+            dashboard_cursor: dashboard::focus::Cursor::default(),
+            rail_offsets: Vec::new(),
             search_value: String::new(),
             user_name: crate::system_status::current_user_name(),
             disk_free: String::new(),
@@ -404,6 +440,9 @@ impl Application for App {
                 self.cursors = focus::clamp(self.cursors, self.layout());
             }
             Message::SelectSection(section) => {
+                // The sidebar is the library's own navigation, so reaching for it
+                // leaves the dashboard.
+                self.page = Page::Library;
                 self.cur_section = section;
                 self.cur_group = None;
                 self.search_value.clear();
@@ -494,6 +533,15 @@ impl Application for App {
                 }
             }
             Message::CloseMenu => self.menu.close(),
+            Message::RailScrolled { rail, offset } => {
+                if self.rail_offsets.len() <= rail {
+                    self.rail_offsets.resize(rail + 1, 0.0);
+                }
+                self.rail_offsets[rail] = offset;
+            }
+            // A dashboard card is a way into the library, so pressing one leaves
+            // the dashboard for it - which the section change itself does.
+            Message::ShowLibrary(section) => return self.update(Message::SelectSection(section)),
             Message::GamepadEvent(event) => {
                 // A game owns the screen, or the window is not focused: the
                 // pad's events are not ours to act on. (This is what keeps a
@@ -583,6 +631,12 @@ impl Application for App {
         // library behind it is no longer what the user is acting on.
         let content: Element<'_, Self::Message> = if self.launch_state.is_visible() {
             view_launch_overlay(&self.launch_state)
+        } else if self.page == Page::Dashboard {
+            dashboard::view(
+                &self.dashboard_shelves(),
+                self.window_width,
+                |rail, offset| Message::RailScrolled { rail, offset },
+            )
         } else {
             let header = header::view(header::Header {
                 section: self.cur_section,
@@ -806,8 +860,6 @@ impl App {
             filter_button: !self.facets.is_empty(),
             facets: self.facets.len(),
             drawer_open: self.filter_open && !self.facets.is_empty(),
-            menu_open: self.menu.is_open(),
-            menu_rows: self.menu_rows(),
             tiles: self.visible.len(),
             columns: grid::metrics(self.window_width).columns,
         }
@@ -875,6 +927,127 @@ impl App {
         }
     }
 
+    /// Whether the menu is up with something in it. A menu with no rows is not a
+    /// surface, so it does not take the navigation.
+    fn menu_is_up(&self) -> bool {
+        self.menu.is_open() && self.menu_rows() > 0
+    }
+
+    /// Steps the open menu's highlight. A menu is a list, so both vertical
+    /// directions walk it and wrap; there is nothing beside a row to step to.
+    fn move_menu(&mut self, direction: Direction) -> Task<Message> {
+        let rows = self.menu_rows();
+        match direction {
+            Direction::Up => self.menu.move_selection(-1, rows),
+            Direction::Down => self.menu.move_selection(1, rows),
+            Direction::Left | Direction::Right => {}
+        }
+        Task::none()
+    }
+
+    /// The dashboard's rails, from what the shell already holds.
+    ///
+    /// The shelves drawn so far are the ones that need nothing fetched: the
+    /// library itself. Recently played, favourites and continue watching each
+    /// add a rail here as their data lands, and so does the console rail - that
+    /// one wants the console artwork, which the shell does not keep yet.
+    fn dashboard_shelves(&self) -> Vec<Shelf> {
+        let spacing = theme::spacing();
+        let size = dashboard_tile_size(
+            self.window_width,
+            content_horizontal_padding(),
+            spacing.space_l,
+        );
+        let cards: Vec<Card> = self
+            .catalog
+            .iter()
+            .filter(|entry| Section::PcGames.matches(entry))
+            .take(DASHBOARD_RAIL_TILES)
+            .enumerate()
+            .map(|(index, entry)| {
+                Card::new(
+                    dashboard_card_id(index),
+                    entry.name.clone(),
+                    crate::icon_cache::entry_icon_handle(&entry.icon, size as u32),
+                    Message::ShowLibrary(Section::PcGames),
+                )
+            })
+            .collect();
+        if cards.is_empty() {
+            return Vec::new();
+        }
+        vec![Shelf::new(false, fl!("all-games"), cards)]
+    }
+
+    /// How many cards each rail holds, which is the shape the rail navigation
+    /// walks.
+    fn dashboard_rail_lengths(&self) -> Vec<usize> {
+        self.dashboard_shelves()
+            .iter()
+            .map(|shelf| shelf.cards.len())
+            .collect()
+    }
+
+    /// Steps the dashboard's cursor, and keeps the card it lands on on screen.
+    fn step_dashboard(&mut self, direction: Direction) -> Task<Message> {
+        let rails = self.dashboard_rail_lengths();
+        let before = self.dashboard_cursor;
+        self.dashboard_cursor = dashboard::focus::step(self.dashboard_cursor, direction, &rails);
+        if self.dashboard_cursor == before {
+            return Task::none();
+        }
+        self.focus_dashboard_card()
+    }
+
+    /// Runs the card the dashboard's cursor is on.
+    fn confirm_dashboard(&mut self) -> Task<Message> {
+        let rails = self.dashboard_rail_lengths();
+        let message =
+            dashboard::focus::confirm(self.dashboard_cursor, &rails).and_then(|(rail, card)| {
+                self.dashboard_shelves()
+                    .get(rail)
+                    .and_then(|shelf| shelf.cards.get(card))
+                    .map(|card| card.message.clone())
+            });
+        match message {
+            Some(message) => self.update(message),
+            None => Task::none(),
+        }
+    }
+
+    /// Points the renderer's focus at the card the dashboard's cursor is on, and
+    /// scrolls its rail so that card stays on screen.
+    ///
+    /// A rail moves only once the cursor crosses one of its edges, which is the
+    /// rule the grid follows and for the same reason: a row that slid on every
+    /// step reads as the row moving rather than the selection.
+    fn focus_dashboard_card(&mut self) -> Task<Message> {
+        let shelves = self.dashboard_shelves();
+        let Some(shelf) = shelves.get(self.dashboard_cursor.rail) else {
+            return Task::none();
+        };
+        let Some(card) = shelf.cards.get(self.dashboard_cursor.card) else {
+            return Task::none();
+        };
+        let focus = widget_focus(card.id.clone());
+        let (card_width, gap) = dashboard::card_pitch(shelf, self.window_width);
+        let offset = dashboard::focus::rail_scroll_target(
+            self.dashboard_cursor.card,
+            shelf.cards.len(),
+            self.rail_offsets
+                .get(self.dashboard_cursor.rail)
+                .copied()
+                .unwrap_or(0.0),
+            dashboard::rail_viewport(self.window_width),
+            card_width,
+            gap,
+        );
+        match offset {
+            Some(offset) => Task::batch([focus, scroll_rail(self.dashboard_cursor.rail, offset)]),
+            None => focus,
+        }
+    }
+
     /// Acts on one navigation event.
     ///
     /// The pad and the keyboard both arrive here, so there is one place that
@@ -910,6 +1083,14 @@ impl App {
         // A step belongs to the content: a D-pad press takes the cursor back
         // from the keyboard's ring rather than walking along the chrome.
         self.cursors.ring = None;
+        // The menu is drawn over whichever page is behind it, so it takes the
+        // step before the page does.
+        if self.menu_is_up() {
+            return self.move_menu(direction);
+        }
+        if self.page == Page::Dashboard {
+            return self.step_dashboard(direction);
+        }
         match focus::step(self.cursors, direction, self.layout()) {
             Outcome::Tile { tile, column } => {
                 self.cursors.tile = tile;
@@ -928,26 +1109,25 @@ impl App {
             // Sideways on a row is that row's own control: the value steps and
             // the cursor stays where the user is looking.
             Outcome::FilterValue { row, delta } => self.cycle_facet(row, delta),
-            // The menu owns which row it is on, so the step is handed to it and
-            // nothing is repainted: its card draws its own highlight.
-            Outcome::MenuStep(delta) => {
-                let rows = self.menu_rows();
-                self.menu.move_selection(delta, rows);
-                Task::none()
-            }
             Outcome::Stayed => Task::none(),
         }
     }
 
     /// Acts on whatever holds the cursor: a ring stop, a drawer row, or a tile.
     fn confirm_focus(&mut self) -> Task<Message> {
+        // The menu is the innermost surface, on either page.
+        if self.menu_is_up() {
+            return self.activate_menu_row();
+        }
+        if self.page == Page::Dashboard {
+            return self.confirm_dashboard();
+        }
         match focus::confirm(self.cursors, self.layout()) {
             Confirm::Tile(index) => self.update(Message::Activate(index)),
             // A pad whose left and right do not work still has to be able to
             // change a facet, so confirming a row steps it forward.
             Confirm::Filter { row } => self.cycle_facet(row, 1),
             Confirm::Chrome(chrome) => self.activate_chrome(chrome),
-            Confirm::Menu => self.activate_menu_row(),
             Confirm::Nothing => Task::none(),
         }
     }
@@ -1045,9 +1225,15 @@ impl App {
             return self.focus_task();
         }
         // Whatever took the caret - the search box, through its button or a
-        // click - gives it back to the content. With nothing else open that is
-        // all Back means on this screen; the page behind the library is the
-        // Dashboard, which is the one rung still missing.
+        // click - gives it back to the content. With nothing else open, Back from
+        // the library returns to the dashboard, and on the dashboard itself there
+        // is nothing behind it to go back to.
+        if self.page == Page::Library {
+            self.page = Page::Dashboard;
+            let rails = self.dashboard_rail_lengths();
+            self.dashboard_cursor = dashboard::focus::clamp(self.dashboard_cursor, &rails);
+            return self.focus_dashboard_card();
+        }
         self.focus_task()
     }
 
@@ -1392,6 +1578,23 @@ fn view_launch_overlay(state: &LaunchState) -> Element<'_, Message> {
         .into()
 }
 
+/// The widget id of a dashboard card, so the pad can be pointed at it.
+fn dashboard_card_id(index: usize) -> Id {
+    Id::new(format!("dashboard-card-{index}"))
+}
+
+/// Scrolls one dashboard rail to a horizontal offset, leaving it where it is
+/// vertically - a rail only ever moves sideways.
+fn scroll_rail(rail: usize, offset: f32) -> Task<Message> {
+    scroll_to(
+        dashboard::rail_id(rail),
+        AbsoluteOffset {
+            x: Some(offset),
+            y: None,
+        },
+    )
+}
+
 /// Puts the renderer's focus on one widget.
 ///
 /// The shell's cursor decides what the user is on; this only reproduces it in
@@ -1427,6 +1630,7 @@ mod tests {
     fn shell() -> App {
         App {
             core: Core::default(),
+            page: Page::default(),
             config: AppLibraryConfig::default(),
             config_store: None,
             daemon_client: DaemonClient::new(DaemonConfig {
@@ -1443,6 +1647,8 @@ mod tests {
             cur_section: Section::PcGames,
             cur_group: None,
             cursors: Cursors::default(),
+            dashboard_cursor: dashboard::focus::Cursor::default(),
+            rail_offsets: Vec::new(),
             search_value: String::new(),
             user_name: String::new(),
             disk_free: String::new(),
@@ -1536,13 +1742,23 @@ mod tests {
         app
     }
 
-    /// A shell showing `count` launchable entries in its grid.
-    fn showing(count: usize) -> App {
+    /// A shell that has loaded `count` launchable entries, still on the page the
+    /// app opens on.
+    fn loaded(count: usize) -> App {
         let mut app = navigable();
         let entries = (0..count)
             .map(|index| entry(&format!("hearthdeck:game-{index}"), &["Game"]))
             .collect();
         let _ = app.update(Message::CatalogLoaded(entries));
+        app
+    }
+
+    /// The same shell on the library page - which is where the grid, its filters
+    /// and its tile menu live. A test about the grid has to be on the page that
+    /// has one, and the app opens on the dashboard.
+    fn showing(count: usize) -> App {
+        let mut app = loaded(count);
+        app.page = Page::Library;
         app
     }
 
@@ -2039,5 +2255,64 @@ mod tests {
         // And the rows wrap, so the pad reaches either one from either end.
         send(&mut app, GamepadEvent::MoveDown);
         assert_eq!(app.menu.selected(), 0);
+    }
+
+    /// The dashboard is where the app opens, and the sidebar is the way out of
+    /// it: reaching for a section leaves for the library.
+    #[test]
+    fn the_app_opens_on_the_dashboard_and_the_sidebar_leaves_it() {
+        let mut app = loaded(4);
+        assert_eq!(app.page, Page::Dashboard, "the app opens on its front door");
+
+        let _ = app.update(Message::SelectSection(Section::Applications));
+
+        assert_eq!(app.page, Page::Library);
+        assert_eq!(app.cur_section, Section::Applications);
+    }
+
+    /// Back from the library returns to the dashboard, and on the dashboard there
+    /// is nothing behind it to reach.
+    #[test]
+    fn back_returns_to_the_dashboard_and_goes_no_further() {
+        let mut app = showing(4);
+        let _ = app.update(Message::SelectSection(Section::PcGames));
+        assert_eq!(app.page, Page::Library);
+
+        send(&mut app, GamepadEvent::Back);
+        assert_eq!(app.page, Page::Dashboard, "Back returns to the dashboard");
+
+        send(&mut app, GamepadEvent::Back);
+        assert_eq!(
+            app.page,
+            Page::Dashboard,
+            "the dashboard is the page behind everything"
+        );
+    }
+
+    /// The pad walks the dashboard's rail and stops at its ends, and Confirm on a
+    /// card leaves for the library - which is what a card is a way into.
+    #[test]
+    fn the_pad_walks_the_dashboard_rail() {
+        let mut app = loaded(6);
+        assert_eq!(
+            app.dashboard_rail_lengths(),
+            vec![6],
+            "one rail so far, one card per entry"
+        );
+
+        send(&mut app, GamepadEvent::MoveRight);
+        assert_eq!(app.dashboard_cursor.card, 1, "the rail takes the step");
+
+        // The ends of a rail are ends: it does not wrap, and it does not leave
+        // for another rail.
+        for _ in 0..10 {
+            send(&mut app, GamepadEvent::MoveRight);
+        }
+        assert_eq!(app.dashboard_cursor.card, 5, "the last card");
+        send(&mut app, GamepadEvent::MoveRight);
+        assert_eq!(app.dashboard_cursor.card, 5, "and it stays there");
+
+        send(&mut app, GamepadEvent::Confirm);
+        assert_eq!(app.page, Page::Library, "Confirm leaves for the library");
     }
 }

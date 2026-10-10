@@ -37,11 +37,6 @@ pub struct Layout {
     pub facets: usize,
     /// Whether the filter drawer is open, which is what gives it the pad.
     pub drawer_open: bool,
-    /// Whether the tile menu is open. It is drawn over the drawer as well as the
-    /// grid, so while it is open it is the innermost surface and owns the pad.
-    pub menu_open: bool,
-    /// How many rows the open menu holds.
-    pub menu_rows: usize,
     /// How many tiles the grid holds.
     pub tiles: usize,
     /// How many tiles are on one row of the grid.
@@ -79,10 +74,6 @@ pub enum Outcome {
     /// right mean inside the drawer: the row is the control there, so its own
     /// arrows are the step.
     FilterValue { row: usize, delta: i32 },
-    /// The open menu's highlight moved by this many rows. Which row it lands on
-    /// stays with the menu's own state, which is the only thing that knows how
-    /// many rows it has.
-    MenuStep(i32),
     /// The cursor is at the edge of what it can reach, and stayed there.
     Stayed,
 }
@@ -108,10 +99,6 @@ pub enum Confirm {
     Tile(usize),
     /// Step the facet drawn on this row forward.
     Filter { row: usize },
-    /// The open menu's highlighted row. Which row that is stays with the menu's
-    /// own state, so this names the menu rather than a row that could have moved
-    /// between the question and the answer.
-    Menu,
     /// A ring stop asks for its own control's action.
     Chrome(Chrome),
     /// There is nothing here to confirm.
@@ -120,19 +107,6 @@ pub enum Confirm {
 
 /// Where a step from `cursors` goes.
 pub fn step(cursors: Cursors, direction: Direction, layout: Layout) -> Outcome {
-    // The menu is drawn over everything, the filter drawer included, so it is
-    // the innermost surface there is and it owns the pad while it is open.
-    if layout.menu_open && layout.menu_rows > 0 {
-        return match direction {
-            // A menu is a list of actions, so both vertical directions walk it
-            // and wrap: the D-pad reaches every row from either end.
-            Direction::Up => Outcome::MenuStep(-1),
-            Direction::Down => Outcome::MenuStep(1),
-            // A row is one whole action, so there is nothing beside it to step
-            // to; sideways leaves the highlight where the user is looking.
-            Direction::Left | Direction::Right => Outcome::Stayed,
-        };
-    }
     // An open drawer is a surface over the grid: it owns the pad, and the grid
     // behind it is not what the user is looking at.
     if layout.drawer_open && layout.facets > 0 {
@@ -252,10 +226,6 @@ pub fn ring_step(ring: Option<usize>, backwards: bool, layout: Layout) -> Option
 
 /// What the confirm button asks for.
 pub fn confirm(cursors: Cursors, layout: Layout) -> Confirm {
-    // The menu is the innermost surface, so it is what Confirm acts on.
-    if layout.menu_open && layout.menu_rows > 0 {
-        return Confirm::Menu;
-    }
     // The ring is only ever on the chrome, so a ring stop confirms that
     // control's own action.
     if let Some(chrome) = cursors.ring.and_then(|index| ring_at(index, layout)) {
@@ -308,8 +278,6 @@ mod tests {
             filter_button: true,
             facets: 3,
             drawer_open: false,
-            menu_open: false,
-            menu_rows: 0,
             tiles: 12,
             columns: 4,
         }
@@ -344,10 +312,7 @@ mod tests {
     fn moved(cursors: Cursors, direction: Direction, layout: Layout) -> Option<(usize, usize)> {
         match step(cursors, direction, layout) {
             Outcome::Tile { tile, column } => Some((tile, column)),
-            Outcome::FilterRow(_)
-            | Outcome::FilterValue { .. }
-            | Outcome::MenuStep(_)
-            | Outcome::Stayed => None,
+            Outcome::FilterRow(_) | Outcome::FilterValue { .. } | Outcome::Stayed => None,
         }
     }
 
@@ -544,56 +509,5 @@ mod tests {
     #[test]
     fn an_empty_grid_has_nowhere_to_step() {
         assert_eq!(step_tile(0, 0, Direction::Down, 0, 4), None);
-    }
-
-    /// An open menu owns the pad: the grid behind it does not move, and Confirm
-    /// acts on the menu's row rather than on the tile the cursor is still over.
-    #[test]
-    fn the_menu_owns_the_pad_while_it_is_open() {
-        let layout = Layout {
-            menu_open: true,
-            menu_rows: 3,
-            ..library()
-        };
-
-        assert_eq!(
-            step(on_tile(7), Direction::Down, layout),
-            Outcome::MenuStep(1)
-        );
-        assert_eq!(
-            step(on_tile(7), Direction::Up, layout),
-            Outcome::MenuStep(-1)
-        );
-        // A row is one whole action, so sideways has nowhere to go.
-        assert_eq!(step(on_tile(7), Direction::Right, layout), Outcome::Stayed);
-        assert_eq!(confirm(on_tile(7), layout), Confirm::Menu);
-
-        // It is the innermost surface there is, so it wins over an open drawer.
-        let over_the_drawer = Layout {
-            drawer_open: true,
-            ..layout
-        };
-        assert_eq!(
-            step(on_tile(7), Direction::Down, over_the_drawer),
-            Outcome::MenuStep(1)
-        );
-        assert_eq!(confirm(on_tile(7), over_the_drawer), Confirm::Menu);
-    }
-
-    /// A menu with nothing in it is not a surface: it must not hold the pad
-    /// hostage, or a menu that lost its rows would leave the grid unreachable.
-    #[test]
-    fn a_menu_with_no_rows_leaves_the_pad_where_it_was() {
-        let layout = Layout {
-            menu_open: true,
-            menu_rows: 0,
-            ..library()
-        };
-
-        assert_eq!(
-            step(on_tile(0), Direction::Down, layout),
-            Outcome::Tile { tile: 4, column: 0 }
-        );
-        assert_eq!(confirm(on_tile(7), layout), Confirm::Tile(7));
     }
 }
