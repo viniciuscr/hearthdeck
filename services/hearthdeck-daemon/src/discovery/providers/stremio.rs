@@ -419,7 +419,7 @@ mod tests {
         in_continue_watching, pick_stremio,
     };
     use crate::discovery::DiscoveryProvider;
-    use hearthdeck_protocol::DiscoveredApplication;
+    use hearthdeck_protocol::{ApplicationSource, DiscoveredApplication};
     use serde_json::{Value, json};
 
     /// The observed film record, `removed` and `temp` both true, 34.3% in.
@@ -604,6 +604,8 @@ mod tests {
             icon: None,
             categories: Vec::new(),
             launch_scheme: scheme.map(str::to_owned),
+            // Which entry is picked is decided by the scheme, not the origin.
+            source: ApplicationSource::System,
         };
 
         assert_eq!(pick_stremio(&[]), None);

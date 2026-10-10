@@ -269,6 +269,7 @@ fn merged_metadata(
         "project_license": metadata_string(enrichment, "project_license"),
         "store": metadata_string(Some(discovery), "store"),
         "runner": metadata_string(Some(discovery), "runner"),
+        "source": metadata_string(Some(discovery), "source"),
         "version": metadata_string(Some(discovery), "version"),
         "platform": metadata_string(Some(discovery), "platform"),
         "cloud_saves": discovery.get("cloud_saves").and_then(Value::as_bool),
@@ -473,6 +474,7 @@ mod tests {
             &serde_json::json!({
                 "comment": "A useful application",
                 "categories": ["Utility"],
+                "source": "flatpak",
             }),
             None,
             None,
@@ -482,5 +484,8 @@ mod tests {
         assert_eq!(metadata["categories"], serde_json::json!(["Utility"]));
         assert_eq!(metadata["provenance"], "desktop-entry");
         assert_eq!(metadata["urls"], serde_json::json!({}));
+        // Where the launcher was installed survives the merge: the client
+        // filters applications by it.
+        assert_eq!(metadata["source"], "flatpak");
     }
 }

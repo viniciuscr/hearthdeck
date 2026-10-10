@@ -57,6 +57,10 @@ impl DiscoveryProvider for DesktopAppsProvider {
                 metadata: serde_json::json!({
                     "categories": application.categories,
                     "comment": application.comment,
+                    // Where the launcher was installed: the bridge read it off
+                    // the directory it found the entry in, and it is what the
+                    // library filters applications by.
+                    "source": application.source,
                 }),
                 updated_at: updated_at.clone(),
             })

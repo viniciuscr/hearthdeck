@@ -142,6 +142,31 @@ pub struct DiscoveredApplication {
     pub icon: Option<String>,
     pub categories: Vec<String>,
     pub launch_scheme: Option<String>,
+    /// Where this launcher came from. The scanner knows it from the directory it
+    /// read the entry out of, so it travels resolved rather than as a path each
+    /// consumer would have to interpret for itself.
+    pub source: ApplicationSource,
+}
+
+/// How an installed application is packaged, and which part of the filesystem
+/// its launcher lives under.
+///
+/// This is the vocabulary a user filters a launcher by ("show me the flatpaks"),
+/// so the variants are the distinctions that answer that question, not every
+/// directory a desktop entry can appear in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationSource {
+    /// The distribution's own packages.
+    System,
+    /// Installed for one user, under their own data home.
+    Local,
+    /// A flatpak, system-wide or per-user.
+    Flatpak,
+    /// A snap.
+    Snap,
+    /// A nix profile's launchers.
+    Nix,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -195,8 +220,9 @@ pub struct RetroRomVersion {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApplicationSession, ApplicationSessionState, BridgeRequest, BridgeResponse, CatalogItem,
-        HeroicRunner, HostCapabilities, InputProfile, RetroRomVersion,
+        ApplicationSession, ApplicationSessionState, ApplicationSource, BridgeRequest,
+        BridgeResponse, CatalogItem, DiscoveredApplication, HeroicRunner, HostCapabilities,
+        InputProfile, RetroRomVersion,
     };
 
     #[test]
@@ -250,6 +276,33 @@ mod tests {
         };
         let value = serde_json::to_value(version).unwrap();
         assert_eq!(value["is_main_sibling"], serde_json::Value::Bool(true));
+
+        // The origin a scanner resolved is read back by name, and its variants
+        // are what a filter compares against, so both spellings are pinned.
+        let application = DiscoveredApplication {
+            application_id: "org.example.App.desktop".to_owned(),
+            name: "Example".to_owned(),
+            comment: None,
+            icon: None,
+            categories: Vec::new(),
+            launch_scheme: None,
+            source: ApplicationSource::Flatpak,
+        };
+        let value = serde_json::to_value(application).unwrap();
+        assert_eq!(value["source"], "flatpak");
+        for source in [
+            (ApplicationSource::System, "system"),
+            (ApplicationSource::Local, "local"),
+            (ApplicationSource::Snap, "snap"),
+            (ApplicationSource::Nix, "nix"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(source.0).unwrap(),
+                serde_json::Value::String(source.1.to_owned()),
+                "{:?} lost its wire name",
+                source.0
+            );
+        }
     }
 
     #[test]

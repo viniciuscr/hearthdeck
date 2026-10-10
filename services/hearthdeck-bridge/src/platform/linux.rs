@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use hearthdeck_protocol::{DiscoveredApplication, HeroicRunner, InputProfile};
+use hearthdeck_protocol::{ApplicationSource, DiscoveredApplication, HeroicRunner, InputProfile};
 use tokio::net::UnixDatagram;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
@@ -1057,14 +1057,29 @@ fn desktop_entry_directories() -> Vec<PathBuf> {
     )
 }
 
+/// The user's XDG data home, as the running environment says it is.
+fn xdg_data_home() -> Option<PathBuf> {
+    xdg_data_home_from(
+        env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+        env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
+/// `$XDG_DATA_HOME`, or `$HOME/.local/share` when it is unset or empty - the
+/// fallback the specification defines, and the one the directory list below and
+/// the classification of what is found there have to agree on.
+fn xdg_data_home_from(data_home: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+    data_home
+        .filter(|path| !path.as_os_str().is_empty())
+        .or_else(|| home.map(|path| path.join(".local/share")))
+}
+
 fn desktop_entry_directories_for(
     data_home: Option<PathBuf>,
     home: Option<PathBuf>,
     data_dirs: Option<String>,
 ) -> Vec<PathBuf> {
-    let data_home = data_home
-        .filter(|path| !path.as_os_str().is_empty())
-        .or_else(|| home.map(|path| path.join(".local/share")));
+    let data_home = xdg_data_home_from(data_home, home);
     let data_dirs = data_dirs
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "/usr/local/share:/usr/share".to_owned());
@@ -1101,6 +1116,40 @@ fn push_unique(directories: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path
     }
 }
 
+/// Where the desktop entry at `path` came from.
+///
+/// The directory list is what finds the entries, but the path is what classifies
+/// them: XDG's data directories hold whatever the distribution put in them -
+/// flatpak's and snapd's export directories are added to that same list - so the
+/// origin is read off the location rather than assumed from the list entry that
+/// found it.
+///
+/// An unrecognised location reads as the distribution's, which is what a data
+/// directory nobody listed in practice is.
+fn origin_of(path: &Path, data_home: Option<&Path>) -> ApplicationSource {
+    let location = path.to_string_lossy();
+    // Flatpak first: a per-user export lives *under* the data home, so asking
+    // about the data home first would classify it as the user's own.
+    if location.contains("/flatpak/") {
+        return ApplicationSource::Flatpak;
+    }
+    if location.starts_with("/var/lib/snapd") {
+        return ApplicationSource::Snap;
+    }
+    if location.starts_with("/nix/store")
+        || location.starts_with("/nix/var")
+        || location.starts_with("/run/current-system")
+        || location.starts_with("/run/system-manager")
+        || location.starts_with("/etc/profiles/per-user")
+    {
+        return ApplicationSource::Nix;
+    }
+    if data_home.is_some_and(|home| path.starts_with(home)) {
+        return ApplicationSource::Local;
+    }
+    ApplicationSource::System
+}
+
 async fn parse_desktop_entry(path: &Path) -> Result<DiscoveredApplication> {
     let content = tokio::fs::read_to_string(path).await?;
     let values = desktop_entry_values(&content);
@@ -1133,6 +1182,7 @@ async fn parse_desktop_entry(path: &Path) -> Result<DiscoveredApplication> {
         launch_scheme: values
             .get("Exec")
             .and_then(|exec| exec.contains("heroic://").then_some("heroic".to_owned())),
+        source: origin_of(path, xdg_data_home().as_deref()),
     })
 }
 
@@ -1163,12 +1213,70 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        RETRO_VIDEO_DRIVER_DEFAULT, SHADER_PRESET_BY_CORE, VIDEO_DRIVER_BY_CORE,
-        desktop_entry_directories_for, is_bare_file_name, parse_desktop_entry, parse_exec,
-        retro_profiles, retroarch_command_args, retroarch_managed_config,
+        ApplicationSource, RETRO_VIDEO_DRIVER_DEFAULT, SHADER_PRESET_BY_CORE, VIDEO_DRIVER_BY_CORE,
+        desktop_entry_directories_for, is_bare_file_name, origin_of, parse_desktop_entry,
+        parse_exec, retro_profiles, retroarch_command_args, retroarch_managed_config,
         shader_preset_for_core_in, valid_heroic_application_id, validate_retro_core_path_in,
         validate_retro_rom_path_in, video_driver_for_core, visible_in_desktop,
     };
+
+    /// A launcher's origin is read off where it was installed, not off the file
+    /// itself, so the same entry name is a different answer in each directory.
+    #[test]
+    fn an_entry_is_classified_by_where_its_launcher_was_installed() {
+        let data_home = Path::new("/home/user/.local/share");
+        let cases: &[(&str, ApplicationSource)] = &[
+            (
+                "/usr/share/applications/example.desktop",
+                ApplicationSource::System,
+            ),
+            (
+                "/usr/local/share/applications/example.desktop",
+                ApplicationSource::System,
+            ),
+            (
+                "/home/user/.local/share/applications/example.desktop",
+                ApplicationSource::Local,
+            ),
+            (
+                "/home/user/.local/share/flatpak/exports/share/applications/org.example.App.desktop",
+                ApplicationSource::Flatpak,
+            ),
+            (
+                "/var/lib/flatpak/exports/share/applications/org.example.App.desktop",
+                ApplicationSource::Flatpak,
+            ),
+            (
+                "/var/lib/snapd/desktop/applications/example_example.desktop",
+                ApplicationSource::Snap,
+            ),
+            (
+                "/nix/store/hash-example/share/applications/example.desktop",
+                ApplicationSource::Nix,
+            ),
+            (
+                "/run/current-system/sw/share/applications/example.desktop",
+                ApplicationSource::Nix,
+            ),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                origin_of(Path::new(path), Some(data_home)),
+                *expected,
+                "path: {path}"
+            );
+        }
+
+        // An unrecognised location reads as the distribution's; without a data
+        // home to compare against, even the user's own directory is one.
+        assert_eq!(
+            origin_of(
+                Path::new("/home/user/.local/share/applications/example.desktop"),
+                None
+            ),
+            ApplicationSource::System,
+        );
+    }
 
     #[test]
     fn a_desktop_entry_id_must_be_a_single_file_name() {
