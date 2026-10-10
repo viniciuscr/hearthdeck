@@ -15,6 +15,7 @@ use std::sync::LazyLock;
 
 use cosmic::Element;
 use cosmic::cosmic_theme::Spacing;
+use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
 use cosmic::iced::{ContentFit, Length};
 use cosmic::theme;
 use cosmic::widget::{Id, column, icon, scrollable};
@@ -115,14 +116,16 @@ pub fn rail_title(collection: &Collection) -> String {
 
 /// The page: every shelf as a rail, stacked and scrolled.
 ///
-/// `on_rail_scroll` is handed each rail's own horizontal offset as it moves,
-/// because only the shell can remember it - and a rail needs its current offset
-/// to know whether the card the cursor lands on would leave the view.
+/// `on_rail_scroll` is handed each rail's own horizontal offset as it moves, and
+/// `on_page_scroll` the page's vertical one, because only the shell can remember
+/// them - a rail needs its own offset, and the page the focused rail's place in
+/// the stack, to know whether the cursor would leave the view.
 #[must_use]
 pub fn view<'a>(
     shelves: &[Shelf],
     window_width: f32,
     on_rail_scroll: impl Fn(usize, f32) -> Message + Clone + 'a,
+    on_page_scroll: impl Fn(f32) -> Message + 'a,
 ) -> Element<'a, Message> {
     let Spacing {
         space_l, space_xl, ..
@@ -158,6 +161,7 @@ pub fn view<'a>(
             .padding([space_l, padding, space_xl, padding]),
     )
     .id(PAGE_ID.clone())
+    .on_scroll(move |viewport| on_page_scroll(viewport.absolute_offset().y))
     .width(Length::Fill)
     .height(Length::Fill)
     .scrollbar_width(0)
@@ -194,6 +198,46 @@ pub fn card_pitch(shelf: &Shelf, window_width: f32) -> (f32, f32) {
     let Spacing { space_l, .. } = theme::spacing();
     (size * aspect, f32::from(space_l))
 }
+
+/// How tall each rail is in order, which is what the page scroll measures
+/// against to keep the focused one on screen.
+#[must_use]
+pub fn rail_heights(shelves: &[Shelf], window_width: f32) -> Vec<f32> {
+    let Spacing { space_m, .. } = theme::spacing();
+    shelves
+        .iter()
+        .map(|shelf| {
+            let (size, _, _) = shelf_metrics(shelf, window_width);
+            RAIL_TITLE_HEIGHT + f32::from(space_m) + size
+        })
+        .collect()
+}
+
+/// The gap between two rails on the page.
+#[must_use]
+pub fn rail_gap() -> f32 {
+    f32::from(theme::spacing().space_xl)
+}
+
+/// Scrolls the page to a vertical offset, leaving the rails where they are
+/// horizontally.
+pub fn scroll_to_page(offset: f32) -> cosmic::app::Task<Message> {
+    scroll_to(
+        PAGE_ID.clone(),
+        AbsoluteOffset {
+            x: None,
+            y: Some(offset),
+        },
+    )
+}
+
+/// The height a rail's title takes above its cards.
+///
+/// The renderer measures the text itself, so this cannot be derived here - the
+/// same reason the grid keeps an estimate of its header for its first frame. It
+/// is deliberately generous: over-estimating scrolls slightly further than
+/// needed, while under-estimating can leave the focused rail off screen.
+const RAIL_TITLE_HEIGHT: f32 = 40.0;
 
 /// The width a rail lays its cards out in, near enough to scroll one into view
 /// with.

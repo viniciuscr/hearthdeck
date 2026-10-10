@@ -145,9 +145,51 @@ pub fn rail_scroll_target(
     Some(target.clamp(0.0, (content - viewport).max(0.0)))
 }
 
+/// The vertical offset that brings rail `index` into the page's view, or `None`
+/// when it is already there.
+///
+/// The page is a stack of rails of unequal height, and the rule is the rails'
+/// own: it moves only when the rail the cursor is on would otherwise leave the
+/// visible height, and then it pins that rail to the nearest edge. Clamped to the
+/// page's own extent, so the last rail stops at the end instead of scrolling past
+/// it.
+///
+/// `rail_heights` is each rail's height in order and `gap` the space between two
+/// of them, which together are the stack's geometry.
+#[must_use]
+pub fn page_scroll_target(
+    rail_heights: &[f32],
+    index: usize,
+    gap: f32,
+    offset: f32,
+    viewport: f32,
+) -> Option<f32> {
+    let height = *rail_heights.get(index)?;
+    let top = rail_top(rail_heights, index, gap);
+    let bottom = top + height;
+    let target = if top < offset {
+        // It left through the top.
+        top
+    } else if bottom > offset + viewport {
+        // It is leaving through the bottom.
+        bottom - viewport
+    } else {
+        return None;
+    };
+    let content = rail_top(rail_heights, rail_heights.len(), gap) - gap;
+    Some(target.clamp(0.0, (content - viewport).max(0.0)))
+}
+
+/// Where rail `index` starts on the page: the rails above it, and the gaps
+/// between them. One past the last rail is the end of the stack.
+fn rail_top(rail_heights: &[f32], index: usize, gap: f32) -> f32 {
+    let above: f32 = rail_heights.iter().take(index).sum();
+    above + index as f32 * gap
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Cursor, clamp, confirm, rail_scroll_target, step};
+    use super::{Cursor, clamp, confirm, page_scroll_target, rail_scroll_target, step};
     use crate::screens::library::focus::Direction;
 
     /// Three rails: four cards, one card, three cards.
@@ -287,5 +329,39 @@ mod tests {
         assert_eq!(rail_scroll_target(4, count, 0.0, viewport, card, gap), None);
         // And a rail short enough to fit whole never scrolls at all.
         assert_eq!(rail_scroll_target(2, 3, 0.0, viewport, card, gap), None);
+    }
+
+    /// The page scrolls only once the cursor leaves the rail it is on, and then
+    /// it pins that rail to the nearest edge - so a stack of rails slides under a
+    /// highlight rather than the page jumping on every step.
+    #[test]
+    fn the_page_scrolls_only_once_the_cursor_leaves_a_rail() {
+        // Three rails 200 tall, 20 apart, in a 500-tall page: 640 of content, so
+        // the furthest it scrolls is 140.
+        let rails = [200.0, 200.0, 200.0];
+        let (gap, viewport) = (20.0, 500.0);
+
+        // The first two are inside the page as it opens (0..200 and 220..420).
+        assert_eq!(page_scroll_target(&rails, 0, gap, 0.0, viewport), None);
+        assert_eq!(page_scroll_target(&rails, 1, gap, 0.0, viewport), None);
+
+        // The third leaves through the bottom (440..640), and the page stops at
+        // the end of its own content rather than past it.
+        assert_eq!(
+            page_scroll_target(&rails, 2, gap, 0.0, viewport),
+            Some(140.0)
+        );
+
+        // Stepping back up pins the rail to the top, not to the bottom, so it
+        // stays just inside the view.
+        assert_eq!(
+            page_scroll_target(&rails, 0, gap, 140.0, viewport),
+            Some(0.0)
+        );
+        // And a rail already in view leaves the page where it is.
+        assert_eq!(page_scroll_target(&rails, 1, gap, 140.0, viewport), None);
+
+        // A rail there is no such thing as has nowhere to scroll to.
+        assert_eq!(page_scroll_target(&rails, 3, gap, 0.0, viewport), None);
     }
 }

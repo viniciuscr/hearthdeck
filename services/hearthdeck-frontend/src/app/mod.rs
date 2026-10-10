@@ -139,6 +139,10 @@ pub enum Message {
         rail: usize,
         offset: f32,
     },
+    /// The dashboard page scrolled, remembered for the same reason a rail's
+    /// offset is: the follow needs to know whether the focused rail would leave
+    /// the view.
+    PageScrolled(f32),
     /// A navigation event, from the pad or from the keyboard - both speak this
     /// one vocabulary, so there is a single place that moves the cursor.
     GamepadEvent(GamepadEvent),
@@ -233,6 +237,10 @@ pub struct App {
     /// it because the rail cannot: the movement rules need to know whether the
     /// card the cursor lands on would leave the view.
     rail_offsets: Vec<f32>,
+    /// Where the dashboard page is scrolled to, which the rail follow needs the
+    /// same way each rail needs its own offset: the dashboard is a stack of rails
+    /// and only some of it is on screen.
+    page_offset: f32,
     search_value: String,
     user_name: String,
     /// Free space on the home filesystem, as the last poll read it. Blank until
@@ -328,6 +336,7 @@ impl Application for App {
             cursors: Cursors::default(),
             dashboard_cursor: dashboard::focus::Cursor::default(),
             rail_offsets: Vec::new(),
+            page_offset: 0.0,
             search_value: String::new(),
             user_name: crate::system_status::current_user_name(),
             disk_free: String::new(),
@@ -563,6 +572,7 @@ impl Application for App {
                 }
                 self.rail_offsets[rail] = offset;
             }
+            Message::PageScrolled(offset) => self.page_offset = offset,
             // A dashboard card is a way into the library, so pressing one leaves
             // the dashboard for it - which the section change itself does.
             Message::ShowLibrary(section) => return self.update(Message::SelectSection(section)),
@@ -660,6 +670,7 @@ impl Application for App {
                 &self.dashboard_shelves(),
                 self.window_width,
                 |rail, offset| Message::RailScrolled { rail, offset },
+                Message::PageScrolled,
             )
         } else {
             let header = header::view(header::Header {
@@ -1120,9 +1131,11 @@ impl App {
         let Some(card) = shelf.cards.get(self.dashboard_cursor.card) else {
             return Task::none();
         };
-        let focus = widget_focus(card.id.clone());
+        let mut tasks = vec![widget_focus(card.id.clone())];
+
+        // The rail follows the cursor sideways...
         let (card_width, gap) = dashboard::card_pitch(shelf, self.window_width);
-        let offset = dashboard::focus::rail_scroll_target(
+        if let Some(offset) = dashboard::focus::rail_scroll_target(
             self.dashboard_cursor.card,
             shelf.cards.len(),
             self.rail_offsets
@@ -1132,11 +1145,26 @@ impl App {
             dashboard::rail_viewport(self.window_width),
             card_width,
             gap,
-        );
-        match offset {
-            Some(offset) => Task::batch([focus, scroll_rail(self.dashboard_cursor.rail, offset)]),
-            None => focus,
+        ) {
+            tasks.push(scroll_rail(self.dashboard_cursor.rail, offset));
         }
+
+        // ...and the page follows it down the stack of rails, which is the same
+        // rule a third time: rails of unequal height rather than cards of equal
+        // width. The dashboard fills the content column, so the page's viewport
+        // is the window's height.
+        let heights = dashboard::rail_heights(&shelves, self.window_width);
+        if let Some(offset) = dashboard::focus::page_scroll_target(
+            &heights,
+            self.dashboard_cursor.rail,
+            dashboard::rail_gap(),
+            self.page_offset,
+            WINDOW_HEIGHT,
+        ) {
+            tasks.push(dashboard::scroll_to_page(offset));
+        }
+
+        Task::batch(tasks)
     }
 
     /// Acts on one navigation event.
@@ -1770,6 +1798,7 @@ mod tests {
             cursors: Cursors::default(),
             dashboard_cursor: dashboard::focus::Cursor::default(),
             rail_offsets: Vec::new(),
+            page_offset: 0.0,
             search_value: String::new(),
             user_name: String::new(),
             disk_free: String::new(),
