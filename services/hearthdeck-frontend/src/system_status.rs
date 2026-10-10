@@ -82,6 +82,20 @@ pub fn current_time() -> String {
         .to_string()
 }
 
+/// The name to greet the user with: `$USER`, falling back to `$LOGNAME`, and
+/// finally to a placeholder rather than an empty line.
+pub(crate) fn current_user_name() -> String {
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_default();
+
+    if user.is_empty() {
+        "Unknown".to_string()
+    } else {
+        user
+    }
+}
+
 /// Available bytes on the filesystem containing the given path.
 fn available_disk_bytes(path: &str) -> u64 {
     let Ok(cstr) = std::ffi::CString::new(path) else {

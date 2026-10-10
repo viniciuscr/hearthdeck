@@ -2,7 +2,6 @@
 
 mod style;
 
-use crate::app_legacy::AppSource;
 use crate::style::{ICON_SMALL, TEXT_CAPTION, tile_button_class};
 use cosmic::Element;
 use cosmic::iced::Alignment;
@@ -33,6 +32,21 @@ impl Selection {
     }
 }
 
+/// A duplicate's source, drawn as a corner badge and appended to the tile label.
+///
+/// A label and an icon rather than a source *type*, because the tile is shared
+/// between the two apps and they do not answer "where did this come from" the
+/// same way: the legacy app guesses it from the launcher's path, while the
+/// library grid is handed the origin the bridge resolved, carried as a
+/// `hearthdeck-source:` category. Taking the rendered pieces keeps the shared
+/// widget from having to know which of those it is talking to.
+pub struct SourceBadge<'a> {
+    /// How the source reads in the tile label, e.g. "Flatpak".
+    pub label: &'a str,
+    /// The icon drawn in the tile's corner, when the source has one.
+    pub icon: Option<icon::Handle>,
+}
+
 /// Builds the tile for one application: a selectable button carrying the cover
 /// art, its name, and the source and version badges, with right-click opened
 /// through a [`mouse_area`] wrapper.
@@ -53,13 +67,14 @@ pub fn app_tile<'a, Message: Clone + 'a>(
     version_count: usize,
     on_right_release: Message,
     on_pressed: Option<Message>,
-    source: Option<&(AppSource, Option<icon::Handle>)>,
+    source: Option<SourceBadge<'_>>,
     selection: Selection,
 ) -> Element<'a, Message> {
     // A duplicate's source, shown as an icon badge on the artwork corner. The
     // name is also appended to the label, so the badge carries only the icon.
     let source_badge_element: Option<Element<'a, Message>> = source
-        .and_then(|(_, handle)| handle.as_ref())
+        .as_ref()
+        .and_then(|badge| badge.icon.as_ref())
         .map(|handle| {
             container(app_source_icon(handle.clone()))
                 .class(cosmic::theme::Container::Custom(Box::new(source_badge)))
@@ -69,8 +84,7 @@ pub fn app_tile<'a, Message: Clone + 'a>(
                 .align_y(Vertical::Center)
                 .into()
         });
-    let source_label = source.map(|(source, _)| source.to_string());
-    let name = tile_label(name, source_label.as_deref());
+    let name = tile_label(name, source.as_ref().map(|badge| badge.label));
 
     // The cover is fitted, not cropped: some box art is not the tile's 2:3
     // shape, and `Cover` cut its title art off, so a fitted cover still reads as
@@ -193,11 +207,9 @@ fn app_source_icon(handle: widget::icon::Handle) -> widget::Icon {
 
 #[cfg(test)]
 mod tests {
-    use super::{Selection, app_tile, tile_label};
-    use crate::app_legacy::AppSource;
+    use super::{Selection, SourceBadge, app_tile, tile_label};
     use cosmic::iced::{Length, Size};
     use cosmic::widget::{self, icon};
-    use std::path::Path;
 
     #[derive(Clone, Debug)]
     enum Msg {
@@ -245,12 +257,11 @@ mod tests {
     // every badge combination and keep the fixed size the grid lays out around.
     #[test]
     fn a_tile_lays_out_at_its_fixed_size_for_every_badge_combination() {
-        let source = (
-            AppSource::from(Path::new("/opt/apps/Steam.desktop")),
-            Some(icon_handle(16)),
-        );
-
         for (version_count, has_source) in [(1usize, false), (3, true)] {
+            let source = has_source.then(|| SourceBadge {
+                label: "Flatpak",
+                icon: Some(icon_handle(16)),
+            });
             let tile = app_tile(
                 widget::Id::unique(),
                 "Steam",
@@ -260,7 +271,7 @@ mod tests {
                 version_count,
                 Msg::Open,
                 Some(Msg::Activate),
-                has_source.then_some(&source),
+                source,
                 Selection::Selected,
             );
 

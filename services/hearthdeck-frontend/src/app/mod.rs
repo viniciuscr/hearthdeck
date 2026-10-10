@@ -55,6 +55,7 @@ use crate::style::{
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
+use crate::ui;
 
 /// One page of RomM console records per request.
 const ROMM_PAGE_SIZE: u32 = 60;
@@ -268,7 +269,7 @@ impl Application for App {
             // at, and every read of the cursor tolerates that.
             cursors: Cursors::default(),
             search_value: String::new(),
-            user_name: crate::app_legacy::current_user_name(),
+            user_name: crate::system_status::current_user_name(),
             disk_free: String::new(),
             window_width: WINDOW_WIDTH,
             grid_scroll_offset: 0.0,
@@ -537,7 +538,7 @@ impl Application for App {
                 current: self.cur_section,
                 user_name: &self.user_name,
                 disk_free: &self.disk_free,
-                app_icon: crate::app_legacy::APP_ICON.clone(),
+                app_icon: ui::app_icon(),
                 window_width: self.window_width,
             },
             Message::SelectSection,
@@ -1197,7 +1198,7 @@ fn view_launch_overlay(state: &LaunchState) -> Element<'_, Message> {
         .into()
     } else {
         column![
-            icon::icon(crate::app_legacy::APP_ICON.clone()).size(ICON_LARGE),
+            icon::icon(ui::app_icon()).size(ICON_LARGE),
             text::title2(fl!("launching", title = title)),
         ]
         .spacing(spacing.space_m)

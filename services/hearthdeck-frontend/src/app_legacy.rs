@@ -97,9 +97,10 @@ use crate::style::{
     tile_width, title_action_height,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
-use crate::system_status::{SystemStatus, disk_free_label, human_size};
+use crate::system_status::{SystemStatus, current_user_name, disk_free_label, human_size};
 use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
-use crate::widgets::application::{Selection, app_tile};
+use crate::ui::app_icon;
+use crate::widgets::application::{Selection, SourceBadge, app_tile};
 use crate::widgets::controller_key::{FaceButton, controller_hint};
 use crate::widgets::menu::{self, Menu, Row};
 use crate::widgets::rail::{rail, rail_item};
@@ -119,12 +120,6 @@ static DASHBOARD_SETTINGS_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard
 /// Rail key for the dashboard console list, which is not a shelved catalog
 /// section, so it needs its own stable scrollable id.
 const CONSOLES_RAIL_KEY: &str = "consoles";
-
-pub(crate) static APP_ICON: LazyLock<icon::Handle> = LazyLock::new(|| {
-    icon::from_svg_bytes(include_bytes!(
-        "../data/icons/org.hearthdeck.HearthDeck.svg"
-    ))
-});
 
 /// Single fixed scrollable id shared by all sections.
 static SCROLLABLE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("section-scrollable"));
@@ -227,20 +222,6 @@ fn provider_records_subscription() -> Subscription<Message> {
             },
         )
     })
-}
-
-/// Display name of the current user (the GECOS field from `/etc/passwd`),
-/// falling back to the login name.
-pub(crate) fn current_user_name() -> String {
-    let user = std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_default();
-
-    if user.is_empty() {
-        "Unknown".to_string()
-    } else {
-        user
-    }
 }
 
 #[derive(Parser, Debug, Serialize, Deserialize, Clone)]
@@ -6332,7 +6313,7 @@ impl HearthDeck {
                 .collect();
             let empty: Element<'_, Message> = container(
                 row![
-                    icon::icon(APP_ICON.clone()).size(ICON_BODY),
+                    icon::icon(app_icon()).size(ICON_BODY),
                     text::body(shelf.empty_message()).size(TEXT_BODY),
                 ]
                 .spacing(space_s)
@@ -6738,7 +6719,7 @@ impl HearthDeck {
             .into()
         } else {
             column![
-                icon::icon(APP_ICON.clone()).size(ICON_LARGE),
+                icon::icon(app_icon()).size(ICON_LARGE),
                 text::title2(format!("Launching {title}...")),
             ]
             .spacing(spacing.space_m)
@@ -6809,7 +6790,7 @@ impl HearthDeck {
                 current: cur_section,
                 user_name: &self.user_name,
                 disk_free: &self.disk_free,
-                app_icon: APP_ICON.clone(),
+                app_icon: app_icon(),
                 window_width: self.window_width,
             },
             Message::SelectSection,
@@ -7115,6 +7096,14 @@ impl HearthDeck {
                     .path
                     .as_ref()
                     .and_then(|path| self.duplicates.get(path));
+                // The shared tile takes a duplicate's source as a label and an
+                // icon rather than a type, so what an `AppSource` reads as is
+                // decided here, where the guessing lives.
+                let dup_label = dup.map(|(source, _)| source.to_string());
+                let dup_badge = dup_label.as_deref().map(|label| SourceBadge {
+                    label,
+                    icon: dup.and_then(|(_, icon)| icon.clone()),
+                });
                 // The tile the menu is open on stays highlighted behind the
                 // scrim, so the menu is visibly attached to an entry.
                 let selection = if self.menu.target() == Some(i) {
@@ -7138,8 +7127,9 @@ impl HearthDeck {
                     } else {
                         Some(Message::ActivateApp(i))
                     },
-                    // TODO add icon and text if duplicated
-                    dup,
+                    // The duplicate's source, drawn as a corner badge with the
+                    // name appended to the label.
+                    dup_badge,
                     selection,
                 );
 
