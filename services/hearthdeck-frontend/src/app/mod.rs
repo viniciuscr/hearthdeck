@@ -114,6 +114,10 @@ pub enum Message {
     ClearFilters,
     /// A tile was pressed: launch the entry it names.
     Activate(usize),
+    /// The menu's controller-compatibility row: turn the per-application
+    /// pointer-driving mode on or off for this entry. It is what makes an
+    /// application that does not handle a controller itself usable with the pad.
+    ToggleControllerCompatibility(usize),
     /// The pad's context button: open the tile menu on the tile at this index,
     /// or close it when it is already open on that tile.
     TileContext(usize),
@@ -472,6 +476,16 @@ impl Application for App {
                 return self.list_replaced();
             }
             Message::Activate(index) => return self.activate(index),
+            Message::ToggleControllerCompatibility(index) => {
+                // Keyed on the entry's id rather than its tile index: the flag
+                // belongs to the application, so it must survive the list being
+                // filtered or reordered under it.
+                let id = self.visible.get(index).map(|entry| entry.id.clone());
+                if let Some(id) = id {
+                    self.config.toggle_desktop_input(&id);
+                    self.persist_config();
+                }
+            }
             Message::TileContext(index) => {
                 // The button that opens the menu is the one that closes it, so a
                 // second press hands the pad back to the grid.
@@ -812,17 +826,34 @@ impl App {
 
     /// How many rows the open menu holds.
     ///
-    /// One row so far: the mechanism, before the actions that need a screen of
-    /// their own. Details, favourite and play later all belong to screens the
-    /// rewrite has not reached, and a row that opens nothing is worse than a row
-    /// that is not there yet.
+    /// Counted from the same list the view draws, so the two cannot disagree
+    /// about how far the pad can walk.
     fn menu_rows(&self) -> usize {
-        usize::from(self.menu_target().is_some())
+        self.menu_target()
+            .map_or(0, |target| self.menu_rows_for(target).len())
     }
 
     /// The rows the menu shows for the tile at `index`.
+    ///
+    /// This is the only place they are defined: the navigation counts them and
+    /// the view draws them, so a row cannot appear in one and be missing from
+    /// the other.
+    ///
+    /// A row is a label and the message it sends, so a switch carries its state
+    /// in the label - there is no tick to draw beside it.
     fn menu_rows_for(&self, index: usize) -> Vec<Row<Message>> {
-        vec![Row::new(fl!("run"), Message::Activate(index))]
+        let Some(entry) = self.visible.get(index) else {
+            return Vec::new();
+        };
+        let compatibility = if self.config.desktop_input_enabled(&entry.id) {
+            fl!("disable-controller-compatibility")
+        } else {
+            fl!("enable-controller-compatibility")
+        };
+        vec![
+            Row::new(fl!("run"), Message::Activate(index)),
+            Row::new(compatibility, Message::ToggleControllerCompatibility(index)),
+        ]
     }
 
     /// Runs the row the open menu has highlighted.
@@ -1941,5 +1972,72 @@ mod tests {
             !app.menu.is_open(),
             "the menu outlived the tile it was opened on"
         );
+    }
+
+    /// The controller compatibility row is the switch that makes an application
+    /// the pad cannot drive usable on its own: the desktop profile hands the
+    /// controller to a pointer. Its label carries the state, because a row here
+    /// is a label and the message it sends - there is no tick to draw beside it.
+    #[test]
+    fn the_menu_offers_the_controller_compatibility_switch() {
+        let labels = |app: &App| -> Vec<String> {
+            app.menu_rows_for(app.menu_target().expect("the menu is open"))
+                .into_iter()
+                .map(|row| row.label)
+                .collect()
+        };
+
+        let mut app = showing(2);
+        send(&mut app, GamepadEvent::ContextMenu);
+
+        assert_eq!(
+            labels(&app),
+            [fl!("run"), fl!("enable-controller-compatibility")],
+            "an application that has never been switched on offers to switch it on"
+        );
+
+        // The second row is the switch, and confirming it flips the flag.
+        send(&mut app, GamepadEvent::MoveDown);
+        assert_eq!(app.menu.selected(), 1, "the switch is the second row");
+        send(&mut app, GamepadEvent::Confirm);
+
+        assert!(
+            app.config.desktop_input_enabled("hearthdeck:game-0"),
+            "the switch never reached the config"
+        );
+        assert!(
+            !app.menu.is_open(),
+            "the switch closes the menu behind it like any other row"
+        );
+
+        send(&mut app, GamepadEvent::ContextMenu);
+        assert_eq!(
+            labels(&app),
+            [fl!("run"), fl!("disable-controller-compatibility")],
+            "and it now offers to switch it back off"
+        );
+    }
+
+    /// The menu is as tall as the rows it was built with, so the pad can reach
+    /// every one of them: a count that drifted from the rows would leave a row
+    /// drawn but unreachable.
+    #[test]
+    fn the_menu_walks_every_row_it_shows() {
+        let mut app = showing(2);
+        send(&mut app, GamepadEvent::ContextMenu);
+
+        let target = app.menu_target().expect("the menu is open");
+        assert_eq!(
+            app.menu_rows(),
+            app.menu_rows_for(target).len(),
+            "the count the navigation uses is not the list the view draws"
+        );
+
+        send(&mut app, GamepadEvent::MoveDown);
+        assert_eq!(app.menu.selected(), 1, "the second row is reachable");
+
+        // And the rows wrap, so the pad reaches either one from either end.
+        send(&mut app, GamepadEvent::MoveDown);
+        assert_eq!(app.menu.selected(), 0);
     }
 }
