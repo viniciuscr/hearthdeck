@@ -25,7 +25,7 @@ use cosmic::theme;
 use cosmic::widget::{Id, button, column, container, icon, row, scrollable, space, text};
 
 use crate::style::{
-    TEXT_HEADER, TEXT_TILE_LABEL, artwork_fit, tile_button_class, tile_label_overlay,
+    TEXT_HEADER, TEXT_RAIL_LABEL, artwork_fit, rail_label_overlay, tile_button_class,
 };
 
 /// One card in a [`Rail`]: the same height as every other card in the rail and,
@@ -90,12 +90,12 @@ impl<Message: Clone + 'static> RailItem<Message> {
             container(
                 column![
                     artwork_fit(&self.handle, self.fit, Length::Fill, Length::Fill),
-                    container(text(self.label).size(TEXT_TILE_LABEL).width(Length::Fill))
+                    container(text(self.label).size(TEXT_RAIL_LABEL).width(Length::Fill))
                         .padding([2, 6])
                         .width(Length::Fill)
                         .height(Length::Shrink)
                         .class(cosmic::theme::Container::Custom(Box::new(
-                            tile_label_overlay
+                            rail_label_overlay
                         ))),
                 ]
                 .width(Length::Fill)

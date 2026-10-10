@@ -5,16 +5,19 @@ mod config {
 
 mod app;
 mod app_group;
+mod app_legacy;
 mod icon_cache;
 mod input_ownership;
 mod launch_state;
 mod localize;
 mod providers;
+mod screens;
 mod settings;
 mod style;
 mod subscriptions;
 mod system_status;
 mod toplevel;
+mod ui;
 mod widgets;
 
 use config::{APP_ID, VERSION};
@@ -32,5 +35,12 @@ fn main() -> cosmic::iced::Result {
     // Prepare i18n
     localize();
 
-    app::run()
+    // The rewritten frontend (`app`) is the default. The inherited one
+    // (`app_legacy`) stays runnable behind `HEARTHDECK_LEGACY=1` until the
+    // rewrite covers every screen.
+    if std::env::var_os("HEARTHDECK_LEGACY").is_some() {
+        app_legacy::run()
+    } else {
+        app::run()
+    }
 }

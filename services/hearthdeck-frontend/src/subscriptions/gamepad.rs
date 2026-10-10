@@ -30,6 +30,9 @@ pub enum GamepadEvent {
     NextGroup,
     PrevTab,
     NextTab,
+    /// Open or close the filter drawer: the one surface over the grid that the
+    /// pad reaches on its own, since it cannot be walked to.
+    FilterPanel,
 }
 
 /// Subscribe to gamepad navigation events.
@@ -195,6 +198,7 @@ fn map_button(button: Button) -> Option<GamepadEvent> {
         Button::RightTrigger => Some(GamepadEvent::NextGroup),
         Button::LeftTrigger2 => Some(GamepadEvent::PrevTab),
         Button::RightTrigger2 => Some(GamepadEvent::NextTab),
+        Button::Select => Some(GamepadEvent::FilterPanel),
         _ => None,
     }
 }
@@ -255,7 +259,34 @@ fn gilrs_loop(tx: UnboundedSender<GamepadEvent>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Direction, direction_after_neutral};
+    use super::{Button, Direction, GamepadEvent, direction_after_neutral, map_button};
+
+    /// The pad's vocabulary: which button means what. This is the whole contract
+    /// between the controller and the shell - a change here changes how the app
+    /// feels - so it is pinned rather than left to the `match` to drift.
+    #[test]
+    fn the_buttons_a_pad_offers_are_the_actions_the_shell_knows() {
+        let cases: &[(Button, GamepadEvent)] = &[
+            (Button::South, GamepadEvent::Confirm),
+            (Button::East, GamepadEvent::Back),
+            (Button::North, GamepadEvent::Search),
+            (Button::West, GamepadEvent::ContextMenu),
+            (Button::LeftTrigger, GamepadEvent::PrevGroup),
+            (Button::RightTrigger, GamepadEvent::NextGroup),
+            (Button::LeftTrigger2, GamepadEvent::PrevTab),
+            (Button::RightTrigger2, GamepadEvent::NextTab),
+            (Button::Select, GamepadEvent::FilterPanel),
+        ];
+        for (button, expected) in cases {
+            assert_eq!(map_button(*button), Some(*expected), "button: {button:?}");
+        }
+
+        // The D-pad and the sticks are read as directions on every poll rather
+        // than as buttons, and what nothing is bound to stays unbound.
+        for button in [Button::DPadUp, Button::Start, Button::Mode, Button::C] {
+            assert_eq!(map_button(button), None, "button: {button:?}");
+        }
+    }
 
     #[test]
     fn resumed_subscription_waits_for_neutral_input() {

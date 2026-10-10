@@ -1,5 +1,6 @@
 use crate::config::APP_ID;
 use crate::fl;
+use crate::providers::filter::{Facet, FacetOption};
 use cosmic::cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use cosmic::cosmic_config::{
     CosmicConfigEntry, {self},
@@ -28,7 +29,6 @@ pub fn romm_console_category(platform_id: i64) -> String {
 /// categories are the only channel a record's RomM metadata survives on; a
 /// facet is then a prefix plus a value, and matching is a category lookup.
 const GENRE_FACET_PREFIX: &str = "hearthdeck-genre:";
-const DECADE_FACET_PREFIX: &str = "hearthdeck-decade:";
 const REGION_FACET_PREFIX: &str = "hearthdeck-region:";
 
 pub fn romm_genre_category(genre: &str) -> String {
@@ -39,13 +39,37 @@ pub fn romm_region_category(region: &str) -> String {
     format!("{REGION_FACET_PREFIX}{region}")
 }
 
-/// Tags a game with the decade its release year falls in: 1994 -> `1990`.
-/// Decades rather than years because a console library spans few enough decades
-/// for the filter row to stay a single short strip.
-pub fn romm_decade_category(release_year: i32) -> String {
-    let decade = release_year - release_year.rem_euclid(10);
-    format!("{DECADE_FACET_PREFIX}{decade}")
-}
+/// Tag a PC game carries for the store it came from (`hearthdeck-store:Steam`).
+pub const STORE_CATEGORY_PREFIX: &str = "hearthdeck-store:";
+
+/// The record-category prefix carrying where an application was installed from:
+/// a flatpak, the distribution's packages, the user's own data home, and so on.
+/// Like a store tag, the tag *is* the filter value, so a selection is a plain
+/// category match.
+pub const SOURCE_CATEGORY_PREFIX: &str = "hearthdeck-source:";
+
+/// The source tag a streaming client carries on top of its origin. What kind of
+/// application it is matters at least as much as where it was installed, and an
+/// entry may carry both tags, so filtering by either finds it.
+pub const STREAMING_SOURCE: &str = "streaming";
+
+/// The freedesktop main categories an Application is grouped by, and the only
+/// categories offered as its filter values. Fixed, so a stray sub-category does
+/// not become a filter of its own.
+pub const APPLICATION_CATEGORIES: &[&str] = &[
+    "Audio",
+    "AudioVideo",
+    "Development",
+    "Education",
+    "Graphics",
+    "Network",
+    "Office",
+    "Science",
+    "Settings",
+    "System",
+    "Utility",
+    "Video",
+];
 
 /// A RomM metadata field the Console Games grid can be filtered by. Each
 /// variant owns the record-category prefix carrying its values, so adding a
@@ -53,18 +77,31 @@ pub fn romm_decade_category(release_year: i32) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RommFacet {
     Genre,
-    Decade,
     Region,
 }
 
 impl RommFacet {
     /// Every facet, in the order the filter bar shows them.
-    pub const ALL: [RommFacet; 3] = [Self::Genre, Self::Decade, Self::Region];
+    pub const ALL: [RommFacet; 2] = [Self::Genre, Self::Region];
+
+    /// Stable identifier for the provider-agnostic filter model
+    /// ([`crate::providers::filter`]). The daemon supplies these ids itself
+    /// when it reports the facets.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Genre => "genre",
+            Self::Region => "region",
+        }
+    }
+
+    /// The facet with this id, if any.
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|facet| facet.id() == id)
+    }
 
     fn prefix(self) -> &'static str {
         match self {
             Self::Genre => GENRE_FACET_PREFIX,
-            Self::Decade => DECADE_FACET_PREFIX,
             Self::Region => REGION_FACET_PREFIX,
         }
     }
@@ -73,18 +110,13 @@ impl RommFacet {
     pub fn name(self) -> String {
         match self {
             Self::Genre => fl!("filter-genre"),
-            Self::Decade => fl!("filter-decade"),
             Self::Region => fl!("filter-region"),
         }
     }
 
-    /// How one of this facet's values reads on a chip: a decade is a range, so
-    /// it is shown as one ("1990s") rather than as its first year.
+    /// The label for one of this facet's values, shown on its chip.
     pub fn value_label(self, value: &str) -> String {
-        match self {
-            Self::Decade => format!("{value}s"),
-            Self::Genre | Self::Region => value.to_owned(),
-        }
+        value.to_owned()
     }
 
     /// Every value of this facet present in `entries`, deduplicated and sorted.
@@ -418,6 +450,79 @@ impl Section {
     }
 }
 
+/// The filter facets a locally-loaded section offers, derived from the entries
+/// it shows.
+///
+/// This is the local counterpart to the console grid's daemon-supplied facets,
+/// so every section filters the same way. A facet's value is the record
+/// category it matches, which makes the selection a plain category check in
+/// [`AppLibraryConfig::filtered_by_facets`]. A dimension with fewer than two
+/// options is dropped: a filter with one choice is not a choice.
+pub fn section_facets(section: Section, entries: &[Arc<DesktopEntryData>]) -> Vec<Facet> {
+    let (id, label) = match section {
+        Section::PcGames => ("store", fl!("filter-store")),
+        Section::Applications => ("source", fl!("filter-source")),
+        Section::ConsoleGames => return Vec::new(),
+    };
+    let options = entries
+        .iter()
+        .filter(|entry| section.matches(entry))
+        .flat_map(|entry| entry.categories.iter())
+        .filter(|category| is_section_facet(section, category.as_str()))
+        .cloned()
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .map(|value| FacetOption {
+            label: facet_value_label(&value),
+            value,
+        })
+        .collect::<Vec<_>>();
+    if options.len() < 2 {
+        return Vec::new();
+    }
+    vec![Facet {
+        id: id.to_owned(),
+        label,
+        options,
+    }]
+}
+
+/// Whether `category` is one of the values this section offers as a filter.
+fn is_section_facet(section: Section, category: &str) -> bool {
+    match section {
+        Section::PcGames => category.starts_with(STORE_CATEGORY_PREFIX),
+        Section::Applications => category.starts_with(SOURCE_CATEGORY_PREFIX),
+        Section::ConsoleGames => false,
+    }
+}
+
+/// How a local facet value reads on a chip: a store drops its tag prefix, and a
+/// source drops its own and reads as the place it names.
+fn facet_value_label(value: &str) -> String {
+    if let Some(source) = value.strip_prefix(SOURCE_CATEGORY_PREFIX) {
+        return source_label(source);
+    }
+    value
+        .strip_prefix(STORE_CATEGORY_PREFIX)
+        .unwrap_or(value)
+        .to_owned()
+}
+
+/// How a source reads on a filter chip. Spelled out rather than title-cased, so
+/// the vocabulary and the words a user sees for it stay together.
+fn source_label(source: &str) -> String {
+    match source {
+        "system" => "System",
+        "local" => "Local",
+        "flatpak" => "Flatpak",
+        "snap" => "Snap",
+        "nix" => "Nix",
+        "streaming" => "Streaming",
+        other => other,
+    }
+    .to_owned()
+}
+
 /// Sub-tabs (filter chips) shown in the top bar, one set per section.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Sections {
@@ -501,6 +606,25 @@ pub(crate) fn is_watch_entry(entry: &DesktopEntryData) -> bool {
     let haystack =
         format!("{} {}", entry.id, entry.exec.as_deref().unwrap_or_default()).to_lowercase();
     SERVICES.iter().any(|service| haystack.contains(service))
+}
+
+/// Tags an entry with where the library got it, for the Applications filter.
+///
+/// `origin` is the resolved origin a discovery provider reported. A streaming
+/// client also gets the [`STREAMING_SOURCE`] tag, because what it is matters at
+/// least as much as where it came from; carrying both means a selection on
+/// either value finds it, which is how one facet can answer both questions.
+pub(crate) fn tag_source(entry: &mut DesktopEntryData, origin: Option<&str>) {
+    if let Some(origin) = origin.filter(|origin| !origin.is_empty()) {
+        entry
+            .categories
+            .push(format!("{SOURCE_CATEGORY_PREFIX}{origin}"));
+    }
+    if is_watch_entry(entry) {
+        entry
+            .categories
+            .push(format!("{SOURCE_CATEGORY_PREFIX}{STREAMING_SOURCE}"));
+    }
 }
 
 /// Returns true when the entry looks like a console emulator, identified by
@@ -697,6 +821,51 @@ impl AppLibraryConfig {
             .collect()
     }
 
+    /// Like [`Self::filtered`], but narrows by the provider-agnostic facet
+    /// selection instead of the RomM-specific one: every selected value must be
+    /// one of the entry's categories. This is how a locally-loaded section
+    /// filters, whose facet values ([`section_facets`]) are its own categories.
+    pub fn filtered_by_facets(
+        &self,
+        section: Section,
+        tab: Option<usize>,
+        input_value: &str,
+        entries: &[Arc<DesktopEntryData>],
+        facets: &BTreeMap<String, String>,
+    ) -> Vec<Arc<DesktopEntryData>> {
+        let tab_group = tab.and_then(|i| self.sections.get(section).get(i));
+        entries
+            .iter()
+            .filter(|de| {
+                if !section.matches(de) {
+                    return false;
+                }
+                if let Some(group) = tab_group
+                    && !group.matches(de)
+                {
+                    return false;
+                }
+                if !facets
+                    .values()
+                    .all(|value| de.categories.iter().any(|category| category == value))
+                {
+                    return false;
+                }
+                if !input_value.is_empty()
+                    && !de.name.to_lowercase().contains(&input_value.to_lowercase())
+                    && !de
+                        .categories
+                        .iter()
+                        .any(|acat| acat.to_lowercase() == input_value.to_lowercase())
+                {
+                    return false;
+                }
+                true
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Rebuild category tabs from the entries currently present while keeping
     /// user-created groups, which use explicit application IDs.
     ///
@@ -705,22 +874,6 @@ impl AppLibraryConfig {
     /// exactly what the scan replaced, so rebuilding them would quietly put the
     /// freedesktop tabs back beside the scan's.
     pub fn sync_category_groups(&mut self, entries: &[Arc<DesktopEntryData>]) -> bool {
-        const APPLICATION_CATEGORIES: &[&str] = &[
-            "Audio",
-            "AudioVideo",
-            "Development",
-            "Education",
-            "Graphics",
-            "Network",
-            "Office",
-            "Science",
-            "Settings",
-            "System",
-            "Utility",
-            "Video",
-        ];
-        const STORE_CATEGORY_PREFIX: &str = "hearthdeck-store:";
-
         let mut changed = false;
         for section in [Section::PcGames, Section::Applications] {
             let mut categories = BTreeMap::new();
@@ -865,8 +1018,8 @@ fn is_user_group(group: &AppGroup) -> bool {
 mod tests {
     use super::{
         AppGroup, AppLibraryConfig, CategorizationGroup, FilterType, GroupSource, RommFacet,
-        RommFilters, Section, romm_console_category, romm_decade_category, romm_genre_category,
-        romm_region_category,
+        RommFilters, Section, romm_console_category, romm_genre_category, romm_region_category,
+        section_facets,
     };
     use cosmic::desktop::{DesktopEntryData, fde::IconSource};
     use std::sync::Arc;
@@ -1193,15 +1346,9 @@ mod tests {
 
     /// A console game as the RomM provider records it: the tags that put it in
     /// the Console Games section, plus the facet tags the filters read.
-    fn console_game(
-        id: &str,
-        genres: &[&str],
-        release_years: &[i32],
-        regions: &[&str],
-    ) -> Arc<DesktopEntryData> {
+    fn console_game(id: &str, genres: &[&str], regions: &[&str]) -> Arc<DesktopEntryData> {
         let mut categories = vec!["Game".to_string(), romm_console_category(7)];
         categories.extend(genres.iter().map(|genre| romm_genre_category(genre)));
-        categories.extend(release_years.iter().map(|year| romm_decade_category(*year)));
         categories.extend(regions.iter().map(|region| romm_region_category(region)));
         let categories: Vec<&str> = categories.iter().map(String::as_str).collect();
         entry(id, &categories)
@@ -1210,26 +1357,102 @@ mod tests {
     #[test]
     fn console_facets_read_their_values_from_the_romm_tags() {
         let entries = [
-            console_game("mario", &["Action", "Platformer"], &[1991], &["USA"]),
-            console_game("chrono", &["RPG"], &[1995], &["USA", "Japan"]),
+            console_game("mario", &["Action", "Platformer"], &["USA"]),
+            console_game("chrono", &["RPG"], &["USA", "Japan"]),
         ];
 
         assert_eq!(
             RommFacet::Genre.values(&entries),
             ["Action", "Platformer", "RPG"]
         );
-        assert_eq!(RommFacet::Decade.values(&entries), ["1990"]);
         assert_eq!(RommFacet::Region.values(&entries), ["Japan", "USA"]);
-        // A decade widens to the span it stands for; other values read as-is.
-        assert_eq!(RommFacet::Decade.value_label("1990"), "1990s");
         assert_eq!(RommFacet::Genre.value_label("RPG"), "RPG");
+    }
+
+    #[test]
+    fn pc_games_offer_a_store_facet_and_applications_a_source_facet() {
+        let entries = [
+            entry("steam-game", &["Game", "hearthdeck-store:Steam"]),
+            entry("heroic-game", &["Game", "hearthdeck-store:Heroic"]),
+            entry("editor", &["Development", "hearthdeck-source:flatpak"]),
+            entry("browser", &["Network", "hearthdeck-source:system"]),
+        ];
+
+        let pc = section_facets(Section::PcGames, &entries);
+        assert_eq!(pc.len(), 1, "pc games should offer one facet");
+        assert_eq!(pc[0].id, "store");
+        assert_eq!(
+            pc[0]
+                .options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            ["hearthdeck-store:Heroic", "hearthdeck-store:Steam"]
+        );
+        assert_eq!(pc[0].options[0].label, "Heroic");
+
+        // Applications filter by where they were installed rather than by
+        // freedesktop category: "Utility" is a bucket an entry lands in, not
+        // something anyone browses a launcher by.
+        let apps = section_facets(Section::Applications, &entries);
+        assert_eq!(apps.len(), 1, "applications should offer one facet");
+        assert_eq!(apps[0].id, "source");
+        assert_eq!(
+            apps[0]
+                .options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            ["hearthdeck-source:flatpak", "hearthdeck-source:system"]
+        );
+        assert_eq!(apps[0].options[0].label, "Flatpak");
+        assert_eq!(apps[0].options[1].label, "System");
+
+        // The console grid's facets come from the daemon, not the local catalog.
+        assert!(section_facets(Section::ConsoleGames, &entries).is_empty());
+    }
+
+    /// One source is not a choice, so it is not offered: a machine whose
+    /// applications all came from the distribution gets no filter rather than
+    /// one that shows the same list twice.
+    #[test]
+    fn a_single_source_offers_no_facet() {
+        let entries = [
+            entry("editor", &["Development", "hearthdeck-source:system"]),
+            entry("browser", &["Network", "hearthdeck-source:system"]),
+        ];
+
+        assert!(section_facets(Section::Applications, &entries).is_empty());
+    }
+
+    #[test]
+    fn facet_selection_narrows_local_sections_by_category() {
+        let entries = [
+            entry("a", &["Game", "hearthdeck-store:Steam"]),
+            entry("b", &["Game", "hearthdeck-store:Heroic"]),
+            entry("c", &["Network"]),
+        ];
+        let config = AppLibraryConfig::default();
+        let facets = std::collections::BTreeMap::from([(
+            "store".to_owned(),
+            "hearthdeck-store:Steam".to_owned(),
+        )]);
+
+        let visible = config.filtered_by_facets(Section::PcGames, None, "", &entries, &facets);
+        assert_eq!(
+            visible
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a"]
+        );
     }
 
     #[test]
     fn filters_narrow_console_games_and_leave_other_sections_alone() {
         let entries = [
-            console_game("mario", &["Action"], &[1991], &["USA"]),
-            console_game("chrono", &["RPG"], &[1995], &["Japan"]),
+            console_game("mario", &["Action"], &["USA"]),
+            console_game("chrono", &["RPG"], &["Japan"]),
             entry("writer", &["Office"]),
         ];
         let config = AppLibraryConfig::default();

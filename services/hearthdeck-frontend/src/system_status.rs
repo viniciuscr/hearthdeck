@@ -82,6 +82,41 @@ pub fn current_time() -> String {
         .to_string()
 }
 
+/// Available bytes on the filesystem containing the given path.
+fn available_disk_bytes(path: &str) -> u64 {
+    let Ok(cstr) = std::ffi::CString::new(path) else {
+        return 0;
+    };
+    nix::sys::statvfs::statvfs(cstr.as_c_str())
+        .map(|vfs| vfs.blocks_available() * vfs.fragment_size())
+        .unwrap_or(0)
+}
+
+/// Free space on the home filesystem, formatted for the sidebar footer.
+///
+/// Reads the filesystem, so it is called from an effect - at startup and again
+/// on the periodic poll - and never from a view.
+pub(crate) fn disk_free_label() -> String {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+    human_size(available_disk_bytes(&home))
+}
+
+/// Formats a byte count for humans, e.g. "128.4 GB".
+pub(crate) fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{:.0} {}", value, UNITS[unit])
+    } else {
+        format!("{:.1} {}", value, UNITS[unit])
+    }
+}
+
 #[cfg(target_os = "linux")]
 async fn wifi_status() -> Option<WifiStatus> {
     use nmrs::{ActiveConnection, NetworkManager};
@@ -131,11 +166,36 @@ async fn bluetooth_status() -> Option<BluetoothStatus> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BluetoothStatus, WifiStatus, current_time};
+    use super::{BluetoothStatus, WifiStatus, current_time, disk_free_label, human_size};
 
     #[test]
     fn current_time_is_displayable() {
         assert!(!current_time().is_empty());
+    }
+
+    /// The sidebar footer reads a bare byte count out as a size a person can
+    /// use. The unit steps at each 1024, and only bytes are shown without a
+    /// decimal, because "0.0 B" reads like a measurement.
+    #[test]
+    fn a_byte_count_reads_as_a_size_at_the_right_unit() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(1024), "1.0 KB");
+        assert_eq!(human_size(1536), "1.5 KB");
+        assert_eq!(human_size(1024 * 1024), "1.0 MB");
+        assert_eq!(human_size(1024 * 1024 * 1024), "1.0 GB");
+        assert_eq!(human_size(1024_u64.pow(4)), "1.0 TB");
+        // The last unit absorbs everything past it rather than overflowing the
+        // table.
+        assert_eq!(human_size(1024_u64.pow(5)), "1024.0 TB");
+    }
+
+    /// The label is read off the filesystem, so this only holds that the call
+    /// resolves and formats: an unreadable `$HOME` falls back rather than
+    /// panicking, and the result is never blank.
+    #[test]
+    fn the_free_space_label_is_displayable() {
+        assert!(!disk_free_label().is_empty());
     }
 
     #[test]

@@ -1,4 +1,5 @@
 pub mod daemon;
+pub mod filter;
 pub mod service;
 
 use std::path::PathBuf;
@@ -66,7 +67,7 @@ impl GameRecord {
             })
             .unwrap_or_else(|| fde::IconSource::Name(fallback_icon.to_string()));
 
-        DesktopEntryData {
+        let mut entry = DesktopEntryData {
             id: self.id,
             name: self.name,
             wm_class: None,
@@ -78,7 +79,17 @@ impl GameRecord {
             mime_types: Vec::new(),
             prefers_dgpu: self.prefers_dgpu,
             terminal: self.terminal,
-        }
+        };
+        // Where the library got this record, for the section that filters by it.
+        // Read here rather than inside the tag, because the streaming tag is
+        // derived from the finished entry.
+        let source = self
+            .metadata
+            .get("source")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        crate::app_group::tag_source(&mut entry, source.as_deref());
+        entry
     }
 }
 
@@ -156,6 +167,36 @@ mod tests {
         assert_eq!(
             game.into_desktop_entry().categories,
             vec!["Game", "hearthdeck-store:Epic Games"]
+        );
+    }
+
+    #[test]
+    fn an_application_carries_where_it_was_installed() {
+        let mut application = record(None);
+        application.metadata = serde_json::json!({"source": "flatpak"});
+
+        assert_eq!(
+            application.into_desktop_entry().categories,
+            ["Utility", "hearthdeck-source:flatpak"]
+        );
+    }
+
+    /// A streaming client is both a place and a kind of application, so it
+    /// carries both tags: a selection on either one finds it.
+    #[test]
+    fn a_streaming_client_is_tagged_beside_its_origin() {
+        let mut client = record(None);
+        client.id = "hearthdeck:desktop:net.stremio.Stremio.desktop".into();
+        client.categories = vec!["Video".into()];
+        client.metadata = serde_json::json!({"source": "flatpak"});
+
+        assert_eq!(
+            client.into_desktop_entry().categories,
+            [
+                "Video",
+                "hearthdeck-source:flatpak",
+                "hearthdeck-source:streaming"
+            ]
         );
     }
 }

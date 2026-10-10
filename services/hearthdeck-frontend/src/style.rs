@@ -1,9 +1,11 @@
 //! Central design system for HearthDeck.
 //!
-//! Every visual constant and every custom widget style lives in this module,
-//! so a single edit propagates through the whole UI. Views (`app.rs`,
-//! `widgets/application.rs`) must never hardcode their own sizes, colors,
-//! radii or style structs; they pull them from here instead.
+//! Shared visual constants and custom widget styles for HearthDeck.
+//!
+//! An edit to a token here propagates through the whole UI. Views (`app.rs`) and
+//! widgets must not hardcode their own sizes, colors, radii or style structs.
+//! Styles that only one widget draws live next to that widget instead - see
+//! `widgets/application/style.rs` - so this module keeps what is shared.
 //!
 //! Theme-derived values (COSMIC's `space_*` spacing, `corner_radii`, accents
 //! and colors) are used as-is so the app still follows the user's system
@@ -26,7 +28,7 @@ use std::time::Duration;
 
 /// Global multiplier applied to every named text size below. COSMIC's own text
 /// scaling from Settings still applies on top at render time.
-const TEXT_SCALE: f32 = 1.3;
+pub(crate) const TEXT_SCALE: f32 = 1.3;
 
 /// Page title.
 pub const TEXT_TITLE: f32 = 40.0 * TEXT_SCALE;
@@ -38,8 +40,12 @@ pub const TEXT_LARGE: f32 = 16.0 * TEXT_SCALE;
 pub const TEXT_BODY: f32 = 14.0 * TEXT_SCALE;
 /// Caption text (matches `text::caption`).
 pub const TEXT_CAPTION: f32 = 12.0 * TEXT_SCALE;
-/// Tile label text.
-pub const TEXT_TILE_LABEL: f32 = 13.0 * TEXT_SCALE;
+/// Rail label text, drawn on the rail's own strip below the artwork.
+///
+/// Distinct from the application grid tile's `TEXT_TILE_LABEL`: the grid's label
+/// rides on the cover art and is read at TV distance, so it is the larger of the
+/// two. Both were once called `TEXT_TILE_LABEL`.
+pub const TEXT_RAIL_LABEL: f32 = 13.0 * TEXT_SCALE;
 
 // ---------------------------------------------------------------------------
 // Motion
@@ -146,6 +152,12 @@ pub const CONSOLE_GRID_COLUMNS: usize = 6;
 /// little and buys noticeably more air between cards than the Xbox-style 6.5%.
 pub const GRID_GAP_RATIO: f32 = 0.14;
 
+/// Rows of grid built beyond the viewport, above and below, so a small scroll
+/// does not reveal a row that has not been built yet. The grid is virtualized,
+/// so this is the whole margin between what is on screen and what exists as
+/// widgets.
+pub const GRID_OVERSCAN_ROWS: usize = 2;
+
 /// How many columns a section's grid uses. Consoles get the denser layout;
 /// every other section keeps the default. This is the single place the two grid
 /// densities are decided, so a tile's size, its row height and the page's
@@ -164,6 +176,23 @@ pub fn grid_columns(is_console: bool) -> usize {
 /// the density setting.
 pub fn grid_top_padding() -> u16 {
     spacing().space_xs
+}
+
+/// Vertical space the library header - the title and search row, the tab strip
+/// and the spacings between them - takes above the grid. The header is a sum of
+/// theme spacings and text the renderer measures, so it cannot be derived here;
+/// this is the estimate only the first frame's virtualization needs.
+const GRID_HEADER_HEIGHT: f32 = 160.0;
+
+/// Height the grid's viewport is assumed to have before the scrollable has
+/// reported its own.
+///
+/// Only the first frame reads it, to decide how many rows to build; the real
+/// height arrives with the first scroll, and the rows already built are covered
+/// by the overscan either way. It exists because a grid built from an assumed
+/// zero-height viewport would draw a single row until the user scrolled.
+pub fn grid_viewport_height_fallback() -> f32 {
+    WINDOW_HEIGHT - GRID_HEADER_HEIGHT
 }
 
 /// Width of the 1px vertical dividers.
@@ -285,9 +314,6 @@ pub fn details_action_bar_padding() -> u16 {
 
 /// Widest the details screen's disc picker panel may grow.
 pub const DETAILS_PICKER_WIDTH: f32 = 460.0;
-
-/// Size of the source badge overlaid on the tile artwork corner.
-pub const SOURCE_BADGE: f32 = 28.0;
 
 // ---------------------------------------------------------------------------
 // Top bar & controls
@@ -439,33 +465,23 @@ pub fn artwork_fit<'a, M: 'a>(
     }
 }
 
-/// Artwork scaled to *fit* inside its bounds, whole: the image is resized to the
-/// largest size that still fits and centred, so a cover whose aspect ratio does
-/// not match the tile is neither stretched nor cropped to match it. This is what
-/// grid tiles use — box art comes in too many shapes for a cover-crop to be
-/// trusted with the title art — with [`tile_surface`] behind it so the bands the
-/// fit leaves are a card, not a hole.
-pub fn artwork_contained<'a, M: 'a>(
-    handle: &icon::Handle,
-    width: Length,
-    height: Length,
-) -> Element<'a, M> {
-    artwork_fit(handle, ContentFit::Contain, width, height)
-}
-
 // ---------------------------------------------------------------------------
 // Container styles
 // ---------------------------------------------------------------------------
 
-/// Translucent scrim behind a tile's label, drawn over the bottom of the cover
-/// art.
+/// Translucent scrim behind the rail's label, drawn over the bottom of the
+/// cover art.
 ///
 /// The label sits on artwork, not on the page, so it needs a scrim to stay
 /// readable. The scrim is the theme's background at partial opacity and the text
 /// its `on_bg_color`, so it follows the palette under both themes while the art
 /// shows through. Only the bottom corners follow the tile radius; the top edge
 /// meets the artwork and stays square.
-pub fn tile_label_overlay(theme: &Theme) -> container::Style {
+///
+/// The application grid tile has its own scrim (see
+/// `widgets::application::style::tile_label_overlay`), which is lighter: its
+/// label is larger and needs less help against the art.
+pub fn rail_label_overlay(theme: &Theme) -> container::Style {
     let radius = surface_radius(theme);
     let t = theme.cosmic();
     let mut background: Color = t.bg_color().into();
@@ -520,27 +536,6 @@ pub fn card_surface(theme: &Theme) -> container::Style {
         shadow: Shadow::default(),
         snap: false,
     }
-}
-
-/// Background for the source badge overlaid on tile artwork. A card-like
-/// surface, so it shares the same radius and colors as the tile instead of
-/// borrowing a different preset.
-pub fn source_badge(theme: &Theme) -> container::Style {
-    card_surface(theme)
-}
-
-/// Quiet backdrop drawn behind a tile's artwork.
-///
-/// Grid tiles fit their cover art ([`artwork_contained`]) rather than cropping
-/// it, so art whose aspect ratio is not the tile's leaves bands on two sides.
-/// This fills those with a faint card surface instead of letting the page show
-/// through, so a letterboxed cover still reads as a card of a consistent size.
-pub fn tile_surface(theme: &Theme) -> container::Style {
-    let mut style = card_surface(theme);
-    if let Some(Background::Color(color)) = style.background.as_mut() {
-        color.a = if theme.cosmic().is_dark { 0.35 } else { 0.5 };
-    }
-    style
 }
 
 /// Opaque launch layer shown while a selected game is starting.
@@ -746,97 +741,64 @@ pub fn control_button_class(selected: bool) -> Button {
     }
 }
 
-/// An icon-only button for a toolbar or list row. The shared radius and focus
-/// ring, transparent at rest so a row of them stays quiet.
+/// Builds a Hearthdeck button class from a COSMIC role: the shared corner
+/// radius, the focus ring, and the app's single hover rule.
+///
+/// `role` is a factory rather than a value because `cosmic::theme::Button` is
+/// not `Clone` (it can hold closures), so each interaction arm needs its own
+/// value. `selected` carries the role's selected state through to COSMIC.
+///
+/// Hover draws the accent ring instead of the role's hover fill, so the pointer
+/// gets the same affordance as keyboard/controller focus and no button paints a
+/// box over its content. This is the one place to change hover for the app.
+pub fn button_class(role: fn() -> Button, selected: bool) -> Button {
+    Button::Custom {
+        active: Box::new(move |focused, theme| {
+            let mut style = theme.active(focused, selected, &role());
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+        disabled: Box::new(move |theme| {
+            let mut style = theme.disabled(&role());
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            style
+        }),
+        hovered: Box::new(move |focused, theme| {
+            let mut style = theme.hovered(focused, selected, &role());
+            style.background = None;
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            // Ring on hover regardless of focus, so the pointer reads the same
+            // as the controller.
+            focus_ring(style, true, theme)
+        }),
+        pressed: Box::new(move |focused, theme| {
+            let mut style = theme.pressed(focused, selected, &role());
+            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
+            focus_ring(style, focused, theme)
+        }),
+    }
+}
+
+/// An icon-only button for a toolbar or list row. Transparent at rest so a row
+/// of them stays quiet.
 pub fn icon_button_class() -> Button {
-    Button::Custom {
-        active: Box::new(|focused, theme| {
-            let mut style = theme.active(focused, false, &Button::Icon);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-        disabled: Box::new(|theme| theme.disabled(&Button::Icon)),
-        hovered: Box::new(|focused, theme| {
-            let mut style = theme.hovered(focused, false, &Button::Icon);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-        pressed: Box::new(|focused, theme| {
-            let mut style = theme.pressed(focused, false, &Button::Icon);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-    }
+    button_class(|| Button::Icon, false)
 }
 
-/// The action that removes something: the theme's destructive preset with the
-/// shared radius and focus ring.
+/// The action that removes something: the theme's destructive preset.
 pub fn destructive_button_class() -> Button {
-    Button::Custom {
-        active: Box::new(|focused, theme| {
-            let mut style = theme.active(focused, false, &Button::Destructive);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-        disabled: Box::new(|theme| theme.disabled(&Button::Destructive)),
-        hovered: Box::new(|focused, theme| {
-            let mut style = theme.hovered(focused, false, &Button::Destructive);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-        pressed: Box::new(|focused, theme| {
-            let mut style = theme.pressed(focused, false, &Button::Destructive);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-    }
+    button_class(|| Button::Destructive, false)
 }
 
-/// An ordinary secondary action (a settings toggle, a reset): the theme's
-/// standard fill with the shared radius and focus ring.
+/// An ordinary secondary action (a settings toggle, a reset).
 pub fn standard_button_class() -> Button {
-    Button::Custom {
-        active: Box::new(|focused, theme| {
-            let mut style = theme.active(focused, false, &Button::Standard);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-        disabled: Box::new(|theme| theme.disabled(&Button::Standard)),
-        hovered: Box::new(|focused, theme| {
-            let mut style = theme.hovered(focused, false, &Button::Standard);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-        pressed: Box::new(|focused, theme| {
-            let mut style = theme.pressed(focused, false, &Button::Standard);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-    }
+    button_class(|| Button::Standard, false)
 }
 
 /// A bare-text control - a value you click to change (the filter drawer's
-/// current value). Transparent at rest like [`tab_button_class`], but with the
-/// shared radius and focus ring so it still reads as a control.
+/// current value). Transparent at rest like [`tab_button_class`].
 pub fn text_button_class() -> Button {
-    Button::Custom {
-        active: Box::new(|focused, theme| {
-            let mut style = theme.active(focused, false, &Button::Text);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-        disabled: Box::new(|theme| theme.disabled(&Button::Text)),
-        hovered: Box::new(|focused, theme| {
-            let mut style = theme.hovered(focused, false, &Button::Text);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-        pressed: Box::new(|focused, theme| {
-            let mut style = theme.pressed(focused, false, &Button::Text);
-            style.border_radius = theme.cosmic().corner_radii.radius_m.into();
-            focus_ring(style, focused, theme)
-        }),
-    }
+    button_class(|| Button::Text, false)
 }
 
 /// A subtle neutral fill derived from the theme's on-color so it stays visible
@@ -849,7 +811,7 @@ fn chip_background(alpha: f32, theme: &Theme) -> Background {
 
 /// Applies the shared focus ring to a button style: a single solid accent
 /// border.
-fn focus_ring(mut style: button::Style, focused: bool, theme: &Theme) -> button::Style {
+pub(crate) fn focus_ring(mut style: button::Style, focused: bool, theme: &Theme) -> button::Style {
     if focused {
         style.border_width = FOCUS_RING_WIDTH;
         style.border_color = theme.cosmic().accent.base.into();
@@ -861,30 +823,7 @@ fn focus_ring(mut style: button::Style, focused: bool, theme: &Theme) -> button:
 
 /// Compact icon buttons used by the dashboard's centered top navigation.
 pub fn dashboard_nav_button_class(selected: bool) -> Button {
-    Button::Custom {
-        active: Box::new(move |focused, theme| {
-            focus_ring(
-                theme.active(focused, selected, &Button::Icon),
-                focused,
-                theme,
-            )
-        }),
-        disabled: Box::new(|theme| theme.disabled(&Button::Icon)),
-        hovered: Box::new(move |focused, theme| {
-            focus_ring(
-                theme.hovered(focused, selected, &Button::Icon),
-                focused,
-                theme,
-            )
-        }),
-        pressed: Box::new(move |focused, theme| {
-            focus_ring(
-                theme.pressed(focused, selected, &Button::Icon),
-                focused,
-                theme,
-            )
-        }),
-    }
+    button_class(|| Button::Icon, selected)
 }
 
 /// Sidebar section buttons: transparent when idle, a light-grey full-width bar
@@ -1004,42 +943,10 @@ pub fn filter_row(selected: bool, cursor: bool) -> impl Fn(&Theme) -> container:
     }
 }
 
-/// Grid tile appearance: the shared surface radius, plus the focus ring when
-/// the tile is focused. Exactly one border is ever drawn.
-fn tile_style(mut style: button::Style, focused: bool, theme: &Theme) -> button::Style {
-    style.border_radius = surface_radius(theme).into();
-    focus_ring(style, focused, theme)
-}
-
-/// Grid tile buttons: focused tiles get the shared accent ring so selection is
-/// clearly visible. Tiles have the shared surface corner radius.
+/// Grid tile buttons: the shared surface radius and focus ring, with the app's
+/// hover ring so a hovered tile reads like a focused one.
 pub fn tile_button_class(selected: bool) -> Button {
-    Button::Custom {
-        active: Box::new(move |focused, theme| {
-            tile_style(
-                theme.active(focused, selected, &Button::IconVertical),
-                focused,
-                theme,
-            )
-        }),
-        disabled: Box::new(move |theme| {
-            tile_style(theme.disabled(&Button::IconVertical), false, theme)
-        }),
-        hovered: Box::new(move |focused, theme| {
-            tile_style(
-                theme.hovered(focused, selected, &Button::IconVertical),
-                focused,
-                theme,
-            )
-        }),
-        pressed: Box::new(move |focused, theme| {
-            tile_style(
-                theme.pressed(focused, selected, &Button::IconVertical),
-                focused,
-                theme,
-            )
-        }),
-    }
+    button_class(|| Button::IconVertical, selected)
 }
 
 // ---------------------------------------------------------------------------

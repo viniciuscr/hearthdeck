@@ -17,7 +17,7 @@ use cosmic::theme;
 use cosmic::theme::Button;
 use cosmic::widget::{Id, button, column, container, row, text};
 
-use crate::app::Message;
+use crate::app_legacy::Message;
 use crate::fl;
 use crate::providers::daemon::StremioConnection;
 use crate::style::{TEXT_HEADER, destructive_button_class, primary_action_button_class};

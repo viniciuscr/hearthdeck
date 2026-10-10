@@ -24,8 +24,6 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
     "wayland",
     "tokio",
     "single-instance",
-    "desktop-systemd-scope",
-    "xdg-portal",
 ] }
 sctk = { package = "smithay-client-toolkit", version = "0.20.0" }
 

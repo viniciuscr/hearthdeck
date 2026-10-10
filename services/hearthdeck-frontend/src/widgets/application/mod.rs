@@ -1,6 +1,9 @@
 //! An application tile: cover art, a label, and source/version badges.
 
-use crate::app::AppSource;
+mod style;
+
+use crate::app_legacy::AppSource;
+use crate::style::{ICON_SMALL, TEXT_CAPTION, tile_button_class};
 use cosmic::Element;
 use cosmic::iced::Alignment;
 use cosmic::iced::Length;
@@ -10,10 +13,7 @@ use cosmic::iced::widget::{row, stack, text};
 use cosmic::widget::{self, button, container, icon, mouse_area};
 use std::rc::Rc;
 
-use crate::style::{
-    ICON_SMALL, SOURCE_BADGE, TEXT_CAPTION, TEXT_TILE_LABEL, artwork_contained, source_badge,
-    tile_button_class, tile_label_overlay, tile_surface,
-};
+use style::{SOURCE_BADGE, TEXT_TILE_LABEL, artwork_contained, source_badge, tile_label_overlay};
 
 /// Whether a tile is the context menu's target. An enum rather than a `bool` so
 /// the call site reads what it means without needing a comment.
@@ -73,12 +73,11 @@ pub fn app_tile<'a, Message: Clone + 'a>(
     let name = tile_label(name, source_label.as_deref());
 
     // The cover is fitted, not cropped: some box art is not the tile's 2:3
-    // shape, and `Cover` cut its title art off. `tile_surface` behind it
-    // turns the bands a `Contain` fit leaves into a card, so a fitted cover
-    // still reads as a tile of a consistent size next to its neighbours.
+    // shape, and `Cover` cut its title art off, so a fitted cover still reads as
+    // a tile of a consistent size next to its neighbours. The bands a `Contain`
+    // fit leaves on the two sides show the page through.
     let mut artwork_layer: Element<'a, Message> =
         container(artwork_contained(&icon_handle, Length::Fill, Length::Fill))
-            .class(cosmic::theme::Container::Custom(Box::new(tile_surface)))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Horizontal::Center)
@@ -195,7 +194,7 @@ fn app_source_icon(handle: widget::icon::Handle) -> widget::Icon {
 #[cfg(test)]
 mod tests {
     use super::{Selection, app_tile, tile_label};
-    use crate::app::AppSource;
+    use crate::app_legacy::AppSource;
     use cosmic::iced::{Length, Size};
     use cosmic::widget::{self, icon};
     use std::path::Path;

@@ -84,21 +84,20 @@ use crate::style::{
     DETAILS_SHOT_RASTER, DETAILS_SHOT_SIZE, DIALOG_ACTION_WIDTH, DIALOG_WIDTH, DIVIDER_WIDTH,
     EDIT_NAME_INPUT_WIDTH, FILTER_BUTTON_MIN_WIDTH, FILTER_VALUE_WIDTH, ICON_BODY, ICON_LARGE,
     ICON_SEARCH, ICON_SMALL, ICON_TILE_ACTION, MENU_MAX_HEIGHT, PAGE_TRANSITION_DURATION,
-    SCROLL_TRANSITION_DURATION, SEARCH_WIDTH, SECTION_TRANSITION_DURATION,
-    SIDEBAR_ACCENT_BAR_WIDTH, TAB_TRANSITION_DURATION, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER,
-    TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH, accent_bar, action_bar, artwork_fit,
-    backdrop_scrim, backdrop_wash, card_surface, content_horizontal_padding, control_button_class,
-    dashboard_console_tile_size, dashboard_nav_button_class, dashboard_tile_size,
-    destructive_button_class, details_action_bar_padding, details_action_height,
-    details_hero_width, details_toggle_button_class, filter_button_height, filter_drawer_width,
-    filter_row, grid_gap, grid_top_padding, hero_card, icon_button_class, launch_overlay,
-    modal_scrim, passthrough, primary_action_button_class, root_background, search_icon_padding,
-    section_button_class, sidebar_accent_bar_height, sidebar_divider, sidebar_header_height,
-    sidebar_item_height, sidebar_width, tab_button_class, tab_height, tab_underline_height,
-    tab_width, text_button_class, tile_height, tile_width, title_action_height,
+    SCROLL_TRANSITION_DURATION, SEARCH_WIDTH, SECTION_TRANSITION_DURATION, TAB_TRANSITION_DURATION,
+    TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH,
+    accent_bar, action_bar, artwork_fit, backdrop_scrim, backdrop_wash, card_surface,
+    content_horizontal_padding, control_button_class, dashboard_console_tile_size,
+    dashboard_nav_button_class, dashboard_tile_size, destructive_button_class,
+    details_action_bar_padding, details_action_height, details_hero_width,
+    details_toggle_button_class, filter_button_height, filter_drawer_width, filter_row, grid_gap,
+    grid_top_padding, hero_card, icon_button_class, launch_overlay, modal_scrim, passthrough,
+    primary_action_button_class, root_background, search_icon_padding, sidebar_divider,
+    tab_button_class, tab_height, tab_underline_height, tab_width, text_button_class, tile_height,
+    tile_width, title_action_height,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
-use crate::system_status::SystemStatus;
+use crate::system_status::{SystemStatus, disk_free_label, human_size};
 use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
 use crate::widgets::application::{Selection, app_tile};
 use crate::widgets::controller_key::{FaceButton, controller_hint};
@@ -121,7 +120,7 @@ static DASHBOARD_SETTINGS_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard
 /// section, so it needs its own stable scrollable id.
 const CONSOLES_RAIL_KEY: &str = "consoles";
 
-static APP_ICON: LazyLock<icon::Handle> = LazyLock::new(|| {
+pub(crate) static APP_ICON: LazyLock<icon::Handle> = LazyLock::new(|| {
     icon::from_svg_bytes(include_bytes!(
         "../data/icons/org.hearthdeck.HearthDeck.svg"
     ))
@@ -232,7 +231,7 @@ fn provider_records_subscription() -> Subscription<Message> {
 
 /// Display name of the current user (the GECOS field from `/etc/passwd`),
 /// falling back to the login name.
-fn current_user_name() -> String {
+pub(crate) fn current_user_name() -> String {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_default();
@@ -241,39 +240,6 @@ fn current_user_name() -> String {
         "Unknown".to_string()
     } else {
         user
-    }
-}
-
-/// Available bytes on the filesystem containing the given path.
-fn available_disk_bytes(path: &str) -> u64 {
-    let Ok(cstr) = std::ffi::CString::new(path) else {
-        return 0;
-    };
-    nix::sys::statvfs::statvfs(cstr.as_c_str())
-        .map(|vfs| vfs.blocks_available() * vfs.fragment_size())
-        .unwrap_or(0)
-}
-
-/// Free space on the home filesystem, formatted for the status bar. Called once
-/// at startup and again on the periodic system-status poll — never from a view.
-fn disk_free_label() -> String {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
-    human_size(available_disk_bytes(&home))
-}
-
-/// Formats a byte count for humans, e.g. "128.4 GB".
-pub(crate) fn human_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{:.0} {}", value, UNITS[unit])
-    } else {
-        format!("{:.1} {}", value, UNITS[unit])
     }
 }
 
@@ -1702,7 +1668,13 @@ impl HearthDeck {
         Task::perform(
             async move {
                 client
-                    .list_retro_records(scope.platform_id(), ROMM_PAGE_SIZE, offset)
+                    .list_retro_records(
+                        scope.platform_id(),
+                        None,
+                        &std::collections::BTreeMap::new(),
+                        ROMM_PAGE_SIZE,
+                        offset,
+                    )
                     .await
                     .map_err(|error| error.to_string())
             },
@@ -4904,6 +4876,7 @@ impl cosmic::Application for HearthDeck {
                             | GamepadEvent::MoveRight
                             | GamepadEvent::Confirm
                             | GamepadEvent::Back
+                            | GamepadEvent::FilterPanel
                     )
                 {
                     return Task::none();
@@ -4921,6 +4894,8 @@ impl cosmic::Application for HearthDeck {
                     GamepadEvent::NextGroup => self.gamepad_switch_section(1),
                     GamepadEvent::PrevTab => self.gamepad_switch_tab(-1),
                     GamepadEvent::NextTab => self.gamepad_switch_tab(1),
+                    // The drawer cannot be walked to, so it has its own button.
+                    GamepadEvent::FilterPanel => self.update(Message::ToggleFilterPanel),
                 };
             }
             Message::FocusGridFirst => {
@@ -6828,96 +6803,17 @@ impl HearthDeck {
                 Some(self.entry_path_input.len())
             };
 
-        let user_name = self.user_name.clone();
-        let disk_free = self.disk_free.clone();
-
         // ===== Sidebar: fixed section navigation =====
-        let build_section_button = |section: crate::app_group::Section| {
-            let is_active = self.cur_section == section;
-            let inner = container(
-                row![
-                    icon::icon(icon::from_name(section.icon_name()).into()).size(ICON_BODY),
-                    text(section.name()).size(TEXT_LARGE),
-                ]
-                .spacing(space_m)
-                .align_y(Alignment::Center),
-            )
-            .align_y(Vertical::Center)
-            .width(Length::Fill)
-            .padding([space_none, space_l]);
-
-            let content = if is_active {
-                row![
-                    inner,
-                    container(space::horizontal().width(Length::Fixed(SIDEBAR_ACCENT_BAR_WIDTH)))
-                        .width(Length::Fixed(SIDEBAR_ACCENT_BAR_WIDTH))
-                        .height(Length::Fixed(sidebar_accent_bar_height()))
-                        .class(theme::Container::Custom(Box::new(accent_bar))),
-                ]
-                .align_y(Alignment::Center)
-            } else {
-                row![inner]
-            };
-
-            button::custom(
-                container(content)
-                    .align_y(Vertical::Center)
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .height(Length::Fixed(sidebar_item_height()))
-            .width(Length::Fill)
-            .class(section_button_class(is_active))
-            .on_press(Message::SelectSection(section))
-        };
-
-        let sidebar_header = container(
-            row![
-                icon::icon(APP_ICON.clone()).size(ICON_LARGE),
-                container(text(user_name).size(TEXT_HEADER))
-                    .align_y(Vertical::Center)
-                    .width(Length::Fill),
-            ]
-            .spacing(space_m)
-            .align_y(Alignment::Center),
-        )
-        .width(Length::Fill)
-        .height(Length::Fixed(sidebar_header_height()))
-        .align_y(Vertical::Center)
-        .padding([0, space_l]);
-
-        let storage_info = container(
-            row![
-                icon::icon(icon::from_name("drive-harddisk-solidstate-symbolic").into())
-                    .size(ICON_BODY),
-                column![
-                    text::caption(fl!("storage-available")).size(TEXT_CAPTION),
-                    text::body(disk_free).size(TEXT_BODY),
-                ]
-                .spacing(space_xxs),
-            ]
-            .spacing(space_xs)
-            .align_y(Alignment::Center),
-        )
-        .width(Length::Fill)
-        .padding([space_m, space_l, space_l, space_l]);
-
-        let sidebar = container(
-            column![
-                sidebar_header,
-                build_section_button(crate::app_group::Section::PcGames),
-                build_section_button(crate::app_group::Section::ConsoleGames),
-                build_section_button(crate::app_group::Section::Applications),
-                space::vertical().height(Length::Fill),
-                storage_info,
-            ]
-            .spacing(space_xs),
-        )
-        .width(Length::Fixed(sidebar_width(self.window_width)))
-        .height(Length::Fill)
-        // Inset the navigation items from the window edge and the divider so the
-        // selected chip reads as a rounded pill instead of a full-bleed bar.
-        .padding([0, space_xs, space_m, space_xs]);
+        let sidebar = crate::screens::library::sidebar::view(
+            crate::screens::library::sidebar::Sidebar {
+                current: cur_section,
+                user_name: &self.user_name,
+                disk_free: &self.disk_free,
+                app_icon: APP_ICON.clone(),
+                window_width: self.window_width,
+            },
+            Message::SelectSection,
+        );
 
         // ===== Top bar: title + search =====
         let title_element: Element<'_, Message> = if let Some(edit_name) = self.edit_name.as_ref() {

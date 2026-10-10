@@ -3,6 +3,7 @@ use futures::{StreamExt, future::join_all, stream};
 use hearthdeck_protocol::{ApplicationSession, InputProfile};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     env,
     hash::{DefaultHasher, Hasher},
     io::{Read, Write},
@@ -12,9 +13,8 @@ use std::{
 use tokio::sync::OnceCell;
 
 use super::{GameProvider, GameRecord};
-use crate::app_group::{
-    romm_console_category, romm_decade_category, romm_genre_category, romm_region_category,
-};
+use crate::app_group::{romm_console_category, romm_genre_category, romm_region_category};
+use crate::providers::filter::Facet;
 
 /// Prefix a catalog item's id carries on its way into the library.
 ///
@@ -819,28 +819,41 @@ impl DaemonClient {
         .await)
     }
 
-    /// Lists retro ROMs, optionally filtered by platform.
+    /// Lists retro ROMs, optionally narrowed by platform, a search term, and
+    /// facet selections (facet id -> value, e.g. `genre` -> `Action`).
     pub async fn list_retro_roms(
         &self,
         platform_id: Option<i64>,
         search: Option<&str>,
+        filters: &BTreeMap<String, String>,
         limit: u32,
         offset: u32,
     ) -> Result<RetroGamesResponse, DaemonError> {
-        let mut url = self.api_url("/v1/retro/roms");
-        let mut params = Vec::new();
+        let params = retro_rom_query_params(platform_id, search, filters, limit, offset);
+        let url = format!("{}?{}", self.api_url("/v1/retro/roms"), params.join("&"));
 
+        let response = self
+            .http
+            .get(&url)
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    /// The filter facets the current console scope offers: every genre and
+    /// region the source reports, not just the ones a loaded page happens to
+    /// carry, so the grid can offer complete options before it pages anything.
+    pub async fn retro_facets(&self, platform_id: Option<i64>) -> Result<Vec<Facet>, DaemonError> {
+        let mut url = self.api_url("/v1/retro/facets");
         if let Some(platform_id) = platform_id {
-            params.push(format!("platform_id={}", platform_id));
-        }
-        if let Some(search) = search.filter(|s| !s.is_empty()) {
-            params.push(format!("q={}", urlencoding::encode(search)));
-        }
-        params.push(format!("limit={}", limit));
-        params.push(format!("offset={}", offset));
-
-        if !params.is_empty() {
-            url = format!("{}?{}", url, params.join("&"));
+            url = format!("{url}?platform_id={platform_id}");
         }
 
         let response = self
@@ -858,14 +871,21 @@ impl DaemonClient {
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
+    /// Lists one page of retro records, converted and down to their covers.
+    ///
+    /// `search` is the source's own search, not a filter over the page that
+    /// comes back: a grid that searched only what it had loaded would find
+    /// nothing past the first page.
     pub async fn list_retro_records(
         &self,
         platform_id: Option<i64>,
+        search: Option<&str>,
+        filters: &BTreeMap<String, String>,
         limit: u32,
         offset: u32,
     ) -> Result<RetroRecordPage, DaemonError> {
         let page = self
-            .list_retro_roms(platform_id, None, limit, offset)
+            .list_retro_roms(platform_id, search, filters, limit, offset)
             .await?;
         let records = stream::iter(page.items.into_iter().map(|game| {
             let client = self.clone();
@@ -1283,6 +1303,14 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
             serde_json::Value::String(store.to_string()),
         );
     }
+    // Where the application was installed. It travels beside the store and the
+    // license because the entry it becomes drops the metadata that carried it.
+    if let Some(source) = metadata.get("source").and_then(|v| v.as_str()) {
+        game_metadata.insert(
+            "source".to_string(),
+            serde_json::Value::String(source.to_string()),
+        );
+    }
 
     // Determine if this prefers dGPU based on metadata
     let prefers_dgpu = metadata
@@ -1304,6 +1332,32 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
     }
 }
 
+/// The query parameters for `/v1/retro/roms`, in the order the daemon receives
+/// them. A facet selection's key is already the daemon route's own parameter
+/// name (`genre`, `region`), so it passes through unchanged; an unknown id is
+/// harmless, and the route ignores it.
+fn retro_rom_query_params(
+    platform_id: Option<i64>,
+    search: Option<&str>,
+    filters: &BTreeMap<String, String>,
+    limit: u32,
+    offset: u32,
+) -> Vec<String> {
+    let mut params = Vec::new();
+    if let Some(platform_id) = platform_id {
+        params.push(format!("platform_id={platform_id}"));
+    }
+    if let Some(search) = search.filter(|search| !search.is_empty()) {
+        params.push(format!("q={}", urlencoding::encode(search)));
+    }
+    for (facet, value) in filters {
+        params.push(format!("{facet}={}", urlencoding::encode(value)));
+    }
+    params.push(format!("limit={limit}"));
+    params.push(format!("offset={offset}"));
+    params
+}
+
 pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameRecord {
     // The filterable metadata a record carries has to travel as categories:
     // `DesktopEntryData` has no metadata field, and the grid filters on the
@@ -1316,9 +1370,6 @@ pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameR
             .iter()
             .map(|region| romm_region_category(region)),
     );
-    if let Some(release_year) = game.release_year {
-        categories.push(romm_decade_category(release_year));
-    }
 
     let mut metadata = serde_json::Map::new();
     if let Some(summary) = game.summary {
@@ -1618,8 +1669,8 @@ mod tests {
     use super::{
         CatalogItem, DaemonError, RecentActivityItem, RetroGame, RetroRomVersion,
         belongs_in_the_app_library, cache_file_name, catalog_item_to_game_record,
-        daemon_error_from_body, image_extension, retro_game_to_game_record, retro_rom_versions,
-        retro_version_label,
+        daemon_error_from_body, image_extension, retro_game_to_game_record, retro_rom_query_params,
+        retro_rom_versions, retro_version_label,
     };
 
     /// The extension a cached cover is stored with must come from the response,
@@ -1681,6 +1732,27 @@ mod tests {
         // A record with no kind is kept: losing something from the library would be
         // worse than showing it.
         assert!(belongs_in_the_app_library(&item("")));
+    }
+
+    /// Where an application was installed reaches the converted record. The
+    /// entry the record becomes drops the catalog's metadata, so the origin has
+    /// to be copied onto it the way the store and the license are - otherwise
+    /// the library has nothing to filter applications by.
+    #[test]
+    fn an_applications_source_reaches_the_record() {
+        let item = CatalogItem {
+            id: "hearthdeck:org.example.App".to_owned(),
+            source_id: "desktop-apps".to_owned(),
+            title: "Example".to_owned(),
+            kind: "application".to_owned(),
+            launch_id: Some("org.example.App.desktop".to_owned()),
+            icon: None,
+            metadata: serde_json::json!({ "categories": ["Utility"], "source": "flatpak" }),
+        };
+
+        let record = catalog_item_to_game_record(item);
+
+        assert_eq!(record.metadata["source"], "flatpak");
     }
 
     #[test]
@@ -1800,7 +1872,8 @@ mod tests {
         assert_eq!(record.exec.as_deref(), Some("42"));
         assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
         assert_eq!(record.metadata["genres"], serde_json::json!(["RPG"]));
-        // The console filters read a record's RomM metadata off its categories,
+        assert_eq!(record.metadata["release_year"], serde_json::json!(1994));
+        // The console facets read a record's RomM metadata off its categories,
         // which is the only field `DesktopEntryData` keeps.
         assert_eq!(
             record.categories,
@@ -1809,9 +1882,39 @@ mod tests {
                 "hearthdeck-console:7",
                 "hearthdeck-genre:RPG",
                 "hearthdeck-region:Japan",
-                "hearthdeck-decade:1990",
             ]
         );
+    }
+
+    /// A facet selection travels as the daemon route's own parameter names, so
+    /// the server, not the loaded page, does the filtering.
+    #[test]
+    fn a_facet_selection_becomes_the_daemons_filter_parameters() {
+        let filters = std::collections::BTreeMap::from([
+            ("genre".to_owned(), "Action".to_owned()),
+            ("region".to_owned(), "USA".to_owned()),
+        ]);
+
+        let params = retro_rom_query_params(Some(7), None, &filters, 60, 0);
+
+        assert!(params.contains(&"platform_id=7".to_owned()));
+        assert!(params.contains(&"genre=Action".to_owned()));
+        assert!(params.contains(&"region=USA".to_owned()));
+        assert!(params.contains(&"limit=60".to_owned()));
+        assert!(params.contains(&"offset=0".to_owned()));
+    }
+
+    /// The console grid's search is the source's own search, so it travels as
+    /// `q` and the daemon narrows the whole library with it. An empty term is
+    /// no term: the parameter is left off rather than sent blank.
+    #[test]
+    fn a_search_term_becomes_the_daemons_own_query_parameter() {
+        let params =
+            retro_rom_query_params(None, Some("street fighter"), &Default::default(), 60, 0);
+        assert!(params.contains(&"q=street%20fighter".to_owned()));
+
+        let unsearched = retro_rom_query_params(None, Some(""), &Default::default(), 60, 0);
+        assert!(unsearched.iter().all(|param| !param.starts_with("q=")));
     }
 
     #[test]

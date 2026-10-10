@@ -14,7 +14,7 @@ use cosmic::theme;
 use cosmic::theme::Button;
 use cosmic::widget::{Id, button, column, container, row, scrollable, text, toggler};
 
-use crate::app::{Message, human_size};
+use crate::app_legacy::Message;
 use crate::fl;
 use crate::providers::daemon::{
     CategorizationPhase, CategorizationSnapshot, ModelStatus, ScanReport,
@@ -23,6 +23,7 @@ use crate::style::{
     TEXT_HEADER, TEXT_TITLE, destructive_button_class, primary_action_button_class,
     standard_button_class,
 };
+use crate::system_status::human_size;
 
 pub mod stremio;
 

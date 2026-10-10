@@ -39,9 +39,11 @@ dialog) is legitimate — it is an overlay, not a themed surface. Anything that 
 come from tokens.
 
 **Sizes are tokens too.** `style.rs` owns text sizes (`TEXT_TITLE`, `TEXT_HEADER`, `TEXT_LARGE`,
-`TEXT_BODY`, `TEXT_CAPTION`, `TEXT_TILE_LABEL`), window geometry, sidebar ratios, and transition
+`TEXT_BODY`, `TEXT_CAPTION`, `TEXT_RAIL_LABEL`), window geometry, sidebar ratios, and transition
 durations, plus measured helpers (`sidebar_header_height()`, `content_horizontal_padding()`). Use
-them; do not introduce a new magic number in a view.
+them; do not introduce a new magic number in a view. A token names the surface it belongs to: the
+grid tile's own label size and scrim live with the tile
+(`widgets/application/style.rs::TEXT_TILE_LABEL`, `::tile_label_overlay`) and are not the rail's.
 
 ## CRITICAL RULE 2: Back is one global contract
 
