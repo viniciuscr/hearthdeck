@@ -21,6 +21,11 @@
 
 # Rust build artifacts
 /services/target/
+# Local Cargo configuration, e.g. a faster linker for this machine. It sets
+# `rustflags`, which cargo folds into its fingerprints, and it names tools such
+# as clang and lld that CI does not install - so it stays a per-machine choice
+# rather than a project requirement.
+/.cargo/
 # hearthdeck-overlay is deliberately its own standalone Cargo workspace (see
 # services/hearthdeck-overlay/Cargo.toml), not a member of services/, so its
 # build output lands in its own nested target/ instead of /services/target/.
