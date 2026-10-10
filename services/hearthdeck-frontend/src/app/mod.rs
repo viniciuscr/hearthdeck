@@ -44,7 +44,9 @@ use crate::input_ownership::{
 };
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::providers::GameProvider;
-use crate::providers::daemon::{DaemonClient, DaemonConfig, DaemonProvider};
+use crate::providers::daemon::{
+    Collection, CollectionItem, DaemonClient, DaemonConfig, DaemonProvider,
+};
 use crate::providers::filter::{Facet, cycle};
 use crate::screens::dashboard::{self, Card, Shelf};
 use crate::screens::library::console::{self, ConsoleListing};
@@ -99,6 +101,8 @@ pub enum Message {
     },
     /// The filter facets the current console scope offers, from the daemon.
     FacetsLoaded(Vec<Facet>),
+    /// The dashboard's collections arrived, which is what its rails are made of.
+    CollectionsLoaded(Result<Vec<Collection>, String>),
     /// The console list a tab strip is built from: `(platform id, label)`.
     ConsolesLoaded(Vec<(i64, String)>),
     SelectSection(Section),
@@ -201,6 +205,11 @@ pub struct App {
     visible: Vec<Arc<DesktopEntryData>>,
     /// The facets the current source offers, and the selection keyed by facet id.
     facets: Vec<Facet>,
+    /// The daemon's collections, in the order it composes them. The dashboard's
+    /// rails are these, so a collection nobody wrote code for - which is what a
+    /// feature's own categories, and so the AI's, are - appears without a
+    /// frontend change.
+    collections: Vec<Collection>,
     facet_selection: BTreeMap<String, String>,
     /// Whether the filter sidebar is open.
     filter_open: bool,
@@ -308,6 +317,7 @@ impl Application for App {
             console: ConsoleListing::default(),
             visible: Vec::new(),
             facets: Vec::new(),
+            collections: Vec::new(),
             facet_selection: BTreeMap::new(),
             filter_open: false,
             menu: menu::State::default(),
@@ -330,7 +340,8 @@ impl Application for App {
         let poll = app.poll_active_session(std::time::Duration::ZERO);
         let consoles = app.load_consoles();
         let disk = app.poll_disk_free(std::time::Duration::ZERO);
-        (app, Task::batch([load, poll, consoles, disk]))
+        let collections = app.load_collections();
+        (app, Task::batch([load, poll, consoles, disk, collections]))
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
@@ -421,6 +432,19 @@ impl Application for App {
                     return Task::none();
                 }
                 return self.load_console(0);
+            }
+            Message::CollectionsLoaded(result) => {
+                match result {
+                    Ok(collections) => {
+                        self.collections = collections;
+                        // The rails just changed under the cursor, so it may be
+                        // pointing past the end of them now.
+                        let rails = self.dashboard_rail_lengths();
+                        self.dashboard_cursor =
+                            dashboard::focus::clamp(self.dashboard_cursor, &rails);
+                    }
+                    Err(error) => log::warn!("collection fetch failed: {error}"),
+                }
             }
             Message::FacetsLoaded(facets) => {
                 // The daemon reports the facet ids; the labels are ours so they
@@ -945,12 +969,14 @@ impl App {
         Task::none()
     }
 
-    /// The dashboard's rails, from what the shell already holds.
+    /// The dashboard's rails: the daemon's collections, in the order it composes
+    /// them.
     ///
-    /// The shelves drawn so far are the ones that need nothing fetched: the
-    /// library itself. Recently played, favourites and continue watching each
-    /// add a rail here as their data lands, and so does the console rail - that
-    /// one wants the console artwork, which the shell does not keep yet.
+    /// Drawn from the collections rather than from a list of known shelves, so a
+    /// collection nobody wrote frontend code for - which is what a feature's own
+    /// categories, and so the AI's, are - appears on the dashboard without a
+    /// change here. With nothing composed yet the library still gets a rail,
+    /// because a blank front door is worse than a short one.
     fn dashboard_shelves(&self) -> Vec<Shelf> {
         let spacing = theme::spacing();
         let size = dashboard_tile_size(
@@ -958,6 +984,37 @@ impl App {
             content_horizontal_padding(),
             spacing.space_l,
         );
+        let shelves: Vec<Shelf> = self
+            .collections
+            .iter()
+            .filter(|collection| !collection.items.is_empty())
+            .map(|collection| {
+                let cards = collection
+                    .items
+                    .iter()
+                    .take(DASHBOARD_RAIL_TILES)
+                    .enumerate()
+                    .map(|(index, item)| {
+                        Card::new(
+                            dashboard_card_id(&collection.slug, index),
+                            item.name.clone(),
+                            self.collection_item_icon(item, size as u32),
+                            self.collection_item_message(item),
+                        )
+                    })
+                    .collect();
+                Shelf::new(false, dashboard::rail_title(collection), cards)
+            })
+            .collect();
+        if shelves.is_empty() {
+            return self.library_shelf(size);
+        }
+        shelves
+    }
+
+    /// The library as a single rail, for when the daemon has composed nothing yet
+    /// - a fresh install, or a fetch that has not landed.
+    fn library_shelf(&self, size: f32) -> Vec<Shelf> {
         let cards: Vec<Card> = self
             .catalog
             .iter()
@@ -966,10 +1023,10 @@ impl App {
             .enumerate()
             .map(|(index, entry)| {
                 Card::new(
-                    dashboard_card_id(index),
+                    dashboard_card_id("library", index),
                     entry.name.clone(),
                     crate::icon_cache::entry_icon_handle(&entry.icon, size as u32),
-                    Message::ShowLibrary(Section::PcGames),
+                    Some(Message::ShowLibrary(Section::PcGames)),
                 )
             })
             .collect();
@@ -977,6 +1034,40 @@ impl App {
             return Vec::new();
         }
         vec![Shelf::new(false, fl!("all-games"), cards)]
+    }
+
+    /// A collection item's icon.
+    ///
+    /// The library's own entry when the item is one of its, which is the common
+    /// case and draws the real cover. An item the library does not hold - a play
+    /// the daemon derived, or a title from a linked account - gets a generic mark
+    /// rather than nothing.
+    fn collection_item_icon(&self, item: &CollectionItem, size: u32) -> icon::Handle {
+        self.catalog
+            .iter()
+            .find(|entry| entry.id == item.item_id)
+            .map_or_else(
+                || {
+                    crate::icon_cache::icon_cache_handle(
+                        "application-x-executable-symbolic",
+                        size as u16,
+                    )
+                },
+                |entry| crate::icon_cache::entry_icon_handle(&entry.icon, size),
+            )
+    }
+
+    /// What pressing a collection card does.
+    ///
+    /// A way into the library, at the section that item belongs to - which is
+    /// what a tile does everywhere else until the details screen exists. An item
+    /// the library does not hold has nowhere to go, so its card is inert rather
+    /// than a way into some other section.
+    fn collection_item_message(&self, item: &CollectionItem) -> Option<Message> {
+        self.catalog
+            .iter()
+            .find(|entry| entry.id == item.item_id)
+            .map(|entry| Message::ShowLibrary(section_of(entry)))
     }
 
     /// How many cards each rail holds, which is the shape the rail navigation
@@ -1007,7 +1098,7 @@ impl App {
                 self.dashboard_shelves()
                     .get(rail)
                     .and_then(|shelf| shelf.cards.get(card))
-                    .map(|card| card.message.clone())
+                    .and_then(|card| card.message.clone())
             });
         match message {
             Some(message) => self.update(message),
@@ -1393,6 +1484,24 @@ impl App {
         )
     }
 
+    /// Fetches the dashboard's collections, which are what its rails are made of.
+    ///
+    /// One request for all of them, in the order the daemon composes them, rather
+    /// than a request per shelf: a collection nobody wrote frontend code for has
+    /// to arrive the same way as one that did.
+    fn load_collections(&self) -> Task<Message> {
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                client
+                    .list_collections()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CollectionsLoaded(result)),
+        )
+    }
+
     /// Fetches the console list, so the Console Games tabs match the user's
     /// actual RomM platforms rather than whatever was last persisted.
     fn load_consoles(&self) -> Task<Message> {
@@ -1578,9 +1687,20 @@ fn view_launch_overlay(state: &LaunchState) -> Element<'_, Message> {
         .into()
 }
 
-/// The widget id of a dashboard card, so the pad can be pointed at it.
-fn dashboard_card_id(index: usize) -> Id {
-    Id::new(format!("dashboard-card-{index}"))
+/// The widget id of a dashboard card: the rail's slug and the card's place in
+/// it, so the pad can be pointed at it and a card keeps its identity while the
+/// rails around it change.
+fn dashboard_card_id(slug: &str, index: usize) -> Id {
+    Id::new(format!("dashboard-card-{slug}-{index}"))
+}
+
+/// The library section an entry belongs to, for a card that opens the library at
+/// it.
+fn section_of(entry: &DesktopEntryData) -> Section {
+    Section::ALL
+        .into_iter()
+        .find(|section| section.matches(entry))
+        .unwrap_or(Section::PcGames)
 }
 
 /// Scrolls one dashboard rail to a horizontal offset, leaving it where it is
@@ -1641,6 +1761,7 @@ mod tests {
             console: ConsoleListing::default(),
             visible: Vec::new(),
             facets: Vec::new(),
+            collections: Vec::new(),
             facet_selection: BTreeMap::new(),
             filter_open: false,
             menu: menu::State::default(),
@@ -2314,5 +2435,110 @@ mod tests {
 
         send(&mut app, GamepadEvent::Confirm);
         assert_eq!(app.page, Page::Library, "Confirm leaves for the library");
+    }
+
+    /// A collection as the daemon composes one.
+    fn collection(slug: &str, owner: &str, name: Option<&str>, ids: &[&str]) -> Collection {
+        Collection {
+            slug: slug.to_owned(),
+            owner: owner.to_owned(),
+            name: name.map(str::to_owned),
+            items: ids
+                .iter()
+                .map(|id| CollectionItem {
+                    item_id: (*id).to_owned(),
+                    name: (*id).to_owned(),
+                    icon: None,
+                    played: None,
+                })
+                .collect(),
+        }
+    }
+
+    /// The dashboard's rails are the daemon's collections - so a collection this
+    /// client has never heard of, which is what a feature's own categories and so
+    /// the AI's are, becomes a shelf without a change in the frontend. That is
+    /// the whole reason the daemon sends a name with one.
+    #[test]
+    fn the_dashboards_rails_are_the_daemons_collections() {
+        let mut app = loaded(2);
+        let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+            collection("favorites", "user", None, &["hearthdeck:game-0"]),
+            collection(
+                "smart:action",
+                "ai",
+                Some("Action picks"),
+                &["hearthdeck:game-1"],
+            ),
+        ])));
+
+        let shelves = app.dashboard_shelves();
+        assert_eq!(shelves.len(), 2, "one rail per collection");
+        // A slug the client knows is shown in the user's own language.
+        assert_eq!(shelves[0].title, fl!("favorites"));
+        // One it does not uses the name the daemon sent with it.
+        assert_eq!(shelves[1].title, "Action picks");
+        // And the pad walks what the view draws.
+        assert_eq!(app.dashboard_rail_lengths(), vec![1, 1]);
+    }
+
+    /// A collection with neither a known slug nor a name falls back to its slug
+    /// rather than to a blank heading.
+    #[test]
+    fn a_collection_with_no_name_reads_as_its_slug() {
+        let mut app = loaded(1);
+        let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
+            "smart:mystery",
+            "ai",
+            None,
+            &["hearthdeck:game-0"],
+        )])));
+
+        assert_eq!(app.dashboard_shelves()[0].title, "smart:mystery");
+    }
+
+    /// A card for an item the library holds is a way into it, at the section that
+    /// item belongs to.
+    #[test]
+    fn a_collection_card_that_is_a_library_entry_opens_the_library_at_it() {
+        let mut app = loaded(2);
+        let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
+            "favorites",
+            "user",
+            None,
+            &["hearthdeck:game-1"],
+        )])));
+
+        send(&mut app, GamepadEvent::Confirm);
+
+        assert_eq!(
+            app.page,
+            Page::Library,
+            "the card is a way into the library"
+        );
+        assert_eq!(app.cur_section, Section::PcGames);
+    }
+
+    /// A card for an item the library does not hold has nowhere to go, so it is
+    /// inert rather than a way into some other section.
+    #[test]
+    fn a_collection_item_the_library_does_not_hold_is_a_dead_card() {
+        let mut app = loaded(1);
+        let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
+            "stremio:continue-watching",
+            "stremio",
+            None,
+            &["stremio:tt0111161"],
+        )])));
+
+        let shelves = app.dashboard_shelves();
+        assert_eq!(shelves[0].title, fl!("continue-watching"));
+        assert!(
+            shelves[0].cards[0].message.is_none(),
+            "an item the library cannot show has nowhere to go"
+        );
+
+        send(&mut app, GamepadEvent::Confirm);
+        assert_eq!(app.page, Page::Dashboard, "Confirm did nothing");
     }
 }

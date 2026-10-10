@@ -337,6 +337,11 @@ pub struct Collection {
     /// Who may edit it: `system`, `user`, or the feature that owns it.
     #[serde(default)]
     pub owner: String,
+    /// The label to show when this client does not know the slug, which a
+    /// feature's own categories need: nobody has translated a rail that did not
+    /// exist when the client shipped. The AI's collections arrive this way.
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default)]
     pub items: Vec<CollectionItem>,
 }

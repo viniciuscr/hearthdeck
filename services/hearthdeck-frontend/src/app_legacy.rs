@@ -7663,6 +7663,7 @@ mod tests {
         Collection {
             slug: LAST_PLAYED_COLLECTION.to_owned(),
             owner: "system".to_owned(),
+            name: None,
             items: plays
                 .iter()
                 .map(|(id, title, kind)| CollectionItem {
@@ -7769,6 +7770,7 @@ mod tests {
         Collection {
             slug: FAVORITES_COLLECTION.to_owned(),
             owner: "user".to_owned(),
+            name: None,
             items: ids
                 .iter()
                 .map(|id| CollectionItem {
@@ -7789,6 +7791,7 @@ mod tests {
         Collection {
             slug: CONTINUE_WATCHING_COLLECTION.to_owned(),
             owner: "stremio".to_owned(),
+            name: None,
             items: ids
                 .iter()
                 .map(|id| CollectionItem {
@@ -9037,6 +9040,7 @@ mod tests {
         Collection {
             slug: format!("{MODEL_OWNER}:{rail}"),
             owner: MODEL_OWNER.to_owned(),
+            name: None,
             items: ids
                 .iter()
                 .map(|id| CollectionItem {

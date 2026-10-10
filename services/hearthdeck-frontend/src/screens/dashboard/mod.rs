@@ -20,6 +20,11 @@ use cosmic::theme;
 use cosmic::widget::{Id, column, icon, scrollable};
 
 use crate::app::Message;
+use crate::fl;
+use crate::providers::daemon::{
+    CONTINUE_WATCHING_COLLECTION, Collection, FAVORITES_COLLECTION, LAST_PLAYED_COLLECTION,
+    PLAY_LATER_COLLECTION,
+};
 use crate::style::{
     DASHBOARD_GAME_ASPECT, content_horizontal_padding, dashboard_console_tile_size,
     dashboard_tile_size, sidebar_width,
@@ -37,11 +42,20 @@ pub struct Card {
     pub id: Id,
     pub label: String,
     pub icon: icon::Handle,
-    pub message: Message,
+    /// What pressing the card does, or `None` when it has nowhere to go - an
+    /// item the library does not hold. Such a card is still drawn, because the
+    /// rail it is in is worth reading either way, but it does not look live
+    /// while doing nothing.
+    pub message: Option<Message>,
 }
 
 impl Card {
-    pub fn new(id: Id, label: impl Into<String>, icon: icon::Handle, message: Message) -> Self {
+    pub fn new(
+        id: Id,
+        label: impl Into<String>,
+        icon: icon::Handle,
+        message: Option<Message>,
+    ) -> Self {
         Self {
             id,
             label: label.into(),
@@ -78,6 +92,27 @@ pub fn rail_id(index: usize) -> Id {
     Id::new(format!("dashboard-rail-{index}"))
 }
 
+/// What a rail is called.
+///
+/// This client knows the slugs it ships with and shows their translated labels.
+/// Anything else uses the name the daemon sent with the collection, because
+/// nobody has translated a rail that did not exist when this client shipped -
+/// which is exactly what a feature's own categories, and so the AI's, are. A
+/// slug with neither falls back to itself rather than to a blank heading.
+#[must_use]
+pub fn rail_title(collection: &Collection) -> String {
+    match collection.slug.as_str() {
+        FAVORITES_COLLECTION => fl!("favorites"),
+        PLAY_LATER_COLLECTION => fl!("play-later"),
+        LAST_PLAYED_COLLECTION => fl!("recently-played"),
+        CONTINUE_WATCHING_COLLECTION => fl!("continue-watching"),
+        _ => collection
+            .name
+            .clone()
+            .unwrap_or_else(|| collection.slug.clone()),
+    }
+}
+
 /// The page: every shelf as a rail, stacked and scrolled.
 ///
 /// `on_rail_scroll` is handed each rail's own horizontal offset as it moves,
@@ -102,11 +137,15 @@ pub fn view<'a>(
             let scroll = on_rail_scroll.clone();
             rail(rail_id(index), shelf.title.clone(), size)
                 .items(shelf.cards.iter().map(|card| {
-                    rail_item(card.id.clone(), card.label.clone(), card.icon.clone(), size)
-                        .aspect(aspect)
-                        .fit(fit)
-                        .on_press(card.message.clone())
-                        .into_element()
+                    let item =
+                        rail_item(card.id.clone(), card.label.clone(), card.icon.clone(), size)
+                            .aspect(aspect)
+                            .fit(fit);
+                    match card.message.clone() {
+                        Some(message) => item.on_press(message),
+                        None => item,
+                    }
+                    .into_element()
                 }))
                 .on_scroll(move |viewport| scroll(index, viewport.absolute_offset().x))
                 .into()
