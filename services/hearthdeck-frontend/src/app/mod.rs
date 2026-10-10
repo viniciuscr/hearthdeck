@@ -27,6 +27,7 @@ use cosmic::iced::core::keyboard::{Key, key::Named};
 use cosmic::iced::core::widget::operation::focusable::focus;
 use cosmic::iced::core::window::{Event as WindowEvent, Id as SurfaceId};
 use cosmic::iced::event::{Status, listen_with};
+use cosmic::iced::widget::stack;
 use cosmic::iced::{self, Length, Subscription, runtime, window};
 use cosmic::theme;
 use cosmic::widget::{
@@ -56,6 +57,7 @@ use crate::style::{
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
 use crate::ui;
+use crate::widgets::menu::{self, Menu, Row};
 
 /// One page of RomM console records per request.
 const ROMM_PAGE_SIZE: u32 = 60;
@@ -112,8 +114,11 @@ pub enum Message {
     ClearFilters,
     /// A tile was pressed: launch the entry it names.
     Activate(usize),
-    /// A tile was right-clicked. The context menu lands in a later slice.
+    /// The pad's context button: open the tile menu on the tile at this index,
+    /// or close it when it is already open on that tile.
     TileContext(usize),
+    /// The menu's scrim was pressed: close it.
+    CloseMenu,
     /// A navigation event, from the pad or from the keyboard - both speak this
     /// one vocabulary, so there is a single place that moves the cursor.
     GamepadEvent(GamepadEvent),
@@ -169,6 +174,10 @@ pub struct App {
     facet_selection: BTreeMap<String, String>,
     /// Whether the filter sidebar is open.
     filter_open: bool,
+    /// The tile menu: which tile it is open on, and which of its rows is
+    /// highlighted. The menu owns both, so "is it open" cannot disagree with
+    /// "what is it on".
+    menu: menu::State,
     cur_section: Section,
     cur_group: Option<usize>,
     /// Where the pad is: the tile it is on and the column it came down, the row
@@ -263,6 +272,7 @@ impl Application for App {
             facets: Vec::new(),
             facet_selection: BTreeMap::new(),
             filter_open: false,
+            menu: menu::State::default(),
             cur_section: Section::PcGames,
             cur_group: None,
             // The first tile: with nothing loaded yet there is nothing to point
@@ -462,8 +472,14 @@ impl Application for App {
                 return self.list_replaced();
             }
             Message::Activate(index) => return self.activate(index),
-            // The context menu moves here next.
-            Message::TileContext(_index) => {}
+            Message::TileContext(index) => {
+                // The button that opens the menu is the one that closes it, so a
+                // second press hands the pad back to the grid.
+                if index < self.visible.len() {
+                    self.menu.toggle(index);
+                }
+            }
+            Message::CloseMenu => self.menu.close(),
             Message::GamepadEvent(event) => {
                 // A game owns the screen, or the window is not focused: the
                 // pad's events are not ours to act on. (This is what keeps a
@@ -606,6 +622,30 @@ impl Application for App {
             }
         };
 
+        // The menu is a surface over the page: it is stacked over the content
+        // column, so it draws over the grid and the filter drawer alike, and its
+        // scrim dismisses it. The rows come from the entry it is open on, which
+        // is why the menu is built here and not in the grid.
+        let content: Element<'_, Self::Message> = match self.menu_target() {
+            Some(target) => {
+                let title = self
+                    .visible
+                    .get(target)
+                    .map_or("", |entry| entry.name.as_str());
+                stack![
+                    content,
+                    Menu::new(
+                        title,
+                        self.menu_rows_for(target),
+                        self.menu.selected(),
+                        Message::CloseMenu,
+                    )
+                ]
+                .into()
+            }
+            None => content,
+        };
+
         container(row![sidebar, divider, content])
             .width(Length::Fill)
             .height(Length::Fill)
@@ -697,6 +737,15 @@ impl App {
                 &self.facet_selection,
             );
         }
+        // A menu belongs to a tile, and the tile it was opened on may no longer
+        // be in the list: a search, a tab and a section all replace it.
+        if self
+            .menu
+            .target()
+            .is_some_and(|target| target >= self.visible.len())
+        {
+            self.menu.close();
+        }
         self.cursors = focus::clamp(self.cursors, self.layout());
     }
 
@@ -743,8 +792,55 @@ impl App {
             filter_button: !self.facets.is_empty(),
             facets: self.facets.len(),
             drawer_open: self.filter_open && !self.facets.is_empty(),
+            menu_open: self.menu.is_open(),
+            menu_rows: self.menu_rows(),
             tiles: self.visible.len(),
             columns: grid::metrics(self.window_width).columns,
+        }
+    }
+
+    /// The tile the menu is open on, when that tile is still in the list.
+    ///
+    /// A menu belongs to a tile, and the list under it can be replaced - a
+    /// search narrows, a tab or a section swaps - so the target is only good
+    /// while the tile it names is still there.
+    fn menu_target(&self) -> Option<usize> {
+        self.menu
+            .target()
+            .filter(|target| *target < self.visible.len())
+    }
+
+    /// How many rows the open menu holds.
+    ///
+    /// One row so far: the mechanism, before the actions that need a screen of
+    /// their own. Details, favourite and play later all belong to screens the
+    /// rewrite has not reached, and a row that opens nothing is worse than a row
+    /// that is not there yet.
+    fn menu_rows(&self) -> usize {
+        usize::from(self.menu_target().is_some())
+    }
+
+    /// The rows the menu shows for the tile at `index`.
+    fn menu_rows_for(&self, index: usize) -> Vec<Row<Message>> {
+        vec![Row::new(fl!("run"), Message::Activate(index))]
+    }
+
+    /// Runs the row the open menu has highlighted.
+    ///
+    /// The menu closes before the row acts, so nothing is done from behind it: a
+    /// launch must not leave a menu on screen, and an action that replaces the
+    /// list must not leave one open on a tile that is gone. The highlighted row
+    /// is therefore read before the close, which resets it.
+    fn activate_menu_row(&mut self) -> Task<Message> {
+        let Some(target) = self.menu_target() else {
+            return Task::none();
+        };
+        let selected = self.menu.selected();
+        let action = self.menu_rows_for(target).into_iter().nth(selected);
+        self.menu.close();
+        match action {
+            Some(row) => self.update(row.message),
+            None => Task::none(),
         }
     }
 
@@ -801,6 +897,13 @@ impl App {
             // Sideways on a row is that row's own control: the value steps and
             // the cursor stays where the user is looking.
             Outcome::FilterValue { row, delta } => self.cycle_facet(row, delta),
+            // The menu owns which row it is on, so the step is handed to it and
+            // nothing is repainted: its card draws its own highlight.
+            Outcome::MenuStep(delta) => {
+                let rows = self.menu_rows();
+                self.menu.move_selection(delta, rows);
+                Task::none()
+            }
             Outcome::Stayed => Task::none(),
         }
     }
@@ -813,6 +916,7 @@ impl App {
             // change a facet, so confirming a row steps it forward.
             Confirm::Filter { row } => self.cycle_facet(row, 1),
             Confirm::Chrome(chrome) => self.activate_chrome(chrome),
+            Confirm::Menu => self.activate_menu_row(),
             Confirm::Nothing => Task::none(),
         }
     }
@@ -853,6 +957,12 @@ impl App {
 
     /// The X button: what the user can do with what the cursor is on.
     fn context_action(&mut self) -> Task<Message> {
+        // An open menu takes the button back: it is the innermost surface, so
+        // the press closes it before it reaches anything behind it.
+        if self.menu.is_open() {
+            self.menu.close();
+            return Task::none();
+        }
         // Inside the drawer, X is the one thing a drawer cannot do for itself:
         // clear every facet without travelling to a button for it. The clear
         // action is deliberately not a cursor row, so the cursor never has to
@@ -860,8 +970,8 @@ impl App {
         if self.filter_open {
             return self.update(Message::ClearFilters);
         }
-        // The tile's own menu, which the next slice fills in: X is the button
-        // that opens it, wherever the tile is.
+        // The tile's own menu: X is the button that opens it, on the tile the
+        // cursor is on.
         if self.cursors.tile < self.visible.len() {
             return self.update(Message::TileContext(self.cursors.tile));
         }
@@ -882,6 +992,12 @@ impl App {
         }
         // A launch in flight is not something to back out of.
         if self.launch_state.is_visible() {
+            return Task::none();
+        }
+        // The menu is drawn over everything there is, so it is the surface Back
+        // reaches first.
+        if self.menu.is_open() {
+            self.menu.close();
             return Task::none();
         }
         // The drawer is a surface of its own: it closes before Back reaches the
@@ -1292,6 +1408,7 @@ mod tests {
             facets: Vec::new(),
             facet_selection: BTreeMap::new(),
             filter_open: false,
+            menu: menu::State::default(),
             cur_section: Section::PcGames,
             cur_group: None,
             cursors: Cursors::default(),
@@ -1750,6 +1867,79 @@ mod tests {
         assert!(
             app.grid_scroll_offset > 0.0,
             "the cursor left the viewport and the grid did not follow it"
+        );
+    }
+
+    /// The pad's context button opens the tile menu on the tile the cursor is
+    /// on, and the menu takes the pad: the grid behind it stops moving.
+    #[test]
+    fn the_context_button_opens_the_menu_and_the_menu_owns_the_pad() {
+        let mut app = showing(6);
+        send(&mut app, GamepadEvent::MoveRight);
+        assert_eq!(app.cursors.tile, 1);
+
+        send(&mut app, GamepadEvent::ContextMenu);
+
+        assert!(app.menu.is_open(), "X opens the tile menu");
+        assert_eq!(app.menu.target(), Some(1), "on the tile it was pressed on");
+
+        // The grid does not move while the menu is up, so the tile it was opened
+        // on is still where the user left it when the menu closes.
+        send(&mut app, GamepadEvent::MoveDown);
+        assert_eq!(app.cursors.tile, 1, "the grid moved behind the menu");
+
+        // The button that opens it is the one that closes it.
+        send(&mut app, GamepadEvent::ContextMenu);
+        assert!(!app.menu.is_open());
+    }
+
+    /// Back closes the menu before it reaches anything behind it: it is the
+    /// innermost surface, so it unwinds first.
+    #[test]
+    fn back_closes_the_menu_first() {
+        let mut app = showing(4);
+        send(&mut app, GamepadEvent::ContextMenu);
+        assert!(app.menu.is_open());
+
+        send(&mut app, GamepadEvent::Back);
+
+        assert!(!app.menu.is_open(), "Back closes the menu");
+        assert_eq!(app.cursors.tile, 0, "and the grid cursor never moved");
+    }
+
+    /// Confirm runs the row the menu is open on, for the entry the menu belongs
+    /// to - not the first entry, and not whatever the grid cursor is over.
+    #[test]
+    fn confirm_runs_the_row_the_menu_is_open_on() {
+        let mut app = showing(4);
+        send(&mut app, GamepadEvent::MoveRight);
+        send(&mut app, GamepadEvent::ContextMenu);
+
+        send(&mut app, GamepadEvent::Confirm);
+
+        assert_eq!(app.launch_state.title(), Some("hearthdeck:game-1"));
+        assert!(
+            !app.menu.is_open(),
+            "the menu is not left on screen behind the action"
+        );
+    }
+
+    /// A menu belongs to a tile, and a list that drops that tile closes it -
+    /// otherwise a menu would sit open over an entry that is no longer there.
+    #[test]
+    fn a_list_that_drops_the_menu_target_closes_the_menu() {
+        let mut app = showing(4);
+        send(&mut app, GamepadEvent::MoveRight);
+        send(&mut app, GamepadEvent::MoveRight);
+        send(&mut app, GamepadEvent::ContextMenu);
+        assert_eq!(app.menu.target(), Some(2));
+
+        let _ = app.update(Message::InputChanged("game-0".to_owned()));
+
+        assert_eq!(app.visible.len(), 1, "only one entry matches now");
+        assert!(
+            !app.menu.is_open(),
+            "the menu outlived the tile it was opened on"
         );
     }
 }
