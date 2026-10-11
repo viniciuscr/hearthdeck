@@ -16,9 +16,9 @@ use std::sync::LazyLock;
 use cosmic::Element;
 use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
-use cosmic::iced::{Alignment, ContentFit, Length};
+use cosmic::iced::{ContentFit, Length};
 use cosmic::theme;
-use cosmic::widget::{Id, button, column, container, icon, row, scrollable, space, text};
+use cosmic::widget::{Id, column, container, icon, scrollable};
 
 use crate::app::Message;
 use crate::fl;
@@ -27,11 +27,11 @@ use crate::providers::daemon::{
     PLAY_LATER_COLLECTION,
 };
 use crate::style::{
-    DASHBOARD_GAME_ASPECT, ICON_BODY, ICON_LARGE, TEXT_CAPTION, TEXT_HEADER,
-    content_horizontal_padding, dashboard_console_tile_size, dashboard_nav_button_class,
+    DASHBOARD_GAME_ASPECT, content_horizontal_padding, dashboard_console_tile_size,
     dashboard_tile_size, sidebar_width,
 };
 use crate::widgets::rail::{rail, rail_item};
+use crate::widgets::top_bar;
 
 /// The page's own scrollable. Held here because the page is its widget, and this
 /// module is what knows the page scrolls vertically and nothing else.
@@ -115,31 +115,19 @@ pub fn rail_title(collection: &Collection) -> String {
     }
 }
 
-/// The dashboard's top bar: who is signed in, and the destinations.
+/// The page: the shared top bar, then every shelf as a rail, stacked and
+/// scrolled.
 ///
-/// The dashboard is a sibling of the library rather than a page inside it, so it
-/// carries its own chrome. The library's sidebar belongs to the library; drawing
-/// it here would make the dashboard read as a section of it.
-pub struct TopBar {
-    pub user_name: String,
-    pub app_icon: icon::Handle,
-    pub on_home: Message,
-    pub on_library: Message,
-    pub on_search: Message,
-    pub on_settings: Message,
-}
-
-/// The page: the top bar, then every shelf as a rail, stacked and scrolled.
-///
-/// `on_rail_scroll` is handed each rail's own horizontal offset as it moves, and
-/// `on_page_scroll` the page's vertical one, because only the shell can remember
-/// them - a rail needs its own offset, and the page the focused rail's place in
-/// the stack, to know whether the cursor would leave the view.
+/// `on_navigate` belongs to the bar, which every top-level destination wears. The
+/// two scroll callbacks belong to the shell, because only it can remember an
+/// offset: a rail needs its own, and the page the focused rail's place in the
+/// stack, to know whether the cursor would leave the view.
 #[must_use]
 pub fn view<'a>(
     shelves: &[Shelf],
-    top_bar: TopBar,
+    bar: &top_bar::TopBar,
     window_width: f32,
+    on_navigate: fn(top_bar::Destination) -> Message,
     on_rail_scroll: impl Fn(usize, f32) -> Message + Clone + 'a,
     on_page_scroll: impl Fn(f32) -> Message + 'a,
 ) -> Element<'a, Message> {
@@ -184,73 +172,11 @@ pub fn view<'a>(
     .scroller_width(0);
 
     column![
-        container(top_bar_element(&top_bar, space_xl)).padding([space_l, padding, 0, padding]),
+        container(top_bar::view(bar, on_navigate)).padding([space_l, padding, 0, padding]),
         page,
     ]
     .width(Length::Fill)
     .height(Length::Fill)
-    .into()
-}
-
-/// The top bar itself: the profile on the left, the destinations centered, and
-/// the space the system status goes in on the right.
-fn top_bar_element<'a>(bar: &TopBar, button_size: u16) -> Element<'a, Message> {
-    let Spacing {
-        space_xxs,
-        space_xs,
-        space_s,
-        space_l,
-        space_xxl,
-        ..
-    } = theme::spacing();
-    let button_size = f32::from(button_size);
-
-    let profile = row![
-        icon::icon(bar.app_icon.clone()).size(ICON_LARGE),
-        column![
-            text::body(bar.user_name.clone()).size(TEXT_HEADER),
-            text::caption("Hearthdeck").size(TEXT_CAPTION),
-        ]
-        .spacing(space_xxs),
-    ]
-    .spacing(space_s)
-    .align_y(Alignment::Center)
-    .width(Length::FillPortion(1));
-
-    // One builder for every destination, so the buttons cannot drift apart.
-    let nav = |icon_name: &'static str, selected: bool, message: Message| {
-        button::custom(icon::icon(icon::from_name(icon_name).into()).size(ICON_BODY))
-            .width(Length::Fixed(button_size))
-            .height(Length::Fixed(button_size))
-            .class(dashboard_nav_button_class(selected))
-            .on_press(message)
-    };
-
-    let navigation = row![
-        // Home reads as the destination showing, because it is: this screen is
-        // where the app opens.
-        nav("go-home-symbolic", true, bar.on_home.clone()),
-        nav("view-grid-symbolic", false, bar.on_library.clone()),
-        nav("system-search-symbolic", false, bar.on_search.clone()),
-        nav(
-            "preferences-system-symbolic",
-            false,
-            bar.on_settings.clone()
-        ),
-    ]
-    .spacing(space_xs)
-    .align_y(Alignment::Center);
-
-    row![
-        profile,
-        navigation,
-        // Where the system status goes. It is not wired yet, so the space is
-        // reserved rather than filled with something that is not true.
-        space::horizontal().width(Length::FillPortion(1)),
-    ]
-    .spacing(space_l)
-    .align_y(Alignment::Center)
-    .height(Length::Fixed(f32::from(space_xxl)))
     .into()
 }
 
@@ -302,16 +228,6 @@ pub fn rail_heights(shelves: &[Shelf], window_width: f32) -> Vec<f32> {
 #[must_use]
 pub fn rail_gap() -> f32 {
     f32::from(theme::spacing().space_xl)
-}
-
-/// The height the top bar takes above the rails, which is what the page's viewport
-/// is the window's height less.
-#[must_use]
-pub fn top_bar_height() -> f32 {
-    let Spacing {
-        space_l, space_xxl, ..
-    } = theme::spacing();
-    f32::from(space_l) + f32::from(space_xxl)
 }
 
 /// Scrolls the page to a vertical offset, leaving the rails where they are

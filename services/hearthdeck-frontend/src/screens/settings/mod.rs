@@ -9,12 +9,13 @@ use cosmic::Element;
 use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::Length;
 use cosmic::theme;
-use cosmic::widget::{button, column, row, scrollable, settings, text, toggler};
+use cosmic::widget::{button, column, container, row, scrollable, settings, text, toggler};
 
 use crate::app::Message;
 use crate::fl;
 use crate::providers::daemon::{CategorizationPhase, CategorizationSnapshot, ModelStatus};
-use crate::style::{TEXT_BODY, TEXT_TITLE, standard_button_class};
+use crate::style::{TEXT_BODY, TEXT_TITLE, content_horizontal_padding, standard_button_class};
+use crate::widgets::top_bar;
 
 /// What the first scan costs. Named once, so the sentence that warns about it
 /// cannot drift from the number.
@@ -27,14 +28,19 @@ pub struct Settings<'a> {
     pub categorization: Option<&'a CategorizationSnapshot>,
 }
 
-/// The page.
+/// The page: the shared top bar, then the sections.
 #[must_use]
-pub fn view<'a>(state: &Settings<'a>) -> Element<'a, Message> {
+pub fn view<'a>(
+    state: &Settings<'a>,
+    bar: &top_bar::TopBar,
+    on_navigate: fn(top_bar::Destination) -> Message,
+) -> Element<'a, Message> {
     let Spacing {
         space_l, space_xl, ..
     } = theme::spacing();
+    let padding = content_horizontal_padding();
 
-    column![
+    let sections = column![
         text::title1(fl!("settings-title")).size(TEXT_TITLE),
         scrollable(settings::view_column(vec![categorization(
             state.categorization
@@ -45,7 +51,14 @@ pub fn view<'a>(state: &Settings<'a>) -> Element<'a, Message> {
         .scroller_width(0),
     ]
     .spacing(space_l)
-    .padding(space_xl)
+    .padding([space_xl, padding]);
+
+    // The bar sits where the dashboard's does: a sibling destination wears the
+    // same chrome in the same place, so moving between them moves nothing.
+    column![
+        container(top_bar::view(bar, on_navigate)).padding([space_l, padding, 0, padding]),
+        sections,
+    ]
     .width(Length::Fill)
     .height(Length::Fill)
     .into()

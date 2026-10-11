@@ -88,13 +88,13 @@ use crate::style::{
     TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, WINDOW_WIDTH,
     accent_bar, action_bar, artwork_fit, backdrop_scrim, backdrop_wash, card_surface,
     content_horizontal_padding, control_button_class, dashboard_console_tile_size,
-    dashboard_nav_button_class, dashboard_tile_size, destructive_button_class,
-    details_action_bar_padding, details_action_height, details_hero_width,
-    details_toggle_button_class, filter_button_height, filter_drawer_width, filter_row, grid_gap,
-    grid_top_padding, hero_card, icon_button_class, launch_overlay, modal_scrim, passthrough,
-    primary_action_button_class, root_background, search_icon_padding, sidebar_divider,
-    tab_button_class, tab_height, tab_underline_height, tab_width, text_button_class, tile_height,
-    tile_width, title_action_height,
+    dashboard_tile_size, destructive_button_class, details_action_bar_padding,
+    details_action_height, details_hero_width, details_toggle_button_class, filter_button_height,
+    filter_drawer_width, filter_row, grid_gap, grid_top_padding, hero_card, icon_button_class,
+    launch_overlay, modal_scrim, nav_button_class, passthrough, primary_action_button_class,
+    root_background, search_icon_padding, sidebar_divider, tab_button_class, tab_height,
+    tab_underline_height, tab_width, text_button_class, tile_height, tile_width,
+    title_action_height,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::{SystemStatus, current_user_name, disk_free_label, human_size};
@@ -6198,7 +6198,7 @@ impl HearthDeck {
                     .id(id)
                     .width(Length::Fixed(nav_button_size))
                     .height(Length::Fixed(nav_button_size))
-                    .class(dashboard_nav_button_class(selected))
+                    .class(nav_button_class(selected))
                     .on_press_maybe(message),
                 text::body(label).size(TEXT_BODY),
                 tooltip::Position::Bottom,

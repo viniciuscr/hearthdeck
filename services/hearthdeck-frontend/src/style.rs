@@ -821,8 +821,8 @@ pub(crate) fn focus_ring(mut style: button::Style, focused: bool, theme: &Theme)
     style
 }
 
-/// Compact icon buttons used by the dashboard's centered top navigation.
-pub fn dashboard_nav_button_class(selected: bool) -> Button {
+/// Compact icon buttons used by a top-level destination's centered navigation.
+pub fn nav_button_class(selected: bool) -> Button {
     button_class(|| Button::Icon, selected)
 }
 

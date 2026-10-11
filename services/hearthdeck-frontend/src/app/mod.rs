@@ -64,6 +64,7 @@ use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
 use crate::ui;
 use crate::widgets::menu::{self, Menu, Row};
+use crate::widgets::top_bar;
 
 /// One page of RomM console records per request.
 const ROMM_PAGE_SIZE: u32 = 60;
@@ -902,15 +903,9 @@ impl App {
     fn view_dashboard(&self) -> Element<'_, Message> {
         let screen = dashboard::view(
             &self.dashboard_shelves(),
-            dashboard::TopBar {
-                user_name: self.user_name.clone(),
-                app_icon: ui::app_icon(),
-                on_home: Message::OpenDashboard,
-                on_library: Message::OpenLibrary,
-                on_search: Message::OpenSearch,
-                on_settings: Message::OpenSettings,
-            },
+            &self.top_bar(top_bar::Destination::Dashboard),
             self.window_width,
+            navigate,
             |rail, offset| Message::RailScrolled { rail, offset },
             Message::PageScrolled,
         );
@@ -932,13 +927,27 @@ impl App {
     /// dashboard is: it is a sibling destination, and the library's sidebar
     /// belongs to the library.
     fn view_settings(&self) -> Element<'_, Message> {
-        container(settings::view(&settings::Settings {
-            categorization: self.categorization.as_ref(),
-        }))
+        container(settings::view(
+            &settings::Settings {
+                categorization: self.categorization.as_ref(),
+            },
+            &self.top_bar(top_bar::Destination::Settings),
+            navigate,
+        ))
         .width(Length::Fill)
         .height(Length::Fill)
         .class(theme::Container::Custom(Box::new(root_background)))
         .into()
+    }
+
+    /// The chrome every top-level destination wears, marked with the one that is
+    /// drawing it - so the bar shows where you are as well as where you can go.
+    fn top_bar(&self, current: top_bar::Destination) -> top_bar::TopBar {
+        top_bar::TopBar {
+            current,
+            user_name: self.user_name.clone(),
+            app_icon: ui::app_icon(),
+        }
     }
 
     /// Re-projects the current section into `visible`.
@@ -1279,7 +1288,7 @@ impl App {
         let heights = dashboard::rail_heights(&shelves, self.window_width);
         // The page sits below the top bar, so its viewport is the window's height
         // less the bar rather than the whole window.
-        let page_viewport = WINDOW_HEIGHT - dashboard::top_bar_height();
+        let page_viewport = WINDOW_HEIGHT - top_bar::height();
         if let Some(offset) = dashboard::focus::page_scroll_target(
             &heights,
             self.dashboard_cursor.rail,
@@ -1884,6 +1893,19 @@ fn view_launch_overlay(state: &LaunchState) -> Element<'_, Message> {
         .align_y(Alignment::Center)
         .class(theme::Container::Custom(Box::new(launch_overlay)))
         .into()
+}
+
+/// Where the top bar's buttons go.
+///
+/// A plain function rather than a closure, because the bar takes it as one: the
+/// mapping is the same for every screen that wears the bar.
+fn navigate(destination: top_bar::Destination) -> Message {
+    match destination {
+        top_bar::Destination::Dashboard => Message::OpenDashboard,
+        top_bar::Destination::Library => Message::OpenLibrary,
+        top_bar::Destination::Search => Message::OpenSearch,
+        top_bar::Destination::Settings => Message::OpenSettings,
+    }
 }
 
 /// The widget id of a dashboard card: the rail's slug and the card's place in
@@ -2815,5 +2837,28 @@ mod tests {
             app.categorization.as_ref().is_some_and(|snap| snap.enabled),
             "the last answer the daemon gave stands"
         );
+    }
+
+    /// The bar's buttons work from whichever sibling is showing, and each one
+    /// goes to its own screen - including back to the dashboard.
+    #[test]
+    fn the_top_bar_moves_between_siblings_whichever_is_showing() {
+        // `loaded` rather than `showing`: the point is the page the app opens on,
+        // which is the dashboard.
+        let mut app = loaded(4);
+        assert_eq!(app.page, Page::Dashboard);
+
+        let _ = app.update(navigate(top_bar::Destination::Settings));
+        assert_eq!(app.page, Page::Settings);
+
+        let _ = app.update(navigate(top_bar::Destination::Search));
+        assert_eq!(
+            app.page,
+            Page::Library,
+            "search is a way into the library, not a screen of its own"
+        );
+
+        let _ = app.update(navigate(top_bar::Destination::Dashboard));
+        assert_eq!(app.page, Page::Dashboard, "and back");
     }
 }
