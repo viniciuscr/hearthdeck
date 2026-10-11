@@ -126,6 +126,7 @@ pub struct TopBar {
     pub on_home: Message,
     pub on_library: Message,
     pub on_search: Message,
+    pub on_settings: Message,
 }
 
 /// The page: the top bar, then every shelf as a rail, stacked and scrolled.
@@ -231,6 +232,11 @@ fn top_bar_element<'a>(bar: &TopBar, button_size: u16) -> Element<'a, Message> {
         nav("go-home-symbolic", true, bar.on_home.clone()),
         nav("view-grid-symbolic", false, bar.on_library.clone()),
         nav("system-search-symbolic", false, bar.on_search.clone()),
+        nav(
+            "preferences-system-symbolic",
+            false,
+            bar.on_settings.clone()
+        ),
     ]
     .spacing(space_xs)
     .align_y(Alignment::Center);

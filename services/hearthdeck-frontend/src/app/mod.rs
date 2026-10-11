@@ -53,6 +53,7 @@ use crate::screens::library::console::{self, ConsoleListing};
 use crate::screens::library::focus::{self, Chrome, Confirm, Cursors, Direction, Layout, Outcome};
 use crate::screens::library::sidebar::{self, Sidebar};
 use crate::screens::library::{filters, grid, header};
+use crate::screens::settings;
 use crate::style::{
     DASHBOARD_RAIL_TILES, DIVIDER_WIDTH, ICON_LARGE, WINDOW_HEIGHT, WINDOW_WIDTH,
     content_horizontal_padding, dashboard_tile_size, filter_drawer_width,
@@ -103,6 +104,17 @@ pub enum Message {
     FacetsLoaded(Vec<Facet>),
     /// The dashboard's collections arrived, which is what its rails are made of.
     CollectionsLoaded(Result<Vec<Collection>, String>),
+    /// The settings screen's smart-categories state, as the daemon reports it.
+    CategorizationLoaded(Result<crate::providers::daemon::CategorizationSnapshot, String>),
+    /// A categorization action finished. The shell re-reads the state either way,
+    /// because a failed action is still news about what the daemon thinks.
+    CategorizationDone(Result<(), String>),
+    /// The dashboard's top bar: show the settings screen.
+    OpenSettings,
+    /// The smart-categories switch was flipped.
+    SetCategorization(bool),
+    /// A categorization scan was asked for.
+    ScanCategorization,
     /// The console list a tab strip is built from: `(platform id, label)`.
     ConsolesLoaded(Vec<(i64, String)>),
     SelectSection(Section),
@@ -192,6 +204,18 @@ enum Page {
     #[default]
     Dashboard,
     Library,
+    /// What Hearthdeck is allowed to do to the library. A sibling of the other
+    /// two rather than a page inside the library.
+    Settings,
+}
+
+/// One thing the settings screen can ask the daemon to do.
+///
+/// A list rather than a task per button, because they all end the same way: the
+/// daemon is asked, and then asked what it now thinks.
+enum CategorizationAction {
+    SetEnabled(bool),
+    Scan,
 }
 
 pub struct App {
@@ -221,6 +245,10 @@ pub struct App {
     /// feature's own categories, and so the AI's, are - appears without a
     /// frontend change.
     collections: Vec<Collection>,
+    /// The settings screen's smart-categories state, as the daemon last reported
+    /// it. `None` until the first read lands, which is what lets the screen say
+    /// it is checking rather than show a switch in a state nobody reported.
+    categorization: Option<crate::providers::daemon::CategorizationSnapshot>,
     facet_selection: BTreeMap<String, String>,
     /// Whether the filter sidebar is open.
     filter_open: bool,
@@ -338,6 +366,7 @@ impl Application for App {
             menu: menu::State::default(),
             cur_section: Section::PcGames,
             cur_group: None,
+            categorization: None,
             // The first tile: with nothing loaded yet there is nothing to point
             // at, and every read of the cursor tolerates that.
             cursors: Cursors::default(),
@@ -357,7 +386,11 @@ impl Application for App {
         let consoles = app.load_consoles();
         let disk = app.poll_disk_free(std::time::Duration::ZERO);
         let collections = app.load_collections();
-        (app, Task::batch([load, poll, consoles, disk, collections]))
+        let categorization = app.load_categorization();
+        (
+            app,
+            Task::batch([load, poll, consoles, disk, collections, categorization]),
+        )
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
@@ -585,6 +618,28 @@ impl Application for App {
             Message::ShowLibrary(section) => return self.update(Message::SelectSection(section)),
             Message::OpenDashboard => self.page = Page::Dashboard,
             Message::OpenLibrary => self.page = Page::Library,
+            Message::OpenSettings => {
+                self.page = Page::Settings;
+                // Opening it asks for a fresh read, rather than showing whatever
+                // was fetched at startup.
+                return self.load_categorization();
+            }
+            Message::SetCategorization(on) => {
+                return self.categorization_action(CategorizationAction::SetEnabled(on));
+            }
+            Message::ScanCategorization => {
+                return self.categorization_action(CategorizationAction::Scan);
+            }
+            Message::CategorizationDone(result) => {
+                if let Err(error) = result {
+                    log::warn!("categorization action failed: {error}");
+                }
+                return self.load_categorization();
+            }
+            Message::CategorizationLoaded(result) => match result {
+                Ok(snapshot) => self.categorization = Some(snapshot),
+                Err(error) => log::warn!("categorization read failed: {error}"),
+            },
             Message::OpenSearch => {
                 self.page = Page::Library;
                 // The caret goes in the search box, which the library header
@@ -666,6 +721,11 @@ impl Application for App {
         // of the library, which is exactly what it is not.
         if self.page == Page::Dashboard {
             return self.view_dashboard();
+        }
+        // Settings is a sibling of the library as well, and carries no sidebar of
+        // its own.
+        if self.page == Page::Settings {
+            return self.view_settings();
         }
 
         let sidebar = sidebar::view(
@@ -848,6 +908,7 @@ impl App {
                 on_home: Message::OpenDashboard,
                 on_library: Message::OpenLibrary,
                 on_search: Message::OpenSearch,
+                on_settings: Message::OpenSettings,
             },
             self.window_width,
             |rail, offset| Message::RailScrolled { rail, offset },
@@ -865,6 +926,19 @@ impl App {
             .height(Length::Fill)
             .class(theme::Container::Custom(Box::new(root_background)))
             .into()
+    }
+
+    /// The settings screen, drawn as the whole window for the same reason the
+    /// dashboard is: it is a sibling destination, and the library's sidebar
+    /// belongs to the library.
+    fn view_settings(&self) -> Element<'_, Message> {
+        container(settings::view(&settings::Settings {
+            categorization: self.categorization.as_ref(),
+        }))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .class(theme::Container::Custom(Box::new(root_background)))
+        .into()
     }
 
     /// Re-projects the current section into `visible`.
@@ -1399,7 +1473,9 @@ impl App {
         // click - gives it back to the content. With nothing else open, Back from
         // the library returns to the dashboard, and on the dashboard itself there
         // is nothing behind it to go back to.
-        if self.page == Page::Library {
+        // Settings is as deep as the library is, so Back leaves either for the
+        // dashboard - the one page with nothing behind it.
+        if self.page != Page::Dashboard {
             self.page = Page::Dashboard;
             let rails = self.dashboard_rail_lengths();
             self.dashboard_cursor = dashboard::focus::clamp(self.dashboard_cursor, &rails);
@@ -1569,6 +1645,49 @@ impl App {
     /// One request for all of them, in the order the daemon composes them, rather
     /// than a request per shelf: a collection nobody wrote frontend code for has
     /// to arrive the same way as one that did.
+    /// Fetches the smart-categories state, which is what the settings screen
+    /// draws.
+    ///
+    /// Read again whenever the screen is opened rather than cached from startup,
+    /// because the switch is a setting something else may have changed since.
+    fn load_categorization(&self) -> Task<Message> {
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                client
+                    .categorization()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CategorizationLoaded(result)),
+        )
+    }
+
+    /// Runs a categorization action, then re-reads what the daemon now thinks.
+    ///
+    /// No action writes to the screen's state directly: the daemon is asked, and
+    /// then asked again, so what is drawn is always its answer rather than the
+    /// shell's guess at it.
+    fn categorization_action(&self, action: CategorizationAction) -> Task<Message> {
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                match action {
+                    CategorizationAction::SetEnabled(on) => {
+                        if on {
+                            client.enable_categorization().await
+                        } else {
+                            client.disable_categorization().await
+                        }
+                    }
+                    CategorizationAction::Scan => client.start_categorization_scan().await,
+                }
+                .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CategorizationDone(result)),
+        )
+    }
+
     fn load_collections(&self) -> Task<Message> {
         let client = self.daemon_client.clone();
         Task::perform(
@@ -1847,6 +1966,7 @@ mod tests {
             menu: menu::State::default(),
             cur_section: Section::PcGames,
             cur_group: None,
+            categorization: None,
             cursors: Cursors::default(),
             dashboard_cursor: dashboard::focus::Cursor::default(),
             rail_offsets: Vec::new(),
@@ -2621,5 +2741,79 @@ mod tests {
 
         send(&mut app, GamepadEvent::Confirm);
         assert_eq!(app.page, Page::Dashboard, "Confirm did nothing");
+    }
+
+    use crate::providers::daemon::{
+        CategorizationPhase, CategorizationSnapshot, CategorizationStatus, ModelStatus,
+    };
+
+    /// A categorization answer with nothing but the switch set - the state the
+    /// settings screen reads to decide what to draw.
+    fn snapshot(enabled: bool) -> CategorizationSnapshot {
+        CategorizationSnapshot {
+            enabled,
+            status: CategorizationStatus {
+                running: false,
+                phase: CategorizationPhase::Idle,
+                completed: 0,
+                total: 0,
+                model: ModelStatus::Absent,
+                last_error: None,
+                last_completed_at: None,
+            },
+            report: None,
+        }
+    }
+
+    /// The dashboard's Settings destination opens the settings screen, and Back
+    /// leaves it for the dashboard: a sibling destination, not a place inside the
+    /// library.
+    #[test]
+    fn the_settings_destination_opens_settings_and_back_leaves_it() {
+        let mut app = showing(4);
+
+        let _ = app.update(Message::OpenSettings);
+        assert_eq!(app.page, Page::Settings);
+
+        send(&mut app, GamepadEvent::Back);
+        assert_eq!(
+            app.page,
+            Page::Dashboard,
+            "settings is as deep as the library, and no deeper"
+        );
+    }
+
+    /// The screen draws the daemon's answer and nothing else, so what lands is
+    /// what is kept.
+    #[test]
+    fn the_settings_screen_keeps_the_daemons_answer() {
+        let mut app = showing(4);
+        assert!(
+            app.categorization.is_none(),
+            "nothing has been read yet, so there is nothing to draw"
+        );
+
+        let _ = app.update(Message::CategorizationLoaded(Ok(snapshot(false))));
+        assert!(!app.categorization.as_ref().is_some_and(|snap| snap.enabled));
+
+        let _ = app.update(Message::CategorizationLoaded(Ok(snapshot(true))));
+        assert!(app.categorization.as_ref().is_some_and(|snap| snap.enabled));
+    }
+
+    /// A read that fails does not blank the screen: the last answer stands, so a
+    /// transient failure does not turn the switch into a question mark.
+    #[test]
+    fn a_failed_categorization_read_keeps_the_last_answer() {
+        let mut app = showing(4);
+        let _ = app.update(Message::CategorizationLoaded(Ok(snapshot(true))));
+
+        let _ = app.update(Message::CategorizationLoaded(Err(
+            "daemon is down".to_owned()
+        )));
+
+        assert!(
+            app.categorization.as_ref().is_some_and(|snap| snap.enabled),
+            "the last answer the daemon gave stands"
+        );
     }
 }

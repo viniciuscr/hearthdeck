@@ -5,3 +5,4 @@
 
 pub mod dashboard;
 pub mod library;
+pub mod settings;
