@@ -9,18 +9,17 @@
 
 ---
 
-# Change summaries teach the code and the codebase
+# The final report is short
 
-Applies to the final summary of every bug fix or feature. Overrides the short-by-default style above for this output only.
+Applies to the summary of every change. The default is **3–6 lines**: what changed and where, the
+one non-obvious thing, and the command that proved it.
 
-The reader is a senior engineer who is learning Rust — and does not know this codebase well, since most of it was agent-written. A summary is not a changelog ("implemented X, fixed Y"). It is a small lesson that helps them understand the change and, gradually, the system around it. Write so someone who never saw the code can follow:
+The diff holds the detail; the report holds only what the diff cannot say. No changelog, no commit
+list, no architecture recap, no unasked-for next steps. A heading, a table or a bullet list has to
+be earned — by a decision the reader must make, or a tradeoff they should weigh.
 
-- **Place the change first**: name the file/module touched and explain its job in the system in one or two plain sentences. Do not assume they already know what that module does.
-- **Explain the mechanism**: walk through what the code now does and why that fixes the issue or adds the feature, tied concretely to the diff.
-- **Teach the Rust it uses**: when a construct does real work in this change, explain it briefly — what it does and why it is used here (e.g. `?` to propagate errors up, an enum + `match` so the compiler checks every case, why a value is borrowed or cloned). Only what this diff actually uses; no Rust 101 and no term-dumping.
-- **Say why this design**: one or two lines on the realistic alternative and the accepted tradeoff.
-- **Grow their map slowly**: each summary is one step toward understanding the codebase; link back to things explained in earlier changes when it helps. Do not recap the whole architecture.
-- **Stay short**: one-pass read, depth where the change is subtle, silence where it is obvious.
+The full rules, with WRONG/CORRECT examples, are in `.agents/skills/reporting/SKILL.md`. Load it
+before writing the report.
 
 ---
 
