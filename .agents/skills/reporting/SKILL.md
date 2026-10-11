@@ -1,60 +1,80 @@
 ---
 name: reporting
-description: "How to write the final report after finishing a Hearthdeck task: short, plain, and only what the diff cannot say. Load before writing any summary, wrap-up, status message, or PR body. Activates on final report, summary, wrap-up, status, 'what changed', PR description, and at the end of every task."
+description: "How to write the final report after finishing a Hearthdeck task: a fixed five-line block, plain words, only what the diff cannot say. Load before writing any summary, wrap-up, status message, or PR body. Activates on final report, summary, wrap-up, status, 'what changed', PR description, and at the end of every task."
 ---
 
-# Reporting: short, plain, no padding
+# Reporting: one block, always the same shape
 
-## CRITICAL RULE: the default report is a handful of lines
+## CRITICAL RULE: use this block, in this order, with these labels
 
-If it reads like a changelog, an essay, or a consultant's deck, it is wrong. The diff already
-holds everything. The report holds only what the diff cannot say.
+```
+Done:     what changed, and where. One line.
+Watch out: the one thing a reader of the diff would get wrong. Drop the line if there is none.
+Checked:  the command you ran, and its result.
+Next:     what comes next. Drop the line if nothing does.
+```
 
-**Budget: 3–6 lines.** A heading, a table or a bullet list has to be earned — by a decision the
-reader must make, a tradeoff they should weigh, or a finding that changes the plan. Nothing else
-justifies one.
+Nothing outside those labels. No headings, no tables, no bullet lists, no numbered
+steps, no "summary" paragraph before the block, no sign-off after it.
 
-## What it contains
+The labels are the whole point: they are always the same and always in that order,
+so the reader knows where to look before they read. A wall of prose has to be read
+to be understood; this does not.
 
-1. **What changed, and where** — one line.
-2. **The one non-obvious thing** — what a reader of the diff would get wrong. Skip it if there
-   genuinely is not one.
-3. **How it was proved** — the command, and its result.
+## Filling it in
 
-That is the whole report. If a commit message already says something, do not say it again.
+- **Done** — the change and the file. Say what it does, not which functions you
+  touched. `Done: the grid follows the cursor now — grid.rs.`
+- **Watch out** — the trap. A behaviour that changed, a decision you made that a
+  reader would otherwise assume was accidental, a thing that looks wrong but is
+  deliberate. `/tmp`-style asides do not belong here.
+- **Checked** — the real command and the real result. `just check-fast
+  hearthdeck-frontend: 257 pass.` If you did not run one, write `Checked: not run`
+  and nothing else.
+- **Next** — one line, only if genuine work remains.
 
-## What never goes in
+Plain sentences. No "leveraging", no "comprehensive", no restating the ask back.
 
-- A restatement of the diff, hunk by hunk.
-- A list of the commits.
-- Background on the architecture, the file, or the language — unless the change is unintelligible
-  without it.
-- A "next steps" or "what I'd suggest" section nobody asked for.
-- Anything you would not say out loud to a colleague across a desk.
+## When you are stuck, unfinished, or wrong
+
+Same block. Say it in the same place:
+
+```
+Done:     nothing — I reverted it.
+Watch out: the tree is mid-edit and does not compile; do not build on it.
+Checked:  not run.
+Next:     redo X starting from Y.
+```
+
+Never dress a failure up as progress, and never bury it under what did work.
 
 ## WRONG / CORRECT
 
-WRONG — headings, tables and several hundred words, for a one-line fix:
+WRONG — everything below is padding. It buries the two facts that matter:
 
 > ## Summary
-> I updated `grid.rs` to fix the scroll behaviour. The library grid renders the catalog, which is
-> fetched from the daemon... [and on, for several screens]
+> I updated the dashboard so that it renders its own top bar. The dashboard is a
+> sibling of the library rather than a page inside it, which matters because...
+>
+> | File | Change |
+> |---|---|
+> | `top_bar.rs` | new |
+> | `dashboard/mod.rs` | removed the old bar |
+>
+> I also renamed `dashboard_nav_button_class` to `nav_button_class` since...
+> Let me know if you'd like me to also wire the system status next.
 
 CORRECT:
 
-> The grid now follows the cursor when the pad walks out of the viewport — `grid.rs:93`. The bug
-> was that `grid_scroll_offset` was only ever *written* by the scrollable reporting where it was,
-> never by a step, so the cursor walked off the screen while the content sat still.
-> `Metrics::scroll_to_row` computes the offset now, and the new test fails without it.
-> `just check-fast hearthdeck-frontend`: green, 248 tests.
+```
+Done:     the dashboard and settings screens share one top bar — widgets/top_bar.rs,
+          drawn by both. Settings had no chrome at all before this.
+Watch out: the class rename to `nav_button_class` also moved the old app's two uses.
+Checked:  just check-fast hearthdeck-frontend — 257 pass, clippy clean.
+Next:     the wifi/bluetooth icons in the bar's right-hand space.
+```
 
-## Teaching is allowed one sentence, not a section
+## Length is the symptom, shape is the cause
 
-Explaining a Rust construct is worth it only when that construct *is* the crux of the change — the
-`fn` pointer in `button_class`, the offset recorded before the scrollable reports it. Say it in a
-sentence and move on.
-
-## Length is for the reader, not the writer
-
-Less is more is not modesty, it is the mechanism: a wall of text buries the one line that mattered,
-and the reader stops reading. When in doubt, cut the paragraph.
+Four labels that do not move beat any amount of "be concise". When in doubt, cut
+the clause, not the label.

@@ -38,9 +38,8 @@ handling, and naming; this codebase is consistent and a new pattern stands out.
 **4. Verify.** Run the narrow loop (`just check-fast <crate>`) while iterating, then the
 validation-matrix row for what you touched. Fix what fails; never silence it.
 
-**5. Report.** Short. A handful of lines: what changed and where, the one non-obvious thing, and
-the command that proved it. Load `reporting` before writing it. Do not restate the diff, list the
-commits, or explain the codebase.
+**5. Report.** The fixed block: `Done` / `Watch out` / `Checked` / `Next`. Load `reporting` before
+writing it. Nothing outside those labels — no headings, no tables, no commit list.
 
 ## Skill router
 
@@ -53,7 +52,7 @@ that is normal, and cheap.
 | Anything under `hearthdeck-frontend`: state, messages, views, widgets, theme, gamepad | `iced-cosmic-ui` | COSMIC/iced MVU and theming rules |
 | Writing or changing tests, deciding if something is finished, picking a validation command | `testing-and-validation` | What to test, and the command that proves it |
 | Reviewing a diff, refactoring, "clean this up", self-check before reporting | `rust-anti-patterns` | WRONG/CORRECT catalog + review checklist |
-| **Every task, at the end**: the report, a summary, a PR body | `reporting` | Short, plain, no changelog |
+| **Every task, at the end**: the report, a summary, a PR body | `reporting` | The fixed Done / Watch out / Checked / Next block |
 | Writing new Rust from scratch, or reviewing agent-generated code | `rust-llm-pitfalls` | Habits the default lint set does not catch |
 | Backend services: daemon, bridge, discovery, launches | `rust-hygiene` + `testing-and-validation` | Plus the invariants below |
 
@@ -75,7 +74,7 @@ Every item, every time. An unchecked box is not done.
 - [ ] No new clippy warnings. CI runs `-D warnings`, so a warning is a build failure.
 - [ ] No leftover scratch files, `dbg!`, or `println!` debugging.
 - [ ] `git diff` re-read end to end: only intended changes, no leftovers.
-- [ ] The report is a handful of lines, and says only what the diff cannot.
+- [ ] The report is the fixed block, and says only what the diff cannot.
 
 ## Validation matrix
 

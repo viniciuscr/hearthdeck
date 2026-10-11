@@ -9,17 +9,23 @@
 
 ---
 
-# The final report is short
+# The final report is a fixed five-line block
 
-Applies to the summary of every change. The default is **3–6 lines**: what changed and where, the
-one non-obvious thing, and the command that proved it.
+Every change ends with the same block, in the same order, with these labels:
 
-The diff holds the detail; the report holds only what the diff cannot say. No changelog, no commit
-list, no architecture recap, no unasked-for next steps. A heading, a table or a bullet list has to
-be earned — by a decision the reader must make, or a tradeoff they should weigh.
+```
+Done:     what changed, and where. One line.
+Watch out: the one thing a reader of the diff would get wrong. Drop it if there is none.
+Checked:  the command you ran, and its result.
+Next:     what comes next. Drop it if nothing does.
+```
 
-The full rules, with WRONG/CORRECT examples, are in `.agents/skills/reporting/SKILL.md`. Load it
-before writing the report.
+Nothing outside those labels. No headings, no tables, no bullet lists, no summary
+paragraph before it, no sign-off after it. When the task failed or was left
+unfinished, the same block says so — never dress a failure up as progress.
+
+The full rules, with a WRONG/CORRECT pair, are in
+`.agents/skills/reporting/SKILL.md`. Load it before writing the report.
 
 ---
 
