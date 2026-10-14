@@ -952,6 +952,7 @@ impl App {
     fn view_dashboard(&self) -> Element<'_, Message> {
         let screen = dashboard::view(
             &self.dashboard_shelves(),
+            self.dashboard_cursor,
             &self.top_bar(top_bar::Destination::Dashboard),
             self.window_width,
             navigate,

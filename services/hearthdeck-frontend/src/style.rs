@@ -40,12 +40,6 @@ pub const TEXT_LARGE: f32 = 16.0 * TEXT_SCALE;
 pub const TEXT_BODY: f32 = 14.0 * TEXT_SCALE;
 /// Caption text (matches `text::caption`).
 pub const TEXT_CAPTION: f32 = 12.0 * TEXT_SCALE;
-/// Rail label text, drawn on the rail's own strip below the artwork.
-///
-/// Distinct from the application grid tile's `TEXT_TILE_LABEL`: the grid's label
-/// rides on the cover art and is read at TV distance, so it is the larger of the
-/// two. Both were once called `TEXT_TILE_LABEL`.
-pub const TEXT_RAIL_LABEL: f32 = 13.0 * TEXT_SCALE;
 
 // ---------------------------------------------------------------------------
 // Motion
@@ -469,37 +463,6 @@ pub fn artwork_fit<'a, M: 'a>(
 // Container styles
 // ---------------------------------------------------------------------------
 
-/// Translucent scrim behind the rail's label, drawn over the bottom of the
-/// cover art.
-///
-/// The label sits on artwork, not on the page, so it needs a scrim to stay
-/// readable. The scrim is the theme's background at partial opacity and the text
-/// its `on_bg_color`, so it follows the palette under both themes while the art
-/// shows through. Only the bottom corners follow the tile radius; the top edge
-/// meets the artwork and stays square.
-///
-/// The application grid tile has its own scrim (see
-/// `widgets::application::style::tile_label_overlay`), which is lighter: its
-/// label is larger and needs less help against the art.
-pub fn rail_label_overlay(theme: &Theme) -> container::Style {
-    let radius = surface_radius(theme);
-    let t = theme.cosmic();
-    let mut background: Color = t.bg_color().into();
-    background.a = 0.7;
-    container::Style {
-        text_color: Some(t.on_bg_color().into()),
-        icon_color: Some(t.on_bg_color().into()),
-        background: Some(Background::Color(background)),
-        border: Border {
-            radius: [0.0, 0.0, radius[2], radius[3]].into(),
-            width: 0.0,
-            color: Color::TRANSPARENT,
-        },
-        shadow: Shadow::default(),
-        snap: false,
-    }
-}
-
 /// A container that only groups and centres its child: no fill, and - the point
 /// - no text or icon colour.
 ///
@@ -704,7 +667,7 @@ pub fn menu_scrim(theme: &Theme) -> container::Style {
 //                                     button, drawer actions).
 //   * `text_button_class`           - a bare-text control (a value you click).
 //   * `icon_button_class`           - icon-only tools in a toolbar or row.
-//   * `tile_button_class` / `rail`  - the media tiles themselves.
+//   * `tile_button_class`           - the media tiles (grid and rail cards).
 //
 // They all share `focus_ring` and a radius, so "this is selected" looks
 // identical whether the focus is on a tile, a tab or a control.

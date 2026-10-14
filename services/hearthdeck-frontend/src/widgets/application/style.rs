@@ -1,44 +1,29 @@
-//! Styles used only by the application grid tile.
+//! Styles used only by the application tile.
 //!
 //! These dress the tile that [`super::app_tile`] builds and live next to it
 //! rather than in the shared design system. What stays tile-specific here is the
-//! source badge, the label scrim and the fitted-artwork helper. The shared
-//! primitives (surface radius, artwork fitting, card surface, text scale) and
-//! the button classes are imported, not copied.
+//! source badge and the label scrim. The shared primitives (surface radius,
+//! artwork fitting, card surface, text scale) and the button classes are
+//! imported, not copied.
 //!
-//! The rail draws its own label scrim and size from [`crate::style`]'s
-//! `rail_label_overlay`/`TEXT_RAIL_LABEL`; the two are deliberately different
-//! sizes, so the tile's pair is named for the tile.
+//! The tile draws every surface's card - the library grid, the dashboard's
+//! rails - so this scrim and its [`TEXT_TILE_LABEL`] are the only label
+//! treatment a card has.
 
-use cosmic::Element;
 use cosmic::Theme;
 use cosmic::iced::core::{Background, Border, Color, Shadow};
-use cosmic::iced::{ContentFit, Length};
-use cosmic::widget::{container, icon};
+use cosmic::widget::container;
 
-use crate::style::{TEXT_SCALE, artwork_fit, card_surface, surface_radius};
+use crate::style::{TEXT_SCALE, card_surface, surface_radius};
 
 /// Tile label text.
 ///
-/// Larger than the rail's `TEXT_RAIL_LABEL`: a grid tile is read at TV distance
-/// and its label rides on the cover art rather than on its own strip.
+/// Read at TV distance, and it rides on the cover art rather than on its own
+/// strip below it.
 pub const TEXT_TILE_LABEL: f32 = 24.0 * TEXT_SCALE;
 
 /// Size of the source badge overlaid on the tile artwork corner.
 pub const SOURCE_BADGE: f32 = 28.0;
-
-/// Artwork scaled to *fit* inside its bounds, whole: the image is resized to the
-/// largest size that still fits and centred, so a cover whose aspect ratio does
-/// not match the tile is neither stretched nor cropped to match it. This is what
-/// grid tiles use — box art comes in too many shapes for a cover-crop to be
-/// trusted with the title art.
-pub fn artwork_contained<'a, M: 'a>(
-    handle: &icon::Handle,
-    width: Length,
-    height: Length,
-) -> Element<'a, M> {
-    artwork_fit(handle, ContentFit::Contain, width, height)
-}
 
 /// Background for the source badge overlaid on tile artwork. A card-like
 /// surface, so it shares the same radius and colors as the tile instead of

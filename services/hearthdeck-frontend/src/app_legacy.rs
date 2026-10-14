@@ -103,7 +103,7 @@ use crate::ui::app_icon;
 use crate::widgets::application::{Selection, SourceBadge, app_tile};
 use crate::widgets::controller_key::{FaceButton, controller_hint};
 use crate::widgets::menu::{self, Menu, Row};
-use crate::widgets::rail::{rail, rail_item};
+use crate::widgets::rail::rail;
 use crate::widgets::transition::{PageTransition, SectionTransition, TabTransition};
 
 // popovers should show options, but also the desktop info options
@@ -3558,10 +3558,19 @@ impl HearthDeck {
                                 ICON_LARGE,
                             )
                         });
-                    rail_item(dashboard_console_id(index), group.name(), handle, tile_size)
-                        .fit(ContentFit::Contain)
-                        .on_press(Message::OpenConsole(index))
-                        .into()
+                    app_tile(
+                        dashboard_console_id(index),
+                        &group.name(),
+                        handle,
+                        tile_size,
+                        tile_size,
+                        ContentFit::Contain,
+                        1,
+                        None,
+                        Some(Message::OpenConsole(index)),
+                        None,
+                        Selection::Unselected,
+                    )
                 })
                 .collect();
             rail(
@@ -6298,17 +6307,21 @@ impl HearthDeck {
             let cards: Vec<Element<'_, Message>> = entries
                 .into_iter()
                 .map(|entry| {
-                    rail_item(
+                    app_tile(
                         shelf.widget_id(&entry.id),
                         &entry.name,
                         crate::icon_cache::entry_icon_handle(&entry.icon, tile_size as u32),
+                        // Portrait, so a poster is cropped on the sides rather
+                        // than losing its title art to a square crop.
+                        tile_size * DASHBOARD_GAME_ASPECT,
                         tile_size,
+                        ContentFit::Cover,
+                        1,
+                        None,
+                        Some(Message::ActivateDashboardApp(entry.id.clone())),
+                        None,
+                        Selection::Unselected,
                     )
-                    // Portrait, so a poster is cropped on the sides rather than
-                    // losing its title art to a square crop.
-                    .aspect(DASHBOARD_GAME_ASPECT)
-                    .on_press(Message::ActivateDashboardApp(entry.id.clone()))
-                    .into()
                 })
                 .collect();
             let empty: Element<'_, Message> = container(
@@ -6653,15 +6666,20 @@ impl HearthDeck {
                     // Bound to a local first: the `fl!` macro cannot infer the
                     // type of a bare `index + 1` expression argument.
                     let number = index + 1;
-                    rail_item(
+                    app_tile(
                         details_focus_id(DetailsFocus::Screenshot(index)),
-                        fl!("screenshot", index = number),
+                        &fl!("screenshot", index = number),
                         handle.clone(),
+                        // 16:9, its own shape, rather than cropped to a square.
+                        DETAILS_SHOT_SIZE * DETAILS_SHOT_ASPECT,
                         DETAILS_SHOT_SIZE,
+                        ContentFit::Cover,
+                        1,
+                        None,
+                        Some(Message::DetailsSelectScreenshot(index)),
+                        None,
+                        Selection::Unselected,
                     )
-                    .aspect(DETAILS_SHOT_ASPECT)
-                    .on_press(Message::DetailsSelectScreenshot(index))
-                    .into()
                 })
                 .collect();
             rail(
@@ -7118,10 +7136,11 @@ impl HearthDeck {
                     icon_handle,
                     tile_w,
                     tile_h,
+                    ContentFit::Contain,
                     self.romm_versions
                         .get(&entry.id)
                         .map_or(1, |versions| versions.len()),
-                    Message::OpenContextMenu(i),
+                    Some(Message::OpenContextMenu(i)),
                     if self.menu.is_open() {
                         selection.is_selected().then_some(Message::CloseContextMenu)
                     } else {

@@ -2,9 +2,10 @@
 
 mod style;
 
-use crate::style::{ICON_SMALL, TEXT_CAPTION, tile_button_class};
+use crate::style::{ICON_SMALL, TEXT_CAPTION, artwork_fit, tile_button_class};
 use cosmic::Element;
 use cosmic::iced::Alignment;
+use cosmic::iced::ContentFit;
 use cosmic::iced::Length;
 use cosmic::iced::alignment::Vertical;
 use cosmic::iced::core::alignment::Horizontal;
@@ -12,7 +13,7 @@ use cosmic::iced::widget::{row, stack, text};
 use cosmic::widget::{self, button, container, icon, mouse_area};
 use std::rc::Rc;
 
-use style::{SOURCE_BADGE, TEXT_TILE_LABEL, artwork_contained, source_badge, tile_label_overlay};
+use style::{SOURCE_BADGE, TEXT_TILE_LABEL, source_badge, tile_label_overlay};
 
 /// Whether a tile is the context menu's target. An enum rather than a `bool` so
 /// the call site reads what it means without needing a comment.
@@ -49,10 +50,18 @@ pub struct SourceBadge<'a> {
 
 /// Builds the tile for one application: a selectable button carrying the cover
 /// art, its name, and the source and version badges, with right-click opened
-/// through a [`mouse_area`] wrapper.
-// The ten arguments are one tile's identity, geometry, and the two messages its
-// interactions send; they are all supplied inline at the single call site, so a
-// spec struct would only move the same list somewhere else.
+/// through a [`mouse_area`] wrapper when the caller has a context menu to open.
+///
+/// One tile for every surface that shows an application or a media item - the
+/// library grid, the dashboard's game and movie rails, and the legacy app's
+/// shelves - so a card looks and focuses the same wherever it is drawn. The
+/// surfaces differ only in geometry ([`ContentFit`], and the fixed
+/// `tile_width`/`tile_height` they pass), whether they have a context menu
+/// (`on_right_release`), and whether the card is the one the cursor is on
+/// ([`Selection`]).
+// The eleven arguments are one tile's identity, geometry, fit, and the messages
+// and markers its interactions use; they are all supplied inline at the call
+// sites, so a spec struct would only move the same list somewhere else.
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn app_tile<'a, Message: Clone + 'a>(
@@ -61,11 +70,16 @@ pub fn app_tile<'a, Message: Clone + 'a>(
     icon_handle: icon::Handle,
     tile_width: f32,
     tile_height: f32,
+    // How the artwork fills the tile. Grid tiles contain box art so it is not
+    // cropped; media rails cover a poster whose shape already matches.
+    fit: ContentFit,
     // Number of selectable versions of this entry (1 for a single file).
     // More than one overlays a disc badge on the artwork so a collapsed
     // multi-disc game is still visibly distinct from a single-file one.
     version_count: usize,
-    on_right_release: Message,
+    // The message a right-click sends, or `None` for a surface with no context
+    // menu (the dashboard's rails).
+    on_right_release: Option<Message>,
     on_pressed: Option<Message>,
     source: Option<SourceBadge<'_>>,
     selection: Selection,
@@ -86,12 +100,12 @@ pub fn app_tile<'a, Message: Clone + 'a>(
         });
     let name = tile_label(name, source.as_ref().map(|badge| badge.label));
 
-    // The cover is fitted, not cropped: some box art is not the tile's 2:3
-    // shape, and `Cover` cut its title art off, so a fitted cover still reads as
-    // a tile of a consistent size next to its neighbours. The bands a `Contain`
-    // fit leaves on the two sides show the page through.
+    // The cover is fitted by the caller: a grid tile contains box art so an
+    // odd-shaped cover is not cropped, and a media rail covers a poster whose
+    // shape already matches the card. A `Contain` fit bands the artwork and the
+    // page shows through the bands.
     let mut artwork_layer: Element<'a, Message> =
-        container(artwork_contained(&icon_handle, Length::Fill, Length::Fill))
+        container(artwork_fit(&icon_handle, fit, Length::Fill, Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Horizontal::Center)
@@ -163,15 +177,23 @@ pub fn app_tile<'a, Message: Clone + 'a>(
     let tile_button = button::custom(artwork_layer)
         .id(widget_id)
         .selected(is_selected)
+        // A card with no press handler - an item the library does not hold - is
+        // drawn by the button's disabled style, which never paints the focus
+        // ring. Forcing it enabled *only while it is the cursor card* keeps the
+        // two tiles' shared look: an inert card is dim at rest, but shows the
+        // same accent ring under the cursor that an app tile does. It stays
+        // inert either way, because `on_press_maybe` still gets `None`.
+        .force_enabled(is_selected)
         .width(Length::Fixed(tile_width))
         .height(Length::Fixed(tile_height))
         .class(tile_button_class(is_selected))
         .padding(0)
         .on_press_maybe(on_pressed);
 
-    mouse_area(tile_button)
-        .on_right_release(on_right_release)
-        .into()
+    match on_right_release {
+        Some(message) => mouse_area(tile_button).on_right_release(message).into(),
+        None => tile_button.into(),
+    }
 }
 
 /// The label on a tile: the entry's name, truncated to fit the tile, with
@@ -208,6 +230,7 @@ fn app_source_icon(handle: widget::icon::Handle) -> widget::Icon {
 #[cfg(test)]
 mod tests {
     use super::{Selection, SourceBadge, app_tile, tile_label};
+    use cosmic::iced::ContentFit;
     use cosmic::iced::{Length, Size};
     use cosmic::widget::{self, icon};
 
@@ -268,8 +291,9 @@ mod tests {
                 icon_handle(64),
                 240.0,
                 300.0,
+                ContentFit::Contain,
                 version_count,
-                Msg::Open,
+                Some(Msg::Open),
                 Some(Msg::Activate),
                 source,
                 Selection::Selected,
@@ -281,5 +305,33 @@ mod tests {
                 "version_count={version_count} has_source={has_source}",
             );
         }
+    }
+
+    /// A rail card is the same tile as a grid tile, only at another shelf's
+    /// fixed portrait size and with a cover fit. It has no right-click message
+    /// (the rails have no context menu) and, for an item the library does not
+    /// hold, no press message either - and it must still build at that fixed
+    /// size rather than collapse or grow.
+    #[test]
+    fn a_rail_card_lays_out_at_its_fixed_size_without_a_press_or_right_click() {
+        let (width, height) = (240.0, 240.0 * 1.5);
+        let tile = app_tile::<Msg>(
+            widget::Id::unique(),
+            "Blade Runner 2049",
+            icon_handle(64),
+            width,
+            height,
+            ContentFit::Cover,
+            1,
+            None,
+            None,
+            None,
+            Selection::Selected,
+        );
+
+        assert_eq!(
+            tile.as_widget().size(),
+            Size::new(Length::Fixed(width), Length::Fixed(height)),
+        );
     }
 }

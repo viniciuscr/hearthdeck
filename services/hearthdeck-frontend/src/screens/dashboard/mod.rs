@@ -30,7 +30,8 @@ use crate::style::{
     DASHBOARD_GAME_ASPECT, content_horizontal_padding, dashboard_console_tile_size,
     dashboard_tile_size, sidebar_width,
 };
-use crate::widgets::rail::{rail, rail_item};
+use crate::widgets::application::{Selection, app_tile};
+use crate::widgets::rail::rail;
 use crate::widgets::top_bar;
 
 /// The page's own scrollable. Held here because the page is its widget, and this
@@ -46,8 +47,8 @@ pub struct Card {
     pub icon: icon::Handle,
     /// What pressing the card does, or `None` when it has nowhere to go - an
     /// item the library does not hold. Such a card is still drawn, because the
-    /// rail it is in is worth reading either way, but it does not look live
-    /// while doing nothing.
+    /// rail it is in is worth reading either way; it is dim at rest, and shows
+    /// the cursor ring (but still does nothing) when the pad is on it.
     pub message: Option<Message>,
 }
 
@@ -125,6 +126,7 @@ pub fn rail_title(collection: &Collection) -> String {
 #[must_use]
 pub fn view<'a>(
     shelves: &[Shelf],
+    cursor: focus::Cursor,
     bar: &top_bar::TopBar<'_>,
     window_width: f32,
     on_navigate: fn(top_bar::Destination) -> Message,
@@ -135,6 +137,10 @@ pub fn view<'a>(
         space_l, space_xl, ..
     } = theme::spacing();
     let padding = content_horizontal_padding();
+    // The rails' card counts, which `card_selection` clamps the cursor against -
+    // the same shape the pad's movement walks. Computed once so every card asks
+    // the question against the same rails.
+    let rail_lengths: Vec<usize> = shelves.iter().map(|shelf| shelf.cards.len()).collect();
 
     let rails: Vec<Element<'a, Message>> = shelves
         .iter()
@@ -143,16 +149,24 @@ pub fn view<'a>(
             let (size, aspect, fit) = shelf_metrics(shelf, window_width);
             let scroll = on_rail_scroll.clone();
             rail(rail_id(index), shelf.title.clone(), size)
-                .items(shelf.cards.iter().map(|card| {
-                    let item =
-                        rail_item(card.id.clone(), card.label.clone(), card.icon.clone(), size)
-                            .aspect(aspect)
-                            .fit(fit);
-                    match card.message.clone() {
-                        Some(message) => item.on_press(message),
-                        None => item,
-                    }
-                    .into_element()
+                .items(shelf.cards.iter().enumerate().map(|(card_index, card)| {
+                    // The one shared tile. The rails differ from the grid
+                    // only in geometry and in having no context menu; the
+                    // card under the cursor is marked here, which is what
+                    // gives an inert movie card its ring.
+                    app_tile(
+                        card.id.clone(),
+                        &card.label,
+                        card.icon.clone(),
+                        size * aspect,
+                        size,
+                        fit,
+                        1,
+                        None,
+                        card.message.clone(),
+                        None,
+                        card_selection(cursor, &rail_lengths, index, card_index),
+                    )
                 }))
                 .on_scroll(move |viewport| scroll(index, viewport.absolute_offset().x))
                 .into()
@@ -210,6 +224,28 @@ pub fn card_pitch(shelf: &Shelf, window_width: f32) -> (f32, f32) {
     (size * aspect, f32::from(space_l))
 }
 
+/// Whether the card at `(rail_index, card_index)` is the one the dashboard
+/// cursor is on.
+///
+/// A pure function of the cursor and the rails, so which card the ring lands on
+/// is decided - and tested - without a compositor. The cursor is confirmed
+/// against the rails first (`focus::confirm`), so a cursor left past the end of
+/// a rail that shrank reads as the card it clamps onto, and a cursor on an empty
+/// dashboard selects nothing at all.
+#[must_use]
+pub fn card_selection(
+    cursor: focus::Cursor,
+    rails: &[usize],
+    rail_index: usize,
+    card_index: usize,
+) -> Selection {
+    if focus::confirm(cursor, rails) == Some((rail_index, card_index)) {
+        Selection::Selected
+    } else {
+        Selection::Unselected
+    }
+}
+
 /// How tall each rail is in order, which is what the page scroll measures
 /// against to keep the focused one on screen.
 #[must_use]
@@ -262,4 +298,58 @@ const RAIL_TITLE_HEIGHT: f32 = 40.0;
 pub fn rail_viewport(window_width: f32) -> f32 {
     (window_width - sidebar_width(window_width) - 2.0 * f32::from(content_horizontal_padding()))
         .max(1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{card_selection, focus};
+    use crate::widgets::application::Selection;
+
+    /// A cursor on a rail and a card in it.
+    fn on(rail: usize, card: usize) -> focus::Cursor {
+        focus::Cursor {
+            rail,
+            card,
+            remembered: card,
+        }
+    }
+
+    /// Three rails: four cards, one card, three cards.
+    const RAILS: [usize; 3] = [4, 1, 3];
+
+    #[test]
+    fn the_card_under_the_cursor_is_selected_and_its_neighbours_are_not() {
+        // Rail 2 holds three cards, so card 1 is a card that exists.
+        let cursor = on(2, 1);
+        assert_eq!(card_selection(cursor, &RAILS, 2, 1), Selection::Selected);
+
+        // Sideways neighbours, the rail above and the rail below.
+        assert_eq!(card_selection(cursor, &RAILS, 2, 0), Selection::Unselected);
+        assert_eq!(card_selection(cursor, &RAILS, 2, 2), Selection::Unselected);
+        assert_eq!(card_selection(cursor, &RAILS, 1, 1), Selection::Unselected);
+        assert_eq!(card_selection(cursor, &RAILS, 0, 1), Selection::Unselected);
+    }
+
+    #[test]
+    fn no_card_is_selected_when_there_is_nowhere_to_be() {
+        // An empty dashboard has no card to be on.
+        let empty: [usize; 2] = [0, 0];
+        assert_eq!(
+            card_selection(on(0, 0), &empty, 0, 0),
+            Selection::Unselected
+        );
+
+        // A cursor left past the end of a rail that shrank reads as the card it
+        // clamps onto rather than selecting nothing.
+        assert_eq!(
+            card_selection(on(0, 9), &[3], 0, 2),
+            Selection::Selected,
+            "the cursor clamps to the last card that exists"
+        );
+        assert_eq!(
+            card_selection(on(0, 9), &[3], 0, 9),
+            Selection::Unselected,
+            "the card the cursor named does not exist"
+        );
+    }
 }

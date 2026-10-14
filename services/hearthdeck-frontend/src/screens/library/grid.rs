@@ -17,6 +17,7 @@ use std::sync::{Arc, LazyLock};
 
 use cosmic::Element;
 use cosmic::desktop::DesktopEntryData;
+use cosmic::iced::ContentFit;
 use cosmic::iced::Length;
 use cosmic::iced::alignment::Vertical;
 use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
@@ -218,8 +219,9 @@ pub fn view(grid: Grid<'_>) -> Element<'_, Message> {
                 icon,
                 metrics.tile_width,
                 metrics.tile_height,
+                ContentFit::Contain,
                 1,
-                Message::TileContext(index),
+                Some(Message::TileContext(index)),
                 Some(Message::Activate(index)),
                 None,
                 Selection::Unselected,

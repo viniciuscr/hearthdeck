@@ -1,9 +1,14 @@
-//! A shared, single-line horizontal rail of media cards.
+//! A shared, single-line horizontal rail of cards.
 //!
-//! The dashboard shows several of these (consoles, recently played, favorites),
+//! The dashboard shows several of these (consoles, recently played, favourites),
 //! and every one must look and behave identically: a title, uniform-size cards,
 //! horizontal scrolling, and no visible scrollbar. This module owns those rules
 //! once so no surface re-implements (or diverges from) them.
+//!
+//! The cards themselves are not built here: every surface builds its tiles from
+//! the one shared tile, [`crate::widgets::application::app_tile`], and hands the
+//! resulting [`Element`]s to [`Rail::item`]. This module is only the row, its
+//! title and its scroll.
 //!
 //! This is a *composed* widget, not a custom one: it is built entirely from
 //! existing widgets, has no internal state, and needs no custom layout or event
@@ -18,113 +23,15 @@
 
 use cosmic::Element;
 use cosmic::cosmic_theme::Spacing;
-use cosmic::iced::alignment::{Horizontal, Vertical};
+use cosmic::iced::Length;
 use cosmic::iced::widget::scrollable::Viewport;
-use cosmic::iced::{Alignment, ContentFit, Length};
 use cosmic::theme;
-use cosmic::widget::{Id, button, column, container, icon, row, scrollable, space, text};
+use cosmic::widget::{Id, column, container, row, scrollable, space, text};
 
-use crate::style::{
-    TEXT_HEADER, TEXT_RAIL_LABEL, artwork_fit, rail_label_overlay, tile_button_class,
-};
+use crate::style::TEXT_HEADER;
 
-/// One card in a [`Rail`]: the same height as every other card in the rail and,
-/// by default, square. Only the artwork fit and the aspect ratio vary — game
-/// covers are cropped to fill, console art is contained so its pixel-art edges
-/// are not cut off, and screenshots keep their own 16:9 shape.
-#[must_use]
-pub struct RailItem<Message> {
-    id: Id,
-    label: String,
-    handle: icon::Handle,
-    size: f32,
-    aspect: f32,
-    fit: ContentFit,
-    on_press: Option<Message>,
-}
-
-/// Creates a [`RailItem`] for the given entry.
-pub fn rail_item<Message: 'static>(
-    id: Id,
-    label: impl Into<String>,
-    handle: icon::Handle,
-    size: f32,
-) -> RailItem<Message> {
-    RailItem {
-        id,
-        label: label.into(),
-        handle,
-        size,
-        aspect: 1.0,
-        fit: ContentFit::Cover,
-        on_press: None,
-    }
-}
-
-impl<Message: Clone + 'static> RailItem<Message> {
-    /// Sets how the artwork fills the card. Defaults to [`ContentFit::Cover`].
-    #[inline]
-    pub fn fit(mut self, fit: ContentFit) -> Self {
-        self.fit = fit;
-        self
-    }
-
-    /// Sets the card's width as a multiple of `size`, which stays the card's
-    /// height. Defaults to `1.0`, a square card; landscape art such as
-    /// screenshots passes its own ratio so it is not cropped to a square.
-    #[inline]
-    pub fn aspect(mut self, aspect: f32) -> Self {
-        self.aspect = aspect;
-        self
-    }
-
-    #[inline]
-    pub fn on_press(mut self, message: Message) -> Self {
-        self.on_press = Some(message);
-        self
-    }
-
-    #[must_use]
-    pub fn into_element<'a>(self) -> Element<'a, Message> {
-        button::custom(
-            container(
-                column![
-                    artwork_fit(&self.handle, self.fit, Length::Fill, Length::Fill),
-                    container(text(self.label).size(TEXT_RAIL_LABEL).width(Length::Fill))
-                        .padding([2, 6])
-                        .width(Length::Fill)
-                        .height(Length::Shrink)
-                        .class(cosmic::theme::Container::Custom(Box::new(
-                            rail_label_overlay
-                        ))),
-                ]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(Horizontal::Center)
-            .align_y(Vertical::Bottom),
-        )
-        .id(self.id)
-        .width(Length::Fixed(self.size * self.aspect))
-        .height(Length::Fixed(self.size))
-        .class(tile_button_class(false))
-        .padding(0)
-        .on_press_maybe(self.on_press)
-        .into()
-    }
-}
-
-impl<'a, Message: Clone + 'static> From<RailItem<Message>> for Element<'a, Message> {
-    fn from(item: RailItem<Message>) -> Self {
-        item.into_element()
-    }
-}
-
-/// A titled row of [`RailItem`]s. Scrolls horizontally inside a single line and
-/// hides its scrollbar; cards never wrap onto a second row.
+/// A titled row of cards. Scrolls horizontally inside a single line and hides
+/// its scrollbar; cards never wrap onto a second row.
 #[must_use]
 pub struct Rail<'a, Message> {
     id: Id,
@@ -152,7 +59,7 @@ pub fn rail<'a, Message: 'static>(
 }
 
 impl<'a, Message: Clone + 'static> Rail<'a, Message> {
-    /// Appends one card.
+    /// Appends one card, built by [`crate::widgets::application::app_tile`].
     #[inline]
     pub fn item(mut self, item: impl Into<Element<'a, Message>>) -> Self {
         self.items.push(item.into());
