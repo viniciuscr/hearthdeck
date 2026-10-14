@@ -61,6 +61,7 @@ use crate::style::{
     sidebar_divider,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
+use crate::system_status::SystemStatus;
 use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
 use crate::ui;
 use crate::widgets::menu::{self, Menu, Row};
@@ -88,6 +89,14 @@ const CONSOLE_SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_m
 /// Free space moves on the order of minutes, and reading it is a filesystem
 /// call, so it rides its own slow poll rather than a frame subscription.
 const DISK_FREE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How often the top bar's system status is re-read.
+///
+/// Wi-Fi and Bluetooth move on the order of minutes, but this poll is also
+/// what makes the bar's clock tick: the view reads the time fresh, and a poll
+/// is what makes the view run again. The inherited shell ran the same loop at
+/// the same pace.
+const SYSTEM_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Everything the new shell can react to so far.
 #[derive(Debug, Clone)]
@@ -186,6 +195,8 @@ pub enum Message {
     ActiveSessionResult(Result<bool, String>),
     /// The home filesystem's free space, for the sidebar footer.
     DiskFreeLoaded(String),
+    /// The top bar's system status: Wi-Fi and Bluetooth, as the poll read them.
+    SystemStatusLoaded(SystemStatus),
     /// The main window appeared: go fullscreen, matching the session's kiosk
     /// model.
     Opened,
@@ -269,6 +280,13 @@ pub struct App {
     /// Where the pad is on the dashboard, which is a different surface with a
     /// different shape: rails of cards rather than a grid of tiles.
     dashboard_cursor: dashboard::focus::Cursor,
+    /// Where the pad is on the top bar both sibling pages wear: the destination
+    /// button at this index, or `None` when the bar does not hold the cursor.
+    ///
+    /// The bar is the one row the dashboard and the settings screen share, so
+    /// its cursor is shell state rather than either page's - but what a step
+    /// along it does is the bar's own rule, in `widgets::top_bar`.
+    bar_cursor: Option<usize>,
     /// Where each dashboard rail is scrolled to, by rail index. The shell keeps
     /// it because the rail cannot: the movement rules need to know whether the
     /// card the cursor lands on would leave the view.
@@ -282,6 +300,10 @@ pub struct App {
     /// Free space on the home filesystem, as the last poll read it. Blank until
     /// the first poll answers.
     disk_free: String,
+    /// Wi-Fi and Bluetooth, as the last poll read them - what the top bar's
+    /// status icons draw. Defaulted, so the bar says "unavailable" rather than
+    /// nothing until the first read lands.
+    system_status: SystemStatus,
     window_width: f32,
     /// Where the grid is scrolled to, and how tall its viewport is. The
     /// virtualization builds the rows between them, and the console source asks
@@ -372,11 +394,13 @@ impl Application for App {
             // at, and every read of the cursor tolerates that.
             cursors: Cursors::default(),
             dashboard_cursor: dashboard::focus::Cursor::default(),
+            bar_cursor: None,
             rail_offsets: Vec::new(),
             page_offset: 0.0,
             search_value: String::new(),
             user_name: crate::system_status::current_user_name(),
             disk_free: String::new(),
+            system_status: SystemStatus::default(),
             window_width: WINDOW_WIDTH,
             grid_scroll_offset: 0.0,
             grid_viewport_height: grid_viewport_height_fallback(),
@@ -386,11 +410,20 @@ impl Application for App {
         let poll = app.poll_active_session(std::time::Duration::ZERO);
         let consoles = app.load_consoles();
         let disk = app.poll_disk_free(std::time::Duration::ZERO);
+        let status = app.poll_system_status(std::time::Duration::ZERO);
         let collections = app.load_collections();
         let categorization = app.load_categorization();
         (
             app,
-            Task::batch([load, poll, consoles, disk, collections, categorization]),
+            Task::batch([
+                load,
+                poll,
+                consoles,
+                disk,
+                status,
+                collections,
+                categorization,
+            ]),
         )
     }
 
@@ -517,6 +550,7 @@ impl Application for App {
                 // The sidebar is the library's own navigation, so reaching for it
                 // leaves the dashboard.
                 self.page = Page::Library;
+                self.bar_cursor = None;
                 self.cur_section = section;
                 self.cur_group = None;
                 self.search_value.clear();
@@ -617,10 +651,21 @@ impl Application for App {
             // A dashboard card is a way into the library, so pressing one leaves
             // the dashboard for it - which the section change itself does.
             Message::ShowLibrary(section) => return self.update(Message::SelectSection(section)),
-            Message::OpenDashboard => self.page = Page::Dashboard,
-            Message::OpenLibrary => self.page = Page::Library,
+            Message::OpenDashboard => {
+                // Landing on a page hands the cursor to its content, so neither
+                // the library's ring nor the bar's row survives the trip.
+                self.page = Page::Dashboard;
+                self.cursors.ring = None;
+                self.bar_cursor = None;
+            }
+            Message::OpenLibrary => {
+                self.page = Page::Library;
+                self.bar_cursor = None;
+            }
             Message::OpenSettings => {
                 self.page = Page::Settings;
+                self.cursors.ring = None;
+                self.bar_cursor = None;
                 // Opening it asks for a fresh read, rather than showing whatever
                 // was fetched at startup.
                 return self.load_categorization();
@@ -699,6 +744,10 @@ impl Application for App {
                     self.disk_free = label;
                 }
                 return self.poll_disk_free(DISK_FREE_POLL_INTERVAL);
+            }
+            Message::SystemStatusLoaded(status) => {
+                self.system_status = status;
+                return self.poll_system_status(SYSTEM_STATUS_POLL_INTERVAL);
             }
             Message::Opened => {
                 return window::set_mode(SurfaceId::RESERVED, window::Mode::Fullscreen);
@@ -942,11 +991,12 @@ impl App {
 
     /// The chrome every top-level destination wears, marked with the one that is
     /// drawing it - so the bar shows where you are as well as where you can go.
-    fn top_bar(&self, current: top_bar::Destination) -> top_bar::TopBar {
+    fn top_bar(&self, current: top_bar::Destination) -> top_bar::TopBar<'_> {
         top_bar::TopBar {
             current,
             user_name: self.user_name.clone(),
             app_icon: ui::app_icon(),
+            status: &self.system_status,
         }
     }
 
@@ -1141,7 +1191,16 @@ impl App {
                         Card::new(
                             dashboard_card_id(&collection.slug, index),
                             item.name.clone(),
-                            self.collection_item_icon(item, size as u32),
+                            // The card draws the icon the daemon sent with the
+                            // item - already resolved to a file or a theme name
+                            // by the provider - the same way every other surface
+                            // draws one. Looking it up in this client's own
+                            // catalog instead is what left every film, every
+                            // console game and every favourite showing the
+                            // generic mark: a media record is not in the
+                            // application library at all, and a curated item
+                            // carries no icon of its own here.
+                            crate::icon_cache::reference_handle(item.icon.as_deref(), size as u32),
                             self.collection_item_message(item),
                         )
                     })
@@ -1179,27 +1238,6 @@ impl App {
         vec![Shelf::new(false, fl!("all-games"), cards)]
     }
 
-    /// A collection item's icon.
-    ///
-    /// The library's own entry when the item is one of its, which is the common
-    /// case and draws the real cover. An item the library does not hold - a play
-    /// the daemon derived, or a title from a linked account - gets a generic mark
-    /// rather than nothing.
-    fn collection_item_icon(&self, item: &CollectionItem, size: u32) -> icon::Handle {
-        self.catalog
-            .iter()
-            .find(|entry| entry.id == item.item_id)
-            .map_or_else(
-                || {
-                    crate::icon_cache::icon_cache_handle(
-                        "application-x-executable-symbolic",
-                        size as u16,
-                    )
-                },
-                |entry| crate::icon_cache::entry_icon_handle(&entry.icon, size),
-            )
-    }
-
     /// What pressing a collection card does.
     ///
     /// A way into the library, at the section that item belongs to - which is
@@ -1227,10 +1265,74 @@ impl App {
         let rails = self.dashboard_rail_lengths();
         let before = self.dashboard_cursor;
         self.dashboard_cursor = dashboard::focus::step(self.dashboard_cursor, direction, &rails);
-        if self.dashboard_cursor == before {
-            return Task::none();
+        if self.dashboard_cursor != before {
+            return self.focus_dashboard_card();
         }
-        self.focus_dashboard_card()
+        // Up off the top of the stack of rails is the top bar, the row above
+        // them - which is where the pad comes to choose a destination.
+        if direction == Direction::Up {
+            self.bar_cursor = Some(top_bar::Destination::Dashboard.index());
+            return self.focus_bar_button();
+        }
+        Task::none()
+    }
+
+    /// Steps the cursor along the top bar.
+    ///
+    /// The bar is one row of buttons: sideways walks it and stops at its ends,
+    /// up off it does nothing, and down leaves it for the content below - the
+    /// rails on the dashboard, which the bar is the top of. The settings screen
+    /// has no content cursor below its bar, so down does nothing there and the
+    /// bar keeps the cursor.
+    fn step_bar(&mut self, direction: Direction) -> Task<Message> {
+        let Some(index) = self.bar_cursor else {
+            return Task::none();
+        };
+        match direction {
+            Direction::Left | Direction::Right => {
+                let delta = if direction == Direction::Left { -1 } else { 1 };
+                if let Some(next) = top_bar::stepped(index, delta) {
+                    self.bar_cursor = Some(next);
+                }
+            }
+            Direction::Down if self.page == Page::Dashboard => {
+                self.bar_cursor = None;
+                // The first rail, at the card the cursor remembers - the same
+                // rule a vertical step between rails follows.
+                let remembered = self.dashboard_cursor.remembered;
+                self.dashboard_cursor = dashboard::focus::clamp(
+                    dashboard::focus::Cursor {
+                        rail: 0,
+                        card: remembered,
+                        remembered,
+                    },
+                    &self.dashboard_rail_lengths(),
+                );
+                return self.focus_dashboard_card();
+            }
+            Direction::Up | Direction::Down => {}
+        }
+        self.focus_bar_button()
+    }
+
+    /// Acts on the top bar's button at `index`, which is what both the pad's
+    /// Confirm and the keyboard's Enter ask for - the same action a click on
+    /// the button asks for.
+    fn activate_bar(&mut self, index: usize) -> Task<Message> {
+        match top_bar::Destination::at(index) {
+            Some(destination) => self.update(navigate(destination)),
+            None => Task::none(),
+        }
+    }
+
+    /// Points the renderer's focus at the top bar button the cursor is on,
+    /// which is where its focus ring comes from.
+    fn focus_bar_button(&self) -> Task<Message> {
+        self.bar_cursor
+            .and_then(top_bar::Destination::at)
+            .map_or(Task::none(), |destination| {
+                widget_focus(top_bar::button_id(destination))
+            })
     }
 
     /// Runs the card the dashboard's cursor is on.
@@ -1315,9 +1417,9 @@ impl App {
             GamepadEvent::MoveRight => self.step_focus(Direction::Right),
             GamepadEvent::Confirm => self.confirm_focus(),
             GamepadEvent::Back => self.back(),
-            // Search is the one action that puts the caret in the search box
-            // from wherever the cursor is, which is what a pad needs to search.
-            GamepadEvent::Search => self.focus_search(),
+            // Search puts the caret in the search box - which, off the library,
+            // means showing it first, the same way the bar's Search button does.
+            GamepadEvent::Search => self.update(Message::OpenSearch),
             GamepadEvent::ContextMenu => self.context_action(),
             // The shoulder buttons switch section and the triggers switch tab.
             // They are chords rather than places on the screen, so they wrap
@@ -1334,17 +1436,31 @@ impl App {
 
     /// Moves the cursor one step, and the renderer's focus with it.
     fn step_focus(&mut self, direction: Direction) -> Task<Message> {
-        // A step belongs to the content: a D-pad press takes the cursor back
-        // from the keyboard's ring rather than walking along the chrome.
-        self.cursors.ring = None;
         // The menu is drawn over whichever page is behind it, so it takes the
         // step before the page does.
         if self.menu_is_up() {
             return self.move_menu(direction);
         }
+        // The top bar is the chrome both sibling pages wear, and while it holds
+        // the cursor it takes every step: sideways along its buttons, and Down
+        // off it and into the content below.
+        if self.bar_cursor.is_some() {
+            return self.step_bar(direction);
+        }
         if self.page == Page::Dashboard {
             return self.step_dashboard(direction);
         }
+        // The settings screen's rows are not walkable yet - they are controls
+        // the pad has no cursor for - so any step lands on the one row it can
+        // walk, its bar, rather than moving a cursor over the library the
+        // screen does not show.
+        if self.page == Page::Settings {
+            self.bar_cursor = Some(top_bar::Destination::Settings.index());
+            return self.focus_bar_button();
+        }
+        // A step belongs to the content: a D-pad press takes the cursor back
+        // from the keyboard's ring rather than walking along the chrome.
+        self.cursors.ring = None;
         match focus::step(self.cursors, direction, self.layout()) {
             Outcome::Tile { tile, column } => {
                 self.cursors.tile = tile;
@@ -1373,8 +1489,19 @@ impl App {
         if self.menu_is_up() {
             return self.activate_menu_row();
         }
+        // The top bar's button under the cursor, on whichever page wears the
+        // bar - the same action a click on it asks for.
+        if let Some(index) = self.bar_cursor {
+            return self.activate_bar(index);
+        }
         if self.page == Page::Dashboard {
             return self.confirm_dashboard();
+        }
+        // The settings screen's rows are not walkable yet, so there is nothing
+        // on it to confirm - and above all nothing that may be read as the
+        // library's tiles, which this screen does not show.
+        if self.page == Page::Settings {
+            return Task::none();
         }
         match focus::confirm(self.cursors, self.layout()) {
             Confirm::Tile(index) => self.update(Message::Activate(index)),
@@ -1428,6 +1555,12 @@ impl App {
             self.menu.close();
             return Task::none();
         }
+        // The menu belongs to the library grid: on a sibling page it would open
+        // over a tile the screen does not show, and from then on the pad would
+        // walk that invisible menu instead of the page in front of it.
+        if self.page != Page::Library {
+            return Task::none();
+        }
         // Inside the drawer, X is the one thing a drawer cannot do for itself:
         // clear every facet without travelling to a button for it. The clear
         // action is deliberately not a cursor row, so the cursor never has to
@@ -1472,6 +1605,14 @@ impl App {
         if self.filter_open {
             return self.update(Message::CloseFilterPanel);
         }
+        // The top bar is chrome rather than a surface over anything: Back steps
+        // off it into the content the way it steps out of the library's ring.
+        // The settings screen has no content cursor below its bar, so Back there
+        // leaves the page itself, as it already did.
+        if self.bar_cursor.is_some() && self.page == Page::Dashboard {
+            self.bar_cursor = None;
+            return self.focus_dashboard_card();
+        }
         // The ring is the keyboard's surface: Back steps out of it into the
         // content, the same way it leaves the drawer.
         if self.cursors.ring.is_some() {
@@ -1486,6 +1627,8 @@ impl App {
         // dashboard - the one page with nothing behind it.
         if self.page != Page::Dashboard {
             self.page = Page::Dashboard;
+            self.cursors.ring = None;
+            self.bar_cursor = None;
             let rails = self.dashboard_rail_lengths();
             self.dashboard_cursor = dashboard::focus::clamp(self.dashboard_cursor, &rails);
             return self.focus_dashboard_card();
@@ -1500,6 +1643,7 @@ impl App {
     /// pad, so leaving it again puts the user back on the tile they were on.
     fn focus_search(&mut self) -> Task<Message> {
         self.cursors.ring = None;
+        self.bar_cursor = None;
         text_input::focus(header::search_id())
     }
 
@@ -1530,12 +1674,26 @@ impl App {
     ///
     /// The ring is input, so it waits for the same ownership the pad's events do
     /// rather than moving the cursor of a screen a game is covering.
+    ///
+    /// What the ring walks is the page's own chrome: the library's sidebar,
+    /// header and tabs on the library, and the top bar - the only chrome there
+    /// is - on the sibling pages.
     fn walk_ring(&mut self, backwards: bool) -> Task<Message> {
         if !self.input_ownership.frontend_has_control() {
             return Task::none();
         }
-        self.cursors.ring = focus::ring_step(self.cursors.ring, backwards, self.layout());
-        self.focus_task()
+        if self.page == Page::Library {
+            self.cursors.ring = focus::ring_step(self.cursors.ring, backwards, self.layout());
+            return self.focus_task();
+        }
+        self.bar_cursor = top_bar::ring_step(self.bar_cursor, backwards);
+        match self.bar_cursor {
+            Some(_) => self.focus_bar_button(),
+            // Past either end the cursor goes back to the content - the rail
+            // card it left, which the dashboard's own cursor kept.
+            None if self.page == Page::Dashboard => self.focus_dashboard_card(),
+            None => Task::none(),
+        }
     }
 
     /// Points the renderer's focus at whatever holds the cursor, which is where
@@ -1855,6 +2013,19 @@ impl App {
             |label| cosmic::Action::App(Message::DiskFreeLoaded(label)),
         )
     }
+
+    /// Reads Wi-Fi and Bluetooth, and schedules the next read - which is also
+    /// what makes the top bar's clock tick, since the view reads the time fresh
+    /// and a poll is what makes the view run again.
+    fn poll_system_status(&self, delay: std::time::Duration) -> Task<Message> {
+        Task::perform(
+            async move {
+                tokio::time::sleep(delay).await;
+                SystemStatus::load().await
+            },
+            |status| cosmic::Action::App(Message::SystemStatusLoaded(status)),
+        )
+    }
 }
 
 /// The launch overlay: progress while a game starts, or the failure with a way
@@ -1991,11 +2162,13 @@ mod tests {
             categorization: None,
             cursors: Cursors::default(),
             dashboard_cursor: dashboard::focus::Cursor::default(),
+            bar_cursor: None,
             rail_offsets: Vec::new(),
             page_offset: 0.0,
             search_value: String::new(),
             user_name: String::new(),
             disk_free: String::new(),
+            system_status: SystemStatus::default(),
             window_width: WINDOW_WIDTH,
             grid_scroll_offset: 0.0,
             grid_viewport_height: grid_viewport_height_fallback(),
@@ -2660,6 +2833,66 @@ mod tests {
         assert_eq!(app.page, Page::Library, "Confirm leaves for the library");
     }
 
+    /// A rail card draws the icon its own item carries, resolved by the provider,
+    /// and never one looked up in this client's library by item id.
+    ///
+    /// The lookup was the bug. No media record is in the application library at
+    /// all, no console game is either, and a curated item has no library entry to
+    /// find - so those cards drew the generic mark, or worse, whatever the library
+    /// happened to hold under the same id.
+    #[test]
+    fn a_rail_card_draws_the_icon_its_own_item_carries() {
+        use cosmic::desktop::fde::IconSource;
+        use std::path::PathBuf;
+
+        let mut app = shell();
+        // A library entry under the rail item's own id, wearing artwork of its
+        // own: it is not what the card draws.
+        let _ = app.update(Message::CatalogLoaded(vec![Arc::new(DesktopEntryData {
+            id: "hearthdeck:game-0".to_owned(),
+            name: "Library's own".to_owned(),
+            icon: IconSource::Path(PathBuf::from("/usr/share/icons/library-only.png")),
+            ..DesktopEntryData::default()
+        })]));
+        let rail = |app: &mut App, icon: Option<&str>| {
+            let _ = app.update(Message::CollectionsLoaded(Ok(vec![Collection {
+                slug: "favorites".to_owned(),
+                owner: "user".to_owned(),
+                name: None,
+                items: vec![CollectionItem {
+                    item_id: "hearthdeck:game-0".to_owned(),
+                    name: "Game 0".to_owned(),
+                    icon: icon.map(str::to_owned),
+                    played: None,
+                }],
+            }])));
+        };
+
+        // The cover the provider resolved for a console game. That game is not in
+        // the library at all, and the card draws the file it was sent.
+        rail(
+            &mut app,
+            Some("/home/user/.cache/hearthdeck/icons/cover.png"),
+        );
+        let drawn = &app.dashboard_shelves()[0].cards[0].icon;
+        assert!(!drawn.symbolic, "the card draws the cover it was sent");
+        assert!(
+            matches!(drawn.data, cosmic::widget::icon::Data::Image(_)),
+            "a file is drawn as the image it is"
+        );
+
+        // A poster the provider could not fetch is not artwork, and it does not
+        // borrow the library's icon for the same id: the card draws the mark.
+        rail(
+            &mut app,
+            Some("https://images.metahub.space/poster/medium/tt0149460/img"),
+        );
+        assert!(
+            app.dashboard_shelves()[0].cards[0].icon.symbolic,
+            "an unfetched poster is the generic mark, not the library's icon"
+        );
+    }
+
     /// A collection as the daemon composes one.
     fn collection(slug: &str, owner: &str, name: Option<&str>, ids: &[&str]) -> Collection {
         Collection {
@@ -2860,5 +3093,170 @@ mod tests {
 
         let _ = app.update(navigate(top_bar::Destination::Dashboard));
         assert_eq!(app.page, Page::Dashboard, "and back");
+    }
+
+    /// The pad reaches the top bar from the top rail of the dashboard, walks it
+    /// sideways, and a button confirms to its own screen.
+    #[test]
+    fn the_pad_walks_the_top_bar_from_the_dashboard_and_back() {
+        let mut app = loaded(4);
+        assert_eq!(app.page, Page::Dashboard);
+
+        send(&mut app, GamepadEvent::MoveUp);
+        assert_eq!(
+            app.bar_cursor,
+            Some(top_bar::Destination::Dashboard.index()),
+            "Up off the top rail lands on the bar, on the page's own button"
+        );
+
+        send(&mut app, GamepadEvent::MoveRight);
+        assert_eq!(app.bar_cursor, Some(top_bar::Destination::Library.index()));
+        send(&mut app, GamepadEvent::MoveRight);
+        send(&mut app, GamepadEvent::MoveRight);
+        assert_eq!(app.bar_cursor, Some(top_bar::Destination::Settings.index()));
+        send(&mut app, GamepadEvent::MoveRight);
+        assert_eq!(
+            app.bar_cursor,
+            Some(top_bar::Destination::Settings.index()),
+            "the end of the bar is an end"
+        );
+
+        send(&mut app, GamepadEvent::Confirm);
+        assert_eq!(app.page, Page::Settings, "the button goes to its screen");
+    }
+
+    /// Down from the bar leaves it for the rails below, and Back off the bar
+    /// goes back to the card: the bar is chrome, not a surface over anything.
+    #[test]
+    fn the_bar_gives_the_cursor_back_to_the_rails() {
+        let mut app = loaded(4);
+
+        send(&mut app, GamepadEvent::MoveUp);
+        send(&mut app, GamepadEvent::MoveRight);
+        assert_eq!(app.bar_cursor, Some(top_bar::Destination::Library.index()));
+
+        send(&mut app, GamepadEvent::MoveDown);
+        assert_eq!(app.bar_cursor, None, "Down leaves the bar");
+        assert_eq!(app.dashboard_cursor.rail, 0, "for the rails below it");
+
+        send(&mut app, GamepadEvent::MoveUp);
+        send(&mut app, GamepadEvent::Back);
+        assert_eq!(app.bar_cursor, None, "Back steps off the bar too");
+        assert_eq!(app.page, Page::Dashboard, "without leaving the page");
+    }
+
+    /// The keyboard walks the bar the way the pad does - entering at either end
+    /// and leaving past an end, back to the content.
+    #[test]
+    fn tab_walks_the_bar_on_the_dashboard() {
+        let mut app = loaded(4);
+
+        let _ = app.update(Message::ChromeNext);
+        assert_eq!(
+            app.bar_cursor,
+            Some(0),
+            "Tab enters the bar at its first button"
+        );
+        let _ = app.update(Message::ChromePrevious);
+        assert_eq!(app.bar_cursor, None, "and leaves it the way it came");
+        let _ = app.update(Message::ChromePrevious);
+        assert_eq!(
+            app.bar_cursor,
+            Some(top_bar::Destination::Settings.index()),
+            "backwards enters at the far end"
+        );
+    }
+
+    /// The settings screen's rows are not walkable yet, so the pad's step lands
+    /// on the bar it wears, and Confirm there acts on the bar - and on nothing
+    /// else. The screen used to answer Confirm by launching whichever tile the
+    /// library cursor happened to be on, invisibly.
+    #[test]
+    fn the_pad_on_settings_walks_the_bar_and_acts_on_nothing_else() {
+        let mut app = showing(4);
+        let _ = app.update(Message::OpenSettings);
+
+        send(&mut app, GamepadEvent::MoveDown);
+        assert_eq!(
+            app.bar_cursor,
+            Some(top_bar::Destination::Settings.index()),
+            "any step lands on the bar, on the page's own button"
+        );
+
+        send(&mut app, GamepadEvent::Confirm);
+        assert_eq!(app.page, Page::Settings, "the page's own button is a no-op");
+        assert!(
+            !app.launch_state.is_visible(),
+            "nothing was launched behind the screen"
+        );
+    }
+
+    /// The context menu belongs to the library grid: on a sibling page there is
+    /// no tile behind it to act on, so the button does nothing rather than
+    /// opening a menu over the bar and taking the pad from there.
+    #[test]
+    fn the_context_button_opens_no_menu_off_the_library() {
+        let mut app = loaded(4);
+
+        send(&mut app, GamepadEvent::ContextMenu);
+
+        assert!(
+            !app.menu_is_up(),
+            "there is no grid here for it to belong to"
+        );
+    }
+
+    /// The library's ring is the library's: it does not survive a trip to a
+    /// sibling page, where Back would otherwise step out of a ring that nothing
+    /// on screen shows.
+    #[test]
+    fn leaving_the_library_takes_the_ring_with_it() {
+        let mut app = showing(4);
+        let _ = app.update(Message::ChromeNext);
+        assert!(app.cursors.ring.is_some());
+
+        let _ = app.update(Message::OpenDashboard);
+
+        assert!(app.cursors.ring.is_none());
+    }
+
+    /// The pad's Search button reaches the search box from wherever it is, the
+    /// same way the bar's Search button does - off the library it shows the
+    /// library first.
+    #[test]
+    fn the_search_button_reaches_the_search_from_any_page() {
+        let mut app = loaded(4);
+        assert_eq!(app.page, Page::Dashboard);
+
+        send(&mut app, GamepadEvent::Search);
+
+        assert_eq!(app.page, Page::Library);
+    }
+
+    /// The bar's status icons read the same snapshot the poll landed in the
+    /// shell, and until the first read they say the service is unavailable
+    /// rather than drawing nothing.
+    #[test]
+    fn the_bar_reads_the_status_the_poll_landed() {
+        use crate::system_status::WifiStatus;
+
+        let mut app = shell();
+        assert!(app.system_status.wifi.is_none(), "nothing read yet");
+
+        let _ = app.update(Message::SystemStatusLoaded(SystemStatus {
+            wifi: Some(WifiStatus {
+                enabled: true,
+                connected: true,
+                strength: 80,
+            }),
+            bluetooth: None,
+        }));
+
+        let bar = app.top_bar(top_bar::Destination::Dashboard);
+        assert!(
+            bar.status.wifi.as_ref().is_some_and(|wifi| wifi.connected),
+            "the bar reads the shell's snapshot, not its own copy"
+        );
+        assert!(bar.status.bluetooth.is_none());
     }
 }

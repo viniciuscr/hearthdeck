@@ -9,6 +9,8 @@ use async_trait::async_trait;
 use cosmic::desktop::{DesktopEntryData, fde};
 use serde::{Deserialize, Serialize};
 
+use crate::icon_cache::{self, IconReference};
+
 /// A provider-agnostic record representing a discovered application or game.
 ///
 /// Providers produce `Vec<GameRecord>`. The app converts these into
@@ -53,19 +55,18 @@ impl GameRecord {
         } else {
             "application-x-executable"
         };
-        let icon_source = self
-            .icon
-            .as_deref()
-            .map(|icon| {
-                if icon.starts_with("http://") || icon.starts_with("https://") {
-                    fde::IconSource::Name(fallback_icon.to_string())
-                } else if PathBuf::from(icon).is_absolute() {
-                    fde::IconSource::Path(PathBuf::from(icon))
-                } else {
-                    fde::IconSource::Name(icon.to_string())
-                }
-            })
-            .unwrap_or_else(|| fde::IconSource::Name(fallback_icon.to_string()));
+        // Read through the same rule the provider fetches by, so a reference
+        // means one thing here and there. A poster URL or a RomM path is the
+        // provider's to turn into a file *before* a record is built; one that got
+        // here un-fetched is not art, and a name the theme cannot read draws
+        // nothing at all, so the record wears the mark for its kind instead.
+        let icon_source = match self.icon.as_deref().and_then(icon_cache::classify) {
+            Some(IconReference::File(path)) => fde::IconSource::Path(PathBuf::from(path)),
+            Some(IconReference::Name(name)) => fde::IconSource::Name(name.to_owned()),
+            Some(IconReference::Remote(_) | IconReference::RommAsset(_)) | None => {
+                fde::IconSource::Name(fallback_icon.to_owned())
+            }
+        };
 
         let mut entry = DesktopEntryData {
             id: self.id,
@@ -155,6 +156,37 @@ mod tests {
         assert!(matches!(
             record(None).into_desktop_entry().icon,
             IconSource::Name(name) if name == "application-x-executable"
+        ));
+    }
+
+    /// A launcher may write its artwork as a `file://` URL; the scheme off, it is
+    /// the same file, and a renderer cannot open it as a name.
+    #[test]
+    fn a_file_url_is_read_as_the_file_it_names() {
+        assert!(matches!(
+            record(Some("file:///home/user/.local/share/art/cover.png"))
+                .into_desktop_entry()
+                .icon,
+            IconSource::Path(path) if path == std::path::Path::new("/home/user/.local/share/art/cover.png")
+        ));
+    }
+
+    /// RomM hands out paths in its own URL space, so an unproxied one is not a
+    /// file: the record wears the mark for its kind instead of a path the
+    /// renderer would try and fail to open.
+    #[test]
+    fn romm_artwork_that_was_never_fetched_is_not_a_path() {
+        let romm = "/assets/romm/resources/roms/9/4014/cover/small.png";
+        assert!(matches!(
+            record(Some(romm)).into_desktop_entry().icon,
+            IconSource::Name(name) if name == "application-x-executable"
+        ));
+
+        let mut game = record(Some(romm));
+        game.categories = vec!["Game".into()];
+        assert!(matches!(
+            game.into_desktop_entry().icon,
+            IconSource::Name(name) if name == "applications-games"
         ));
     }
 

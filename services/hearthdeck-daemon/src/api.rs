@@ -9,6 +9,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
+use futures_util::{StreamExt, stream};
 use hearthdeck_ai::categorization::{ScanReport, Taxonomy};
 use hearthdeck_protocol::{
     ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner, HostCapabilities,
@@ -1563,8 +1564,87 @@ async fn list_collections(
                 .map(played_collection_item)
                 .collect();
         }
+        // Last, once every rail holds the items it will serve: an item stored
+        // without an icon is given the one its id names, so a client can draw
+        // every card in a rail the same way.
+        collection.items = with_item_icons(&state, std::mem::take(&mut collection.items)).await;
     }
     Ok(Json(collections))
+}
+
+/// How many icons one rail resolves at a time.
+///
+/// A lookup is either a local database read or a request to the user's own RomM,
+/// so the bound is not about a shared remote service: it keeps a long favourites
+/// list from opening one socket per item at once.
+const ITEM_ICON_CONCURRENCY: usize = 8;
+
+/// The same items, each carrying an icon.
+///
+/// A curated item is stored exactly as the client added it, and the clients that
+/// curate send no icon at all - they draw a card from data they already hold, so
+/// they had no reason to store one. A rail drawn from the collection alone
+/// therefore had nothing to draw with, which is why every favourite and Play
+/// later card showed the same generic mark. The icon is resolved per request
+/// rather than written back, so a cover RomM learns about later, or one the
+/// catalog picks up on its next scan, shows up without the item being rewritten.
+async fn with_item_icons(state: &SharedState, items: Vec<CollectionItem>) -> Vec<CollectionItem> {
+    stream::iter(items)
+        .map(|mut item| {
+            let state = state.clone();
+            async move {
+                if item.icon.is_none() {
+                    item.icon = stored_item_icon(&state, &item.item_id).await;
+                }
+                item
+            }
+        })
+        .buffered(ITEM_ICON_CONCURRENCY)
+        .collect()
+        .await
+}
+
+/// The icon an item id names, as this daemon knows it.
+///
+/// Two kinds of id reach a stored item: one of the catalog's, which is what the
+/// model's rails and every favourite of an application carry, and one of RomM's,
+/// which is what a favourite or a backlogged rom carries. Neither is stored on
+/// the item, and either may since have gone - an uninstalled program, a rom
+/// removed from the library - which is not an error: that card draws its generic
+/// mark, and the rest of the rail is worth having either way.
+async fn stored_item_icon(state: &SharedState, item_id: &str) -> Option<String> {
+    if let Some(rom_id) = rom_id_from_item(item_id) {
+        return match diagnostics::romm_rom(&state.settings, rom_id).await {
+            Ok(game) => RetroGame::from(&game).cover_path,
+            Err(error) => {
+                debug!(?error, rom_id, "could not resolve a rail item's RomM cover");
+                None
+            }
+        };
+    }
+    let catalog_id = catalog_id_from_item(item_id)?;
+    match state.catalog.get(catalog_id).await {
+        Ok(item) => item.and_then(|item| item.icon),
+        Err(error) => {
+            debug!(
+                ?error,
+                item_id, "could not resolve a rail item's catalog icon"
+            );
+            None
+        }
+    }
+}
+
+/// The catalog id an item id wears, when it wears one.
+fn catalog_id_from_item(item_id: &str) -> Option<&str> {
+    item_id
+        .strip_prefix(ENTRY_ID_PREFIX)
+        .filter(|id| !id.is_empty())
+}
+
+/// The RomM rom an item id names, when it names one.
+fn rom_id_from_item(item_id: &str) -> Option<i64> {
+    item_id.strip_prefix("romm:")?.parse().ok()
 }
 
 /// The entry-id prefix a client draws its items with. The daemon echoes it for
@@ -1975,6 +2055,7 @@ mod tests {
     use super::{local_router, redact_provider_error, router};
     use crate::{
         catalog::CatalogRecord,
+        collections::CollectionItem,
         config::Config,
         database::Database,
         discovery::{DiscoveryProvider, DiscoveryService},
@@ -2986,5 +3067,119 @@ mod tests {
         assert_eq!(played.entry.kind.as_deref(), Some("game"));
         assert_eq!(played.entry.source, "romm");
         assert_eq!(played.launch_count, 3);
+    }
+
+    /// The two id shapes a stored rail item can carry are read back as the thing
+    /// they name, and an id naming neither resolves to nothing rather than to a
+    /// guess.
+    #[test]
+    fn an_item_id_is_read_back_as_the_thing_it_names() {
+        assert_eq!(
+            super::catalog_id_from_item("hearthdeck:desktop:org.example.App"),
+            Some("desktop:org.example.App")
+        );
+        assert_eq!(super::catalog_id_from_item("hearthdeck:"), None);
+        assert_eq!(super::catalog_id_from_item("romm:4014"), None);
+
+        assert_eq!(super::rom_id_from_item("romm:4014"), Some(4014));
+        assert_eq!(super::rom_id_from_item("romm:"), None);
+        assert_eq!(super::rom_id_from_item("romm:not-a-number"), None);
+        assert_eq!(super::rom_id_from_item("hearthdeck:romm:4014"), None);
+    }
+
+    /// A rail item stored without an icon is served with the one its id names.
+    ///
+    /// Every client that curates a collection sends no icon - it draws a card
+    /// from data it already holds - so a rail drawn from the collection alone had
+    /// nothing to draw with, and every favourite showed the same generic mark
+    /// whatever it was a favourite of.
+    #[tokio::test]
+    async fn a_stored_rail_item_is_served_with_the_icon_its_id_names() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.socket"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+            },
+            database,
+        ));
+
+        state
+            .catalog
+            .replace_source(
+                "desktop-apps",
+                vec![CatalogRecord {
+                    id: "desktop:org.example.App".to_owned(),
+                    title: "Example".to_owned(),
+                    kind: "application".to_owned(),
+                    launch_id: Some("org.example.App.desktop".to_owned()),
+                    icon: Some("/usr/share/icons/example.png".to_owned()),
+                    metadata: serde_json::Value::Null,
+                    updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                }],
+            )
+            .await
+            .unwrap();
+        // Stored the way a curating client writes one: an id and a name, no icon.
+        state
+            .collections
+            .add_item(
+                "favorites",
+                &CollectionItem {
+                    item_id: "hearthdeck:desktop:org.example.App".to_owned(),
+                    name: "Example".to_owned(),
+                    icon: None,
+                    played: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let (_, pairing) = response_json(
+            local_router(state.clone()),
+            Request::post("/v1/pairing").body(Body::empty()).unwrap(),
+        )
+        .await;
+        let code = pairing["code"].as_str().unwrap();
+        let (_, paired) = response_json(
+            router(state.clone()),
+            Request::post("/v1/pairing/complete")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"code": code, "client_name": "rail-test"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        let token = paired["token"].as_str().unwrap().to_owned();
+
+        let (status, collections) = response_json(
+            router(state.clone()),
+            Request::get("/v1/collections")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let favorites = collections
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|collection| collection["slug"] == "favorites")
+            .expect("the favorites rail is composed");
+        assert_eq!(
+            favorites["items"][0]["icon"], "/usr/share/icons/example.png",
+            "the catalog's icon answers for the item's own empty one"
+        );
     }
 }

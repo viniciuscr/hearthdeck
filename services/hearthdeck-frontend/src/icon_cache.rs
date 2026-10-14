@@ -5,11 +5,12 @@ use cosmic::iced::core::{image as core_image, svg as core_svg};
 use cosmic::widget::icon;
 use resvg::{tiny_skia, usvg};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct IconCacheKey {
-    name: &'static str,
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct IconCacheKey {
+    name: String,
     size: u16,
 }
 
@@ -26,7 +27,7 @@ impl IconCache {
                 let data: &'static [u8] = include_bytes!(concat!("../data/icons/", $name, ".svg"));
                 cache.insert(
                     IconCacheKey {
-                        name: $name,
+                        name: $name.to_owned(),
                         size: $size,
                     },
                     icon::from_svg_bytes(data).symbolic($name.ends_with("-symbolic")),
@@ -43,9 +44,12 @@ impl IconCache {
         Self { cache }
     }
 
-    pub fn get(&mut self, name: &'static str, size: u16) -> icon::Handle {
+    pub fn get(&mut self, name: &str, size: u16) -> icon::Handle {
         self.cache
-            .entry(IconCacheKey { name, size })
+            .entry(IconCacheKey {
+                name: name.to_owned(),
+                size,
+            })
             .or_insert_with(|| {
                 icon::from_name(name)
                     .size(size)
@@ -58,12 +62,100 @@ impl IconCache {
 
 static ICON_CACHE: OnceLock<Mutex<IconCache>> = OnceLock::new();
 
-pub fn icon_cache_handle(name: &'static str, size: u16) -> icon::Handle {
+pub fn icon_cache_handle(name: &str, size: u16) -> icon::Handle {
     let mut icon_cache = ICON_CACHE
         .get_or_init(|| Mutex::new(IconCache::new()))
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     icon_cache.get(name, size)
+}
+
+/// Where RomM's own artwork lives, as RomM reports it.
+///
+/// RomM runs on the user's machine and hands out paths inside its own URL space
+/// rather than files, so a reference under this prefix is not something to open:
+/// it is a path to ask the daemon's asset route to fetch, which reads it off the
+/// host's library mount or from RomM itself.
+const ROMM_ASSET_PREFIX: &str = "/assets/";
+
+/// What a rail card with no artwork draws.
+///
+/// Symbolic, so it takes the card's own colour instead of a baked-in one - which
+/// is also why nothing else is drawn this way: a rasterized glyph loses the
+/// colour the theme would have given it.
+pub const GENERIC_ICON: &str = "application-x-executable-symbolic";
+
+/// What an icon reference names, and therefore where its bytes come from.
+///
+/// The daemon publishes a reference with every record and rail item, and a
+/// reference is one of four things. This is the client reading it back: the
+/// provider that fetches artwork and the views that draw it both go through
+/// [`classify`], so a reference cannot mean one thing on the dashboard and
+/// another in the library.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IconReference<'a> {
+    /// A poster or cover on the network, to be downloaded and cached.
+    Remote(&'a str),
+    /// A path inside RomM's library, which only the daemon can fetch.
+    RommAsset(&'a str),
+    /// A file on this machine.
+    File(&'a str),
+    /// A name the icon theme resolves.
+    Name(&'a str),
+}
+
+/// Reads one icon reference. `None` is a reference that names nothing, which is
+/// not the same as one that names something missing - both draw the same, but
+/// only the second is worth fetching.
+#[must_use]
+pub fn classify(reference: &str) -> Option<IconReference<'_>> {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return None;
+    }
+    Some(
+        if reference.starts_with("http://") || reference.starts_with("https://") {
+            IconReference::Remote(reference)
+        } else if let Some(path) = reference.strip_prefix("file://") {
+            // A launcher's artwork is often written as a URL rather than a path,
+            // and the two are the same file once the scheme is off.
+            IconReference::File(path)
+        } else if reference.starts_with(ROMM_ASSET_PREFIX) {
+            IconReference::RommAsset(reference)
+        } else if reference.starts_with('/') {
+            IconReference::File(reference)
+        } else {
+            IconReference::Name(reference)
+        },
+    )
+}
+
+/// Draws one icon reference: a file the provider resolved, or a name the icon
+/// theme resolves.
+///
+/// The single place a view turns a reference into a widget, so every surface
+/// draws a card the same way. A reference that is absent, blank, or still
+/// unfetched - a poster URL or a RomM path the provider has not turned into a
+/// file yet - draws [`GENERIC_ICON`], because a card is never blank and a path
+/// that does not exist is not artwork.
+pub fn reference_handle(reference: Option<&str>, size: u32) -> icon::Handle {
+    match reference.and_then(classify) {
+        Some(IconReference::File(path)) => {
+            entry_icon_handle(&IconSource::Path(PathBuf::from(path)), size)
+        }
+        // A symbolic name is monochrome and the theme decides its colour, which
+        // a rasterized copy loses (it comes out black), so it is drawn through
+        // the theme lookup like the generic mark.
+        Some(IconReference::Name(name)) if name.ends_with("-symbolic") => {
+            icon_cache_handle(name, size as u16)
+        }
+        Some(IconReference::Name(name)) => {
+            entry_icon_handle(&IconSource::Name(name.to_owned()), size)
+        }
+        Some(IconReference::Remote(_) | IconReference::RommAsset(_)) | None => {
+            icon_cache_handle(GENERIC_ICON, size as u16)
+        }
+    }
 }
 
 /// Rasterize an SVG into a raw RGBA [`icon::Handle`] at the given size.
@@ -173,4 +265,84 @@ pub fn entry_icon_handle(source: &IconSource, size: u32) -> icon::Handle {
     cache.insert(key, handle.clone());
 
     handle
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GENERIC_ICON, IconReference, classify, reference_handle};
+
+    /// A reference is the daemon's, and it means one of four things. Reading it
+    /// wrong is the whole of the bug this vocabulary exists to stop: a poster URL
+    /// read as a theme name draws nothing, and a path that is not a file (RomM's
+    /// own artwork) is not something to open.
+    #[test]
+    fn a_reference_is_read_as_the_thing_its_bytes_come_from() {
+        let poster = "https://images.metahub.space/poster/medium/tt0149460/img";
+        assert_eq!(classify(poster), Some(IconReference::Remote(poster)));
+        assert_eq!(
+            classify("http://images.example.com/cover.jpg"),
+            Some(IconReference::Remote("http://images.example.com/cover.jpg"))
+        );
+
+        // RomM hands out paths in its own URL space, not files on this machine.
+        let romm = "/assets/romm/resources/roms/9/4014/cover/small.png";
+        assert_eq!(classify(romm), Some(IconReference::RommAsset(romm)));
+        assert_eq!(
+            classify("/assets/platforms/snes.png"),
+            Some(IconReference::RommAsset("/assets/platforms/snes.png"))
+        );
+
+        // A file is a file whether it was written as a path or as a URL.
+        assert_eq!(
+            classify("file:///home/user/cover.png"),
+            Some(IconReference::File("/home/user/cover.png"))
+        );
+        let cached = "/home/user/.cache/hearthdeck/icons/1a2b3c4d.png";
+        assert_eq!(classify(cached), Some(IconReference::File(cached)));
+
+        // Everything else is a name for the icon theme to resolve.
+        assert_eq!(
+            classify("org.example.App"),
+            Some(IconReference::Name("org.example.App"))
+        );
+        assert_eq!(
+            classify("  application-x-executable-symbolic  "),
+            Some(IconReference::Name("application-x-executable-symbolic"))
+        );
+
+        // A reference that names nothing is nothing to fetch or draw.
+        assert_eq!(classify(""), None);
+        assert_eq!(classify("   "), None);
+    }
+
+    /// A card with nothing drawable draws the generic mark, and the mark is
+    /// symbolic so the theme colours it rather than a glyph baked at one colour.
+    /// A poster URL and a RomM path are both undrawable as they stand - the
+    /// provider is what turns them into files - so arriving here means the mark.
+    #[test]
+    fn nothing_drawable_draws_the_generic_mark() {
+        for reference in [
+            None,
+            Some(""),
+            Some("https://images.metahub.space/poster/medium/tt0149460/img"),
+            Some("/assets/romm/resources/roms/9/4014/cover/small.png"),
+        ] {
+            assert!(
+                reference_handle(reference, 64).symbolic,
+                "{reference:?} is not artwork, so it draws the mark"
+            );
+        }
+        assert!(GENERIC_ICON.ends_with("-symbolic"));
+    }
+
+    /// A file the provider resolved is drawn as the image it is, and a symbolic
+    /// name keeps the theme's own colouring instead of being rasterized into a
+    /// fixed one.
+    #[test]
+    fn a_resolved_file_is_drawn_as_an_image() {
+        let cached = reference_handle(Some("/tmp/hearthdeck-cache/cover.png"), 64);
+        assert!(!cached.symbolic);
+
+        assert!(reference_handle(Some("app-source-flatpak-symbolic"), 16).symbolic);
+    }
 }

@@ -14,6 +14,7 @@ use tokio::sync::OnceCell;
 
 use super::{GameProvider, GameRecord};
 use crate::app_group::{romm_console_category, romm_genre_category, romm_region_category};
+use crate::icon_cache::{self, IconReference};
 use crate::providers::filter::Facet;
 
 /// Prefix a catalog item's id carries on its way into the library.
@@ -326,6 +327,13 @@ pub const WATCH_RAIL: &str = "watch";
 /// unlike the model's rail this slug is the same string on both sides rather than an
 /// owner plus an id.
 pub const CONTINUE_WATCHING_COLLECTION: &str = "stremio:continue-watching";
+
+/// How many icons one rail, or one library page, resolves at a time.
+///
+/// A cached icon costs nothing and the ones that are not cached are the posters
+/// the page is about to show, so this bounds a first paint rather than a shared
+/// service: the daemon's asset route is loopback and RomM is the user's own.
+const RAIL_ICON_CONCURRENCY: usize = 16;
 
 /// One dashboard rail as the daemon composes it.
 ///
@@ -895,14 +903,16 @@ impl DaemonClient {
         let records = stream::iter(page.items.into_iter().map(|game| {
             let client = self.clone();
             async move {
-                let icon = client.cache_retro_cover(&game).await;
+                // The cover is a RomM path, which the same resolver every other
+                // record's icon goes through turns into a cached file.
+                let icon = client.resolve_icon(game.cover_path.as_deref()).await;
                 retro_game_to_game_record(game, icon)
             }
         }))
         // A page is only returned once every cover in it is cached, so this
         // concurrency directly bounds first-paint latency; the daemon asset
         // endpoint is loopback/served by RomM, so 16 parallel covers is safe.
-        .buffered(16)
+        .buffered(RAIL_ICON_CONCURRENCY)
         .collect()
         .await;
         Ok(RetroRecordPage {
@@ -910,11 +920,6 @@ impl DaemonClient {
             total: page.total,
             offset: page.offset,
         })
-    }
-
-    async fn cache_retro_cover(&self, game: &RetroGame) -> Option<String> {
-        self.cache_retro_asset_path(game.cover_path.as_deref())
-            .await
     }
 
     /// Downloads one RomM asset (cover, screenshot, console artwork) through
@@ -1006,6 +1011,11 @@ impl DaemonClient {
     }
 
     /// The dashboard's collections, in composition order.
+    ///
+    /// Every item's icon is resolved on the way out, so a rail arrives drawable
+    /// rather than as a set of references each surface would have to interpret
+    /// for itself - which is how the dashboard ended up looking its own items up
+    /// and drawing a generic mark for anything its library did not also hold.
     pub async fn list_collections(&self) -> Result<Vec<Collection>, DaemonError> {
         let response = self
             .http
@@ -1019,7 +1029,65 @@ impl DaemonClient {
             return Err(Self::http_error(response).await);
         }
 
-        response.json().await.map_err(DaemonError::Deserialization)
+        let collections: Vec<Collection> = response
+            .json()
+            .await
+            .map_err(DaemonError::Deserialization)?;
+        Ok(self.resolve_rail_icons(collections).await)
+    }
+
+    /// The same collections, with every item's icon resolved.
+    ///
+    /// Bounded rather than one at a time: a rail of two dozen posters is a page
+    /// the user is looking at, and an already-cached one costs nothing.
+    async fn resolve_rail_icons(&self, collections: Vec<Collection>) -> Vec<Collection> {
+        stream::iter(collections)
+            .map(|mut collection| {
+                let client = self.clone();
+                async move {
+                    collection.items = stream::iter(collection.items)
+                        .map(|mut item| {
+                            let client = client.clone();
+                            async move {
+                                item.icon = client.resolve_icon(item.icon.as_deref()).await;
+                                item
+                            }
+                        })
+                        .buffered(RAIL_ICON_CONCURRENCY)
+                        .collect()
+                        .await;
+                    collection
+                }
+            })
+            .buffered(RAIL_ICON_CONCURRENCY)
+            .collect()
+            .await
+    }
+
+    /// One icon reference, resolved into something a view can draw.
+    ///
+    /// The single place a reference becomes artwork, so every record and rail
+    /// item a surface receives has been through it: a poster is downloaded into
+    /// the icon cache, RomM's own artwork is fetched through the daemon's asset
+    /// route, and a file or a theme name is already drawable. `None` - there was
+    /// no reference, or fetching it failed - is the generic mark, because a card
+    /// with no artwork is drawn as the mark rather than as a path that does not
+    /// exist.
+    pub async fn resolve_icon(&self, reference: Option<&str>) -> Option<String> {
+        match icon_cache::classify(reference?)? {
+            IconReference::Remote(url) => {
+                // Blocking, and deliberately so: this reads and writes image
+                // files, which is what a blocking HTTP client is for.
+                let url = url.to_owned();
+                tokio::task::spawn_blocking(move || cache_icon(&url))
+                    .await
+                    .ok()
+                    .flatten()
+            }
+            IconReference::RommAsset(path) => self.cache_retro_asset_path(Some(path)).await,
+            IconReference::File(path) => Some(path.to_owned()),
+            IconReference::Name(name) => Some(name.to_owned()),
+        }
     }
 
     /// Adds one item to a curated collection, answering with the collection as it
@@ -1512,18 +1580,16 @@ impl GameProvider for DaemonProvider {
 
         tracing::info!(item_count = items.len(), "fetched catalog from daemon");
 
-        let items = join_all(items.into_iter().map(|mut item| async move {
-            if let Some(url) = item
-                .icon
-                .as_deref()
-                .filter(|icon| icon.starts_with("http://") || icon.starts_with("https://"))
-                .map(str::to_owned)
-            {
-                item.icon = tokio::task::spawn_blocking(move || cache_icon(&url))
-                    .await
-                    .unwrap_or(None);
+        let items = join_all(items.into_iter().map(|mut item| {
+            let client = self.client.clone();
+            async move {
+                // Every icon is resolved here, once, before a record is built:
+                // a poster becomes the file on disk the renderer can read, and
+                // what cannot be fetched stops being a reference no view could
+                // have drawn anyway.
+                item.icon = client.resolve_icon(item.icon.as_deref()).await;
+                item
             }
-            item
         }))
         .await;
 
@@ -1672,8 +1738,8 @@ pub struct RetroRecordPage {
 #[cfg(test)]
 mod tests {
     use super::{
-        CatalogItem, DaemonError, RecentActivityItem, RetroGame, RetroRomVersion,
-        belongs_in_the_app_library, cache_file_name, catalog_item_to_game_record,
+        CatalogItem, DaemonClient, DaemonConfig, DaemonError, RecentActivityItem, RetroGame,
+        RetroRomVersion, belongs_in_the_app_library, cache_file_name, catalog_item_to_game_record,
         daemon_error_from_body, image_extension, retro_game_to_game_record, retro_rom_query_params,
         retro_rom_versions, retro_version_label,
     };
@@ -1702,6 +1768,47 @@ mod tests {
         assert_eq!(
             stem(cache_file_name(poster, "png")),
             stem(cache_file_name(poster, "webp"))
+        );
+    }
+
+    /// A reference that is already drawable is resolved to itself, so every
+    /// record and rail item a surface receives holds something it can draw
+    /// rather than a reference it would have to interpret for itself. None of
+    /// these branches touches the network, which is the point: a file and a
+    /// theme name are not fetched, they are read.
+    #[tokio::test]
+    async fn an_already_drawable_reference_resolves_to_itself() {
+        let client = DaemonClient::new(DaemonConfig {
+            // Nothing in this test is dialled; the port only has to be a real one.
+            base_url: "http://127.0.0.1:38400".to_owned(),
+            token: String::new(),
+        });
+
+        // No reference at all, and one that names nothing: both draw the mark.
+        assert_eq!(client.resolve_icon(None).await, None);
+        assert_eq!(client.resolve_icon(Some("")).await, None);
+
+        let cached = "/home/user/.cache/hearthdeck/icons/1a2b3c4d.png";
+        assert_eq!(
+            client.resolve_icon(Some(cached)).await.as_deref(),
+            Some(cached)
+        );
+
+        // Artwork a launcher wrote as a URL is the same file with the scheme off.
+        assert_eq!(
+            client
+                .resolve_icon(Some("file:///home/user/art/cover.png"))
+                .await
+                .as_deref(),
+            Some("/home/user/art/cover.png")
+        );
+
+        assert_eq!(
+            client
+                .resolve_icon(Some("org.example.App"))
+                .await
+                .as_deref(),
+            Some("org.example.App")
         );
     }
 

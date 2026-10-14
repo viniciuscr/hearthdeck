@@ -32,7 +32,7 @@ pub struct Settings<'a> {
 #[must_use]
 pub fn view<'a>(
     state: &Settings<'a>,
-    bar: &top_bar::TopBar,
+    bar: &top_bar::TopBar<'_>,
     on_navigate: fn(top_bar::Destination) -> Message,
 ) -> Element<'a, Message> {
     let Spacing {

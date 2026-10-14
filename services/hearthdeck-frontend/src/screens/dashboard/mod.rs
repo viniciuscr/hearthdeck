@@ -125,7 +125,7 @@ pub fn rail_title(collection: &Collection) -> String {
 #[must_use]
 pub fn view<'a>(
     shelves: &[Shelf],
-    bar: &top_bar::TopBar,
+    bar: &top_bar::TopBar<'_>,
     window_width: f32,
     on_navigate: fn(top_bar::Destination) -> Message,
     on_rail_scroll: impl Fn(usize, f32) -> Message + Clone + 'a,
