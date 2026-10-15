@@ -3558,8 +3558,16 @@ impl HearthDeck {
                                 ICON_LARGE,
                             )
                         });
+                    let id = dashboard_console_id(index);
+                    // The label shows on the ringed tile, the way its border
+                    // does.
+                    let selection = if self.ringed(&id) {
+                        Selection::Selected
+                    } else {
+                        Selection::Unselected
+                    };
                     app_tile(
-                        dashboard_console_id(index),
+                        id,
                         &group.name(),
                         handle,
                         tile_size,
@@ -3569,7 +3577,7 @@ impl HearthDeck {
                         None,
                         Some(Message::OpenConsole(index)),
                         None,
-                        Selection::Unselected,
+                        selection,
                     )
                 })
                 .collect();
@@ -3790,6 +3798,16 @@ impl HearthDeck {
         self.focused_id
             .as_ref()
             .and_then(|focused| focused_entry_index(focused, &self.entry_ids))
+    }
+
+    /// Whether the renderer's focus - the accent ring - is on the tile with
+    /// this id.
+    ///
+    /// The tile's label shows with the ring, the way the border does, so every
+    /// surface asks this the same way instead of each keeping its own idea of
+    /// which tile is picked out.
+    fn ringed(&self, tile: &Id) -> bool {
+        self.focused_id.as_ref() == Some(tile)
     }
 
     /// True if focus is inside a text input, where gamepad movement should
@@ -6307,8 +6325,16 @@ impl HearthDeck {
             let cards: Vec<Element<'_, Message>> = entries
                 .into_iter()
                 .map(|entry| {
+                    let id = shelf.widget_id(&entry.id);
+                    // The label shows on the ringed tile, the way its border
+                    // does.
+                    let selection = if self.ringed(&id) {
+                        Selection::Selected
+                    } else {
+                        Selection::Unselected
+                    };
                     app_tile(
-                        shelf.widget_id(&entry.id),
+                        id,
                         &entry.name,
                         crate::icon_cache::entry_icon_handle(&entry.icon, tile_size as u32),
                         // Portrait, so a poster is cropped on the sides rather
@@ -6320,7 +6346,7 @@ impl HearthDeck {
                         None,
                         Some(Message::ActivateDashboardApp(entry.id.clone())),
                         None,
-                        Selection::Unselected,
+                        selection,
                     )
                 })
                 .collect();
@@ -6666,8 +6692,16 @@ impl HearthDeck {
                     // Bound to a local first: the `fl!` macro cannot infer the
                     // type of a bare `index + 1` expression argument.
                     let number = index + 1;
+                    let id = details_focus_id(DetailsFocus::Screenshot(index));
+                    // The label shows on the ringed tile, the way its border
+                    // does.
+                    let selection = if self.ringed(&id) {
+                        Selection::Selected
+                    } else {
+                        Selection::Unselected
+                    };
                     app_tile(
-                        details_focus_id(DetailsFocus::Screenshot(index)),
+                        id,
                         &fl!("screenshot", index = number),
                         handle.clone(),
                         // 16:9, its own shape, rather than cropped to a square.
@@ -6678,7 +6712,7 @@ impl HearthDeck {
                         None,
                         Some(Message::DetailsSelectScreenshot(index)),
                         None,
-                        Selection::Unselected,
+                        selection,
                     )
                 })
                 .collect();
@@ -7123,8 +7157,11 @@ impl HearthDeck {
                     icon: dup.and_then(|(_, icon)| icon.clone()),
                 });
                 // The tile the menu is open on stays highlighted behind the
-                // scrim, so the menu is visibly attached to an entry.
-                let selection = if self.menu.target() == Some(i) {
+                // scrim, so the menu is visibly attached to an entry; the tile
+                // the ring is on shows its label the way the border shows.
+                // Both are tiles picked out, and a tile picked out either way
+                // draws in the active style.
+                let selection = if self.menu.target() == Some(i) || self.ringed(id) {
                     Selection::Selected
                 } else {
                     Selection::Unselected

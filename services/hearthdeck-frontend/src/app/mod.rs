@@ -39,14 +39,10 @@ use hearthdeck_protocol::InputProfile;
 
 use crate::app_group::{AppLibraryConfig, RommFacet, Section, section_facets};
 use crate::fl;
-use crate::input_ownership::{
-    Event as InputEvent, InputOwnership, LaunchTarget, managed_launch_target,
-};
+use crate::input_ownership::{Event as InputEvent, InputOwnership};
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::providers::GameProvider;
-use crate::providers::daemon::{
-    Collection, CollectionItem, DaemonClient, DaemonConfig, DaemonProvider,
-};
+use crate::providers::daemon::{Collection, DaemonClient, DaemonConfig, DaemonProvider};
 use crate::providers::filter::{Facet, cycle};
 use crate::screens::dashboard::{self, Card, Shelf};
 use crate::screens::library::console::{self, ConsoleListing};
@@ -135,9 +131,13 @@ pub enum Message {
     /// The dashboard's top bar: show the library with the caret in its search
     /// box, which is what this app's search means.
     OpenSearch,
-    /// A dashboard card was pressed: show the library at the section the entry
-    /// on that card belongs to.
-    ShowLibrary(Section),
+    /// A dashboard card was pressed: launch the item it names.
+    ActivateCard {
+        /// The item's id, sent exactly as the rail carried it.
+        id: String,
+        /// What the launch overlay shows while it starts.
+        title: String,
+    },
     SelectGroup(Option<usize>),
     InputChanged(String),
     /// A filter chip was pressed: set (or clear) one facet's value.
@@ -623,6 +623,9 @@ impl Application for App {
                 return self.list_replaced();
             }
             Message::Activate(index) => return self.activate(index),
+            // A card carries the id the daemon composed the rail with, exactly
+            // as it came: what that names is the daemon's side of the wire.
+            Message::ActivateCard { id, title } => return self.launch_managed(id, title),
             Message::ToggleControllerCompatibility(index) => {
                 // Keyed on the entry's id rather than its tile index: the flag
                 // belongs to the application, so it must survive the list being
@@ -648,9 +651,6 @@ impl Application for App {
                 self.rail_offsets[rail] = offset;
             }
             Message::PageScrolled(offset) => self.page_offset = offset,
-            // A dashboard card is a way into the library, so pressing one leaves
-            // the dashboard for it - which the section change itself does.
-            Message::ShowLibrary(section) => return self.update(Message::SelectSection(section)),
             Message::OpenDashboard => {
                 // Landing on a page hands the cursor to its content, so neither
                 // the library's ring nor the bar's row survives the trip.
@@ -819,6 +819,9 @@ impl Application for App {
                     window_width: self.window_width,
                     scroll_offset: self.grid_scroll_offset,
                     viewport_height: self.grid_viewport_height,
+                    // The same question `focus_task` answers, so the border
+                    // and the label land on one tile together.
+                    focused_tile: focus::focused_tile(self.cursors, self.layout()),
                 })
             };
 
@@ -1202,7 +1205,7 @@ impl App {
                             // application library at all, and a curated item
                             // carries no icon of its own here.
                             crate::icon_cache::reference_handle(item.icon.as_deref(), size as u32),
-                            self.collection_item_message(item),
+                            Some(launch_card_message(&item.item_id, &item.name)),
                         )
                     })
                     .collect();
@@ -1229,7 +1232,7 @@ impl App {
                     dashboard_card_id("library", index),
                     entry.name.clone(),
                     crate::icon_cache::entry_icon_handle(&entry.icon, size as u32),
-                    Some(Message::ShowLibrary(Section::PcGames)),
+                    Some(launch_card_message(&entry.id, &entry.name)),
                 )
             })
             .collect();
@@ -1237,19 +1240,6 @@ impl App {
             return Vec::new();
         }
         vec![Shelf::new(false, fl!("all-games"), cards)]
-    }
-
-    /// What pressing a collection card does.
-    ///
-    /// A way into the library, at the section that item belongs to - which is
-    /// what a tile does everywhere else until the details screen exists. An item
-    /// the library does not hold has nowhere to go, so its card is inert rather
-    /// than a way into some other section.
-    fn collection_item_message(&self, item: &CollectionItem) -> Option<Message> {
-        self.catalog
-            .iter()
-            .find(|entry| entry.id == item.item_id)
-            .map(|entry| Message::ShowLibrary(section_of(entry)))
     }
 
     /// How many cards each rail holds, which is the shape the rail navigation
@@ -1719,8 +1709,8 @@ impl App {
                 Chrome::FilterButton => widget_focus(header::filter_button_id()),
             };
         }
-        self.visible
-            .get(self.cursors.tile)
+        focus::focused_tile(self.cursors, self.layout())
+            .and_then(|tile| self.visible.get(tile))
             .map_or(Task::none(), |entry| widget_focus(grid::tile_id(entry)))
     }
 
@@ -1923,35 +1913,27 @@ impl App {
         let Some(entry) = self.visible.get(index).cloned() else {
             return Task::none();
         };
-        let Some(target) = managed_launch_target(&entry.id) else {
-            log::error!("refusing unmanaged application launch: {}", entry.id);
-            return Task::none();
-        };
-        self.launch_managed(target, entry.id.clone(), entry.name.clone())
+        self.launch_managed(entry.id.clone(), entry.name.clone())
     }
 
     /// Starts a launch: guards input ownership, shows the overlay, registers the
-    /// window hint with the compositor watcher, and calls the daemon route for
-    /// the target kind.
-    fn launch_managed(
-        &mut self,
-        target: LaunchTarget,
-        app_id: String,
-        title: String,
-    ) -> Task<Message> {
+    /// window hint with the compositor watcher, and posts the item id to the
+    /// daemon's single launch route - which source that is stays the daemon's
+    /// side of the wire.
+    fn launch_managed(&mut self, item_id: String, title: String) -> Task<Message> {
         // A game is already starting, or one owns the screen; a second launch
         // would be lost.
         if !self.input_ownership.frontend_has_control() {
             return Task::none();
         }
-        let input_profile = if self.config.desktop_input_enabled(&app_id) {
+        let input_profile = if self.config.desktop_input_enabled(&item_id) {
             InputProfile::Desktop
         } else {
             InputProfile::Native
         };
         // Built before the launch so the compositor watcher is already listening
         // when the new window appears.
-        let window_hint = self.launch_window_hint(&app_id, &title);
+        let window_hint = self.launch_window_hint(&item_id, &title);
         if self.launch_state.update(LaunchEvent::Start(title)) != LaunchEffect::Launch {
             return Task::none();
         }
@@ -1959,12 +1941,7 @@ impl App {
         fullscreen_when_it_appears(window_hint);
         let client = self.daemon_client.clone();
         Task::perform(
-            async move {
-                match target {
-                    LaunchTarget::Catalog(id) => client.launch_app(&id, input_profile).await,
-                    LaunchTarget::Romm(id) => client.launch_retro_rom(id, input_profile).await,
-                }
-            },
+            async move { client.launch_item(&item_id, input_profile).await },
             |result| {
                 cosmic::Action::App(Message::DaemonLaunchResult(
                     result.map(|_| ()).map_err(|error| error.to_string()),
@@ -2087,13 +2064,19 @@ fn dashboard_card_id(slug: &str, index: usize) -> Id {
     Id::new(format!("dashboard-card-{slug}-{index}"))
 }
 
-/// The library section an entry belongs to, for a card that opens the library at
-/// it.
-fn section_of(entry: &DesktopEntryData) -> Section {
-    Section::ALL
-        .into_iter()
-        .find(|section| section.matches(entry))
-        .unwrap_or(Section::PcGames)
+/// What pressing a dashboard card does: launch the item it names.
+///
+/// The card carries the id the daemon composed the rail with, and it goes out
+/// exactly as it came - this client never parses a prefix to choose a route.
+/// The lookup against its own catalog that used to decide whether a card did
+/// anything is what left every film and console game dead: media records are
+/// not in the application library at all. Which ids this daemon can launch,
+/// and what that means, is decided on the other side of the wire.
+fn launch_card_message(id: &str, title: &str) -> Message {
+    Message::ActivateCard {
+        id: id.to_owned(),
+        title: title.to_owned(),
+    }
 }
 
 /// Scrolls one dashboard rail to a horizontal offset, leaving it where it is
@@ -2808,7 +2791,8 @@ mod tests {
     }
 
     /// The pad walks the dashboard's rail and stops at its ends, and Confirm on a
-    /// card leaves for the library - which is what a card is a way into.
+    /// card launches the item it names - without leaving the dashboard, which the
+    /// launch overlay covers.
     #[test]
     fn the_pad_walks_the_dashboard_rail() {
         let mut app = loaded(6);
@@ -2831,7 +2815,12 @@ mod tests {
         assert_eq!(app.dashboard_cursor.card, 5, "and it stays there");
 
         send(&mut app, GamepadEvent::Confirm);
-        assert_eq!(app.page, Page::Library, "Confirm leaves for the library");
+        assert_eq!(
+            app.launch_state.title(),
+            Some("hearthdeck:game-5"),
+            "Confirm launches the card the cursor is on"
+        );
+        assert_eq!(app.page, Page::Dashboard, "the launch does not navigate");
     }
 
     /// A rail card draws the icon its own item carries, resolved by the provider,
@@ -2954,10 +2943,10 @@ mod tests {
         assert_eq!(app.dashboard_shelves()[0].title, "smart:mystery");
     }
 
-    /// A card for an item the library holds is a way into it, at the section that
-    /// item belongs to.
+    /// A card launches the item it names: the launch overlay comes up and the
+    /// frontend gives input up, staying on the dashboard underneath.
     #[test]
-    fn a_collection_card_that_is_a_library_entry_opens_the_library_at_it() {
+    fn a_collection_card_launches_the_item_it_names() {
         let mut app = loaded(2);
         let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
             "favorites",
@@ -2969,17 +2958,47 @@ mod tests {
         send(&mut app, GamepadEvent::Confirm);
 
         assert_eq!(
-            app.page,
-            Page::Library,
-            "the card is a way into the library"
+            app.launch_state.title(),
+            Some("hearthdeck:game-1"),
+            "the card did not launch the item it names"
         );
-        assert_eq!(app.cur_section, Section::PcGames);
+        assert!(!app.input_ownership.frontend_has_control());
+        assert_eq!(
+            app.page,
+            Page::Dashboard,
+            "the launch stays on the dashboard"
+        );
     }
 
-    /// A card for an item the library does not hold has nowhere to go, so it is
-    /// inert rather than a way into some other section.
+    /// A film card carries the id the daemon composed the rail with, so it
+    /// launches even though the application library has never held it - which
+    /// is every Continue Watching title there is.
     #[test]
-    fn a_collection_item_the_library_does_not_hold_is_a_dead_card() {
+    fn a_media_card_the_library_never_held_launches_anyway() {
+        let mut app = loaded(1);
+        let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
+            "stremio:continue-watching",
+            "stremio",
+            None,
+            &["hearthdeck:stremio:tt0111161"],
+        )])));
+
+        send(&mut app, GamepadEvent::Confirm);
+
+        assert_eq!(
+            app.launch_state.title(),
+            Some("hearthdeck:stremio:tt0111161"),
+            "an item outside the local library is still launchable"
+        );
+        assert_eq!(app.page, Page::Dashboard);
+    }
+
+    /// The frontend never parses an id: whatever the rail carried goes to the
+    /// launch route exactly as it came, and what that names is the daemon's
+    /// answer to give. The client-side prefix gate that used to stand here is
+    /// what made cards dead for no reason the daemon would have agreed with.
+    #[test]
+    fn a_card_id_reaches_the_launch_route_exactly_as_the_rail_carried_it() {
         let mut app = loaded(1);
         let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
             "stremio:continue-watching",
@@ -2991,16 +3010,25 @@ mod tests {
         let shelves = app.dashboard_shelves();
         assert_eq!(shelves[0].title, fl!("continue-watching"));
         assert!(
-            shelves[0].cards[0].message.is_none(),
-            "an item the library cannot show has nowhere to go"
+            matches!(
+                shelves[0].cards[0].message,
+                Some(Message::ActivateCard { ref id, .. }) if id == "stremio:tt0111161"
+            ),
+            "the card carries the id the rail did, unparsed"
         );
 
         send(&mut app, GamepadEvent::Confirm);
-        assert_eq!(app.page, Page::Dashboard, "Confirm did nothing");
+        assert_eq!(
+            app.launch_state.title(),
+            Some("stremio:tt0111161"),
+            "the raw id went to the launch route; the daemon decides what it means"
+        );
+        assert_eq!(app.page, Page::Dashboard);
     }
 
     use crate::providers::daemon::{
-        CategorizationPhase, CategorizationSnapshot, CategorizationStatus, ModelStatus,
+        CategorizationPhase, CategorizationSnapshot, CategorizationStatus, CollectionItem,
+        ModelStatus,
     };
 
     /// A categorization answer with nothing but the switch set - the state the

@@ -767,6 +767,32 @@ impl DaemonClient {
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
+    /// Launches whatever an item id names - the one route a provider-agnostic
+    /// client posts to. The daemon resolves the id (catalog record, RomM rom)
+    /// and picks the launch shape; this parses nothing. `launch_app` and
+    /// `launch_retro_rom` stay for the legacy frontend, which picks the route
+    /// itself.
+    pub async fn launch_item(
+        &self,
+        item_id: &str,
+        input_profile: InputProfile,
+    ) -> Result<ApplicationSession, DaemonError> {
+        let response = self
+            .http
+            .post(self.api_url(&format!("/v1/launch/{}", item_id)))
+            .query(&[("input_profile", input_profile)])
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
     /// Gets the currently active application session.
     pub async fn active_session(&self) -> Result<Option<ApplicationSession>, DaemonError> {
         let response = self

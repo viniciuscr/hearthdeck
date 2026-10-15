@@ -604,9 +604,49 @@ paths:
       responses:
         '202':
           description: Metadata provider refresh accepted
+  /v1/launch/{item_id}:
+    post:
+      operationId: launchItem
+      description: >-
+        Launches whatever an item id names — the one route a provider-agnostic
+        client posts to. A `hearthdeck:`-prefixed id resolves against the
+        catalog, where the record's own source decides the launch shape
+        (desktop application, Heroic game, Stremio title); a `romm:` id
+        launches that ROM through RetroArch; any other id is taken as the
+        catalog id itself, as launchApp addresses it. The client never parses
+        a prefix to pick a route.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          description: The item id a collection item, card, or library entry carries
+          schema: { type: string }
+        - name: input_profile
+          in: query
+          description: Controller handling for the launched application
+          schema: { type: string, enum: [native, desktop], default: native }
+      responses:
+        '200':
+          description: Launch accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationSession'
+        '404':
+          description: The item id names no launch this daemon knows
+        '501':
+          description: No RetroArch core is configured for the rom's platform
+        '503':
+          description: RomM is not configured, or the mapped RetroArch core is not installed
   /v1/apps/{id}/launch:
     post:
       operationId: launchApp
+      description: >-
+        Catalog launch by bare catalog id. Kept for the legacy frontend, which
+        picks this route or launchRetroRom itself; new clients post any item
+        id to launchItem instead.
       security:
         - bearerAuth: []
       parameters:

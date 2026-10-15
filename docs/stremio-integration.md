@@ -243,12 +243,14 @@ authoritative would drop usable fields:
    `database.rs::migrate()` rather than published on link — an empty rule costs
    nothing, and a seeded row saves the link path a lifecycle to maintain — and
    `list_collections` resolves it from the records the provider published, newest
-   change first. Its items carry the `hearthdeck:`-prefixed ids the model's rails use,
-   and that prefix is load-bearing rather than cosmetic: the client strips it and hands
-   the remainder to `/v1/apps/{id}/launch`. Sending the bare catalog id instead leaves
-   the client's own launch gate refusing it, so the card would draw and then do
-   nothing when pressed. (That is the first thing that broke in testing, and the
-   reason `activate_dashboard_app` now also looks in the rail's own entry lists.)
+   change first. Its items carry the `hearthdeck:`-prefixed ids the model's rails use.
+   The new shell sends that id untouched to `/v1/launch/{item_id}`; the route strips
+   the prefix and resolves the remainder against the catalog, so which source sits
+   behind the id is the daemon's decision. (The legacy client strips the prefix itself
+   for `/v1/apps/{id}/launch`, where sending the bare catalog id instead met the
+   client's own launch gate: the card drew and then did nothing when pressed — the
+   first thing that broke in testing, and the reason `activate_dashboard_app` now also
+   looks in the rail's own entry lists.)
 7. **Season and episode come from `video_id`**, never from `state.season` /
    `state.episode`.
 8. **Launch is a deep link, assembled by the bridge from a validated id** —

@@ -153,7 +153,11 @@ The public OpenAPI contract is `contracts/openapi.yaml`.
 - `GET /v1/library`: authenticated library metadata.
 - `POST /v1/library/rescan`: authenticated request to refresh every registered
   discovery and metadata provider.
-- `POST /v1/apps/{id}/launch`: authenticated launch of a registered item.
+- `POST /v1/launch/{item_id}`: authenticated launch of whatever an item id
+  names — the daemon resolves the prefix and picks the catalog or retro
+  launch (operationId `launchItem`).
+- `POST /v1/apps/{id}/launch`: authenticated launch of a registered item, by
+  bare catalog id (kept for the legacy frontend).
 - `GET /v1/events`: authenticated WebSocket for library/action events.
 
 The loopback admin listener exposes `POST /v1/pairing` for host-side pairing

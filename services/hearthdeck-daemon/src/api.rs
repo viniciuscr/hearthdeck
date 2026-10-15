@@ -85,6 +85,10 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/settings", get(get_settings).put(update_settings))
         .route("/v1/discovery/{source_id}/refresh", post(refresh_source))
         .route("/v1/metadata/{provider_id}/refresh", post(refresh_metadata))
+        // One route for every launch kind: the client sends an item id and this
+        // daemon decides what it names. The per-kind routes below stay for the
+        // legacy frontend, which parses the prefixes itself.
+        .route("/v1/launch/{item_id}", post(launch_item))
         .route("/v1/apps/{id}/launch", post(launch_app))
         .route("/v1/sessions/active", get(active_application_session))
         .route("/v1/sessions/{id}/stop", post(stop_application_session))
@@ -401,6 +405,16 @@ async fn launch_retro_rom(
     Query(options): Query<LaunchOptions>,
 ) -> Result<Json<ApplicationSession>, ApiError> {
     authenticate(&state, &headers).await?;
+    launch_retro(&state, rom_id, options.input_profile).await
+}
+
+/// The retro half of a launch, shared by both routes. The capability check
+/// lives here, so no caller can reach a launch this host cannot do.
+async fn launch_retro(
+    state: &SharedState,
+    rom_id: i64,
+    input_profile: InputProfile,
+) -> Result<Json<ApplicationSession>, ApiError> {
     if !host_capabilities().retro_launch {
         return Err(ApiError::capability_unavailable("retro game launch"));
     }
@@ -413,7 +427,7 @@ async fn launch_retro_rom(
         core_path: plan.core_path.to_string_lossy().into_owned(),
         rom_path: plan.rom_path.to_string_lossy().into_owned(),
         session_id,
-        input_profile: options.input_profile,
+        input_profile,
     };
     let response = crate::bridge::request(&state.config.bridge_socket_path, request)
         .await
@@ -942,12 +956,42 @@ async fn launch_app(
     Query(options): Query<LaunchOptions>,
 ) -> Result<Json<ApplicationSession>, ApiError> {
     authenticate(&state, &headers).await?;
+    launch_catalog(&state, &id, options.input_profile).await
+}
+
+/// Launches whatever an item id names — the single route a provider-agnostic
+/// client posts to. Which source sits behind the id (a catalog record's own
+/// dispatch, or RomM's launch) stays this daemon's business: the client sends
+/// the id its card or tile carries and reads the session back, and never
+/// parses a prefix to pick a route.
+async fn launch_item(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(item_id): Path<String>,
+    Query(options): Query<LaunchOptions>,
+) -> Result<Json<ApplicationSession>, ApiError> {
+    authenticate(&state, &headers).await?;
+    match item_launch(&item_id) {
+        ItemLaunch::Retro(rom_id) => launch_retro(&state, rom_id, options.input_profile).await,
+        ItemLaunch::Catalog(id) => launch_catalog(&state, id, options.input_profile).await,
+    }
+}
+
+/// The catalog half of a launch, shared by both routes: resolves the record,
+/// decides which launch shape its `source_id` asks the bridge for — desktop
+/// application, Heroic game, or Stremio title — and runs it. The capability
+/// check lives here, so no caller can reach a launch this host cannot do.
+async fn launch_catalog(
+    state: &SharedState,
+    id: &str,
+    input_profile: InputProfile,
+) -> Result<Json<ApplicationSession>, ApiError> {
     if !host_capabilities().launch {
         return Err(ApiError::capability_unavailable("application launch"));
     }
     let item = state
         .catalog
-        .get(&id)
+        .get(id)
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(ApiError::not_found)?;
@@ -963,7 +1007,7 @@ async fn launch_app(
             runner,
             application_id,
             session_id,
-            input_profile: options.input_profile,
+            input_profile,
         }
     } else if let Some(video_id) = stremio_title {
         // A Stremio record names a title, so the bridge is asked for that title rather
@@ -976,7 +1020,7 @@ async fn launch_app(
             application_id: launch_id.to_owned(),
             video_id,
             session_id,
-            input_profile: options.input_profile,
+            input_profile,
         }
     } else {
         BridgeRequest::LaunchApplication {
@@ -986,7 +1030,7 @@ async fn launch_app(
             source_id: crate::DESKTOP_APPS_SOURCE.to_owned(),
             application_id: launch_id.to_owned(),
             session_id,
-            input_profile: options.input_profile,
+            input_profile,
         }
     };
     let response = crate::bridge::request(&state.config.bridge_socket_path, request)
@@ -1645,6 +1689,26 @@ fn catalog_id_from_item(item_id: &str) -> Option<&str> {
 /// The RomM rom an item id names, when it names one.
 fn rom_id_from_item(item_id: &str) -> Option<i64> {
     item_id.strip_prefix("romm:")?.parse().ok()
+}
+
+/// Which launch an item id names: the two shapes an id can carry.
+enum ItemLaunch<'a> {
+    /// The RomM rom its `romm:` prefix carries.
+    Retro(i64),
+    /// The catalog record the id wears the entry prefix for — or, unprefixed,
+    /// the record it directly names, which is what the per-kind route
+    /// addresses.
+    Catalog(&'a str),
+}
+
+/// Resolves an item id to one of the two launches. This is the whole of what
+/// the single launch route decides from the id: a client that posts ids never
+/// parses a prefix itself.
+fn item_launch(item_id: &str) -> ItemLaunch<'_> {
+    if let Some(rom_id) = rom_id_from_item(item_id) {
+        return ItemLaunch::Retro(rom_id);
+    }
+    ItemLaunch::Catalog(catalog_id_from_item(item_id).unwrap_or(item_id))
 }
 
 /// The entry-id prefix a client draws its items with. The daemon echoes it for
@@ -2350,6 +2414,132 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         fallback.await.unwrap();
+    }
+
+    /// One route serves every launch kind: the id travels untouched and the
+    /// daemon decides what it names — the entry prefix stripped against the
+    /// catalog, where the record's own `source_id` picks the launch shape. A
+    /// client never parses a prefix, and an id naming nothing is refused
+    /// rather than guessed at.
+    #[tokio::test]
+    async fn the_single_launch_route_decides_what_an_item_id_names() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.socket"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+            },
+            database,
+        ));
+
+        state
+            .catalog
+            .replace_source(
+                "stremio",
+                vec![CatalogRecord {
+                    id: "stremio:tt0149460".to_owned(),
+                    title: "Futurama".to_owned(),
+                    kind: "series".to_owned(),
+                    launch_id: Some("com.stremio.Stremio.desktop".to_owned()),
+                    icon: None,
+                    metadata: serde_json::json!({
+                        "source": "stremio",
+                        "video_id": "tt0149460:4:7"
+                    }),
+                    updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                }],
+            )
+            .await
+            .unwrap();
+
+        // The launch route is authenticated, so pair first.
+        let (_, pairing) = response_json(
+            local_router(state.clone()),
+            Request::post("/v1/pairing").body(Body::empty()).unwrap(),
+        )
+        .await;
+        let code = pairing["code"].as_str().unwrap();
+        let (_, paired) = response_json(
+            router(state.clone()),
+            Request::post("/v1/pairing/complete")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"code": code, "client_name": "launch-test"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        let token = paired["token"].as_str().unwrap().to_owned();
+
+        let unauthorized = router(state.clone())
+            .oneshot(
+                Request::post("/v1/launch/hearthdeck:stremio:tt0149460")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let bridge = spawn_fake_bridge(state.config.bridge_socket_path.clone(), |request| {
+            let BridgeRequest::LaunchStremioTitle {
+                application_id,
+                video_id,
+                session_id,
+                input_profile,
+            } = request
+            else {
+                panic!("expected a LaunchStremioTitle request, got {request:?}");
+            };
+            // The prefixed item id resolved through the catalog to a Stremio
+            // record, and that record's video id reached the bridge: which
+            // provider sits behind the id is the daemon's decision, not the
+            // client's.
+            assert_eq!(application_id, "com.stremio.Stremio.desktop");
+            assert_eq!(video_id, "tt0149460:4:7");
+            assert_eq!(input_profile, InputProfile::Desktop);
+            BridgeResponse::LaunchAccepted {
+                session: ApplicationSession {
+                    id: session_id,
+                    source_id: "desktop-apps".to_owned(),
+                    application_id: "com.stremio.Stremio.desktop".to_owned(),
+                    state: ApplicationSessionState::Running,
+                },
+            }
+        });
+
+        let (status, launched) = response_json(
+            router(state.clone()),
+            Request::post("/v1/launch/hearthdeck:stremio:tt0149460?input_profile=desktop")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(launched["source_id"], "desktop-apps");
+        assert_eq!(launched["application_id"], "com.stremio.Stremio.desktop");
+        bridge.await.unwrap();
+
+        // An id that names nothing is refused, not guessed at.
+        let (status, _) = response_json(
+            router(state),
+            Request::post("/v1/launch/does-not-exist")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     /// The Stremio rail is composed from what the provider published: only that
@@ -3085,6 +3275,32 @@ mod tests {
         assert_eq!(super::rom_id_from_item("romm:"), None);
         assert_eq!(super::rom_id_from_item("romm:not-a-number"), None);
         assert_eq!(super::rom_id_from_item("hearthdeck:romm:4014"), None);
+    }
+
+    /// The single route's whole decision from the id alone: the two shapes a
+    /// client can send, and an id naming neither falling through to the catalog
+    /// lookup that will not find it — a refusal, never a wrong launch.
+    #[test]
+    fn an_item_id_names_one_of_the_two_launches() {
+        assert!(matches!(
+            super::item_launch("hearthdeck:stremio:tt0111161"),
+            super::ItemLaunch::Catalog("stremio:tt0111161")
+        ));
+        // The bare catalog id the per-kind route addresses stays launchable.
+        assert!(matches!(
+            super::item_launch("test:app"),
+            super::ItemLaunch::Catalog("test:app")
+        ));
+        assert!(matches!(
+            super::item_launch("romm:4014"),
+            super::ItemLaunch::Retro(4014)
+        ));
+        // An unparseable rom id is not a rom id, so it falls through to a
+        // catalog lookup that will not find it.
+        assert!(matches!(
+            super::item_launch("romm:not-a-number"),
+            super::ItemLaunch::Catalog("romm:not-a-number")
+        ));
     }
 
     /// A rail item stored without an icon is served with the one its id names.

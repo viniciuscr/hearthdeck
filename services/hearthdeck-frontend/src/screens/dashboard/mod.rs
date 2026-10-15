@@ -45,10 +45,11 @@ pub struct Card {
     pub id: Id,
     pub label: String,
     pub icon: icon::Handle,
-    /// What pressing the card does, or `None` when it has nowhere to go - an
-    /// item the library does not hold. Such a card is still drawn, because the
-    /// rail it is in is worth reading either way; it is dim at rest, and shows
-    /// the cursor ring (but still does nothing) when the pad is on it.
+    /// What pressing the card does. Every rail the dashboard builds attaches a
+    /// launch: the card's id goes to the daemon untouched and what that names
+    /// is the daemon's answer to give - an unknown id comes back as a failed
+    /// launch, not silence. `None` is only a card with nothing attached: still
+    /// drawn, dim at rest, with the cursor ring but no effect when pressed.
     pub message: Option<Message>,
 }
 

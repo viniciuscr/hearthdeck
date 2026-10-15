@@ -193,6 +193,10 @@ pub struct Grid<'a> {
     pub scroll_offset: f32,
     /// The viewport's height, measured by the scrollable itself.
     pub viewport_height: f32,
+    /// The tile the renderer's focus - and so the accent border - is on, from
+    /// [`crate::screens::library::focus::focused_tile`]. It is drawn selected,
+    /// which is what puts its label beside the border.
+    pub focused_tile: Option<usize>,
 }
 
 #[must_use]
@@ -224,7 +228,7 @@ pub fn view(grid: Grid<'_>) -> Element<'_, Message> {
                 Some(Message::TileContext(index)),
                 Some(Message::Activate(index)),
                 None,
-                Selection::Unselected,
+                tile_selection(grid.focused_tile, index),
             ));
         }
         // Keep every row `columns` wide so tiles line up in a grid rather than
@@ -271,15 +275,32 @@ fn reserved_rows(rows: usize, row_height: f32) -> Element<'static, Message> {
         .into()
 }
 
+/// How the tile at `index` draws: selected while it is the tile the ring is
+/// on, which is what shows its label next to the border.
+fn tile_selection(focused_tile: Option<usize>, index: usize) -> Selection {
+    if focused_tile == Some(index) {
+        Selection::Selected
+    } else {
+        Selection::Unselected
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{GRID_OVERSCAN_ROWS, Metrics, metrics};
+    use super::{GRID_OVERSCAN_ROWS, Metrics, Selection, metrics, tile_selection};
 
     /// A viewport `rows` rows tall. Deliberately not a whole number of rows:
     /// asking for a window that lands exactly on a row boundary is a question
     /// about floating-point rounding, not about the grid.
     fn viewport(metrics: Metrics, rows: f32) -> f32 {
         rows * metrics.row_height
+    }
+
+    #[test]
+    fn only_the_tile_the_ring_is_on_is_drawn_selected() {
+        assert_eq!(tile_selection(Some(5), 5), Selection::Selected);
+        assert_eq!(tile_selection(Some(5), 4), Selection::Unselected);
+        assert_eq!(tile_selection(None, 5), Selection::Unselected);
     }
 
     #[test]

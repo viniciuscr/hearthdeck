@@ -151,6 +151,8 @@ dropping the cruft inherited from the project this started from.
 
 - Controller-first navigation; Back is one global handler (no per-screen Escape).
 - Launches go through transient systemd units (`launch_managed`), never raw shell.
+- The frontend never parses item ids to pick a launch route: it posts them to
+  `POST /v1/launch/{item_id}` and the daemon decides what they name.
 - Theme tokens only — no color or size literals.
 - Input ownership via `input_ownership.rs`.
 - Reuse `ui/`, `widgets/` and `style.rs`; no per-screen styling.

@@ -203,6 +203,25 @@ pub fn ring_at(index: usize, layout: Layout) -> Option<Chrome> {
     (index == layout.tabs && layout.filter_button).then_some(Chrome::FilterButton)
 }
 
+/// The tile the renderer's focus rests on - where the ring's accent border is
+/// drawn - or `None` while the ring is on the chrome, or when the cursor is
+/// past the end of the list.
+///
+/// This is the grid side of the question `focus_task` answers before it points
+/// `focus` at a widget. The tile's label shows on the tile the ring is on, so
+/// the view and the focus task both derive that tile from here rather than
+/// each keeping their own idea of it.
+pub fn focused_tile(cursors: Cursors, layout: Layout) -> Option<usize> {
+    if cursors
+        .ring
+        .and_then(|index| ring_at(index, layout))
+        .is_some()
+    {
+        return None;
+    }
+    (cursors.tile < layout.tiles).then_some(cursors.tile)
+}
+
 /// The ring's next stop, or `None` to hand the cursor back to the content.
 ///
 /// The ring leaves the content at one end and returns to it past the other, so
@@ -265,8 +284,8 @@ pub fn clamp(cursors: Cursors, layout: Layout) -> Cursors {
 #[cfg(test)]
 mod tests {
     use super::{
-        Chrome, Confirm, Cursors, Direction, Layout, Outcome, clamp, confirm, ring_at, ring_len,
-        ring_step, step, step_tile,
+        Chrome, Confirm, Cursors, Direction, Layout, Outcome, clamp, confirm, focused_tile,
+        ring_at, ring_len, ring_step, step, step_tile,
     };
 
     /// A library with three sections, two tabs, a filter button and twelve tiles
@@ -472,6 +491,38 @@ mod tests {
             ..on_tile(7)
         };
         assert_eq!(confirm(ringed, layout), Confirm::Chrome(Chrome::Tab(0)));
+    }
+
+    #[test]
+    fn the_focused_tile_is_the_one_the_ring_is_on() {
+        let layout = library();
+
+        // The content holds the ring, so the cursor's tile is the focused one -
+        // and so the tile whose label shows next to the border.
+        assert_eq!(focused_tile(on_tile(7), layout), Some(7));
+
+        // On the chrome the ring is on a control, not on a tile, so no tile is
+        // picked out.
+        let ringed = Cursors {
+            ring: Some(4),
+            ..on_tile(7)
+        };
+        assert_eq!(focused_tile(ringed, layout), None);
+
+        // A cursor left past the end of a shrunken list focuses nothing.
+        let shrunken = Layout {
+            tiles: 5,
+            ..library()
+        };
+        assert_eq!(focused_tile(on_tile(7), shrunken), None);
+
+        // The open drawer takes the pad but not the ring: where the ring is is
+        // still what decides, exactly as it decides the border.
+        let open = Layout {
+            drawer_open: true,
+            ..library()
+        };
+        assert_eq!(focused_tile(on_tile(7), open), Some(7));
     }
 
     #[test]

@@ -1,5 +1,9 @@
 //! An application tile: cover art, a label, and source/version badges.
+//!
+//! The label is not permanent: it shows while the tile is picked out or under
+//! the pointer, the same moments its border lights up.
 
+mod reveal;
 mod style;
 
 use crate::style::{ICON_SMALL, TEXT_CAPTION, artwork_fit, tile_button_class};
@@ -13,15 +17,19 @@ use cosmic::iced::widget::{row, stack, text};
 use cosmic::widget::{self, button, container, icon, mouse_area};
 use std::rc::Rc;
 
+use reveal::Reveal;
 use style::{SOURCE_BADGE, TEXT_TILE_LABEL, source_badge, tile_label_overlay};
 
-/// Whether a tile is the context menu's target. An enum rather than a `bool` so
-/// the call site reads what it means without needing a comment.
+/// Whether a tile is picked out: the context menu's target, or the card the
+/// cursor ring is on. An enum rather than a `bool` so the call site reads what
+/// it means without needing a comment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Selection {
-    /// The tile the context menu is open on: drawn in the active tile style.
+    /// A picked-out tile: drawn in the active tile style, and its label shown
+    /// the way the border is - always, not only under the pointer.
     Selected,
-    /// Every other tile.
+    /// Every other tile: its label appears only while the pointer is on it,
+    /// the same span the border covers when a tile is hovered.
     Unselected,
 }
 
@@ -57,8 +65,9 @@ pub struct SourceBadge<'a> {
 /// shelves - so a card looks and focuses the same wherever it is drawn. The
 /// surfaces differ only in geometry ([`ContentFit`], and the fixed
 /// `tile_width`/`tile_height` they pass), whether they have a context menu
-/// (`on_right_release`), and whether the card is the one the cursor is on
-/// ([`Selection`]).
+/// (`on_right_release`), and whether the card is picked out ([`Selection`]),
+/// which decides the active style and whether its label waits for the
+/// pointer.
 // The eleven arguments are one tile's identity, geometry, fit, and the messages
 // and markers its interactions use; they are all supplied inline at the call
 // sites, so a spec struct would only move the same list somewhere else.
@@ -171,9 +180,16 @@ pub fn app_tile<'a, Message: Clone + 'a>(
     .align_y(Vertical::Bottom)
     .into();
 
+    let is_selected = selection.is_selected();
+
+    // The label waits for the tile to be picked out or pointed at - the same
+    // moments the accent border lights up - so the name appears with the
+    // border and the artwork stands alone otherwise. The layer keeps its
+    // place in the layout either way; only the drawing is gated.
+    let label_layer: Element<'a, Message> = Reveal::new(label_layer, is_selected).into();
+
     artwork_layer = stack![artwork_layer, label_layer].into();
 
-    let is_selected = selection.is_selected();
     let tile_button = button::custom(artwork_layer)
         .id(widget_id)
         .selected(is_selected)
