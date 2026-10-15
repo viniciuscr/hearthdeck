@@ -10,6 +10,7 @@ mod icon_cache;
 mod input_ownership;
 mod launch_state;
 mod localize;
+mod motion;
 mod providers;
 mod screens;
 mod settings;

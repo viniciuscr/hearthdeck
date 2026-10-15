@@ -44,14 +44,15 @@ relationship, but only two patterns:
 
 | Change | Relationship | Pattern | Duration |
 | --- | --- | --- | --- |
-| Dashboard <-> Library | Sibling top-level destinations | Fade through | `PAGE_TRANSITION_DURATION` (320 ms) |
+| Dashboard <-> Library <-> Settings | Sibling top-level destinations | Fade through | `PAGE_TRANSITION_DURATION` (320 ms) |
 | Tab (group) change in the Library | Peers on an ordered strip | Shared axis X | `TAB_TRANSITION_DURATION` (240 ms) |
 | Section change (PC Games / Console Games / Applications) | Stacked peers in the sidebar | Shared axis Y | `SECTION_TRANSITION_DURATION` (300 ms) |
 
 ## Why a fade through, not a lateral push
 
-The Dashboard <-> Library transition is a change between two **sibling top-level
-destinations**. Material's motion system separates two cases:
+A change between two **sibling top-level destinations** - the Dashboard, the
+Library and Settings are all such pages - has no spatial relationship to draw on.
+Material's motion system separates two cases:
 
 | Pattern | Use for | Says |
 | --- | --- | --- |
@@ -102,24 +103,30 @@ and the bounds are equal, and a page root layer containing text reports
 
 ## How Hearthdeck does it
 
-The Dashboard <-> Library fade through is the reference implementation
-(`app.rs::switch_page`, `widgets/transition.rs`).
+The page fade through is the reference implementation. `widgets/transition.rs`
+draws it; the timing around it lives in `src/motion.rs`, which owns when an
+animation started, how far along it is, and when it must end, while the shell
+owns the frame subscription. The rewrite (`app/mod.rs::switch_page`) drives the
+Dashboard / Library / Settings fade through that way; the inherited
+`app_legacy.rs` still carries an inline copy of the same timing until it retires.
 
-1. **State, not pixels.** `HearthDeck::page_animation` holds
-   `PageAnimation { from, started_at }`. `switch_page` flips `self.page`
-   immediately (so routing and tests are unaffected) and records the origin.
+1. **State, not pixels.** The shell flips `page` immediately (so routing and tests
+   are unaffected) and records the page it came from: `App::page_fade` holds a
+   `motion::Fade<Page>` (legacy: `HearthDeck::page_animation` /
+   `PageAnimation { from, started_at }`).
 2. **One clock, only when needed.** `subscription()` adds
    `window::frames().map(|(_, at)| Message::Animate(at))` *only* while a page,
-   tab or section transition is in flight. An idle window has no frames
-   subscription and schedules no redraws at all.
-3. **Progress is derived in `view()`.** `transition_progress` maps
+   tab or section transition is in flight - in the rewrite, while `page_fade` is
+   set. An idle window has no frames subscription and schedules no redraws at all.
+3. **Progress is derived in `view()`.** `motion::Timed::progress` maps
    `now - started_at` through `cosmic::anim::smootherstep` to an eased `0..=1`.
    libcosmic's `Application::update` does not receive a `now` argument the way raw
    iced's `Application` does, so the frame time is carried on `Message::Animate`.
-4. **Bounded lifetime.** `expire_page_animation()` runs at the top of `update` for
-   *every* message and drops the transition once it exceeds
-   `PAGE_TRANSITION_DURATION`. A transition therefore cannot outlive its
-   duration even if a frame tick is missed.
+4. **Bounded lifetime.** Expiry runs at the top of `update` for *every* message
+   and drops the transition once `Timed::is_done` says it has exceeded
+   `PAGE_TRANSITION_DURATION` (rewrite: `App::expire_page_fade`; legacy:
+   `expire_page_animation`). A transition therefore cannot outlive its duration
+   even if a frame tick is missed.
 5. **Presentation only in the widget.** `PageTransition` takes `progress: f32`
    and, per frame, draws only the page on the near side of the swap plus a
    surface-colour cover sized by `smootherstep` of the half-phase. It owns no
@@ -132,22 +139,26 @@ the one place a lateral slide is correct (Material shared axis X). The
 implementation deliberately differs from the page fade in one key way: it renders
 **one** child, never two.
 
-- `HearthDeck::tab_animation` holds the target tab, start time, direction and a
-  `swapped` flag. `begin_tab_animation` records it **without changing `cur_group`**,
-  so the outgoing grid is still the current data.
+- The shell holds the slide while it runs (`motion::Slide`: a target, a direction
+  and a `swapped` flag on one `Timing`), recorded **without changing `cur_group`**,
+  so the outgoing grid is still the current data - rewrite: `App::tab_slide`,
+  legacy: `HearthDeck::tab_animation`.
 - `TabTransition` (`widgets/transition.rs`) draws that single grid sliding out in
   `-direction` while the surface cover rises, then the swapped grid sliding in
   from `+direction` while the cover falls. `slide(progress, direction, width)`
   returns `(offset_x, cover_alpha)` and is unit-tested.
-- The swap happens on a tick, under the opaque cover: `advance_tab_animation`
-  calls `apply_group` once `progress >= 0.5` and clears the animation at
-  `progress >= 1.0`.
+- The swap happens on a tick, under the opaque cover: the advance step calls
+  `apply_group` once progress passes the midpoint (rewrite: `Slide::step` answers
+  `Step::Swap`) and drops the slide once it has run its course (`Step::Done`).
+  `apply_group` is the old body of the `SelectGroup` handler, now deferred to the
+  midpoint.
 - Because only one grid is ever in the tree, no two grids are laid out per frame
   and the shared entry `Id`s never collide. Rendering two live grids would
   duplicate those ids and re-lay out every tile every frame.
 
 Direction comes from `tab_position` (the "all apps" tab is 0, groups follow), so
-the grid slides left when moving right along the strip and vice versa.
+the grid slides left when moving right along the strip and vice versa. The rewrite
+reads it through `app::tab_direction`, the legacy app through its own copy.
 
 ### Sections: shared-axis slide on Y
 
@@ -155,8 +166,8 @@ The sidebar sections are peers with a spatial relationship too - they are stacke
 top to bottom - so a section change is the same shared-axis slide as a tab
 change, on the other axis. It reuses the tab machinery almost verbatim:
 
-- `HearthDeck::section_animation` holds the target section, start time, direction
-  and a `swapped` flag. `begin_section_animation` records it **without changing
+- The shell holds the target section the same way - rewrite: `App::section_slide`,
+  legacy: `HearthDeck::section_animation` - recorded **without changing
   `cur_section`**, so the outgoing section's title, tabs and grid stay on screen
   while they slide off.
 - `SectionTransition` is the vertical twin of `TabTransition`, sharing the same
@@ -165,18 +176,38 @@ change, on the other axis. It reuses the tab machinery almost verbatim:
   and tab strip travel with the grid. The left sidebar stays put: it is the fixed
   navigation, and leaving it still is what makes the motion read as "the content
   changed", not "the app moved".
-- The swap happens on a tick, under the opaque cover: `advance_section_animation`
-  calls `apply_section` once `progress >= 0.5` and clears the animation at
-  `progress >= 1.0`. `apply_section` is the old body of the `SelectSection`
-  handler, now deferred to the midpoint.
+- The swap happens on a tick, under the opaque cover, exactly as a tab change does:
+  `apply_section` is the old body of the `SelectSection` handler, now deferred to
+  the midpoint.
 - Direction comes from `Section::index()` (sidebar order), so moving down the
   sidebar makes the new content rise from the bottom edge and moving up makes it
-  descend from the top.
+  descend from the top. The rewrite reads it through `app::section_direction`.
 
-One caveat: the vertical slide is drawn by `view_main_content`, so a
-`SelectSection` delivered while some other page is showing (a test, or a future
-caller) applies immediately instead of animating. The sidebar is the only thing
-that emits the message, and it only exists on the Library screen.
+One caveat: the slide travels the library's content column, so a `SelectSection`
+delivered while some other page is showing applies immediately instead of
+animating. The rewrite states that in the handler (`SelectSection` applies at once
+when the page is changing); the sidebar is the only thing that emits the message,
+and it only exists on the Library screen.
+
+### Focus-follow scroll: eased, on one clock
+
+When the cursor moves off the edge of a list, the list follows - eased, not snapped,
+so a step reads as the view moving rather than the selection jumping. Every such
+scroll goes through one entry point (rewrite: `App::animate_scroll_to`, legacy:
+`HearthDeck::animate_scroll_to`), so the grid, the dashboard rails, the dashboard
+page and the legacy tab strip all move at `SCROLL_TRANSITION_DURATION`.
+
+- `motion::Eased` carries `from`, `to` and what is being moved; each frame the
+  advance step emits a `scroll_to` at the interpolated offset, and the animation is
+  dropped on arrival. A scroll the cursor did not drag stays a plain `scroll_to`
+  with no animation at all: a list that is replaced goes back to the top
+  immediately, under whatever cover is up.
+- The shell names the scrollable (`ScrollTarget::Grid` / `Rail(usize)` / `Page`)
+  rather than carrying iced's widget id and axis through the animation, and one
+  function maps a target back to its `scroll_to`.
+- A virtualized list records the offset it is *going* to, not the one it is at: the
+  rows around the target are what get built, and the eased scroll is only what the
+  eye sees.
 
 ### Where timings live
 
@@ -193,7 +224,8 @@ they never define their own. Add a token here rather than a literal in a view.
 
 ## Adding an animation
 
-1. Add state to `HearthDeck` (a `started_at`/`from` pair, or an `iced::Animation<T>`).
+1. Add state to the shell for the payload, and time it with `motion.rs` (`Timed`,
+   or `Fade` where the value being left has to stay drawable).
 2. Add a `Message` variant that carries the frame time if the animation is
    app-wide.
 3. In `subscription()`, add `window::frames()` **gated on the animation being

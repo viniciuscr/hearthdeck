@@ -16,8 +16,11 @@
 //! not ours to restyle. That is the line we use to decide "use COSMIC" vs
 //! "own it".
 
+mod animation;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use cosmic::app::{Core, Settings, Task};
 use cosmic::cosmic_config::{Config, CosmicConfigEntry};
@@ -27,7 +30,6 @@ use cosmic::iced::core::keyboard::{Key, key::Named};
 use cosmic::iced::core::widget::operation::focusable::focus;
 use cosmic::iced::core::window::{Event as WindowEvent, Id as SurfaceId};
 use cosmic::iced::event::{Status, listen_with};
-use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
 use cosmic::iced::widget::stack;
 use cosmic::iced::{self, Length, Subscription, runtime, window};
 use cosmic::theme;
@@ -37,10 +39,12 @@ use cosmic::widget::{
 use cosmic::{Application, Element};
 use hearthdeck_protocol::InputProfile;
 
+use crate::app::animation::{ScrollTarget, section_direction, tab_direction};
 use crate::app_group::{AppLibraryConfig, RommFacet, Section, section_facets};
 use crate::fl;
 use crate::input_ownership::{Event as InputEvent, InputOwnership};
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
+use crate::motion::{Eased, Fade, Slide};
 use crate::providers::GameProvider;
 use crate::providers::daemon::{Collection, DaemonClient, DaemonConfig, DaemonProvider};
 use crate::providers::filter::{Facet, cycle};
@@ -51,10 +55,10 @@ use crate::screens::library::sidebar::{self, Sidebar};
 use crate::screens::library::{filters, grid, header};
 use crate::screens::settings;
 use crate::style::{
-    DASHBOARD_RAIL_TILES, DIVIDER_WIDTH, ICON_LARGE, WINDOW_HEIGHT, WINDOW_WIDTH,
-    content_horizontal_padding, dashboard_tile_size, filter_drawer_width,
-    grid_viewport_height_fallback, launch_overlay, primary_action_button_class, root_background,
-    sidebar_divider,
+    DASHBOARD_RAIL_TILES, DIVIDER_WIDTH, ICON_LARGE, SECTION_TRANSITION_DURATION,
+    TAB_TRANSITION_DURATION, WINDOW_HEIGHT, WINDOW_WIDTH, content_horizontal_padding,
+    dashboard_tile_size, filter_drawer_width, grid_viewport_height_fallback, launch_overlay,
+    primary_action_button_class, root_background, sidebar_divider,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
@@ -62,6 +66,7 @@ use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
 use crate::ui;
 use crate::widgets::menu::{self, Menu, Row};
 use crate::widgets::top_bar;
+use crate::widgets::transition::{PageTransition, SectionTransition, TabTransition};
 
 /// One page of RomM console records per request.
 const ROMM_PAGE_SIZE: u32 = 60;
@@ -204,6 +209,10 @@ pub enum Message {
     WindowResized(f32),
     /// The main window gained or lost compositor focus.
     WindowFocusChanged(bool),
+    /// A frame from `window::frames()` while a transition is in flight, carrying
+    /// the frame time: libcosmic's `update` gets no `now` of its own, so the
+    /// clock rides the message.
+    Animate(Instant),
 }
 
 /// Which page the shell is showing.
@@ -234,6 +243,21 @@ pub struct App {
     core: Core,
     /// Which page the shell is showing.
     page: Page,
+    /// The page this one arrived from, while the fade-through between them runs.
+    /// Bounded by `style::PAGE_TRANSITION_DURATION` and dropped by
+    /// [`App::expire_page_fade`], which runs for every message.
+    page_fade: Option<Fade<Page>>,
+    /// The timestamp of the current frame, refreshed by [`Message::Animate`]
+    /// while a transition is in flight; `view` derives progress from it.
+    now: Instant,
+    /// The section this one slides to, while the slide runs. The section being
+    /// drawn stays the current one until the cover is opaque.
+    section_slide: Option<Slide<Section>>,
+    /// The tab (group) this one slides to, while the slide runs. The same rule:
+    /// the current tab stays until the cover is opaque.
+    tab_slide: Option<Slide<Option<usize>>>,
+    /// The eased focus-follow scroll in flight, if any.
+    scroll: Option<Eased<ScrollTarget>>,
     config: AppLibraryConfig,
     /// The config file the shell writes through, resolved once at startup so the
     /// shell has exactly one write target. `None` when there is no store to
@@ -376,6 +400,11 @@ impl Application for App {
         let app = Self {
             core,
             page: Page::default(),
+            page_fade: None,
+            now: Instant::now(),
+            section_slide: None,
+            tab_slide: None,
+            scroll: None,
             config,
             config_store,
             daemon_client,
@@ -428,6 +457,9 @@ impl Application for App {
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
+        // A transition must never outlive its duration, whatever message happens
+        // to arrive next.
+        self.expire_page_fade();
         // The cursor is repaired before anything acts on it, and again after:
         // entries load, facets come and go and sections swap, so both the cursor
         // and what it can point at change under it. Before, so no action acts on
@@ -549,36 +581,38 @@ impl Application for App {
             Message::SelectSection(section) => {
                 // The sidebar is the library's own navigation, so reaching for it
                 // leaves the dashboard.
-                self.page = Page::Library;
+                let arriving = self.page != Page::Library;
+                self.switch_page(Page::Library);
                 self.bar_cursor = None;
-                self.cur_section = section;
-                self.cur_group = None;
-                self.search_value.clear();
-                self.facet_selection.clear();
-                self.facets.clear();
-                self.filter_open = false;
-                if section == Section::ConsoleGames {
-                    // The console grid's facets and records both come from the
-                    // daemon; it is the one source that loads asynchronously.
-                    self.refilter();
-                    return Task::batch([self.load_console(0), self.load_facets()]);
+                // A slide travels the library's own content column, so it needs
+                // that column on screen: a section picked as the page changes, or
+                // the section already showing, applies at once instead.
+                if arriving || section == self.cur_section {
+                    return self.apply_section(section);
                 }
-                self.rebuild_local_facets();
-                self.refilter();
-                return self.list_replaced();
+                let direction = section_direction(self.cur_section, section);
+                self.section_slide = Some(Slide::new(
+                    section,
+                    direction,
+                    Instant::now(),
+                    SECTION_TRANSITION_DURATION,
+                ));
+                return Task::none();
             }
             Message::SelectGroup(group) => {
-                self.cur_group = group;
-                self.facet_selection.clear();
-                self.facets.clear();
-                self.filter_open = false;
-                if self.cur_section == Section::ConsoleGames {
-                    self.refilter();
-                    return Task::batch([self.load_console(0), self.load_facets()]);
+                // Re-selecting the tab already showing would be motion for its own
+                // sake, so it applies at once.
+                if group == self.cur_group {
+                    return self.apply_group(group);
                 }
-                self.rebuild_local_facets();
-                self.refilter();
-                return self.list_replaced();
+                let direction = tab_direction(self.cur_group, group);
+                self.tab_slide = Some(Slide::new(
+                    group,
+                    direction,
+                    Instant::now(),
+                    TAB_TRANSITION_DURATION,
+                ));
+                return Task::none();
             }
             Message::InputChanged(value) => {
                 self.search_value = value;
@@ -654,16 +688,16 @@ impl Application for App {
             Message::OpenDashboard => {
                 // Landing on a page hands the cursor to its content, so neither
                 // the library's ring nor the bar's row survives the trip.
-                self.page = Page::Dashboard;
+                self.switch_page(Page::Dashboard);
                 self.cursors.ring = None;
                 self.bar_cursor = None;
             }
             Message::OpenLibrary => {
-                self.page = Page::Library;
+                self.switch_page(Page::Library);
                 self.bar_cursor = None;
             }
             Message::OpenSettings => {
-                self.page = Page::Settings;
+                self.switch_page(Page::Settings);
                 self.cursors.ring = None;
                 self.bar_cursor = None;
                 // Opening it asks for a fresh read, rather than showing whatever
@@ -687,7 +721,7 @@ impl Application for App {
                 Err(error) => log::warn!("categorization read failed: {error}"),
             },
             Message::OpenSearch => {
-                self.page = Page::Library;
+                self.switch_page(Page::Library);
                 // The caret goes in the search box, which the library header
                 // draws - so the page has to be the library first.
                 return self.focus_search();
@@ -760,129 +794,34 @@ impl Application for App {
                     InputEvent::FrontendUnfocused
                 });
             }
+            // The frame clock while motion is in flight. Expiry of the page fade
+            // has already run for this message at the top of `update`; what the
+            // tick drives is everything else.
+            Message::Animate(now) => {
+                self.now = now;
+                return Task::batch([
+                    self.advance_section_slide(),
+                    self.advance_tab_slide(),
+                    self.advance_scroll(),
+                ]);
+            }
         }
         Task::none()
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
-        // The dashboard is a sibling of the library, not a page inside it: it
-        // carries its own top bar and has no sidebar, so it is the whole window.
-        // Drawing the library's shell around it would make it read as a section
-        // of the library, which is exactly what it is not.
-        if self.page == Page::Dashboard {
-            return self.view_dashboard();
+        // A fade-through draws both sides: the page being left until the
+        // midpoint, the page being arrived at from there. `PageTransition` paints
+        // only the near side of the swap each frame.
+        if let Some(fade) = &self.page_fade {
+            return PageTransition::new(
+                self.view_page(*fade.origin()),
+                self.view_page(self.page),
+                fade.progress(self.now),
+            )
+            .into();
         }
-        // Settings is a sibling of the library as well, and carries no sidebar of
-        // its own.
-        if self.page == Page::Settings {
-            return self.view_settings();
-        }
-
-        let sidebar = sidebar::view(
-            Sidebar {
-                current: self.cur_section,
-                user_name: &self.user_name,
-                disk_free: &self.disk_free,
-                app_icon: ui::app_icon(),
-                window_width: self.window_width,
-            },
-            Message::SelectSection,
-        );
-
-        let divider = container(space::horizontal())
-            .width(Length::Fixed(DIVIDER_WIDTH))
-            .height(Length::Fill)
-            .class(theme::Container::Custom(Box::new(sidebar_divider)));
-
-        // A launch takes over the content column: the game is starting, so the
-        // library behind it is no longer what the user is acting on.
-        let content: Element<'_, Self::Message> = if self.launch_state.is_visible() {
-            view_launch_overlay(&self.launch_state)
-        } else {
-            let header = header::view(header::Header {
-                section: self.cur_section,
-                selected_group: self.cur_group,
-                groups: self.config.sections.get(self.cur_section),
-                search_value: &self.search_value,
-                filter_active: self.facet_selection.len(),
-                show_filter: !self.facets.is_empty(),
-            });
-
-            let body: Element<'_, Self::Message> = if self.visible.is_empty() {
-                container(space::horizontal())
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into()
-            } else {
-                grid::view(grid::Grid {
-                    entries: &self.visible,
-                    window_width: self.window_width,
-                    scroll_offset: self.grid_scroll_offset,
-                    viewport_height: self.grid_viewport_height,
-                    // The same question `focus_task` answers, so the border
-                    // and the label land on one tile together.
-                    focused_tile: focus::focused_tile(self.cursors, self.layout()),
-                })
-            };
-
-            let page = container(column![header, body])
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .padding([0, content_horizontal_padding()]);
-
-            // The filters live in a sidebar the header's own button toggles, the
-            // way the console drawer did - one filter surface for every section,
-            // driven by whatever facets the source reported, not a strip.
-            if self.filter_open && !self.facets.is_empty() {
-                context_drawer(
-                    Some(fl!("filter").into()),
-                    None,
-                    None,
-                    None,
-                    Message::CloseFilterPanel,
-                    page,
-                    filters::view(filters::Filters {
-                        facets: &self.facets,
-                        selected: &self.facet_selection,
-                        cursor: self.filter_open.then_some(self.cursors.filter_row),
-                    }),
-                    filter_drawer_width(self.window_width),
-                )
-                .into()
-            } else {
-                page.into()
-            }
-        };
-
-        // The menu is a surface over the page: it is stacked over the content
-        // column, so it draws over the grid and the filter drawer alike, and its
-        // scrim dismisses it. The rows come from the entry it is open on, which
-        // is why the menu is built here and not in the grid.
-        let content: Element<'_, Self::Message> = match self.menu_target() {
-            Some(target) => {
-                let title = self
-                    .visible
-                    .get(target)
-                    .map_or("", |entry| entry.name.as_str());
-                stack![
-                    content,
-                    Menu::new(
-                        title,
-                        self.menu_rows_for(target),
-                        self.menu.selected(),
-                        Message::CloseMenu,
-                    )
-                ]
-                .into()
-            }
-            None => content,
-        };
-
-        container(row![sidebar, divider, content])
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .class(theme::Container::Custom(Box::new(root_background)))
-            .into()
+        self.view_page(self.page)
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
@@ -942,11 +881,165 @@ impl Application for App {
             }) => Some(Message::GamepadEvent(GamepadEvent::Back)),
             _ => None,
         });
-        Subscription::batch([navigation, input])
+        let mut subs = vec![navigation, input];
+        // The frame clock runs only while motion is in flight: an idle window
+        // schedules no redraws at all, and an ungated frame subscription would pin
+        // the compositor at the refresh rate forever.
+        if self.is_animating() {
+            subs.push(window::frames().map(|(_window, at)| Message::Animate(at)));
+        }
+        Subscription::batch(subs)
     }
 }
 
 impl App {
+    /// One page, drawn as the whole window. This is the dispatcher a fade-through
+    /// needs: rendering both sides of a transition means asking for a page by
+    /// value rather than for whichever page happens to be current.
+    fn view_page(&self, page: Page) -> Element<'_, Message> {
+        match page {
+            // The dashboard is a sibling of the library, not a page inside it: it
+            // carries its own top bar and has no sidebar, so it is the whole
+            // window. Drawing the library's shell around it would make it read as a
+            // section of the library, which is exactly what it is not.
+            Page::Dashboard => self.view_dashboard(),
+            // Settings is a sibling of the library as well, and carries no sidebar
+            // of its own.
+            Page::Settings => self.view_settings(),
+            Page::Library => self.view_library(),
+        }
+    }
+
+    /// The library: the sidebar, the content column beside it, and the surfaces
+    /// that open over both.
+    fn view_library(&self) -> Element<'_, Message> {
+        let sidebar = sidebar::view(
+            Sidebar {
+                current: self.cur_section,
+                user_name: &self.user_name,
+                disk_free: &self.disk_free,
+                app_icon: ui::app_icon(),
+                window_width: self.window_width,
+            },
+            Message::SelectSection,
+        );
+
+        let divider = container(space::horizontal())
+            .width(Length::Fixed(DIVIDER_WIDTH))
+            .height(Length::Fill)
+            .class(theme::Container::Custom(Box::new(sidebar_divider)));
+
+        // A launch takes over the content column: the game is starting, so the
+        // library behind it is no longer what the user is acting on.
+        let content: Element<'_, Message> = if self.launch_state.is_visible() {
+            view_launch_overlay(&self.launch_state)
+        } else {
+            let header = header::view(header::Header {
+                section: self.cur_section,
+                selected_group: self.cur_group,
+                groups: self.config.sections.get(self.cur_section),
+                search_value: &self.search_value,
+                filter_active: self.facet_selection.len(),
+                show_filter: !self.facets.is_empty(),
+            });
+
+            let body: Element<'_, Message> = if self.visible.is_empty() {
+                container(space::horizontal())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            } else {
+                grid::view(grid::Grid {
+                    entries: &self.visible,
+                    window_width: self.window_width,
+                    scroll_offset: self.grid_scroll_offset,
+                    viewport_height: self.grid_viewport_height,
+                    // The same question `focus_task` answers, so the border
+                    // and the label land on one tile together.
+                    focused_tile: focus::focused_tile(self.cursors, self.layout()),
+                })
+            };
+
+            // A tab change slides the grid sideways, under the cover: the strip
+            // above it is navigation, and stays put.
+            let body: Element<'_, Message> = match &self.tab_slide {
+                Some(slide) => {
+                    TabTransition::new(body, slide.progress(self.now), slide.direction()).into()
+                }
+                None => body,
+            };
+
+            let column: Element<'_, Message> = container(column![header, body])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding([0, content_horizontal_padding()])
+                .into();
+
+            // A section change slides the whole content column - title, tabs and
+            // grid together - while the sidebar stays put as the fixed navigation.
+            let page: Element<'_, Message> = match &self.section_slide {
+                Some(slide) => {
+                    SectionTransition::new(column, slide.progress(self.now), slide.direction())
+                        .into()
+                }
+                None => column,
+            };
+
+            // The filters live in a sidebar the header's own button toggles, the
+            // way the console drawer did - one filter surface for every section,
+            // driven by whatever facets the source reported, not a strip.
+            if self.filter_open && !self.facets.is_empty() {
+                context_drawer(
+                    Some(fl!("filter").into()),
+                    None,
+                    None,
+                    None,
+                    Message::CloseFilterPanel,
+                    page,
+                    filters::view(filters::Filters {
+                        facets: &self.facets,
+                        selected: &self.facet_selection,
+                        cursor: self.filter_open.then_some(self.cursors.filter_row),
+                    }),
+                    filter_drawer_width(self.window_width),
+                )
+                .into()
+            } else {
+                page
+            }
+        };
+
+        // The menu is a surface over the page: it is stacked over the content
+        // column, so it draws over the grid and the filter drawer alike, and its
+        // scrim dismisses it. The rows come from the entry it is open on, which
+        // is why the menu is built here and not in the grid.
+        let content: Element<'_, Message> = match self.menu_target() {
+            Some(target) => {
+                let title = self
+                    .visible
+                    .get(target)
+                    .map_or("", |entry| entry.name.as_str());
+                stack![
+                    content,
+                    Menu::new(
+                        title,
+                        self.menu_rows_for(target),
+                        self.menu.selected(),
+                        Message::CloseMenu,
+                    )
+                ]
+                .into()
+            }
+            None => content,
+        };
+
+        container(row![sidebar, divider, content])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .class(theme::Container::Custom(Box::new(root_background)))
+            .into()
+    }
+
     /// The dashboard screen: the app's front door, with chrome of its own.
     ///
     /// It is drawn as the whole window rather than as the library's content, so
@@ -1360,18 +1453,17 @@ impl App {
 
         // The rail follows the cursor sideways...
         let (card_width, gap) = dashboard::card_pitch(shelf, self.window_width);
+        let rail = self.dashboard_cursor.rail;
+        let rail_offset = self.rail_offsets.get(rail).copied().unwrap_or(0.0);
         if let Some(offset) = dashboard::focus::rail_scroll_target(
             self.dashboard_cursor.card,
             shelf.cards.len(),
-            self.rail_offsets
-                .get(self.dashboard_cursor.rail)
-                .copied()
-                .unwrap_or(0.0),
+            rail_offset,
             dashboard::rail_viewport(self.window_width),
             card_width,
             gap,
         ) {
-            tasks.push(scroll_rail(self.dashboard_cursor.rail, offset));
+            tasks.push(self.animate_scroll_to(ScrollTarget::Rail(rail), rail_offset, offset));
         }
 
         // ...and the page follows it down the stack of rails, which is the same
@@ -1389,7 +1481,8 @@ impl App {
             self.page_offset,
             page_viewport,
         ) {
-            tasks.push(dashboard::scroll_to_page(offset));
+            let from = self.page_offset;
+            tasks.push(self.animate_scroll_to(ScrollTarget::Page, from, offset));
         }
 
         Task::batch(tasks)
@@ -1617,7 +1710,7 @@ impl App {
         // Settings is as deep as the library is, so Back leaves either for the
         // dashboard - the one page with nothing behind it.
         if self.page != Page::Dashboard {
-            self.page = Page::Dashboard;
+            self.switch_page(Page::Dashboard);
             self.cursors.ring = None;
             self.bar_cursor = None;
             let rails = self.dashboard_rail_lengths();
@@ -1730,6 +1823,7 @@ impl App {
     fn scroll_to_tile(&mut self, tile: usize) -> Task<Message> {
         let metrics = grid::metrics(self.window_width);
         let row = tile / metrics.columns.max(1);
+        let from = self.grid_scroll_offset;
         let Some(offset) = metrics.scroll_to_row(
             self.visible.len(),
             row,
@@ -1738,8 +1832,11 @@ impl App {
         ) else {
             return Task::none();
         };
+        // The grid is virtualized, so the offset it is *going* to is recorded now -
+        // the rows around it are the ones that get built - while the scrollable is
+        // eased there.
         self.grid_scroll_offset = offset;
-        grid::scroll_to_offset(offset)
+        self.animate_scroll_to(ScrollTarget::Grid, from, offset)
     }
 
     /// The locally-loaded sections derive their facets from the catalog they
@@ -2079,18 +2176,6 @@ fn launch_card_message(id: &str, title: &str) -> Message {
     }
 }
 
-/// Scrolls one dashboard rail to a horizontal offset, leaving it where it is
-/// vertically - a rail only ever moves sideways.
-fn scroll_rail(rail: usize, offset: f32) -> Task<Message> {
-    scroll_to(
-        dashboard::rail_id(rail),
-        AbsoluteOffset {
-            x: Some(offset),
-            y: None,
-        },
-    )
-}
-
 /// Puts the renderer's focus on one widget.
 ///
 /// The shell's cursor decides what the user is on; this only reproduces it in
@@ -2118,6 +2203,9 @@ mod tests {
     use super::*;
     use crate::app_group::AppGroup;
     use crate::providers::filter::FacetOption;
+    use crate::style::PAGE_TRANSITION_DURATION;
+
+    use super::animation::ScrollTarget;
 
     /// A shell with no config store: nothing it does can reach the real config
     /// file, which is what lets a test drive `update` and read the state it
@@ -2127,6 +2215,11 @@ mod tests {
         App {
             core: Core::default(),
             page: Page::default(),
+            page_fade: None,
+            now: Instant::now(),
+            section_slide: None,
+            tab_slide: None,
+            scroll: None,
             config: AppLibraryConfig::default(),
             config_store: None,
             daemon_client: DaemonClient::new(DaemonConfig {
@@ -2294,6 +2387,16 @@ mod tests {
         let _ = app.update(Message::GamepadEvent(event));
     }
 
+    /// Runs the frame clock past every duration, so the slides and the scroll land
+    /// and retire: the first tick applies what is pending under the cover, the
+    /// second drops it. Nothing here waits on the real clock - the tick carries its
+    /// own timestamp.
+    fn settle(app: &mut App) {
+        let ahead = Instant::now() + std::time::Duration::from_secs(1);
+        let _ = app.update(Message::Animate(ahead));
+        let _ = app.update(Message::Animate(ahead));
+    }
+
     /// The pad is not the input path while a game owns the screen, or before the
     /// frontend has been told it has input at all.
     #[test]
@@ -2411,6 +2514,11 @@ mod tests {
         assert_eq!(app.cur_group, None, "the section opens on its all tab");
 
         send(&mut app, GamepadEvent::NextTab);
+        let slide = app.tab_slide.as_ref().expect("the tab change should slide");
+        assert_eq!(*slide.target(), Some(0));
+        assert_eq!(app.cur_group, None, "the grid swaps under the cover");
+
+        settle(&mut app);
 
         assert_eq!(app.cur_group, Some(0), "the store's tab should be showing");
         assert_eq!(
@@ -2425,6 +2533,7 @@ mod tests {
         let mut app = showing(4);
 
         send(&mut app, GamepadEvent::NextGroup);
+        settle(&mut app);
 
         assert_eq!(app.cur_section, Section::ConsoleGames);
         // Nothing is loaded for that section, so its grid is empty and there is
@@ -2433,6 +2542,7 @@ mod tests {
         assert_eq!(app.cursors.tile, 0);
 
         send(&mut app, GamepadEvent::PrevGroup);
+        settle(&mut app);
 
         assert_eq!(app.cur_section, Section::PcGames);
         assert_eq!(
@@ -3287,5 +3397,255 @@ mod tests {
             "the bar reads the shell's snapshot, not its own copy"
         );
         assert!(bar.status.bluetooth.is_none());
+    }
+
+    /// Switching pages flips at once - routing and input read `self.page`
+    /// immediately - and records where the fade came from, so the transition can
+    /// still draw the page being left.
+    #[test]
+    fn switching_pages_starts_a_fade_through() {
+        let mut app = shell();
+        assert_eq!(app.page, Page::Dashboard);
+
+        let _ = app.update(Message::OpenSettings);
+
+        assert_eq!(app.page, Page::Settings);
+        let fade = app.page_fade.as_ref().expect("the switch should be fading");
+        assert_eq!(
+            *fade.origin(),
+            Page::Dashboard,
+            "fades from the page it left"
+        );
+    }
+
+    #[test]
+    fn reselecting_the_current_page_snaps_instead_of_fading() {
+        let mut app = shell();
+        let _ = app.update(Message::OpenSettings);
+        assert!(app.page_fade.is_some());
+
+        // Asking for the page already on screen again: fading to where we already
+        // are would be motion for its own sake.
+        let _ = app.update(Message::OpenSettings);
+
+        assert_eq!(app.page, Page::Settings);
+        assert!(app.page_fade.is_none());
+    }
+
+    /// Ages the in-flight page fade past its duration, so the next message
+    /// retires it rather than carrying it along.
+    fn age_page_fade(app: &mut App) {
+        let origin = *app
+            .page_fade
+            .as_ref()
+            .expect("page fade in flight")
+            .origin();
+        app.page_fade = Some(Fade::new(
+            origin,
+            Instant::now() - std::time::Duration::from_secs(1),
+            PAGE_TRANSITION_DURATION,
+        ));
+    }
+
+    /// A fade is bounded: it cannot outlive `PAGE_TRANSITION_DURATION`, even when
+    /// the message that arrives next is not a frame tick.
+    #[test]
+    fn any_next_message_retires_a_fade_that_ran_its_course() {
+        let mut app = shell();
+        let _ = app.update(Message::OpenLibrary);
+
+        // Inside its duration, an unrelated message leaves it running.
+        let _ = app.update(Message::DismissLaunch);
+        assert!(app.page_fade.is_some());
+
+        age_page_fade(&mut app);
+        let _ = app.update(Message::DismissLaunch);
+
+        assert!(
+            app.page_fade.is_none(),
+            "expiry is not the tick's job alone"
+        );
+        assert_eq!(app.page, Page::Library, "the page it landed on stays");
+    }
+
+    /// The frame tick is what moves a fade along: `view` reads its progress from
+    /// the clock the tick carries.
+    #[test]
+    fn a_frame_tick_moves_a_fade_along() {
+        let mut app = shell();
+        let _ = app.update(Message::OpenLibrary);
+        let at_landing = app
+            .page_fade
+            .as_ref()
+            .expect("page fade in flight")
+            .progress(app.now);
+
+        let _ = app.update(Message::Animate(app.now + PAGE_TRANSITION_DURATION / 2));
+
+        let midpoint = app
+            .page_fade
+            .as_ref()
+            .expect("page fade still in flight")
+            .progress(app.now);
+        assert!(
+            midpoint > at_landing,
+            "the tick advanced the fade: {midpoint} after {at_landing}"
+        );
+    }
+
+    /// Back is a page change like any other, so it fades home instead of cutting.
+    #[test]
+    fn back_from_another_page_fades_to_the_dashboard() {
+        let mut app = showing(0);
+        assert_eq!(app.page, Page::Library);
+
+        let _ = app.back();
+
+        assert_eq!(app.page, Page::Dashboard);
+        let fade = app.page_fade.as_ref().expect("Back should fade home");
+        assert_eq!(*fade.origin(), Page::Library);
+    }
+
+    /// A section change slides the content column vertically: the section being
+    /// drawn stays the current one until the cover is opaque, so the outgoing grid
+    /// is still what the user sees while it travels off.
+    #[test]
+    fn switching_sections_starts_a_vertical_slide() {
+        let mut app = showing(4);
+
+        let _ = app.update(Message::SelectSection(Section::Applications));
+
+        let slide = app
+            .section_slide
+            .as_ref()
+            .expect("the section change should slide");
+        assert_eq!(*slide.target(), Section::Applications);
+        assert_eq!(slide.direction(), 1.0, "Applications sits below Pc Games");
+        assert_eq!(
+            app.cur_section,
+            Section::PcGames,
+            "the swap waits for cover"
+        );
+        assert!(app.is_animating(), "and the frames are subscribed for it");
+    }
+
+    #[test]
+    fn section_direction_follows_sidebar_order() {
+        let mut app = showing(4);
+        let _ = app.update(Message::SelectSection(Section::Applications));
+        settle(&mut app);
+
+        let _ = app.update(Message::SelectSection(Section::PcGames));
+
+        let slide = app
+            .section_slide
+            .as_ref()
+            .expect("the section change should slide");
+        assert_eq!(slide.direction(), -1.0, "Pc Games sits above Applications");
+    }
+
+    #[test]
+    fn the_section_slide_swaps_under_cover_then_clears() {
+        let mut app = showing(4);
+        let _ = app.update(Message::SelectSection(Section::ConsoleGames));
+
+        settle(&mut app);
+
+        assert_eq!(app.cur_section, Section::ConsoleGames);
+        assert!(app.section_slide.is_none(), "and the slide is dropped");
+    }
+
+    #[test]
+    fn reselecting_the_current_section_does_not_slide() {
+        let mut app = showing(4);
+
+        let _ = app.update(Message::SelectSection(Section::PcGames));
+
+        assert!(
+            app.section_slide.is_none(),
+            "nothing changed, so nothing moves"
+        );
+        assert_eq!(app.cur_section, Section::PcGames);
+    }
+
+    /// A section picked on the way in from the dashboard applies at once: the slide
+    /// travels the library's content column, which is not on screen yet.
+    #[test]
+    fn a_section_picked_as_the_page_changes_applies_at_once() {
+        let mut app = loaded(4);
+        assert_eq!(app.page, Page::Dashboard);
+
+        let _ = app.update(Message::SelectSection(Section::Applications));
+
+        assert!(app.section_slide.is_none());
+        assert_eq!(app.cur_section, Section::Applications);
+        assert_eq!(app.page, Page::Library);
+    }
+
+    /// A tab change slides the grid sideways, and the tab it is travelling to is
+    /// applied under the cover exactly as a section is.
+    #[test]
+    fn switching_tabs_starts_a_directional_slide() {
+        let mut app = showing_two_tabs();
+
+        send(&mut app, GamepadEvent::NextTab);
+
+        let slide = app.tab_slide.as_ref().expect("the tab change should slide");
+        assert_eq!(*slide.target(), Some(0));
+        assert_eq!(slide.direction(), 1.0, "the store's tab sits to the right");
+        assert_eq!(app.cur_group, None, "the swap waits for cover");
+
+        settle(&mut app);
+
+        assert_eq!(app.cur_group, Some(0));
+        assert!(app.tab_slide.is_none(), "and the slide is dropped");
+    }
+
+    #[test]
+    fn tab_direction_follows_strip_order() {
+        let mut app = showing_two_tabs();
+        let _ = app.update(Message::SelectGroup(Some(0)));
+        settle(&mut app);
+
+        let _ = app.update(Message::SelectGroup(None));
+
+        let slide = app.tab_slide.as_ref().expect("the tab change should slide");
+        assert_eq!(slide.direction(), -1.0, "the all tab sits to the left");
+    }
+
+    #[test]
+    fn reselecting_the_current_tab_does_not_slide() {
+        let mut app = showing_two_tabs();
+
+        let _ = app.update(Message::SelectGroup(None));
+
+        assert!(app.tab_slide.is_none(), "nothing changed, so nothing moves");
+    }
+
+    /// A focus step that drags a list eases it there: the lists that follow the
+    /// cursor are what the frame clock is subscribed for.
+    #[test]
+    fn a_focus_step_eases_the_grid_to_its_row() {
+        let mut app = showing(8 * 40);
+        let metrics = grid::metrics(app.window_width);
+        let visible_rows =
+            ((app.grid_viewport_height / metrics.row_height).floor() as usize).max(1);
+
+        for _ in 0..visible_rows.saturating_sub(1) {
+            send(&mut app, GamepadEvent::MoveDown);
+        }
+        assert!(
+            app.scroll.is_none(),
+            "a step inside the viewport drags nothing"
+        );
+
+        send(&mut app, GamepadEvent::MoveDown);
+
+        let scroll = app.scroll.as_ref().expect("the grid should be easing");
+        assert_eq!(*scroll.target(), ScrollTarget::Grid);
+        assert!(app.is_animating(), "and the frames are subscribed for it");
+
+        settle(&mut app);
+        assert!(app.scroll.is_none(), "arriving drops the animation");
     }
 }
