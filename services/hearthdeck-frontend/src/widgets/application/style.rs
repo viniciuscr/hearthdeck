@@ -7,8 +7,9 @@
 //! imported, not copied.
 //!
 //! The tile draws every surface's card - the library grid, the dashboard's
-//! rails - so this scrim and its [`TEXT_TILE_LABEL`] are the only label
-//! treatment a card has.
+//! rails - so this scrim and its [`TEXT_TILE_LABEL`] are the whole label
+//! treatment a card has: [`super::app_label`] reads the name off the artwork
+//! at the same size, for surfaces that have the room for it.
 
 use cosmic::Theme;
 use cosmic::iced::core::{Background, Border, Color, Shadow};
@@ -21,6 +22,28 @@ use crate::style::{TEXT_SCALE, card_surface, surface_radius};
 /// Read at TV distance, and it rides on the cover art rather than on its own
 /// strip below it.
 pub const TEXT_TILE_LABEL: f32 = 24.0 * TEXT_SCALE;
+
+/// Line height of the name text, as a multiple of [`TEXT_TILE_LABEL`].
+///
+/// Pinned here and handed to the text, so [`LABEL_HEIGHT`] is derived from the
+/// same number the renderer draws with: a band figured from any other line
+/// height is how a wrapped name outgrows its rail.
+pub const LABEL_LINE_HEIGHT: f32 = 1.4;
+
+/// How many lines of a name the band holds before the ellipsis cuts it
+/// ([`super::app_label`]).
+pub const LABEL_MAX_LINES: usize = 2;
+
+/// Height of the name line a surface keeps below its cards
+/// ([`super::app_label`]).
+///
+/// Room for the [`LABEL_MAX_LINES`] wrapped lines a long name may reach at
+/// [`LABEL_LINE_HEIGHT`], plus the air around them - half a text size. Most
+/// names are one line at a rail's width, but a longer one must not push what
+/// is below it out of where the page scroll thinks it is. Fixed rather than
+/// measured - only the renderer measures text - so the layout cannot shift as
+/// the cursor walks between rails.
+pub const LABEL_HEIGHT: f32 = TEXT_TILE_LABEL * (LABEL_LINE_HEIGHT * LABEL_MAX_LINES as f32 + 0.5);
 
 /// Size of the source badge overlaid on the tile artwork corner.
 pub const SOURCE_BADGE: f32 = 28.0;

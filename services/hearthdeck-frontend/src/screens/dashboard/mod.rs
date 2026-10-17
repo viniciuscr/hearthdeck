@@ -30,7 +30,7 @@ use crate::style::{
     DASHBOARD_GAME_ASPECT, content_horizontal_padding, dashboard_console_tile_size,
     dashboard_tile_size, sidebar_width,
 };
-use crate::widgets::application::{Selection, app_tile};
+use crate::widgets::application::{LABEL_HEIGHT, Selection, TileLabel, app_label, app_tile};
 use crate::widgets::rail::rail;
 use crate::widgets::top_bar;
 
@@ -149,28 +149,36 @@ pub fn view<'a>(
         .map(|(index, shelf)| {
             let (size, aspect, fit) = shelf_metrics(shelf, window_width);
             let scroll = on_rail_scroll.clone();
-            rail(rail_id(index), shelf.title.clone(), size)
-                .items(shelf.cards.iter().enumerate().map(|(card_index, card)| {
-                    // The one shared tile. The rails differ from the grid
-                    // only in geometry and in having no context menu; the
-                    // card under the cursor is marked here, which is what
-                    // gives an inert movie card its ring.
-                    app_tile(
-                        card.id.clone(),
-                        &card.label,
-                        card.icon.clone(),
-                        size * aspect,
-                        size,
-                        fit,
-                        1,
-                        None,
-                        card.message.clone(),
-                        None,
-                        card_selection(cursor, &rail_lengths, index, card_index),
-                    )
-                }))
-                .on_scroll(move |viewport| scroll(index, viewport.absolute_offset().x))
-                .into()
+            let rail_element: Element<'a, Message> =
+                rail(rail_id(index), shelf.title.clone(), size)
+                    .items(shelf.cards.iter().enumerate().map(|(card_index, card)| {
+                        // The one shared tile. The rails differ from the grid
+                        // only in geometry, in having no context menu, and in
+                        // where the name is read: below the rail rather than on
+                        // the art. The card under the cursor is marked here,
+                        // which is what gives an inert movie card its ring.
+                        app_tile(
+                            card.id.clone(),
+                            &card.label,
+                            card.icon.clone(),
+                            size * aspect,
+                            size,
+                            fit,
+                            1,
+                            None,
+                            card.message.clone(),
+                            None,
+                            TileLabel::Elsewhere,
+                            card_selection(cursor, &rail_lengths, index, card_index),
+                        )
+                    }))
+                    .on_scroll(move |viewport| scroll(index, viewport.absolute_offset().x))
+                    .into();
+            column![
+                rail_element,
+                app_label(focused_label(cursor, &rail_lengths, index, &shelf.cards)),
+            ]
+            .into()
         })
         .collect();
 
@@ -247,8 +255,29 @@ pub fn card_selection(
     }
 }
 
-/// How tall each rail is in order, which is what the page scroll measures
-/// against to keep the focused one on screen.
+/// The name read out below one rail: the label of the card the cursor is on
+/// in it, if the cursor is on this rail at all.
+///
+/// Clamped through [`focus::confirm`] the same way [`card_selection`] is, so
+/// the name below the rail and the ring on the card cannot disagree.
+#[must_use]
+pub fn focused_label<'a>(
+    cursor: focus::Cursor,
+    rails: &[usize],
+    rail_index: usize,
+    cards: &'a [Card],
+) -> Option<&'a str> {
+    match focus::confirm(cursor, rails) {
+        Some((rail, card_index)) if rail == rail_index => {
+            cards.get(card_index).map(|card| card.label.as_str())
+        }
+        _ => None,
+    }
+}
+
+/// How tall each rail is in order - its title, its cards, and the name line
+/// below them - which is what the page scroll measures against to keep the
+/// focused one on screen.
 #[must_use]
 pub fn rail_heights(shelves: &[Shelf], window_width: f32) -> Vec<f32> {
     let Spacing { space_m, .. } = theme::spacing();
@@ -256,7 +285,7 @@ pub fn rail_heights(shelves: &[Shelf], window_width: f32) -> Vec<f32> {
         .iter()
         .map(|shelf| {
             let (size, _, _) = shelf_metrics(shelf, window_width);
-            RAIL_TITLE_HEIGHT + f32::from(space_m) + size
+            RAIL_TITLE_HEIGHT + f32::from(space_m) + size + LABEL_HEIGHT
         })
         .collect()
 }
@@ -303,8 +332,13 @@ pub fn rail_viewport(window_width: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{card_selection, focus};
-    use crate::widgets::application::Selection;
+    use super::{
+        Card, RAIL_TITLE_HEIGHT, Shelf, card_selection, focus, focused_label, rail_heights,
+        shelf_metrics,
+    };
+    use crate::widgets::application::{LABEL_HEIGHT, Selection};
+    use cosmic::theme;
+    use cosmic::widget::{Id, icon};
 
     /// A cursor on a rail and a card in it.
     fn on(rail: usize, card: usize) -> focus::Cursor {
@@ -315,8 +349,60 @@ mod tests {
         }
     }
 
+    /// A card named after its label, with no icon or press to speak of.
+    fn card(label: &str) -> Card {
+        Card::new(
+            Id::new(label.to_string()),
+            label,
+            icon::from_raster_pixels(4, 4, vec![0u8; 64]),
+            None,
+        )
+    }
+
     /// Three rails: four cards, one card, three cards.
     const RAILS: [usize; 3] = [4, 1, 3];
+
+    #[test]
+    fn the_name_below_a_rail_is_the_card_the_cursor_is_on() {
+        let cards = [card("Half-Life 2"), card("Portal"), card("Hades")];
+        assert_eq!(focused_label(on(1, 1), &[2, 3], 1, &cards), Some("Portal"));
+    }
+
+    #[test]
+    fn a_rail_the_cursor_is_not_in_reads_no_name() {
+        let cards = [card("Half-Life 2"), card("Portal")];
+        assert_eq!(focused_label(on(1, 0), &[2, 3], 0, &cards), None);
+    }
+
+    #[test]
+    fn a_cursor_past_the_end_names_the_card_it_clamps_to() {
+        let cards = [card("Half-Life 2"), card("Portal"), card("Hades")];
+        assert_eq!(focused_label(on(1, 9), &[2, 3], 1, &cards), Some("Hades"));
+    }
+
+    #[test]
+    fn an_empty_dashboard_reads_no_name() {
+        let cards = [card("Half-Life 2")];
+        assert_eq!(focused_label(on(0, 0), &[0, 0], 0, &cards), None);
+    }
+
+    // The page scroll measures a rail by `rail_heights`, so the name line
+    // below its cards has to fit inside that measurement: under-measure the
+    // rail and the scroll stops with the focused name off the bottom of the
+    // screen.
+    #[test]
+    fn a_rail_reserves_room_for_the_name_line_below_its_cards() {
+        let shelves = vec![Shelf::new(true, "Consoles", vec![card("Hades")])];
+        let heights = rail_heights(&shelves, 1200.0);
+        let (size, _, _) = shelf_metrics(&shelves[0], 1200.0);
+
+        assert_eq!(
+            heights[0],
+            RAIL_TITLE_HEIGHT + f32::from(theme::spacing().space_m) + size + LABEL_HEIGHT,
+            "a rail is measured as exactly what its column stacks: the title, the gap under it, \
+             its cards, and the name line below them",
+        );
+    }
 
     #[test]
     fn the_card_under_the_cursor_is_selected_and_its_neighbours_are_not() {

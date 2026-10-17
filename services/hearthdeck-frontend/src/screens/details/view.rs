@@ -30,7 +30,7 @@ use crate::style::{
     details_hero_width, details_toggle_button_class, hero_card, modal_scrim, passthrough,
     primary_action_button_class,
 };
-use crate::widgets::application::{Selection, app_tile};
+use crate::widgets::application::{Selection, TileLabel, app_tile};
 use crate::widgets::rail::rail;
 
 pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message> {
@@ -337,6 +337,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
                     None,
                     Some(Message::DetailsSelectScreenshot(index)),
                     None,
+                    TileLabel::OnArtwork,
                     selection,
                 )
             })

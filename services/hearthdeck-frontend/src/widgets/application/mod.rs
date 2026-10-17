@@ -1,10 +1,16 @@
 //! An application tile: cover art, a label, and source/version badges.
 //!
 //! The label is not permanent: it shows while the tile is picked out or under
-//! the pointer, the same moments its border lights up.
+//! the pointer, the same moments its border lights up. Where a name is read at
+//! all is the surface's choice ([`TileLabel`]): on the artwork, or out beside
+//! the card where there is room for it ([`app_label`]).
 
+mod label;
 mod reveal;
 mod style;
+
+pub use label::app_label;
+pub use style::LABEL_HEIGHT;
 
 use crate::style::{ICON_SMALL, TEXT_CAPTION, artwork_fit, tile_button_class};
 use cosmic::Element;
@@ -25,8 +31,9 @@ use style::{SOURCE_BADGE, TEXT_TILE_LABEL, source_badge, tile_label_overlay};
 /// it means without needing a comment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Selection {
-    /// A picked-out tile: drawn in the active tile style, and its label shown
-    /// the way the border is - always, not only under the pointer.
+    /// A picked-out tile: drawn in the active tile style, and the label on
+    /// its artwork shown the way the border is - always, not only under the
+    /// pointer.
     Selected,
     /// Every other tile: its label appears only while the pointer is on it,
     /// the same span the border covers when a tile is hovered.
@@ -38,6 +45,32 @@ impl Selection {
     #[must_use]
     pub fn is_selected(self) -> bool {
         matches!(self, Self::Selected)
+    }
+}
+
+/// Where a tile's name is read: on its artwork, or beside it.
+///
+/// The library's grid has nowhere but the tile to read a name, so its labels
+/// ride the cover art. The dashboard has room below its rails for the full
+/// name - some are long - so its tiles are drawn nameless and the name is read
+/// out there instead ([`app_label`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TileLabel {
+    /// The name rides the bottom of the artwork as a scrim, revealed the way
+    /// the tile's border is - when the tile is picked out or pointed at.
+    OnArtwork,
+    /// The tile is nameless; the surface reads the name where it has room.
+    Elsewhere,
+}
+
+impl TileLabel {
+    /// The name drawn on the artwork, or `None` for a tile whose surface
+    /// reads the name elsewhere.
+    fn label(self, name: &str, source: Option<&str>) -> Option<String> {
+        match self {
+            Self::OnArtwork => Some(tile_label(name, source)),
+            Self::Elsewhere => None,
+        }
     }
 }
 
@@ -65,12 +98,13 @@ pub struct SourceBadge<'a> {
 /// shelves - so a card looks and focuses the same wherever it is drawn. The
 /// surfaces differ only in geometry ([`ContentFit`], and the fixed
 /// `tile_width`/`tile_height` they pass), whether they have a context menu
-/// (`on_right_release`), and whether the card is picked out ([`Selection`]),
-/// which decides the active style and whether its label waits for the
-/// pointer.
-// The eleven arguments are one tile's identity, geometry, fit, and the messages
-// and markers its interactions use; they are all supplied inline at the call
-// sites, so a spec struct would only move the same list somewhere else.
+/// (`on_right_release`), where the name is read ([`TileLabel`]: on the artwork
+/// or off it), and whether the card is picked out ([`Selection`]), which
+/// decides the active style and whether its label waits for the pointer.
+// The twelve arguments are one tile's identity, geometry, fit, label policy,
+// and the messages and markers its interactions use; they are all supplied
+// inline at the call sites, so a spec struct would only move the same list
+// somewhere else.
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn app_tile<'a, Message: Clone + 'a>(
@@ -91,6 +125,9 @@ pub fn app_tile<'a, Message: Clone + 'a>(
     on_right_release: Option<Message>,
     on_pressed: Option<Message>,
     source: Option<SourceBadge<'_>>,
+    // Where the name is read: on the artwork as a scrim, or off it where the
+    // surface has room for the full name.
+    label: TileLabel,
     selection: Selection,
 ) -> Element<'a, Message> {
     // A duplicate's source, shown as an icon badge on the artwork corner. The
@@ -107,8 +144,6 @@ pub fn app_tile<'a, Message: Clone + 'a>(
                 .align_y(Vertical::Center)
                 .into()
         });
-    let name = tile_label(name, source.as_ref().map(|badge| badge.label));
-
     // The cover is fitted by the caller: a grid tile contains box art so an
     // odd-shaped cover is not cropped, and a media rail covers a poster whose
     // shape already matches the card. A `Contain` fit bands the artwork and the
@@ -163,32 +198,36 @@ pub fn app_tile<'a, Message: Clone + 'a>(
         artwork_layer = stack![artwork_layer, badge_layer].into();
     }
 
-    // The label rides on the bottom of the artwork as a translucent scrim rather
-    // than taking a strip below it, so the cover still fills the whole tile.
-    let label_layer: Element<'a, Message> = container(
-        container(text(name).size(TEXT_TILE_LABEL).width(Length::Fill))
-            .padding([2, 6])
-            .width(Length::Fill)
-            .height(Length::Shrink)
-            .class(cosmic::theme::Container::Custom(Box::new(
-                tile_label_overlay,
-            ))),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .align_x(Horizontal::Center)
-    .align_y(Vertical::Bottom)
-    .into();
-
     let is_selected = selection.is_selected();
 
-    // The label waits for the tile to be picked out or pointed at - the same
-    // moments the accent border lights up - so the name appears with the
-    // border and the artwork stands alone otherwise. The layer keeps its
-    // place in the layout either way; only the drawing is gated.
-    let label_layer: Element<'a, Message> = Reveal::new(label_layer, is_selected).into();
+    // The label rides on the bottom of the artwork as a translucent scrim rather
+    // than taking a strip below it, so the cover still fills the whole tile. A
+    // tile whose surface reads the name elsewhere draws no scrim at all, so no
+    // shadow of a label falls over the cover.
+    if let Some(name) = label.label(name, source.as_ref().map(|badge| badge.label)) {
+        let label_layer: Element<'a, Message> = container(
+            container(text(name).size(TEXT_TILE_LABEL).width(Length::Fill))
+                .padding([2, 6])
+                .width(Length::Fill)
+                .height(Length::Shrink)
+                .class(cosmic::theme::Container::Custom(Box::new(
+                    tile_label_overlay,
+                ))),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Horizontal::Center)
+        .align_y(Vertical::Bottom)
+        .into();
 
-    artwork_layer = stack![artwork_layer, label_layer].into();
+        // The label waits for the tile to be picked out or pointed at - the same
+        // moments the accent border lights up - so the name appears with the
+        // border and the artwork stands alone otherwise. The layer keeps its
+        // place in the layout either way; only the drawing is gated.
+        let label_layer: Element<'a, Message> = Reveal::new(label_layer, is_selected).into();
+
+        artwork_layer = stack![artwork_layer, label_layer].into();
+    }
 
     let tile_button = button::custom(artwork_layer)
         .id(widget_id)
@@ -204,7 +243,12 @@ pub fn app_tile<'a, Message: Clone + 'a>(
         .height(Length::Fixed(tile_height))
         .class(tile_button_class(is_selected))
         .padding(0)
-        .on_press_maybe(on_pressed);
+        .on_press_maybe(on_pressed)
+        // A screen reader takes a button's name from the text nodes inside
+        // it, and text under an artwork `stack` never reaches the button's
+        // node - so the button always names itself from the entry, however
+        // the surface reads the name visually.
+        .name(name.to_owned());
 
     match on_right_release {
         Some(message) => mouse_area(tile_button).on_right_release(message).into(),
@@ -245,7 +289,7 @@ fn app_source_icon(handle: widget::icon::Handle) -> widget::Icon {
 
 #[cfg(test)]
 mod tests {
-    use super::{Selection, SourceBadge, app_tile, tile_label};
+    use super::{Selection, SourceBadge, TileLabel, app_tile, tile_label};
     use cosmic::iced::ContentFit;
     use cosmic::iced::{Length, Size};
     use cosmic::widget::{self, icon};
@@ -263,6 +307,19 @@ mod tests {
     #[test]
     fn a_short_name_is_shown_in_full() {
         assert_eq!(tile_label("Steam", None), "Steam");
+    }
+
+    #[test]
+    fn a_nameless_tile_carries_no_label_on_its_artwork() {
+        assert_eq!(TileLabel::Elsewhere.label("Steam", Some("Flatpak")), None);
+    }
+
+    #[test]
+    fn a_named_tile_carries_the_shaped_label_on_its_artwork() {
+        assert_eq!(
+            TileLabel::OnArtwork.label("Steam", Some("Flatpak")),
+            Some("Steam (Flatpak)".to_string())
+        );
     }
 
     #[test]
@@ -312,6 +369,7 @@ mod tests {
                 Some(Msg::Open),
                 Some(Msg::Activate),
                 source,
+                TileLabel::OnArtwork,
                 Selection::Selected,
             );
 
@@ -342,6 +400,7 @@ mod tests {
             None,
             None,
             None,
+            TileLabel::Elsewhere,
             Selection::Selected,
         );
 

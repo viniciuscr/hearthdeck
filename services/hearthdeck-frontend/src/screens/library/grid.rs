@@ -26,7 +26,7 @@ use cosmic::widget::{Id, column, container, row, scrollable, space};
 
 use crate::app::Message;
 use crate::style::{GRID_OVERSCAN_ROWS, grid_columns, grid_gap, tile_height, tile_width};
-use crate::widgets::application::{Selection, app_tile};
+use crate::widgets::application::{Selection, TileLabel, app_tile};
 
 /// The grid's scrollable. Held here because it is the grid's own widget, and
 /// this module is what knows when a new list has to be drawn from the top.
@@ -228,6 +228,7 @@ pub fn view(grid: Grid<'_>) -> Element<'_, Message> {
                 Some(Message::TileContext(index)),
                 Some(Message::Activate(index)),
                 None,
+                TileLabel::OnArtwork,
                 tile_selection(grid.focused_tile, index),
             ));
         }

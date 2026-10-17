@@ -100,7 +100,7 @@ use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::{SystemStatus, current_user_name, disk_free_label, human_size};
 use crate::toplevel::{WindowHint, fullscreen_when_it_appears};
 use crate::ui::app_icon;
-use crate::widgets::application::{Selection, SourceBadge, app_tile};
+use crate::widgets::application::{Selection, SourceBadge, TileLabel, app_tile};
 use crate::widgets::controller_key::{FaceButton, controller_hint};
 use crate::widgets::menu::{self, Menu, Row};
 use crate::widgets::rail::rail;
@@ -3577,6 +3577,7 @@ impl HearthDeck {
                         None,
                         Some(Message::OpenConsole(index)),
                         None,
+                        TileLabel::OnArtwork,
                         selection,
                     )
                 })
@@ -6346,6 +6347,7 @@ impl HearthDeck {
                         None,
                         Some(Message::ActivateDashboardApp(entry.id.clone())),
                         None,
+                        TileLabel::OnArtwork,
                         selection,
                     )
                 })
@@ -6712,6 +6714,7 @@ impl HearthDeck {
                         None,
                         Some(Message::DetailsSelectScreenshot(index)),
                         None,
+                        TileLabel::OnArtwork,
                         selection,
                     )
                 })
@@ -7186,6 +7189,7 @@ impl HearthDeck {
                     // The duplicate's source, drawn as a corner badge with the
                     // name appended to the label.
                     dup_badge,
+                    TileLabel::OnArtwork,
                     selection,
                 );
 
