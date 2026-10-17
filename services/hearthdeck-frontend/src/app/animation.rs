@@ -52,6 +52,11 @@ impl App {
             .is_some_and(|fade| fade.is_done(Instant::now()))
         {
             self.page_fade = None;
+            // The details screen outlives its own fade - the fade draws the
+            // page it is leaving - so its state goes with that fade.
+            if self.page != Page::Details {
+                self.details = None;
+            }
         }
     }
 

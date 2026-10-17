@@ -4,5 +4,6 @@
 //! [`crate::app`] routes to it and stays thin. See `docs/frontend-rewrite.md`.
 
 pub mod dashboard;
+pub mod details;
 pub mod library;
 pub mod settings;

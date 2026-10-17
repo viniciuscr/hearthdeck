@@ -16,10 +16,12 @@
 //! blank the grid: the list on screen stays until the first page of the new
 //! scope lands, then becomes that page.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use cosmic::desktop::DesktopEntryData;
 
+use crate::providers::daemon::RetroRomVersion;
 use crate::screens::library::grid::Metrics;
 
 /// One page of a source's records: the items, the source's own total for the
@@ -27,6 +29,10 @@ use crate::screens::library::grid::Metrics;
 #[derive(Debug, Clone)]
 pub struct Page {
     pub entries: Vec<Arc<DesktopEntryData>>,
+    /// The version lists of the multi-file entries on this page, keyed by
+    /// entry id. They ride along here because this is the last moment they
+    /// exist: the record's metadata is dropped when it becomes an entry.
+    pub versions: BTreeMap<String, Vec<RetroRomVersion>>,
     pub total: u64,
     pub offset: u32,
 }
@@ -35,6 +41,10 @@ pub struct Page {
 #[derive(Debug, Default)]
 pub struct ConsoleListing {
     entries: Vec<Arc<DesktopEntryData>>,
+    /// Version lists of the multi-file entries loaded so far, keyed by entry
+    /// id. The details screen reads them rather than re-deriving them from its
+    /// own detail payload, so its disc picker works the moment it opens.
+    versions: BTreeMap<String, Vec<RetroRomVersion>>,
     /// The offset to ask for next, or `None` when the scope is fully loaded.
     next_offset: Option<u32>,
     /// The generation of the request in flight, if there is one.
@@ -49,6 +59,14 @@ impl ConsoleListing {
     #[must_use]
     pub fn entries(&self) -> &[Arc<DesktopEntryData>] {
         &self.entries
+    }
+
+    /// The files a console entry collapsed, its own file first. The details
+    /// screen's disc picker reads them from here rather than re-deriving them
+    /// from its own detail payload, so it works the moment the screen opens.
+    #[must_use]
+    pub fn versions(&self, entry_id: &str) -> &[RetroRomVersion] {
+        self.versions.get(entry_id).map_or(&[], Vec::as_slice)
     }
 
     /// Begins a load of the page at `offset`, returning the generation to tag
@@ -82,6 +100,10 @@ impl ConsoleListing {
         self.pending = None;
         if page.offset == 0 {
             self.entries.clear();
+            self.versions.clear();
+        }
+        for (entry_id, versions) in page.versions {
+            self.versions.insert(entry_id, versions);
         }
         // The cursor is where this page ends, measured from the source's own
         // numbering rather than from the log, so a short page cannot make the
@@ -130,11 +152,13 @@ impl ConsoleListing {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use cosmic::desktop::DesktopEntryData;
 
     use super::{ConsoleListing, Page};
+    use crate::providers::daemon::RetroRomVersion;
     use crate::screens::library::grid::{Metrics, metrics};
 
     /// A page starting at `offset`, holding `count` records of `total`.
@@ -143,6 +167,7 @@ mod tests {
             entries: (0..count)
                 .map(|index| entry(offset as usize + index))
                 .collect(),
+            versions: BTreeMap::new(),
             total,
             offset,
         }
@@ -287,5 +312,51 @@ mod tests {
         load(&mut listing, page(60, 0, 500));
 
         assert_eq!(at_the_end(&listing), None);
+    }
+
+    /// The version lists the details screen reads are kept with the log and
+    /// replaced with it: a later page adds its own without touching what is
+    /// already loaded, and a new first page clears the scope it no longer
+    /// describes.
+    #[test]
+    fn version_lists_are_kept_with_the_log_and_replaced_with_it() {
+        let mut listing = ConsoleListing::default();
+        let mut first = page(0, 1, 2);
+        first.versions.insert(
+            "romm:0".to_owned(),
+            vec![RetroRomVersion {
+                id: 0,
+                title: "Disc 1".to_owned(),
+                is_main_sibling: true,
+            }],
+        );
+        load(&mut listing, first);
+        assert_eq!(listing.versions("romm:0").len(), 1);
+        assert!(listing.versions("romm:1").is_empty());
+
+        let mut later = page(1, 1, 2);
+        later.versions.insert(
+            "romm:1".to_owned(),
+            vec![RetroRomVersion {
+                id: 1,
+                title: "Disc 1".to_owned(),
+                is_main_sibling: true,
+            }],
+        );
+        load(&mut listing, later);
+        assert_eq!(
+            listing.versions("romm:0").len(),
+            1,
+            "a later page adds without clearing what came before it"
+        );
+        assert_eq!(listing.versions("romm:1").len(), 1);
+
+        // A new first page is a new scope: its version lists go with it.
+        load(&mut listing, page(0, 1, 1));
+        assert!(
+            listing.versions("romm:0").is_empty(),
+            "the version lists of the scope the user left are gone"
+        );
+        assert!(listing.versions("romm:1").is_empty());
     }
 }

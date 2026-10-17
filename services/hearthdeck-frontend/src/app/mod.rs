@@ -17,6 +17,7 @@
 //! "own it".
 
 mod animation;
+mod details;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -46,9 +47,12 @@ use crate::input_ownership::{Event as InputEvent, InputOwnership};
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
 use crate::motion::{Eased, Fade, Slide};
 use crate::providers::GameProvider;
-use crate::providers::daemon::{Collection, DaemonClient, DaemonConfig, DaemonProvider};
+use crate::providers::daemon::{
+    Collection, DaemonClient, DaemonConfig, DaemonProvider, RetroDetails, retro_version_list,
+};
 use crate::providers::filter::{Facet, cycle};
 use crate::screens::dashboard::{self, Card, Shelf};
+use crate::screens::details::{Details as GameDetails, Flag as DetailsFlag};
 use crate::screens::library::console::{self, ConsoleListing};
 use crate::screens::library::focus::{self, Chrome, Confirm, Cursors, Direction, Layout, Outcome};
 use crate::screens::library::sidebar::{self, Sidebar};
@@ -167,6 +171,37 @@ pub enum Message {
     TileContext(usize),
     /// The menu's scrim was pressed: close it.
     CloseMenu,
+    /// The pad's context button on a console game: show its details screen,
+    /// seeded from the tile it was opened from.
+    OpenDetails(usize),
+    /// Leave the details screen for the grid it was opened from.
+    CloseDetails,
+    /// The details screen's Play button: launch the file the screen points at.
+    DetailsPlay,
+    /// A screenshot in the details strip was pressed: make it the big image.
+    DetailsSelectScreenshot(usize),
+    /// The details screen's favorite button.
+    DetailsToggleFavorite,
+    /// The details screen's play-later button.
+    DetailsToggleBacklog,
+    /// The details screen's disc button: open or close the picker.
+    DetailsToggleDiscPicker,
+    /// A file was picked from the disc picker: point the screen at it.
+    DetailsSelectDisc(i64),
+    /// One game's detail read arrived, for the file it was started for. The
+    /// payload is boxed: `RetroDetails` is large enough that carrying it inline
+    /// would make every message carry its size.
+    DetailsLoaded {
+        rom_id: i64,
+        result: Box<Result<RetroDetails, String>>,
+    },
+    /// A favorite or play-later write settled against the daemon.
+    DetailsFlagWritten {
+        rom_id: i64,
+        flag: DetailsFlag,
+        previous: Option<bool>,
+        result: Result<bool, String>,
+    },
     /// A dashboard rail scrolled: remembered, so the next step can tell whether
     /// the card it lands on would leave the view.
     RailScrolled {
@@ -225,6 +260,10 @@ enum Page {
     #[default]
     Dashboard,
     Library,
+    /// One console game's own screen: play, favorite, play later, and the
+    /// files the game collapsed. Opened over the library grid it came from,
+    /// which is where Back puts the user back.
+    Details,
     /// What Hearthdeck is allowed to do to the library. A sibling of the other
     /// two rather than a page inside the library.
     Settings,
@@ -338,6 +377,10 @@ pub struct App {
     launch_state: LaunchState,
     /// Who owns input: the frontend, a launch in flight, or a running session.
     input_ownership: InputOwnership,
+    /// The console game's details screen. Seeded when it opens, and kept until
+    /// its fade out of view has run: the fade draws the page it is leaving, so
+    /// the state outlives the page by exactly that long.
+    details: Option<GameDetails>,
 }
 
 impl Application for App {
@@ -435,6 +478,7 @@ impl Application for App {
             grid_viewport_height: grid_viewport_height_fallback(),
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
+            details: None,
         };
         let poll = app.poll_active_session(std::time::Duration::ZERO);
         let consoles = app.load_consoles();
@@ -678,6 +722,29 @@ impl Application for App {
                 }
             }
             Message::CloseMenu => self.menu.close(),
+            Message::OpenDetails(index) => return self.open_details(index),
+            Message::CloseDetails => return self.close_details(),
+            Message::DetailsPlay => return self.play_details(),
+            Message::DetailsSelectScreenshot(index) => {
+                if let Some(details) = self.details.as_mut() {
+                    details.select_shot(index);
+                }
+            }
+            Message::DetailsToggleFavorite => {
+                return self.toggle_details_flag(DetailsFlag::Favorite);
+            }
+            Message::DetailsToggleBacklog => {
+                return self.toggle_details_flag(DetailsFlag::Backlog);
+            }
+            Message::DetailsToggleDiscPicker => return self.toggle_details_disc_picker(),
+            Message::DetailsSelectDisc(rom_id) => return self.select_details_disc(rom_id),
+            Message::DetailsLoaded { rom_id, result } => return self.load_details(rom_id, *result),
+            Message::DetailsFlagWritten {
+                rom_id,
+                flag,
+                previous,
+                result,
+            } => return self.settle_details_flag(rom_id, flag, previous, result),
             Message::RailScrolled { rail, offset } => {
                 if self.rail_offsets.len() <= rail {
                     self.rail_offsets.resize(rail + 1, 0.0);
@@ -907,6 +974,9 @@ impl App {
             // of its own.
             Page::Settings => self.view_settings(),
             Page::Library => self.view_library(),
+            // The details screen is the console game's own page. It carries no
+            // sidebar - it is over the grid it was opened from.
+            Page::Details => self.view_details(),
         }
     }
 
@@ -1494,6 +1564,27 @@ impl App {
     /// knows what a step, a confirm and Back mean - and no control that decides
     /// it for itself.
     fn navigate(&mut self, event: GamepadEvent) -> Task<Message> {
+        // The details screen owns the whole surface while it is up: it moves
+        // its own cursor and runs its own actions, and the chords belong to the
+        // library behind it - switching section under a game's details would
+        // change what that screen describes.
+        if self.page == Page::Details {
+            return match event {
+                GamepadEvent::MoveUp => self.step_details(Direction::Up),
+                GamepadEvent::MoveDown => self.step_details(Direction::Down),
+                GamepadEvent::MoveLeft => self.step_details(Direction::Left),
+                GamepadEvent::MoveRight => self.step_details(Direction::Right),
+                GamepadEvent::Confirm => self.confirm_details(),
+                GamepadEvent::Back => self.back(),
+                GamepadEvent::Search
+                | GamepadEvent::ContextMenu
+                | GamepadEvent::PrevGroup
+                | GamepadEvent::NextGroup
+                | GamepadEvent::PrevTab
+                | GamepadEvent::NextTab
+                | GamepadEvent::FilterPanel => Task::none(),
+            };
+        }
         match event {
             GamepadEvent::MoveUp => self.step_focus(Direction::Up),
             GamepadEvent::MoveDown => self.step_focus(Direction::Down),
@@ -1652,10 +1743,15 @@ impl App {
         if self.filter_open {
             return self.update(Message::ClearFilters);
         }
-        // The tile's own menu: X is the button that opens it, on the tile the
-        // cursor is on.
+        // A console game's own screen answers "what can I do with this": Run,
+        // favorite, play later and every file of a multi-disc game live there,
+        // so X opens it rather than stacking a menu of the same actions.
         if self.cursors.tile < self.visible.len() {
-            return self.update(Message::TileContext(self.cursors.tile));
+            let index = self.cursors.tile;
+            if self.visible[index].id.starts_with("romm:") {
+                return self.update(Message::OpenDetails(index));
+            }
+            return self.update(Message::TileContext(index));
         }
         Task::none()
     }
@@ -1688,6 +1784,19 @@ impl App {
         // being a place in the grid.
         if self.filter_open {
             return self.update(Message::CloseFilterPanel);
+        }
+        // The details screen is a place of its own, over the grid it was opened
+        // from: Back leaves it for that grid rather than past it, and closes
+        // its disc picker first - a surface stacked over the page.
+        if self.page == Page::Details {
+            if self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.disc_picker)
+            {
+                return self.update(Message::DetailsToggleDiscPicker);
+            }
+            return self.update(Message::CloseDetails);
         }
         // The top bar is chrome rather than a surface over anything: Back steps
         // off it into the content the way it steps out of the library's ring.
@@ -1880,14 +1989,25 @@ impl App {
                         offset,
                     )
                     .await
-                    .map(|page| console::Page {
-                        entries: page
+                    .map(|page| {
+                        // The version lists are kept while the records still
+                        // carry their metadata: the entry the grid draws has
+                        // nowhere to put them.
+                        let versions = page
                             .items
-                            .into_iter()
-                            .map(|record| Arc::new(record.into_desktop_entry()))
-                            .collect(),
-                        total: page.total,
-                        offset: page.offset,
+                            .iter()
+                            .map(|record| (record.id.clone(), retro_version_list(record)))
+                            .collect();
+                        console::Page {
+                            entries: page
+                                .items
+                                .into_iter()
+                                .map(|record| Arc::new(record.into_desktop_entry()))
+                                .collect(),
+                            versions,
+                            total: page.total,
+                            offset: page.offset,
+                        }
                     })
                     .map_err(|error| error.to_string())
             },
@@ -2202,6 +2322,7 @@ pub fn run() -> cosmic::iced::Result {
 mod tests {
     use super::*;
     use crate::app_group::AppGroup;
+    use crate::providers::daemon::RetroRomVersion;
     use crate::providers::filter::FacetOption;
     use crate::style::PAGE_TRANSITION_DURATION;
 
@@ -2251,6 +2372,7 @@ mod tests {
             grid_viewport_height: grid_viewport_height_fallback(),
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
+            details: None,
         }
     }
 
@@ -2379,6 +2501,30 @@ mod tests {
             ),
             facet("category", "Category", ["Utility", "Development"]),
         ]));
+        app
+    }
+
+    /// A shell on the console grid whose one record is a RomM game, so the
+    /// details screen has a tile to open from. `versions` are the files that
+    /// game collapsed to; empty means a single-file game.
+    fn showing_a_console_game(versions: Vec<RetroRomVersion>) -> App {
+        let mut app = navigable();
+        app.page = Page::Library;
+        app.cur_section = Section::ConsoleGames;
+        let generation = app.console.start(0).expect("the load is allowed");
+        let mut by_id = BTreeMap::new();
+        if !versions.is_empty() {
+            by_id.insert("romm:42".to_owned(), versions);
+        }
+        let _ = app.update(Message::ConsolePageLoaded {
+            generation,
+            result: Ok(console::Page {
+                entries: vec![entry("romm:42", &["Game", "hearthdeck-console:7"])],
+                versions: by_id,
+                total: 1,
+                offset: 0,
+            }),
+        });
         app
     }
 
@@ -3343,6 +3489,104 @@ mod tests {
             !app.menu_is_up(),
             "there is no grid here for it to belong to"
         );
+    }
+
+    /// The context button answers "what can I do with this": for a console game
+    /// that answer lives on the game's own screen, so X opens it rather than
+    /// stacking a menu of the same actions. Everything else keeps its menu.
+    #[test]
+    fn the_context_button_opens_details_only_for_console_games() {
+        let mut app = showing_a_console_game(Vec::new());
+
+        send(&mut app, GamepadEvent::ContextMenu);
+
+        assert_eq!(app.page, Page::Details, "X opens the console game's screen");
+        assert!(app.details.is_some());
+
+        // A local game keeps its menu instead.
+        let mut local = showing(2);
+        send(&mut local, GamepadEvent::ContextMenu);
+        assert!(local.menu.is_open(), "a local game keeps its menu");
+        assert!(local.details.is_none());
+    }
+
+    /// Back from the details screen leaves it for the grid it was opened from,
+    /// with the cursor back on the tile the user came in through.
+    #[test]
+    fn details_back_returns_to_the_tile_that_opened_it() {
+        let mut app = showing_a_console_game(Vec::new());
+        send(&mut app, GamepadEvent::ContextMenu);
+        assert_eq!(app.page, Page::Details);
+
+        send(&mut app, GamepadEvent::Back);
+
+        assert_eq!(app.page, Page::Library);
+        assert_eq!(app.cursors.tile, 0, "the cursor is back on the tile");
+    }
+
+    /// Back closes the disc picker before it leaves the screen: the picker is a
+    /// surface stacked over the page, so it unwinds first.
+    #[test]
+    fn back_closes_the_disc_picker_before_leaving_the_details_screen() {
+        let mut app = showing_a_console_game(vec![
+            RetroRomVersion {
+                id: 42,
+                title: "Disc 1".to_owned(),
+                is_main_sibling: true,
+            },
+            RetroRomVersion {
+                id: 43,
+                title: "Disc 2".to_owned(),
+                is_main_sibling: false,
+            },
+        ]);
+        send(&mut app, GamepadEvent::ContextMenu);
+        assert_eq!(app.page, Page::Details);
+
+        // Open the picker.
+        let _ = app.update(Message::DetailsToggleDiscPicker);
+        assert!(
+            app.details
+                .as_ref()
+                .expect("the screen is open")
+                .disc_picker,
+            "the picker is open"
+        );
+
+        send(&mut app, GamepadEvent::Back);
+
+        assert_eq!(
+            app.page,
+            Page::Details,
+            "Back closes the picker, not the screen"
+        );
+        assert!(
+            !app.details
+                .as_ref()
+                .expect("the screen is open")
+                .disc_picker,
+            "and the picker is what closed"
+        );
+
+        send(&mut app, GamepadEvent::Back);
+        assert_eq!(app.page, Page::Library, "a second Back leaves the screen");
+    }
+
+    /// The shoulder buttons are chords of the library behind the details screen:
+    /// on the details screen they do nothing, because switching section there
+    /// would change what the screen describes.
+    #[test]
+    fn shoulder_buttons_do_not_change_section_from_the_details_screen() {
+        let mut app = showing_a_console_game(Vec::new());
+        send(&mut app, GamepadEvent::ContextMenu);
+        assert_eq!(app.page, Page::Details);
+        let section = app.cur_section;
+
+        send(&mut app, GamepadEvent::NextGroup);
+        send(&mut app, GamepadEvent::PrevGroup);
+
+        assert_eq!(app.cur_section, section, "the section did not change");
+        assert_eq!(app.page, Page::Details, "and the screen stayed put");
     }
 
     /// The library's ring is the library's: it does not survive a trip to a

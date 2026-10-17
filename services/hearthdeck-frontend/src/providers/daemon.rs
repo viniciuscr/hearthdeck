@@ -1529,6 +1529,40 @@ pub fn retro_version_label(metadata: &serde_json::Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The files a console record collapsed: the entry's own first — Play's
+/// target, and what the details screen opens on — then every sibling RomM
+/// folded into it, as the disc picker lists them.
+///
+/// Built here, where the record still carries its metadata: the grid keeps
+/// only `DesktopEntryData`, which has no metadata field. Two files can share
+/// a name, so a repeat gets its id appended to stay distinguishable.
+pub fn retro_version_list(record: &GameRecord) -> Vec<RetroRomVersion> {
+    let siblings = retro_rom_versions(&record.metadata);
+    if siblings.is_empty() {
+        return Vec::new();
+    }
+    let mut versions = Vec::with_capacity(siblings.len() + 1);
+    if let Some(current_id) = record
+        .id
+        .strip_prefix("romm:")
+        .and_then(|id| id.parse::<i64>().ok())
+    {
+        versions.push(RetroRomVersion {
+            id: current_id,
+            title: retro_version_label(&record.metadata).unwrap_or_else(|| record.name.clone()),
+            is_main_sibling: true,
+        });
+    }
+    versions.extend(siblings);
+    let mut seen = std::collections::HashSet::new();
+    for version in &mut versions {
+        if !seen.insert(version.title.clone()) {
+            version.title = format!("{} (#{})", version.title, version.id);
+        }
+    }
+    versions
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("connection failed: {0}")]
@@ -1764,10 +1798,10 @@ pub struct RetroRecordPage {
 #[cfg(test)]
 mod tests {
     use super::{
-        CatalogItem, DaemonClient, DaemonConfig, DaemonError, RecentActivityItem, RetroGame,
-        RetroRomVersion, belongs_in_the_app_library, cache_file_name, catalog_item_to_game_record,
-        daemon_error_from_body, image_extension, retro_game_to_game_record, retro_rom_query_params,
-        retro_rom_versions, retro_version_label,
+        CatalogItem, DaemonClient, DaemonConfig, DaemonError, GameRecord, RecentActivityItem,
+        RetroGame, RetroRomVersion, belongs_in_the_app_library, cache_file_name,
+        catalog_item_to_game_record, daemon_error_from_body, image_extension,
+        retro_game_to_game_record, retro_rom_query_params, retro_rom_versions, retro_version_label,
     };
 
     /// The extension a cached cover is stored with must come from the response,
@@ -2132,6 +2166,74 @@ mod tests {
                 .categories
                 .iter()
                 .any(|category| category.eq_ignore_ascii_case("game"))
+        );
+    }
+
+    fn record_with_siblings(metadata: serde_json::Value) -> GameRecord {
+        GameRecord {
+            id: "romm:42".to_owned(),
+            name: "Metal Gear Solid".to_owned(),
+            exec: None,
+            icon: None,
+            path: None,
+            categories: Vec::new(),
+            terminal: false,
+            prefers_dgpu: false,
+            source: "RomM".to_owned(),
+            metadata,
+        }
+    }
+
+    #[test]
+    fn the_version_list_puts_the_records_own_file_first() {
+        let record = record_with_siblings(serde_json::json!({
+            "version_label": "Disc 1",
+            "sibling_roms": [
+                {"id": 43, "title": "Disc 2", "is_main_sibling": false}
+            ],
+        }));
+        let versions = super::retro_version_list(&record);
+        let listed: Vec<(i64, &str, bool)> = versions
+            .iter()
+            .map(|version| (version.id, version.title.as_str(), version.is_main_sibling))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![(42, "Disc 1", true), (43, "Disc 2", false)],
+            "Play's target leads, its label naming the file",
+        );
+    }
+
+    #[test]
+    fn a_single_file_game_has_no_version_list() {
+        let record = record_with_siblings(serde_json::json!({}));
+        assert!(
+            super::retro_version_list(&record).is_empty(),
+            "nothing to pick between means no picker either",
+        );
+    }
+
+    #[test]
+    fn two_files_sharing_a_name_stay_distinguishable() {
+        let record = record_with_siblings(serde_json::json!({
+            "version_label": "Game",
+            "sibling_roms": [
+                {"id": 43, "title": "Game", "is_main_sibling": false},
+                {"id": 44, "title": "Game", "is_main_sibling": false}
+            ],
+        }));
+        let titles: Vec<String> = super::retro_version_list(&record)
+            .into_iter()
+            .map(|version| version.title)
+            .collect();
+        assert_eq!(
+            titles,
+            vec![
+                "Game".to_owned(),
+                "Game (#43)".to_owned(),
+                "Game (#44)".to_owned()
+            ],
+            "a repeated name gets the id appended so no two rows read the same",
         );
     }
 }
