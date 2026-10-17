@@ -44,7 +44,7 @@ use crate::app::animation::{ScrollTarget, section_direction, tab_direction};
 use crate::app_group::{AppLibraryConfig, RommFacet, Section, section_facets};
 use crate::fl;
 use crate::input_ownership::{Event as InputEvent, InputOwnership};
-use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState};
+use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState, Overlay};
 use crate::motion::{Eased, Fade, Slide};
 use crate::providers::GameProvider;
 use crate::providers::daemon::{
@@ -1001,8 +1001,8 @@ impl App {
 
         // A launch takes over the content column: the game is starting, so the
         // library behind it is no longer what the user is acting on.
-        let content: Element<'_, Message> = if self.launch_state.is_visible() {
-            view_launch_overlay(&self.launch_state)
+        let content: Element<'_, Message> = if let Some(overlay) = self.launch_state.overlay() {
+            view_launch_overlay(overlay)
         } else {
             let header = header::view(header::Header {
                 section: self.cur_section,
@@ -1127,8 +1127,8 @@ impl App {
         );
         // A launch is a layer over whatever page is behind it, the dashboard
         // included.
-        let screen: Element<'_, Message> = if self.launch_state.is_visible() {
-            stack![screen, view_launch_overlay(&self.launch_state)].into()
+        let screen: Element<'_, Message> = if let Some(overlay) = self.launch_state.overlay() {
+            stack![screen, view_launch_overlay(overlay)].into()
         } else {
             screen
         };
@@ -2224,12 +2224,13 @@ impl App {
 }
 
 /// The launch overlay: progress while a game starts, or the failure with a way
-/// to dismiss it.
-fn view_launch_overlay(state: &LaunchState) -> Element<'_, Message> {
+/// to dismiss it. It draws an [`Overlay`] - a value only a launch in flight or
+/// a failure produces - so the layer cannot cover a page while nothing is
+/// being launched.
+fn view_launch_overlay(overlay: Overlay<'_>) -> Element<'_, Message> {
     let spacing = theme::spacing();
-    let title = state.title().unwrap_or_default();
-    let content: Element<'_, Message> = if let Some(error) = state.error() {
-        column![
+    let content: Element<'_, Message> = match overlay {
+        Overlay::Failed { title, error } => column![
             icon::icon(icon::from_name("dialog-error-symbolic").into()).size(ICON_LARGE),
             text::title2(fl!("launch-failed")),
             text::body(title),
@@ -2241,15 +2242,14 @@ fn view_launch_overlay(state: &LaunchState) -> Element<'_, Message> {
         ]
         .spacing(spacing.space_s)
         .align_x(Alignment::Center)
-        .into()
-    } else {
-        column![
+        .into(),
+        Overlay::Progress { title } => column![
             icon::icon(ui::app_icon()).size(ICON_LARGE),
             text::title2(fl!("launching", title = title)),
         ]
         .spacing(spacing.space_m)
         .align_x(Alignment::Center)
-        .into()
+        .into(),
     };
 
     container(content)
@@ -3508,6 +3508,26 @@ mod tests {
         send(&mut local, GamepadEvent::ContextMenu);
         assert!(local.menu.is_open(), "a local game keeps its menu");
         assert!(local.details.is_none());
+    }
+
+    /// Seeing the game's screen is a read, not a launch: the button opens the
+    /// page and starts nothing, so no layer claiming a game is starting comes
+    /// up with it.
+    #[test]
+    fn opening_the_details_screen_starts_no_launch() {
+        let mut app = showing_a_console_game(Vec::new());
+
+        send(&mut app, GamepadEvent::ContextMenu);
+
+        assert_eq!(app.page, Page::Details);
+        assert!(
+            !app.launch_state.is_visible(),
+            "the context button opens the screen; it launches nothing"
+        );
+        assert!(
+            app.launch_state.overlay().is_none(),
+            "and no launch layer covers the page while nothing is in flight"
+        );
     }
 
     /// Back from the details screen leaves it for the grid it was opened from,

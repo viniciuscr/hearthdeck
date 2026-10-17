@@ -26,6 +26,19 @@ pub enum Effect {
     DelayDismiss,
 }
 
+/// What a launch draws over the page, when it covers one at all.
+///
+/// The data the launch layer renders. The decision of *whether* it covers a
+/// page lives on [`LaunchState::overlay`], so the rule is one answer every
+/// page draws by instead of a guard each view has to remember.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Overlay<'a> {
+    /// The game is starting.
+    Progress { title: &'a str },
+    /// The launch failed, and the reason is what the user reads.
+    Failed { title: &'a str, error: &'a str },
+}
+
 impl LaunchState {
     pub fn update(&mut self, event: Event) -> Effect {
         match event {
@@ -70,11 +83,24 @@ impl LaunchState {
             _ => None,
         }
     }
+
+    /// The layer this launch draws over a page, or `None` when it covers none.
+    ///
+    /// A launch in flight takes the page over; a failure stays until it is
+    /// read. An idle launch covers nothing - the page is what the user asked
+    /// to see, never a layer claiming a game is starting.
+    pub fn overlay(&self) -> Option<Overlay<'_>> {
+        match self {
+            Self::Idle => None,
+            Self::Launching { title } => Some(Overlay::Progress { title }),
+            Self::Failed { title, error } => Some(Overlay::Failed { title, error }),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Effect, Event, LaunchState};
+    use super::{Effect, Event, LaunchState, Overlay};
 
     #[test]
     fn start_makes_launch_progress_visible() {
@@ -140,5 +166,46 @@ mod tests {
             Effect::None
         );
         assert_eq!(state, LaunchState::Idle);
+    }
+
+    /// An idle launch covers nothing: the page is what the user asked to see,
+    /// never a layer saying a game is starting. This is the rule every page
+    /// draws its launch layer by.
+    #[test]
+    fn an_idle_launch_draws_no_overlay_over_the_page() {
+        assert!(LaunchState::Idle.overlay().is_none());
+        assert!(LaunchState::default().overlay().is_none());
+    }
+
+    #[test]
+    fn a_launch_in_flight_draws_the_progress_overlay() {
+        let state = LaunchState::Launching {
+            title: "Celeste".to_owned(),
+        };
+
+        assert_eq!(
+            state.overlay(),
+            Some(Overlay::Progress { title: "Celeste" })
+        );
+    }
+
+    /// A failure is a message to read, so it stays over the page until it is
+    /// dismissed - and goes with the dismissal.
+    #[test]
+    fn a_failed_launch_draws_the_failure_until_it_is_dismissed() {
+        let mut state = LaunchState::Failed {
+            title: "Celeste".to_owned(),
+            error: "bridge unavailable".to_owned(),
+        };
+
+        assert_eq!(
+            state.overlay(),
+            Some(Overlay::Failed {
+                title: "Celeste",
+                error: "bridge unavailable",
+            })
+        );
+        state.update(Event::Dismiss);
+        assert!(state.overlay().is_none());
     }
 }

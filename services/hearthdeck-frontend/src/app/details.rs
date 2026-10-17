@@ -221,8 +221,13 @@ impl App {
         };
         // A launch takes over the screen it was started from: the game is
         // starting, so the details page is no longer what the user is acting
-        // on. The overlay draws nothing while no launch is in flight.
-        stack![screen, view_launch_overlay(&self.launch_state)].into()
+        // on. The layer exists only for a launch in flight or a failure, so
+        // seeing the game's details draws the details and nothing else.
+        if let Some(overlay) = self.launch_state.overlay() {
+            stack![screen, view_launch_overlay(overlay)].into()
+        } else {
+            screen
+        }
     }
 }
 
