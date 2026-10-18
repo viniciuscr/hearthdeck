@@ -68,7 +68,8 @@ pub fn view<'a>(
         .scroller_width(0),
     ]
     .spacing(space_l)
-    .padding([space_xl, padding]);
+    .padding([space_xl, padding])
+    .height(Length::Fill);
 
     // The bar sits where the dashboard's does: a sibling destination wears the
     // same chrome in the same place, so moving between them moves nothing.
