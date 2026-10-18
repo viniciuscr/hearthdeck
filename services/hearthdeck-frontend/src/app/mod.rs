@@ -1,9 +1,7 @@
 //! The rewritten HearthDeck frontend.
 //!
 //! Built from scratch, one screen at a time, reusing the plumbing below the UI
-//! (`providers`, `app_group`, `icon_cache`, `style`, `ui`, `widgets`). The
-//! inherited app lives on as [`crate::app_legacy`] until this one covers every
-//! screen; `HEARTHDECK_LEGACY=1` runs the old one.
+//! (`providers`, `app_group`, `icon_cache`, `style`, `ui`, `widgets`).
 //!
 //! The library shell is in place: the sidebar, section selection, the header's
 //! tabs, and the daemon-backed grid - virtualized, paged, and searched at the
@@ -3072,8 +3070,10 @@ mod tests {
         send(&mut app, GamepadEvent::Confirm);
 
         assert_eq!(
-            app.launch_state.title(),
-            Some("hearthdeck:game-1"),
+            app.launch_state,
+            LaunchState::Launching {
+                title: "hearthdeck:game-1".to_owned()
+            },
             "the wrong entry was launched"
         );
         // And the frontend gives input up while that launch is in flight.
@@ -3365,7 +3365,12 @@ mod tests {
 
         send(&mut app, GamepadEvent::Confirm);
 
-        assert_eq!(app.launch_state.title(), Some("hearthdeck:game-1"));
+        assert_eq!(
+            app.launch_state,
+            LaunchState::Launching {
+                title: "hearthdeck:game-1".to_owned()
+            }
+        );
         assert!(
             !app.menu.is_open(),
             "the menu is not left on screen behind the action"
@@ -3649,8 +3654,10 @@ mod tests {
 
         send(&mut app, GamepadEvent::Confirm);
         assert_eq!(
-            app.launch_state.title(),
-            Some("hearthdeck:game-5"),
+            app.launch_state,
+            LaunchState::Launching {
+                title: "hearthdeck:game-5".to_owned()
+            },
             "Confirm launches the card the cursor is on"
         );
         assert_eq!(app.page, Page::Dashboard, "the launch does not navigate");
@@ -3680,13 +3687,11 @@ mod tests {
         let rail = |app: &mut App, icon: Option<&str>| {
             let _ = app.update(Message::CollectionsLoaded(Ok(vec![Collection {
                 slug: "favorites".to_owned(),
-                owner: "user".to_owned(),
                 name: None,
                 items: vec![CollectionItem {
                     item_id: "hearthdeck:game-0".to_owned(),
                     name: "Game 0".to_owned(),
                     icon: icon.map(str::to_owned),
-                    played: None,
                 }],
             }])));
         };
@@ -3717,10 +3722,9 @@ mod tests {
     }
 
     /// A collection as the daemon composes one.
-    fn collection(slug: &str, owner: &str, name: Option<&str>, ids: &[&str]) -> Collection {
+    fn collection(slug: &str, name: Option<&str>, ids: &[&str]) -> Collection {
         Collection {
             slug: slug.to_owned(),
-            owner: owner.to_owned(),
             name: name.map(str::to_owned),
             items: ids
                 .iter()
@@ -3728,7 +3732,6 @@ mod tests {
                     item_id: (*id).to_owned(),
                     name: (*id).to_owned(),
                     icon: None,
-                    played: None,
                 })
                 .collect(),
         }
@@ -3742,13 +3745,8 @@ mod tests {
     fn the_dashboards_rails_are_the_daemons_collections() {
         let mut app = loaded(2);
         let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-            collection("favorites", "user", None, &["hearthdeck:game-0"]),
-            collection(
-                "smart:action",
-                "ai",
-                Some("Action picks"),
-                &["hearthdeck:game-1"],
-            ),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+            collection("smart:action", Some("Action picks"), &["hearthdeck:game-1"]),
         ])));
 
         let shelves = app.dashboard_shelves();
@@ -3768,7 +3766,6 @@ mod tests {
         let mut app = loaded(1);
         let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
             "smart:mystery",
-            "ai",
             None,
             &["hearthdeck:game-0"],
         )])));
@@ -3783,7 +3780,6 @@ mod tests {
         let mut app = loaded(2);
         let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
             "favorites",
-            "user",
             None,
             &["hearthdeck:game-1"],
         )])));
@@ -3791,8 +3787,10 @@ mod tests {
         send(&mut app, GamepadEvent::Confirm);
 
         assert_eq!(
-            app.launch_state.title(),
-            Some("hearthdeck:game-1"),
+            app.launch_state,
+            LaunchState::Launching {
+                title: "hearthdeck:game-1".to_owned()
+            },
             "the card did not launch the item it names"
         );
         assert!(!app.input_ownership.frontend_has_control());
@@ -3811,7 +3809,6 @@ mod tests {
         let mut app = loaded(1);
         let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
             "stremio:continue-watching",
-            "stremio",
             None,
             &["hearthdeck:stremio:tt0111161"],
         )])));
@@ -3819,8 +3816,10 @@ mod tests {
         send(&mut app, GamepadEvent::Confirm);
 
         assert_eq!(
-            app.launch_state.title(),
-            Some("hearthdeck:stremio:tt0111161"),
+            app.launch_state,
+            LaunchState::Launching {
+                title: "hearthdeck:stremio:tt0111161".to_owned()
+            },
             "an item outside the local library is still launchable"
         );
         assert_eq!(app.page, Page::Dashboard);
@@ -3835,7 +3834,6 @@ mod tests {
         let mut app = loaded(1);
         let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
             "stremio:continue-watching",
-            "stremio",
             None,
             &["stremio:tt0111161"],
         )])));
@@ -3852,8 +3850,10 @@ mod tests {
 
         send(&mut app, GamepadEvent::Confirm);
         assert_eq!(
-            app.launch_state.title(),
-            Some("stremio:tt0111161"),
+            app.launch_state,
+            LaunchState::Launching {
+                title: "stremio:tt0111161".to_owned()
+            },
             "the raw id went to the launch route; the daemon decides what it means"
         );
         assert_eq!(app.page, Page::Dashboard);

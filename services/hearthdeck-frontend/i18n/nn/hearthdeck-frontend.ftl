@@ -16,4 +16,3 @@ snap = Snap
 system = System
 local = Lokalt
 nix = Nix
-new-group = Ny mappe

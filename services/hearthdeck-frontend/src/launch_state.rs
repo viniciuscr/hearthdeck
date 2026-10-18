@@ -70,13 +70,6 @@ impl LaunchState {
         !matches!(self, Self::Idle)
     }
 
-    pub fn title(&self) -> Option<&str> {
-        match self {
-            Self::Launching { title } | Self::Failed { title, .. } => Some(title),
-            Self::Idle => None,
-        }
-    }
-
     pub fn error(&self) -> Option<&str> {
         match self {
             Self::Failed { error, .. } => Some(error),
@@ -111,7 +104,12 @@ mod tests {
             Effect::Launch
         );
         assert!(state.is_visible());
-        assert_eq!(state.title(), Some("Celeste"));
+        assert_eq!(
+            state,
+            LaunchState::Launching {
+                title: "Celeste".to_owned()
+            }
+        );
         assert_eq!(state.error(), None);
     }
 
@@ -137,7 +135,13 @@ mod tests {
             state.update(Event::Failed("bridge unavailable".to_owned())),
             Effect::None
         );
-        assert_eq!(state.title(), Some("Celeste"));
+        assert_eq!(
+            state,
+            LaunchState::Failed {
+                title: "Celeste".to_owned(),
+                error: "bridge unavailable".to_owned()
+            }
+        );
         assert_eq!(state.error(), Some("bridge unavailable"));
         state.update(Event::Dismiss);
         assert_eq!(state, LaunchState::Idle);
@@ -153,7 +157,12 @@ mod tests {
             state.update(Event::Start("Another game".to_owned())),
             Effect::None
         );
-        assert_eq!(state.title(), Some("Celeste"));
+        assert_eq!(
+            state,
+            LaunchState::Launching {
+                title: "Celeste".to_owned()
+            }
+        );
     }
 
     #[test]

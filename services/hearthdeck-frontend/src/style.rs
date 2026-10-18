@@ -164,14 +164,6 @@ pub fn grid_columns(is_console: bool) -> usize {
     }
 }
 
-/// Top padding of the scrollable grid; keeps the focus ring on the first row
-/// from being clipped by the viewport and gives the first cover row breathing
-/// room below the tab strip. Taken from the theme's spacing scale so it follows
-/// the density setting.
-pub fn grid_top_padding() -> u16 {
-    spacing().space_xs
-}
-
 /// Vertical space the library header - the title and search row, the tab strip
 /// and the spacings between them - takes above the grid. The header is a sum of
 /// theme spacings and text the renderer measures, so it cannot be derived here;
@@ -321,8 +313,6 @@ pub const ICON_SEARCH: u16 = 32;
 pub fn search_icon_padding() -> u16 {
     spacing().space_xxxs
 }
-/// Width of the inline "rename" input next to the page title.
-pub const EDIT_NAME_INPUT_WIDTH: f32 = 280.0;
 /// Height of the icon buttons next to the page title (rename/delete); 48px at
 /// Standard.
 pub fn title_action_height() -> f32 {
@@ -382,7 +372,7 @@ pub fn tab_width(label: &str) -> f32 {
 // Dialogs & menus
 // ---------------------------------------------------------------------------
 
-/// Width of the new-group / delete-group dialogs and their text inputs.
+/// Width of the delete-group dialog and its text inputs.
 pub const DIALOG_WIDTH: f32 = 432.0;
 /// Width of a dialog action button.
 pub const DIALOG_ACTION_WIDTH: u16 = 142;
@@ -407,8 +397,6 @@ pub const ICON_BODY: u16 = 24;
 pub const ICON_TILE_ACTION: f32 = 32.0;
 /// Small icons and inline spacers (menu checkboxes, source badges).
 pub const ICON_SMALL: u16 = 20;
-/// Diameter of the key-cap badge that names a gamepad button on a control.
-pub const CONTROLLER_KEY_SIZE: f32 = 22.0;
 
 // ---------------------------------------------------------------------------
 // Focus rings
@@ -856,31 +844,6 @@ pub fn tab_button_class(selected: bool) -> Button {
 /// The arrows and value inside are ordinary buttons; this only paints the row
 /// they sit in, so the whole row reads as one control rather than as three
 /// loose widgets - the compact, list-row shape a large option set needs.
-/// A small key-cap badge for a gamepad face button, shown on a control the
-/// controller can also trigger (`widgets::controller_key`).
-///
-/// Drawn as a filled circle with a hairline on-surface border and the button's
-/// letter, so it reads as a face button in either theme. The letter is SDL's
-/// positional naming (A south, B east, X west, Y north), which is what the input
-/// layer maps from - the same control has to read correctly on an Xbox, a
-/// PlayStation and a generic pad, whose printed caps and colours differ.
-pub fn controller_key(theme: &Theme) -> container::Style {
-    let mut border_color: Color = theme.cosmic().on_bg_color().into();
-    border_color.a = 0.45;
-    container::Style {
-        text_color: Some(theme.cosmic().on_bg_color().into()),
-        icon_color: Some(theme.cosmic().on_bg_color().into()),
-        background: Some(chip_background(0.14, theme)),
-        border: Border {
-            radius: (CONTROLLER_KEY_SIZE / 2.0).into(),
-            width: 1.0,
-            color: border_color,
-        },
-        shadow: Shadow::default(),
-        snap: false,
-    }
-}
-
 pub fn filter_row(selected: bool, cursor: bool) -> impl Fn(&Theme) -> container::Style {
     move |theme| {
         let alpha = match (selected, cursor) {
@@ -987,9 +950,9 @@ mod tests {
     use super::{
         CONSOLE_GRID_COLUMNS, DASHBOARD_VISIBLE_TILES, GRID_COLUMNS, content_horizontal_padding,
         content_width, dashboard_tile_size, filter_button_height, grid_columns, grid_gap,
-        grid_top_padding, search_icon_padding, sidebar_accent_bar_height, sidebar_header_height,
-        sidebar_item_height, sidebar_width, tab_height, tab_underline_height, tile_height,
-        tile_width, title_action_height,
+        search_icon_padding, sidebar_accent_bar_height, sidebar_header_height, sidebar_item_height,
+        sidebar_width, tab_height, tab_underline_height, tile_height, tile_width,
+        title_action_height,
     };
 
     #[test]
@@ -1004,7 +967,6 @@ mod tests {
         assert_eq!(tab_height(), 48.0);
         assert_eq!(tab_underline_height(), 4.0);
         assert_eq!(content_horizontal_padding(), 24);
-        assert_eq!(grid_top_padding(), 12);
         assert_eq!(search_icon_padding(), 4);
     }
 

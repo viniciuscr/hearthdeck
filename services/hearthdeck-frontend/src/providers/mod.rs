@@ -1,9 +1,7 @@
 pub mod daemon;
 pub mod filter;
-pub mod service;
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use cosmic::desktop::{DesktopEntryData, fde};
@@ -99,19 +97,9 @@ impl GameRecord {
 ///
 /// # Implementation notes
 ///
-/// - `source_id` must be stable across sessions; it becomes the record's
-///   `source` field and is used for deduplication.
-/// - `refresh_interval` controls automatic periodic refresh. Return `None`
-///   for providers that only run on manual refresh.
 /// - `discover` should be idempotent and return the full current state.
 #[async_trait]
 pub trait GameProvider: Send + Sync {
-    /// Stable provider identifier.
-    fn source_id(&self) -> &'static str;
-
-    /// Optional periodic refresh interval.
-    fn refresh_interval(&self) -> Option<Duration>;
-
     /// Discover all items from this provider.
     async fn discover(&self) -> anyhow::Result<Vec<GameRecord>>;
 }

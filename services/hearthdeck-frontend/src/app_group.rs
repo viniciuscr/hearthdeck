@@ -8,14 +8,7 @@ use cosmic::cosmic_config::{
 use cosmic::desktop::DesktopEntryData;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, LazyLock};
-
-static HOME: LazyLock<AppGroup> = LazyLock::new(|| AppGroup {
-    name: "cosmic-library-home".to_string(),
-    icon: "user-home-symbolic".to_string(),
-    filter: FilterType::None,
-    source: GroupSource::Local,
-});
+use std::sync::Arc;
 
 const CONSOLE_CATEGORY_PREFIX: &str = "hearthdeck-console:";
 
@@ -99,92 +92,12 @@ impl RommFacet {
         Self::ALL.into_iter().find(|facet| facet.id() == id)
     }
 
-    fn prefix(self) -> &'static str {
-        match self {
-            Self::Genre => GENRE_FACET_PREFIX,
-            Self::Region => REGION_FACET_PREFIX,
-        }
-    }
-
     /// The facet's name, shown on its chip in the filter bar.
     pub fn name(self) -> String {
         match self {
             Self::Genre => fl!("filter-genre"),
             Self::Region => fl!("filter-region"),
         }
-    }
-
-    /// The label for one of this facet's values, shown on its chip.
-    pub fn value_label(self, value: &str) -> String {
-        value.to_owned()
-    }
-
-    /// Every value of this facet present in `entries`, deduplicated and sorted.
-    /// Decades sort as text just like years would, because they are all four
-    /// digits long.
-    pub fn values(self, entries: &[Arc<DesktopEntryData>]) -> Vec<String> {
-        entries
-            .iter()
-            .flat_map(|entry| entry.categories.iter())
-            .filter_map(|category| category.strip_prefix(self.prefix()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    }
-
-    /// Whether `entry` carries `value` for this facet.
-    fn matches(self, value: &str, entry: &DesktopEntryData) -> bool {
-        let tag = format!("{}{value}", self.prefix());
-        entry.categories.iter().any(|category| category == &tag)
-    }
-}
-
-/// The Console Games filter selection: at most one value per facet, with an
-/// absent facet meaning "All". Transient view state rather than configuration,
-/// so it is never written to disk; it is also deliberately *not* multi-select,
-/// which keeps the panel a single flat strip of options per facet.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RommFilters {
-    selected: BTreeMap<RommFacet, String>,
-}
-
-impl RommFilters {
-    pub fn selected(&self, facet: RommFacet) -> Option<&str> {
-        self.selected.get(&facet).map(String::as_str)
-    }
-
-    /// Points `facet` at `value`, or clears it when `value` is `None`.
-    pub fn set(&mut self, facet: RommFacet, value: Option<String>) {
-        match value {
-            Some(value) => {
-                self.selected.insert(facet, value);
-            }
-            None => {
-                self.selected.remove(&facet);
-            }
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.selected.clear();
-    }
-
-    pub fn is_active(&self) -> bool {
-        !self.selected.is_empty()
-    }
-
-    /// How many facets are narrowed, for the filter bar's badge.
-    pub fn len(&self) -> usize {
-        self.selected.len()
-    }
-
-    /// Whether `entry` satisfies every selected facet. An empty selection
-    /// matches everything, so an unfiltered grid is the same code path.
-    pub fn matches(&self, entry: &DesktopEntryData) -> bool {
-        self.selected
-            .iter()
-            .all(|(facet, value)| facet.matches(value, entry))
     }
 }
 
@@ -677,8 +590,6 @@ pub struct AppLibraryConfig {
     pub sections: Sections,
     #[serde(default)]
     pub desktop_input_apps: Vec<String>,
-    #[serde(default)]
-    pub favorite_ids: Vec<String>,
 }
 
 impl AppLibraryConfig {
@@ -705,46 +616,9 @@ impl AppLibraryConfig {
         }
     }
 
-    pub fn is_favorite(&self, id: &str) -> bool {
-        self.favorite_ids.iter().any(|favorite| favorite == id)
-    }
-
-    pub fn toggle_favorite(&mut self, id: &str) {
-        if self.is_favorite(id) {
-            self.favorite_ids.retain(|favorite| favorite != id);
-        } else {
-            self.favorite_ids.push(id.to_owned());
-        }
-    }
-
-    /// Resolves the saved favorite ids against a list of entries, in saved
-    /// order and dropping any the list does not hold. Only the config-backed
-    /// favorites use this now (the dashboard resolves against every loaded
-    /// scope); kept as the reference the resolution tests exercise.
-    #[cfg(test)]
-    pub fn favorite_entries<'a>(
-        &self,
-        entries: &'a [Arc<DesktopEntryData>],
-    ) -> Vec<&'a Arc<DesktopEntryData>> {
-        self.favorite_ids
-            .iter()
-            .filter_map(|id| entries.iter().find(|entry| entry.id == *id))
-            .collect()
-    }
-
-    pub fn home() -> &'static AppGroup {
-        &HOME
-    }
-
     pub fn remove(&mut self, section: Section, i: usize) {
         if i < self.sections.get(section).len() {
             self.sections.get_mut(section).remove(i);
-        }
-    }
-
-    pub fn set_name(&mut self, section: Section, i: usize, name: String) {
-        if let Some(group) = self.sections.get_mut(section).get_mut(i) {
-            group.name = name;
         }
     }
 
@@ -766,52 +640,11 @@ impl AppLibraryConfig {
     }
 
     /// The entries one tab of one section shows: the section's records, the
-    /// tab's group, the search box and the console filters, all applied.
-    pub fn filtered(
-        &self,
-        section: Section,
-        tab: Option<usize>,
-        input_value: &str,
-        entries: &[Arc<DesktopEntryData>],
-        filters: &RommFilters,
-    ) -> Vec<Arc<DesktopEntryData>> {
-        let tab_group = tab.and_then(|i| self.sections.get(section).get(i));
-        entries
-            .iter()
-            .filter(|de| {
-                if !section.matches(de) {
-                    return false;
-                }
-                if let Some(group) = tab_group
-                    && !group.matches(de)
-                {
-                    return false;
-                }
-                // The filters are the console grid's own: only that section
-                // renders their controls, and only its records carry the tags,
-                // so leaving them set must not empty another section.
-                if section == Section::ConsoleGames && !filters.matches(de) {
-                    return false;
-                }
-                if !input_value.is_empty()
-                    && !de.name.to_lowercase().contains(&input_value.to_lowercase())
-                    && !de
-                        .categories
-                        .iter()
-                        .any(|acat| acat.to_lowercase() == input_value.to_lowercase())
-                {
-                    return false;
-                }
-                true
-            })
-            .cloned()
-            .collect()
-    }
-
-    /// Like [`Self::filtered`], but narrows by the provider-agnostic facet
-    /// selection instead of the RomM-specific one: every selected value must be
-    /// one of the entry's categories. This is how a locally-loaded section
-    /// filters, whose facet values ([`section_facets`]) are its own categories.
+    /// tab's group, the search box and the facet selection, all applied.
+    ///
+    /// Every selected value must be one of the entry's categories. This is how a
+    /// locally-loaded section filters, whose facet values ([`section_facets`])
+    /// are its own categories.
     pub fn filtered_by_facets(
         &self,
         section: Section,
@@ -1004,8 +837,7 @@ fn is_user_group(group: &AppGroup) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppGroup, AppLibraryConfig, CategorizationGroup, FilterType, GroupSource, RommFacet,
-        RommFilters, Section, romm_console_category, romm_genre_category, romm_region_category,
+        AppGroup, AppLibraryConfig, CategorizationGroup, FilterType, GroupSource, Section,
         section_facets,
     };
     use cosmic::desktop::{DesktopEntryData, fde::IconSource};
@@ -1346,31 +1178,6 @@ mod tests {
         assert!(!config.desktop_input_enabled("writer"));
     }
 
-    /// A console game as the RomM provider records it: the tags that put it in
-    /// the Console Games section, plus the facet tags the filters read.
-    fn console_game(id: &str, genres: &[&str], regions: &[&str]) -> Arc<DesktopEntryData> {
-        let mut categories = vec!["Game".to_string(), romm_console_category(7)];
-        categories.extend(genres.iter().map(|genre| romm_genre_category(genre)));
-        categories.extend(regions.iter().map(|region| romm_region_category(region)));
-        let categories: Vec<&str> = categories.iter().map(String::as_str).collect();
-        entry(id, &categories)
-    }
-
-    #[test]
-    fn console_facets_read_their_values_from_the_romm_tags() {
-        let entries = [
-            console_game("mario", &["Action", "Platformer"], &["USA"]),
-            console_game("chrono", &["RPG"], &["USA", "Japan"]),
-        ];
-
-        assert_eq!(
-            RommFacet::Genre.values(&entries),
-            ["Action", "Platformer", "RPG"]
-        );
-        assert_eq!(RommFacet::Region.values(&entries), ["Japan", "USA"]);
-        assert_eq!(RommFacet::Genre.value_label("RPG"), "RPG");
-    }
-
     #[test]
     fn pc_games_offer_a_store_facet_and_applications_a_source_facet() {
         let entries = [
@@ -1448,69 +1255,5 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["a"]
         );
-    }
-
-    #[test]
-    fn filters_narrow_console_games_and_leave_other_sections_alone() {
-        let entries = [
-            console_game("mario", &["Action"], &["USA"]),
-            console_game("chrono", &["RPG"], &["Japan"]),
-            entry("writer", &["Office"]),
-        ];
-        let config = AppLibraryConfig::default();
-        let mut filters = RommFilters::default();
-        let visible = |section, filters: &RommFilters| {
-            config
-                .filtered(section, None, "", &entries, filters)
-                .iter()
-                .map(|entry| entry.id.clone())
-                .collect::<Vec<_>>()
-        };
-
-        // No selection matches everything, so browsing is the same code path.
-        assert!(!filters.is_active());
-        assert_eq!(
-            visible(Section::ConsoleGames, &filters),
-            ["mario", "chrono"]
-        );
-
-        filters.set(RommFacet::Genre, Some("RPG".into()));
-        assert_eq!(visible(Section::ConsoleGames, &filters), ["chrono"]);
-        // The selection is the console grid's: applications keep their entry.
-        assert_eq!(visible(Section::Applications, &filters), ["writer"]);
-
-        // Facets combine, and setting one back to "All" drops only that one.
-        filters.set(RommFacet::Region, Some("USA".into()));
-        assert!(visible(Section::ConsoleGames, &filters).is_empty());
-        filters.set(RommFacet::Region, None);
-        assert_eq!(visible(Section::ConsoleGames, &filters), ["chrono"]);
-
-        filters.clear();
-        assert!(filters.selected(RommFacet::Genre).is_none());
-        assert_eq!(
-            visible(Section::ConsoleGames, &filters),
-            ["mario", "chrono"]
-        );
-    }
-
-    #[test]
-    fn favorites_follow_saved_order_and_ignore_missing_entries() {
-        let mut config = AppLibraryConfig::default();
-        config.toggle_favorite("terminal");
-        config.toggle_favorite("missing");
-        config.toggle_favorite("writer");
-        let entries = [entry("writer", &[]), entry("terminal", &[])];
-
-        assert_eq!(
-            config
-                .favorite_entries(&entries)
-                .iter()
-                .map(|entry| entry.id.as_str())
-                .collect::<Vec<_>>(),
-            ["terminal", "writer"]
-        );
-
-        config.toggle_favorite("terminal");
-        assert!(!config.is_favorite("terminal"));
     }
 }
