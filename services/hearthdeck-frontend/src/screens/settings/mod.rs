@@ -9,13 +9,20 @@ use cosmic::Element;
 use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::Length;
 use cosmic::theme;
+use cosmic::theme::Button;
 use cosmic::widget::{button, column, container, row, scrollable, settings, text, toggler};
 
 use crate::app::Message;
 use crate::fl;
 use crate::providers::daemon::{CategorizationPhase, CategorizationSnapshot, ModelStatus};
-use crate::style::{TEXT_BODY, TEXT_TITLE, content_horizontal_padding, standard_button_class};
+use crate::style::{
+    TEXT_BODY, TEXT_TITLE, content_horizontal_padding, destructive_button_class,
+    primary_action_button_class, standard_button_class,
+};
 use crate::widgets::top_bar;
+
+pub mod categorization;
+pub mod stremio_link;
 
 /// What the first scan costs. Named once, so the sentence that warns about it
 /// cannot drift from the number.
@@ -26,6 +33,15 @@ pub struct Settings<'a> {
     /// The daemon's answer, once it has landed. Until then the screen says it is
     /// checking, rather than showing a switch in a state nobody reported.
     pub categorization: Option<&'a CategorizationSnapshot>,
+    /// Whether the deployment provides categorization at all, from /v1/health.
+    /// None until the health reply lands.
+    pub capable: Option<bool>,
+    /// What the last action did, for the section's own status text.
+    pub notice: Option<&'a categorization::Notice>,
+    /// The Stremio link flow: the linked account, the code being approved
+    /// elsewhere, and whether a request is in flight. The flow owns all of it;
+    /// this section reads it and names the request each control makes.
+    pub stremio: &'a stremio_link::Flow,
 }
 
 /// The page: the shared top bar, then the sections.
@@ -42,9 +58,10 @@ pub fn view<'a>(
 
     let sections = column![
         text::title1(fl!("settings-title")).size(TEXT_TITLE),
-        scrollable(settings::view_column(vec![categorization(
-            state.categorization
-        )]))
+        scrollable(settings::view_column(vec![
+            categorization(state),
+            stremio(state)
+        ]))
         .width(Length::Fill)
         .height(Length::Fill)
         .scrollbar_width(0)
@@ -71,18 +88,33 @@ pub fn view<'a>(
 /// disk, whether the last one failed - so the screen never claims more than it
 /// was told. Nothing heavy runs until the switch is on, which is the promise the
 /// intro makes and the reason the off state says so plainly.
-fn categorization<'a>(snapshot: Option<&'a CategorizationSnapshot>) -> Element<'a, Message> {
+fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
     let Spacing { space_s, .. } = theme::spacing();
-
-    let Some(snapshot) = snapshot else {
-        return settings::section::<Message>()
-            .title(fl!("categorization-heading"))
-            .add(text::body(fl!("categorization-reading-status")))
-            .into();
+    let panel = categorization::Panel {
+        capable: state.capable,
+        snapshot: state.categorization,
     };
 
-    let mut section = settings::section::<Message>()
-        .title(fl!("categorization-heading"))
+    let mut section = settings::section::<Message>().title(fl!("categorization-heading"));
+
+    let (snapshot, actions) = match categorization::section(&panel) {
+        // A feature this installation does not have is said plainly, with what it
+        // would need - nothing on offer, because nothing here could work.
+        categorization::Section::Unsupported => {
+            return section
+                .add(text::body(fl!("categorization-unsupported")))
+                .add(text::body(fl!("categorization-unsupported-hint")))
+                .into();
+        }
+        categorization::Section::Checking => {
+            return section
+                .add(text::body(fl!("categorization-reading-status")))
+                .into();
+        }
+        categorization::Section::Ready { snapshot, actions } => (snapshot, actions),
+    };
+
+    section = section
         .add(text::body(fl!(
             "categorization-intro",
             size = DOWNLOAD_SIZE
@@ -90,38 +122,237 @@ fn categorization<'a>(snapshot: Option<&'a CategorizationSnapshot>) -> Element<'
         .add(settings::item(
             fl!("categorization-toggle"),
             toggler(snapshot.enabled).on_toggle(Message::SetCategorization),
+        ))
+        .add(text::body(status_line(snapshot)));
+
+    if let Some(notice) = state.notice {
+        section = section.add(text::body(notice_line(notice)));
+    }
+
+    // Where the model lives is the user's business only while the feature is
+    // on; in the off state the promise is that nothing runs, and a model line
+    // with no way to act on it would be noise.
+    if snapshot.enabled {
+        section = section.add(text::body(model_line(&snapshot.status.model)));
+    }
+
+    if let Some(report) = snapshot.report.as_ref() {
+        section = section.add(text::body(fl!(
+            "categorization-report",
+            apps = report.app_count,
+            categories = report.categories.len(),
+            unclassified = report.unclassified.len()
+        )));
+    }
+
+    let mut buttons = row![].spacing(space_s);
+    let mut has_buttons = false;
+    for action in actions {
+        // The switch is its own row above, so it is the one offer that is not a
+        // button down here (which is why the `action_*` maps still cover it:
+        // the match must stay exhaustive).
+        if action == categorization::Action::Toggle {
+            continue;
+        }
+        buttons = buttons.push(action_button(
+            action_label(action, snapshot),
+            action_message(action, snapshot),
+            action_class(action),
+            categorization::pressable(action, &panel),
         ));
-
-    if !snapshot.enabled {
-        return section.add(text::body(fl!("categorization-off"))).into();
+        has_buttons = true;
     }
 
-    section = section.add(text::body(status_line(snapshot)));
-    section = section.add(text::body(model_line(&snapshot.status.model)));
-
-    // Nothing to press while it is already working: the phase above says what it
-    // is doing, and a second scan is not something to ask for from here.
-    if snapshot.status.running {
-        return section.into();
+    // A row with nothing in it still claims its spacing; when the switch is
+    // the only offer, the section simply ends above it.
+    if has_buttons {
+        section = section.add(buttons);
     }
-
-    let actions = row![action_button(
-        scan_label(snapshot),
-        Message::ScanCategorization
-    )]
-    .spacing(space_s);
-    section.add(actions).into()
+    section.into()
 }
 
-/// One action in the section's button row, so padding and class cannot drift
-/// apart as more are added beside it.
-fn action_button<'a>(label: String, message: Message) -> Element<'a, Message> {
+/// The Stremio section: the account, the code being approved on another device,
+/// and the two controls that move between them.
+///
+/// Nothing here ever holds a credential - the code is approved where the user is
+/// already signed in, and the daemon keeps the session the link produces - so
+/// this section only ever says whether a session exists. Every line is the
+/// flow's own state: a status line here would be a second place guessing at what
+/// the daemon said.
+fn stremio<'a>(state: &Settings<'a>) -> Element<'a, Message> {
+    let Spacing { space_s, .. } = theme::spacing();
+    let flow = state.stremio;
+
+    let mut section = settings::section::<Message>()
+        .title(fl!("stremio-heading"))
+        .add(text::body(fl!("stremio-intro")));
+
+    // The code replaces the status line rather than sitting under it: while a
+    // link is pending, the code is the only thing on this section worth reading.
+    section = match flow.pending.as_ref() {
+        Some(pending) => section.add(pending_block(pending)),
+        None => section.add(text::body(stremio_status_line(flow))),
+    };
+
+    // The failure is the daemon's or Stremio's own words, and it sits beside the
+    // state rather than replacing it: a refused request did not change what the
+    // account is.
+    if let Some(error) = flow.error.as_deref() {
+        section = section.add(text::caption(fl!("stremio-failed", reason = error)));
+    }
+
+    let mut buttons = row![].spacing(space_s);
+    for action in stremio_link::actions(flow) {
+        buttons = buttons.push(action_button(
+            stremio_action_label(action),
+            stremio_action_message(action),
+            stremio_action_class(action),
+            stremio_link::pressable(action, flow),
+        ));
+    }
+
+    section.add(buttons).into()
+}
+
+/// The code, the link that carries it, and how long is left. The code is drawn
+/// large on purpose: this is read off a television and typed into a phone, which
+/// is the whole reason the flow exists instead of a password field.
+fn pending_block<'a>(pending: &stremio_link::Pending) -> Element<'a, Message> {
+    let Spacing {
+        space_xs, space_s, ..
+    } = theme::spacing();
+    container(
+        column![
+            text::body(fl!("stremio-pending", seconds = pending.seconds_left)),
+            text(pending.code.clone()).size(TEXT_TITLE),
+            text::caption(pending.link.clone()),
+        ]
+        .spacing(space_xs),
+    )
+    .padding(space_s)
+    .width(Length::Fill)
+    .into()
+}
+
+/// What the section says when no code is on screen: an account, a read in
+/// flight, an expired code, or nothing linked.
+fn stremio_status_line(flow: &stremio_link::Flow) -> String {
+    // Checking outranks the last answer: the section must not claim what the
+    // account was while it is asking what it is.
+    if flow.reading {
+        return fl!("stremio-reading");
+    }
+    // An expired code is what the user last acted on, so it is the news this
+    // line carries until the next request - "no account linked" is true but
+    // does not say what happened to the code they were typing.
+    if flow.expired {
+        return fl!("stremio-link-expired");
+    }
+    match flow.connection.as_ref() {
+        Some(connection) => fl!("stremio-linked", when = connection.linked_at.clone()),
+        None => fl!("stremio-not-linked"),
+    }
+}
+
+/// What pressing `action` asks the shell for. The decision is the flow's; this
+/// only names the request.
+fn stremio_action_message(action: stremio_link::Action) -> Message {
+    match action {
+        stremio_link::Action::Link => Message::StartStremioLink,
+        stremio_link::Action::Unlink => Message::UnlinkStremio,
+    }
+}
+
+/// The control's own words.
+fn stremio_action_label(action: stremio_link::Action) -> String {
+    match action {
+        stremio_link::Action::Link => fl!("stremio-link"),
+        stremio_link::Action::Unlink => fl!("stremio-unlink"),
+    }
+}
+
+/// One action in the section's button row, so padding cannot drift apart as
+/// more are added beside it. The class is passed in rather than fixed here:
+/// each control wears the class its role earns (the two `*_action_class` maps),
+/// the way the legacy screen's `class()` decided.
+///
+/// A control the state cannot honour is drawn disabled rather than dropped: the
+/// row is the same row in every phase, so nothing moves under the user's hand.
+fn action_button<'a>(
+    label: String,
+    message: Message,
+    class: Button,
+    enabled: bool,
+) -> Element<'a, Message> {
     let Spacing { space_s, .. } = theme::spacing();
     button::custom(text::body(label).size(TEXT_BODY))
         .padding([space_s, space_s])
-        .class(standard_button_class())
-        .on_press(message)
+        .class(class)
+        .on_press_maybe(enabled.then_some(message))
         .into()
+}
+
+/// What the control wears, by what it does: the affirmative actions are the
+/// primary button, the one that removes the model is the destructive one, and
+/// the rest stay ordinary. Mirrors the legacy `Action::class()` exactly, so
+/// the two screens cannot disagree about what a control does.
+fn action_class(action: categorization::Action) -> Button {
+    match action {
+        categorization::Action::Categorize | categorization::Action::CreateCollections => {
+            primary_action_button_class()
+        }
+        categorization::Action::RemoveModel => destructive_button_class(),
+        categorization::Action::Toggle | categorization::Action::Reset => standard_button_class(),
+    }
+}
+
+/// The same rule for the Stremio controls: linking is the affirmative action,
+/// unlinking removes the account.
+fn stremio_action_class(action: stremio_link::Action) -> Button {
+    match action {
+        stremio_link::Action::Link => primary_action_button_class(),
+        stremio_link::Action::Unlink => destructive_button_class(),
+    }
+}
+
+/// What pressing `action` asks the shell for. The decision is `update`'s; this
+/// only names the request.
+fn action_message(action: categorization::Action, snapshot: &CategorizationSnapshot) -> Message {
+    match action {
+        categorization::Action::Toggle => Message::SetCategorization(!snapshot.enabled),
+        categorization::Action::Categorize => Message::ScanCategorization,
+        categorization::Action::CreateCollections => Message::CreateCategorizationCollections,
+        categorization::Action::Reset => Message::ResetCategorizationTabs,
+        categorization::Action::RemoveModel => Message::DeleteCategorizationModel,
+    }
+}
+
+/// The button's own words. The switch reads as the item label above it, which is
+/// why it needs a label even though its row is the toggler's.
+fn action_label(action: categorization::Action, snapshot: &CategorizationSnapshot) -> String {
+    match action {
+        categorization::Action::Toggle => fl!("categorization-toggle"),
+        categorization::Action::Categorize => scan_label(snapshot),
+        categorization::Action::CreateCollections => fl!("categorization-create-collections"),
+        categorization::Action::Reset => fl!("categorization-reset"),
+        categorization::Action::RemoveModel => fl!("categorization-remove-model"),
+    }
+}
+
+/// What the last action did, in the daemon's own words.
+fn notice_line(notice: &categorization::Notice) -> String {
+    match notice {
+        categorization::Notice::Created(count) => {
+            // Bound by value: the `fl!` wrapper forwards raw tokens, so a deref
+            // inside the call would read as `*(count.into())`.
+            let count = *count;
+            fl!("categorization-collections-created", count = count)
+        }
+        categorization::Notice::NoCollections => fl!("categorization-collections-empty"),
+        categorization::Notice::Failed(reason) => {
+            fl!("categorization-failed", reason = reason.as_str())
+        }
+    }
 }
 
 /// Where the scan has got to, in the daemon's own words.
@@ -138,6 +369,11 @@ fn status_line(snapshot: &CategorizationSnapshot) -> String {
             ),
             CategorizationPhase::Idle => fl!("categorization-reading-status"),
         };
+    }
+    // The switch is the headline: off means none of the rest is running, so
+    // "ready" - which reads as "on, waiting for a scan" - would be a lie.
+    if !snapshot.enabled {
+        return fl!("categorization-off");
     }
     match status.last_error.as_deref() {
         Some(reason) => fl!("categorization-failed", reason = reason),
@@ -168,5 +404,39 @@ fn scan_label(snapshot: &CategorizationSnapshot) -> String {
         fl!("categorization-rescan")
     } else {
         fl!("categorization-categorize")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::status_line;
+    use crate::fl;
+    use crate::providers::daemon::{
+        CategorizationPhase, CategorizationSnapshot, CategorizationStatus, ModelStatus,
+    };
+
+    fn snapshot(enabled: bool) -> CategorizationSnapshot {
+        CategorizationSnapshot {
+            enabled,
+            status: CategorizationStatus {
+                running: false,
+                phase: CategorizationPhase::Idle,
+                completed: 0,
+                total: 0,
+                model: ModelStatus::Absent,
+                last_error: None,
+                last_completed_at: None,
+            },
+            report: None,
+        }
+    }
+
+    /// The switch being off is the first thing the section says: "ready"
+    /// reads as "on, waiting for a scan", which is exactly what is not true.
+    #[test]
+    fn the_off_switch_says_the_feature_is_off() {
+        let snapshot = snapshot(false);
+
+        assert_eq!(status_line(&snapshot), fl!("categorization-off"));
     }
 }

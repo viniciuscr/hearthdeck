@@ -104,6 +104,21 @@ const DISK_FREE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_s
 /// the same pace.
 const SYSTEM_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// How often the settings screen asks the daemon about a pending Stremio link.
+///
+/// Short, because somebody is standing in front of the television waiting for
+/// the phone in their hand to finish. It is a local call: the daemon is the one
+/// that talks to Stremio, and what it reports is already polled and coalesced.
+const STREMIO_LINK_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How long after a link the dashboard's collections are read back.
+///
+/// Publishing the account's rows is a network round trip to Stremio on the
+/// daemon's side, so reading the collections now would find the row still
+/// empty. Five seconds matches the delay the categorization screen already uses
+/// for a change whose end it cannot see.
+const STREMIO_PUBLISH_SETTLE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Everything the new shell can react to so far.
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -131,6 +146,35 @@ pub enum Message {
     SetCategorization(bool),
     /// A categorization scan was asked for.
     ScanCategorization,
+    /// The daemon's health reply landed: what this deployment provides at all.
+    HealthLoaded(Result<crate::providers::daemon::HealthResponse, String>),
+    /// The last run's rails should become dashboard collections.
+    CreateCategorizationCollections,
+    /// The publish finished: how many collections it created, or why it could
+    /// not. The shell re-reads the collections on success.
+    CategorizationCollectionsCreated(Result<usize, String>),
+    /// Restore default categories was pressed: the Applications tabs go back to
+    /// the ones derived from the entries themselves.
+    ResetCategorizationTabs,
+    /// The downloaded checkpoint should be freed.
+    DeleteCategorizationModel,
+    /// The Stremio section's link button: ask the daemon for a code.
+    StartStremioLink,
+    /// The daemon answered the request for a code: the one to approve, or why
+    /// it could not issue one.
+    StremioLinkStarted(Result<settings::stremio_link::Pending, String>),
+    /// One poll of the pending link came back.
+    StremioLinkPolled(Result<crate::providers::daemon::StremioLink, String>),
+    /// Whether a Stremio account is linked, as the daemon reports it.
+    StremioConnectionLoaded(Result<Option<crate::providers::daemon::StremioConnection>, String>),
+    /// The Stremio section's unlink button: forget the account.
+    UnlinkStremio,
+    /// The daemon answered the unlink request.
+    StremioUnlinked(Result<(), String>),
+    /// The Stremio source was asked to refresh. The failure is all this carries:
+    /// there is nothing for the user to do about it, and the provider's own
+    /// interval will try again.
+    StremioSourceRefreshed(Result<(), String>),
     /// The console list a tab strip is built from: `(platform id, label)`.
     ConsolesLoaded(Vec<(i64, String)>),
     SelectSection(Section),
@@ -291,6 +335,7 @@ enum Page {
 enum CategorizationAction {
     SetEnabled(bool),
     Scan,
+    RemoveModel,
 }
 
 pub struct App {
@@ -339,6 +384,20 @@ pub struct App {
     /// it. `None` until the first read lands, which is what lets the screen say
     /// it is checking rather than show a switch in a state nobody reported.
     categorization: Option<crate::providers::daemon::CategorizationSnapshot>,
+    /// Whether the deployment provides categorization at all, from `/v1/health`.
+    /// `None` until the health reply lands: the switch is not drawn for a
+    /// feature this installation does not have, so its answer has to arrive
+    /// before the screen can decide what it is.
+    categorization_capable: Option<bool>,
+    /// What the last categorization action did, for the section's own status
+    /// text. There is no toast layer yet, so the section is where the user
+    /// reads the outcome.
+    categorization_notice: Option<settings::categorization::Notice>,
+    /// The Stremio link flow: the account the daemon holds, the code being
+    /// approved elsewhere, and what the shell must do next. The flow is the
+    /// decision layer - each answer from the daemon moves it - so nothing in
+    /// `update` decides what a reply means, it only runs what the flow asks for.
+    stremio: settings::stremio_link::Flow,
     facet_selection: BTreeMap<String, String>,
     /// Whether the filter sidebar is open.
     filter_open: bool,
@@ -459,7 +518,7 @@ impl Application for App {
             |entries| cosmic::Action::App(Message::CatalogLoaded(entries)),
         );
 
-        let app = Self {
+        let mut app = Self {
             core,
             page: Page::default(),
             page_fade: None,
@@ -482,6 +541,9 @@ impl Application for App {
             cur_section: Section::PcGames,
             cur_group: None,
             categorization: None,
+            categorization_capable: None,
+            categorization_notice: None,
+            stremio: settings::stremio_link::Flow::default(),
             // The first tile: with nothing loaded yet there is nothing to point
             // at, and every read of the cursor tolerates that.
             cursors: Cursors::default(),
@@ -506,6 +568,11 @@ impl Application for App {
         let status = app.poll_system_status(std::time::Duration::ZERO);
         let collections = app.load_collections();
         let categorization = app.load_categorization();
+        let health = app.load_health();
+        // The settings screen's Stremio half has something to read whatever the
+        // deployment provides, so it is read here rather than only on the way
+        // in: a session can be revoked while the shell is running.
+        let stremio = app.load_stremio_connection();
         (
             app,
             Task::batch([
@@ -516,6 +583,8 @@ impl Application for App {
                 status,
                 collections,
                 categorization,
+                health,
+                stremio,
             ]),
         )
     }
@@ -839,9 +908,19 @@ impl Application for App {
                 self.switch_page(Page::Settings);
                 self.cursors.ring = None;
                 self.bar_cursor = None;
-                // Opening it asks for a fresh read, rather than showing whatever
-                // was fetched at startup.
-                return self.load_categorization();
+                // Opening it asks for fresh reads, rather than showing whatever
+                // was fetched at startup. A deployment that has already said it
+                // cannot run the feature is not asked for a state it has not got.
+                let mut reads = vec![self.load_health()];
+                if self.categorization_capable != Some(false) {
+                    reads.push(self.load_categorization());
+                }
+                // The Stremio half is not behind that check: it has something to
+                // read whatever the deployment provides, and the code a link is
+                // approved with is the one control an unsupported deployment can
+                // still offer.
+                reads.push(self.load_stremio_connection());
+                return Task::batch(reads);
             }
             Message::SetCategorization(on) => {
                 return self.categorization_action(CategorizationAction::SetEnabled(on));
@@ -852,6 +931,8 @@ impl Application for App {
             Message::CategorizationDone(result) => {
                 if let Err(error) = result {
                     log::warn!("categorization action failed: {error}");
+                    self.categorization_notice =
+                        Some(settings::categorization::Notice::Failed(error));
                 }
                 return self.load_categorization();
             }
@@ -859,6 +940,74 @@ impl Application for App {
                 Ok(snapshot) => self.categorization = Some(snapshot),
                 Err(error) => log::warn!("categorization read failed: {error}"),
             },
+            // The deployment says whether the feature exists here at all, which
+            // is the one answer that outranks everything the daemon reports.
+            Message::HealthLoaded(result) => match result {
+                Ok(health) => {
+                    self.categorization_capable = Some(health.capabilities.categorization)
+                }
+                // The last answer stands: a failed read is not news that the
+                // deployment lost the feature.
+                Err(error) => log::warn!("health read failed: {error}"),
+            },
+            Message::CreateCategorizationCollections => {
+                return self.create_categorization_collections();
+            }
+            Message::CategorizationCollectionsCreated(result) => {
+                match result {
+                    Ok(0) => {
+                        log::warn!("the last categorization produced no dashboard collections");
+                        self.categorization_notice =
+                            Some(settings::categorization::Notice::NoCollections);
+                    }
+                    Ok(created) => {
+                        log::info!("created {created} dashboard collections");
+                        self.categorization_notice =
+                            Some(settings::categorization::Notice::Created(created));
+                    }
+                    // A refusal leaves the dashboard as it was, so there is
+                    // nothing new to read back: the reason is the whole answer.
+                    Err(error) => {
+                        log::warn!("could not create the dashboard collections: {error}");
+                        self.categorization_notice =
+                            Some(settings::categorization::Notice::Failed(error));
+                        return Task::none();
+                    }
+                }
+                return self.load_collections();
+            }
+            Message::DeleteCategorizationModel => {
+                return self.categorization_action(CategorizationAction::RemoveModel);
+            }
+            Message::ResetCategorizationTabs => {
+                self.restore_derived_categories();
+                self.refilter();
+            }
+            // The Stremio section: the flow decides what an answer means and
+            // what must happen next, and the shell only runs that. Nothing here
+            // reads a reply to decide anything itself.
+            Message::StartStremioLink => return self.start_stremio_link(),
+            Message::StremioLinkStarted(result) => {
+                let effect = self.stremio.link_started(result);
+                return self.run_stremio_effect(effect);
+            }
+            Message::StremioLinkPolled(result) => {
+                let effect = self.stremio.link_polled(result);
+                return self.run_stremio_effect(effect);
+            }
+            Message::StremioConnectionLoaded(result) => self.stremio.connection_read(result),
+            Message::UnlinkStremio => return self.unlink_stremio(),
+            Message::StremioUnlinked(result) => {
+                let effect = self.stremio.unlinked(result);
+                return self.run_stremio_effect(effect);
+            }
+            // Nothing for the user to do about a failed publish: the provider's
+            // own interval will try again, and `/v1/health` is where it shows.
+            Message::StremioSourceRefreshed(result) => {
+                if let Err(error) = result {
+                    log::warn!("could not refresh the Stremio source: {error}");
+                }
+            }
             Message::OpenSearch => {
                 self.switch_page(Page::Library);
                 // The caret goes in the search box, which the library header
@@ -1227,6 +1376,9 @@ impl App {
         container(settings::view(
             &settings::Settings {
                 categorization: self.categorization.as_ref(),
+                capable: self.categorization_capable,
+                notice: self.categorization_notice.as_ref(),
+                stremio: &self.stremio,
             },
             &self.top_bar(top_bar::Destination::Settings),
             navigate,
@@ -2129,11 +2281,6 @@ impl App {
         )
     }
 
-    /// Fetches the dashboard's collections, which are what its rails are made of.
-    ///
-    /// One request for all of them, in the order the daemon composes them, rather
-    /// than a request per shelf: a collection nobody wrote frontend code for has
-    /// to arrive the same way as one that did.
     /// Fetches the smart-categories state, which is what the settings screen
     /// draws.
     ///
@@ -2152,12 +2299,143 @@ impl App {
         )
     }
 
+    /// Fetches the daemon's health, which is where the deployment says what it
+    /// provides at all.
+    ///
+    /// Read whenever the settings screen is opened, for the same reason the state
+    /// beside it is: the categorization program may have been installed or
+    /// removed since the shell started.
+    fn load_health(&self) -> Task<Message> {
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move { client.health().await.map_err(|error| error.to_string()) },
+            |result| cosmic::Action::App(Message::HealthLoaded(result)),
+        )
+    }
+
+    /// Reads whether a Stremio account is linked, and has the section say it is
+    /// checking while the answer is on its way.
+    ///
+    /// Run whenever the settings screen opens, and again when a pending link
+    /// resolves without saying what it resolved to.
+    fn load_stremio_connection(&mut self) -> Task<Message> {
+        self.stremio.begin_read();
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                client
+                    .stremio_connection()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::StremioConnectionLoaded(result)),
+        )
+    }
+
+    /// Asks the daemon for a link code.
+    ///
+    /// The code is approved on a device where the user is already signed in,
+    /// which is why this screen asks for no password: there is no secret here
+    /// for it to collect.
+    fn start_stremio_link(&mut self) -> Task<Message> {
+        self.stremio.begin_link();
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                client
+                    .start_stremio_link()
+                    .await
+                    .map(|offer| settings::stremio_link::Pending {
+                        code: offer.code,
+                        link: offer.link,
+                        seconds_left: offer.expires_in_seconds,
+                    })
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::StremioLinkStarted(result)),
+        )
+    }
+
+    /// One poll of the pending link, after `delay`.
+    ///
+    /// Self-rescheduling rather than a subscription: the chain ends the moment
+    /// the daemon stops reporting that a link is waiting, so there is nothing
+    /// left to unsubscribe from.
+    fn poll_stremio_link(&self, delay: std::time::Duration) -> Task<Message> {
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                tokio::time::sleep(delay).await;
+                client
+                    .poll_stremio_link()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::StremioLinkPolled(result)),
+        )
+    }
+
+    /// Asks the daemon to publish the linked account's rows now.
+    ///
+    /// The provider would get there on its own interval, but a person who just
+    /// approved a code expects the dashboard to fill in front of them.
+    fn refresh_stremio_source(&self) -> Task<Message> {
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                client
+                    .refresh_source("stremio")
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::StremioSourceRefreshed(result)),
+        )
+    }
+
+    /// Forgets the linked account, and the rows it published.
+    fn unlink_stremio(&mut self) -> Task<Message> {
+        self.stremio.begin_unlink();
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                client
+                    .unlink_stremio()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::StremioUnlinked(result)),
+        )
+    }
+
+    /// Turns the flow's answer into the work that answer asks for: keep watching
+    /// the code, publish what a link just produced, or re-read the connection.
+    ///
+    /// The flow owns which of those is right; this owns how each is run, so no
+    /// arm in `update` has to know what a reply meant.
+    fn run_stremio_effect(&mut self, effect: settings::stremio_link::Effect) -> Task<Message> {
+        use crate::screens::settings::stremio_link::Effect;
+        match effect {
+            Effect::Nothing => Task::none(),
+            Effect::Poll => self.poll_stremio_link(STREMIO_LINK_POLL_INTERVAL),
+            // Both halves go together: the publish is what fills the rows, and
+            // the delayed read is what makes the rail holding them appear.
+            Effect::Publish => Task::batch([
+                self.refresh_stremio_source(),
+                self.load_collections_after(STREMIO_PUBLISH_SETTLE),
+            ]),
+            Effect::ReloadConnection => self.load_stremio_connection(),
+        }
+    }
+
     /// Runs a categorization action, then re-reads what the daemon now thinks.
     ///
     /// No action writes to the screen's state directly: the daemon is asked, and
     /// then asked again, so what is drawn is always its answer rather than the
     /// shell's guess at it.
-    fn categorization_action(&self, action: CategorizationAction) -> Task<Message> {
+    fn categorization_action(&mut self, action: CategorizationAction) -> Task<Message> {
+        // A new action starts clean: whatever the last one left in the section's
+        // status text is about something the user has already moved past.
+        self.categorization_notice = None;
         let client = self.daemon_client.clone();
         Task::perform(
             async move {
@@ -2170,6 +2448,7 @@ impl App {
                         }
                     }
                     CategorizationAction::Scan => client.start_categorization_scan().await,
+                    CategorizationAction::RemoveModel => client.delete_categorization_model().await,
                 }
                 .map_err(|error| error.to_string())
             },
@@ -2177,10 +2456,68 @@ impl App {
         )
     }
 
-    fn load_collections(&self) -> Task<Message> {
+    /// Publishes the last run's rails as dashboard collections.
+    ///
+    /// The report the publish reads is already the daemon's, so this asks for
+    /// that work rather than calling the model again - and clears the last notice,
+    /// because the user has now asked for something.
+    fn create_categorization_collections(&mut self) -> Task<Message> {
+        self.categorization_notice = None;
         let client = self.daemon_client.clone();
         Task::perform(
             async move {
+                client
+                    .create_categorization_collections()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::CategorizationCollectionsCreated(result)),
+        )
+    }
+
+    /// Hands the Applications tabs back to the ones derived from the entries.
+    ///
+    /// This is the way out of a scan the user does not want: their own folders
+    /// survive, because only the scan's tabs are dropped. The selection follows
+    /// the folder it was on rather than the index, because the index no longer
+    /// names the same tab once the scan's tabs are gone.
+    fn restore_derived_categories(&mut self) {
+        let selected = self
+            .cur_group
+            .and_then(|index| self.config.sections.get(self.cur_section).get(index))
+            .cloned();
+        if !self.config.sync_categorization(&[]) {
+            return;
+        }
+        self.persist_config();
+        self.cur_group = selected.and_then(|selected| {
+            self.config
+                .sections
+                .get(self.cur_section)
+                .iter()
+                .position(|group| group == &selected)
+        });
+    }
+
+    /// Fetches the dashboard's collections, which are what its rails are made of.
+    ///
+    /// One request for all of them, in the order the daemon composes them, rather
+    /// than a request per shelf: a collection nobody wrote frontend code for has
+    /// to arrive the same way as one that did.
+    fn load_collections(&self) -> Task<Message> {
+        self.load_collections_after(std::time::Duration::ZERO)
+    }
+
+    /// Fetches the dashboard's collections after `delay`.
+    ///
+    /// The delay exists for the write that produces them: publishing a source's
+    /// rows is a network round trip on the daemon's side, so reading the
+    /// collections straight away would find them still empty.
+    fn load_collections_after(&self, delay: std::time::Duration) -> Task<Message> {
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                tokio::time::sleep(delay).await;
                 client
                     .list_collections()
                     .await
@@ -2473,6 +2810,9 @@ mod tests {
             cur_section: Section::PcGames,
             cur_group: None,
             categorization: None,
+            categorization_capable: None,
+            categorization_notice: None,
+            stremio: settings::stremio_link::Flow::default(),
             cursors: Cursors::default(),
             dashboard_cursor: dashboard::focus::Cursor::default(),
             bar_cursor: None,
@@ -3550,6 +3890,25 @@ mod tests {
         CategorizationPhase, CategorizationSnapshot, CategorizationStatus, CollectionItem,
         ModelStatus,
     };
+    use crate::screens::settings::categorization::Notice;
+
+    /// A health reply that carries one capability and nothing else, so a test can
+    /// say what this deployment provides without building a whole host.
+    fn health(categorization: bool) -> crate::providers::daemon::HealthResponse {
+        crate::providers::daemon::HealthResponse {
+            version: "test".to_owned(),
+            lan_enabled: false,
+            transport: "loopback".to_owned(),
+            providers: Vec::new(),
+            capabilities: crate::providers::daemon::HostCapabilities {
+                launch: false,
+                application_sessions: false,
+                install_requests: false,
+                retro_launch: false,
+                categorization,
+            },
+        }
+    }
 
     /// A categorization answer with nothing but the switch set - the state the
     /// settings screen reads to decide what to draw.
@@ -3566,6 +3925,24 @@ mod tests {
                 last_completed_at: None,
             },
             report: None,
+        }
+    }
+
+    /// The account the daemon reports as linked, so a test can land one without
+    /// a daemon behind it.
+    fn stremio_account() -> crate::providers::daemon::StremioConnection {
+        crate::providers::daemon::StremioConnection {
+            linked_at: "2026-10-07T10:00:00Z".to_owned(),
+        }
+    }
+
+    /// A code as the daemon issues one: the four characters, the page that
+    /// already carries them, and the window.
+    fn stremio_code() -> settings::stremio_link::Pending {
+        settings::stremio_link::Pending {
+            code: "ABCD".to_owned(),
+            link: "https://link.stremio.com/#/ABCD".to_owned(),
+            seconds_left: 120,
         }
     }
 
@@ -3618,6 +3995,229 @@ mod tests {
         assert!(
             app.categorization.as_ref().is_some_and(|snap| snap.enabled),
             "the last answer the daemon gave stands"
+        );
+    }
+
+    /// The health reply is what says whether this deployment provides the
+    /// feature at all, and the screen draws nothing on offer until it has one.
+    #[test]
+    fn the_health_reply_says_whether_the_feature_exists_here() {
+        let mut app = showing(4);
+        assert_eq!(
+            app.categorization_capable, None,
+            "nothing has asked the deployment yet"
+        );
+
+        let _ = app.update(Message::HealthLoaded(Ok(health(false))));
+        assert_eq!(
+            app.categorization_capable,
+            Some(false),
+            "this installation cannot run it"
+        );
+
+        let _ = app.update(Message::HealthLoaded(Ok(health(true))));
+        assert_eq!(app.categorization_capable, Some(true), "and this one can");
+    }
+
+    /// Restoring the defaults drops the tabs a scan made and keeps the user's
+    /// own, and the selection follows the folder rather than the index it was
+    /// sitting at.
+    #[test]
+    fn restoring_the_defaults_keeps_the_users_folders_and_drops_the_scans() {
+        let mut app = showing(4);
+        app.cur_section = Section::Applications;
+        app.config.add(Section::Applications, "Mine".to_owned());
+        let _ = app
+            .config
+            .sync_categorization(&[crate::app_group::CategorizationGroup {
+                name: "Speedruns".to_owned(),
+                entry_ids: vec!["app.one".to_owned()],
+            }]);
+        app.cur_group = Some(1);
+
+        let _ = app.update(Message::ResetCategorizationTabs);
+
+        assert_eq!(
+            tabs(&app, Section::Applications),
+            ["Mine"],
+            "the scan's tab goes and the user's folder stays"
+        );
+        assert_eq!(
+            app.cur_group,
+            Some(0),
+            "the selection follows the folder it was on"
+        );
+    }
+
+    /// Every outcome of a categorization action lands in the section's own
+    /// status text, and asking for the next one starts it clean.
+    #[test]
+    fn each_outcome_lands_in_the_sections_own_status_text() {
+        let mut app = showing(4);
+
+        let _ = app.update(Message::CategorizationCollectionsCreated(Ok(3)));
+        assert_eq!(
+            app.categorization_notice,
+            Some(Notice::Created(3)),
+            "how many collections the publish made"
+        );
+
+        let _ = app.update(Message::CategorizationCollectionsCreated(Ok(0)));
+        assert_eq!(
+            app.categorization_notice,
+            Some(Notice::NoCollections),
+            "zero is not four: it says the run implies no collection"
+        );
+
+        let _ = app.update(Message::CategorizationCollectionsCreated(Err(
+            "refused".to_owned()
+        )));
+        assert!(
+            matches!(&app.categorization_notice, Some(Notice::Failed(reason)) if reason == "refused"),
+            "the daemon's own reason is what the user reads: {:?}",
+            app.categorization_notice
+        );
+
+        let _ = app.update(Message::CategorizationDone(Err(
+            "the scan was refused".to_owned()
+        )));
+        assert!(
+            matches!(app.categorization_notice, Some(Notice::Failed(_))),
+            "a refused action is news the section has to carry: {:?}",
+            app.categorization_notice
+        );
+
+        let _ = app.update(Message::SetCategorization(true));
+        assert_eq!(
+            app.categorization_notice, None,
+            "a new action starts from a clean slate"
+        );
+    }
+
+    /// The Stremio section draws whatever the daemon last said about the
+    /// account: a read lands it, and a successful "none" clears it - an account
+    /// that is not there is a fact, not a missing one.
+    #[test]
+    fn a_stremio_connection_read_lands_the_account_the_section_draws() {
+        let mut app = showing(4);
+
+        let _ = app.update(Message::StremioConnectionLoaded(Ok(
+            Some(stremio_account()),
+        )));
+
+        assert_eq!(
+            app.stremio
+                .connection
+                .as_ref()
+                .map(|found| found.linked_at.as_str()),
+            Some("2026-10-07T10:00:00Z"),
+            "the account the daemon holds is the one kept"
+        );
+        assert!(
+            !app.stremio.reading,
+            "the answer ends the checking state the request started"
+        );
+
+        let _ = app.update(Message::StremioConnectionLoaded(Ok(None)));
+
+        assert!(
+            app.stremio.connection.is_none(),
+            "nothing is linked, and the section says so rather than keeping a ghost"
+        );
+    }
+
+    /// Unlinking takes the account off the section - and while the request is
+    /// unanswered nothing presses again, so the account cannot be forgotten
+    /// twice.
+    #[test]
+    fn unlinking_takes_the_account_off_the_section_once_it_is_answered() {
+        let mut app = showing(4);
+        let _ = app.update(Message::StremioConnectionLoaded(Ok(
+            Some(stremio_account()),
+        )));
+
+        let _ = app.update(Message::UnlinkStremio);
+
+        assert!(app.stremio.busy, "the request is in flight");
+        assert!(
+            !settings::stremio_link::pressable(
+                settings::stremio_link::Action::Unlink,
+                &app.stremio
+            ),
+            "a request in flight owns the section"
+        );
+
+        let _ = app.update(Message::StremioUnlinked(Ok(())));
+
+        assert!(app.stremio.connection.is_none(), "the account is gone");
+        assert!(!app.stremio.busy, "and the buttons come back");
+    }
+
+    /// A refused unlink is never news that the account is gone: it stays, with
+    /// the daemon's own reason beside it for the section to read.
+    #[test]
+    fn a_refused_unlink_keeps_the_account_and_says_why() {
+        let mut app = showing(4);
+        let _ = app.update(Message::StremioConnectionLoaded(Ok(
+            Some(stremio_account()),
+        )));
+        let _ = app.update(Message::UnlinkStremio);
+
+        let _ = app.update(Message::StremioUnlinked(Err("daemon is down".to_owned())));
+
+        assert!(
+            app.stremio.connection.is_some(),
+            "the account is still linked as far as anyone knows"
+        );
+        assert_eq!(app.stremio.error.as_deref(), Some("daemon is down"));
+        assert!(
+            !app.stremio.busy,
+            "the buttons come back even when the request failed"
+        );
+    }
+
+    /// Asking for a code locks the section while the request is in flight, and
+    /// the code the daemon answers with is what the section then shows - each
+    /// poll updating the countdown through the same flow.
+    #[test]
+    fn a_started_link_locks_the_section_and_then_shows_its_code() {
+        let mut app = showing(4);
+        assert!(
+            settings::stremio_link::pressable(settings::stremio_link::Action::Link, &app.stremio),
+            "idle, linking is the way in"
+        );
+
+        let _ = app.update(Message::StartStremioLink);
+
+        assert!(app.stremio.busy, "the code is being asked for");
+
+        let _ = app.update(Message::StremioLinkStarted(Ok(stremio_code())));
+
+        assert!(!app.stremio.busy, "the answer releases the buttons");
+        assert_eq!(
+            app.stremio
+                .pending
+                .as_ref()
+                .map(|pending| pending.code.as_str()),
+            Some("ABCD"),
+            "the code the daemon issued is the one on screen"
+        );
+
+        let _ = app.update(Message::StremioLinkPolled(Ok(
+            crate::providers::daemon::StremioLink::Waiting {
+                code: "ABCD".to_owned(),
+                link: "https://link.stremio.com/#/ABCD".to_owned(),
+                seconds_left: 98,
+            },
+        )));
+
+        assert_eq!(
+            app.stremio
+                .pending
+                .as_ref()
+                .map(|pending| pending.seconds_left),
+            Some(98),
+            "the countdown follows the daemon's answer, not a local clock"
         );
     }
 
