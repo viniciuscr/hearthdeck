@@ -399,9 +399,9 @@ pub struct App {
     /// highlighted. The menu owns both, so "is it open" cannot disagree with
     /// "what is it on".
     menu: menu::State,
-    /// The group dialog over the shell: naming a new folder, or confirming a
-    /// delete. It owns "is one open", the way the menu owns its open state, so
-    /// the two cannot disagree about it.
+    /// The group dialog over the shell: confirming a folder's deletion. It owns
+    /// "is one open", the way the menu owns its open state, so the two cannot
+    /// disagree about it.
     group_dialog: GroupDialog,
     cur_section: Section,
     cur_group: Option<usize>,
@@ -2528,8 +2528,13 @@ impl App {
 
     /// Writes the config back to disk, so a derived tab set survives a restart.
     fn persist_config(&self) {
-        if let Some(store) = self.config_store.as_ref() {
-            let _ = self.config.write_entry(store);
+        if let Some(store) = self.config_store.as_ref()
+            && let Err(error) = self.config.write_entry(store)
+        {
+            // A failed write does not undo the change - the in-memory tabs are
+            // still what the user asked for - but it must not be silent, or a
+            // restart looks like it lost their work.
+            log::warn!("config write failed: {error}");
         }
     }
 

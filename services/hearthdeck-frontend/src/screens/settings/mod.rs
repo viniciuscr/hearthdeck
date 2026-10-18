@@ -273,8 +273,7 @@ fn stremio_action_label(action: stremio_link::Action) -> String {
 
 /// One action in the section's button row, so padding cannot drift apart as
 /// more are added beside it. The class is passed in rather than fixed here:
-/// each control wears the class its role earns (the two `*_action_class` maps),
-/// the way the legacy screen's `class()` decided.
+/// each control wears the class its role earns (the two `*_action_class` maps).
 ///
 /// A control the state cannot honour is drawn disabled rather than dropped: the
 /// row is the same row in every phase, so nothing moves under the user's hand.
@@ -294,8 +293,7 @@ fn action_button<'a>(
 
 /// What the control wears, by what it does: the affirmative actions are the
 /// primary button, the one that removes the model is the destructive one, and
-/// the rest stay ordinary. Mirrors the legacy `Action::class()` exactly, so
-/// the two screens cannot disagree about what a control does.
+/// the rest stay ordinary.
 fn action_class(action: categorization::Action) -> Button {
     match action {
         categorization::Action::Categorize | categorization::Action::CreateCollections => {
@@ -377,7 +375,12 @@ fn status_line(snapshot: &CategorizationSnapshot) -> String {
     }
     match status.last_error.as_deref() {
         Some(reason) => fl!("categorization-failed", reason = reason),
-        None => fl!("categorization-ready"),
+        // A scan that already ran is not "ready to run": the daemon says when
+        // the last one finished, so that is the line instead of asking again.
+        None => match status.last_completed_at.as_deref() {
+            Some(when) => fl!("categorization-last-run", when = when),
+            None => fl!("categorization-ready"),
+        },
     }
 }
 
@@ -438,5 +441,18 @@ mod tests {
         let snapshot = snapshot(false);
 
         assert_eq!(status_line(&snapshot), fl!("categorization-off"));
+    }
+
+    /// A scan that already ran is not "ready to run": the daemon reports when
+    /// the last one finished, and the line says that instead of asking again.
+    #[test]
+    fn a_completed_scan_reads_as_the_last_run() {
+        let mut answered = snapshot(true);
+        answered.status.last_completed_at = Some("2026-10-07T10:00:00Z".to_owned());
+
+        assert_eq!(
+            status_line(&answered),
+            fl!("categorization-last-run", when = "2026-10-07T10:00:00Z")
+        );
     }
 }

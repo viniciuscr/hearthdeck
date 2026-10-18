@@ -1,1 +1,1 @@
-hearthdeck = ספריית האפליקציות COSMIC
+

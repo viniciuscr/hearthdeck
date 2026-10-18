@@ -1,9 +1,9 @@
 # Frontend rewrite — a new app, grown from scratch
 
-`app.rs` grew to ~10,200 lines: one `HearthDeck` struct, one giant `update`, and
-every screen's `view_*` in one file. This is a rewrite of the **UI and
-navigation**, built as a new app module alongside the old one, kept honest by
-dropping the cruft inherited from the project this started from.
+The app this one replaces had grown into a single ~10,200-line module: one
+struct, one giant `update`, and every screen's `view_*` in one file. This is a
+rewrite of the **UI and navigation** as a new app module, kept honest by dropping
+the cruft inherited from the project this started from.
 
 ## Layout
 
@@ -11,9 +11,6 @@ dropping the cruft inherited from the project this started from.
   time. It reuses the plumbing below the UI (`providers`, `app_group`,
   `icon_cache`, `input_ownership`, `launch_state`, `style`, `ui`, `widgets`);
   only the screens and navigation are rewritten.
-- `app_legacy.rs` — the inherited app. Still compiled and runnable behind
-  `HEARTHDECK_LEGACY=1`, as reference and fallback, until `app/` covers every
-  screen.
 - `ui/` — the design system: shared, styled widgets every screen composes from.
   Grows on second use; never a per-screen copy.
 - `screens/<name>/…` — one module per screen, each owning its own state,
@@ -29,9 +26,9 @@ dropping the cruft inherited from the project this started from.
   the documented opt-in (see `CONTRIBUTING.md`).
 - Audit candidate: libcosmic is enabled with `xdg-portal`,
   `desktop-systemd-scope` and `single-instance`; the first two look unused
-  (we launch via our own daemon/bridge) and the third is only used by
-  `app_legacy`. Measure with `cargo build -p hearthdeck-frontend --timings`
-  before trimming.
+  (we launch via our own daemon/bridge) and the third's only consumer was the
+  app this one replaced. Measure with
+  `cargo build -p hearthdeck-frontend --timings` before trimming.
 
 ## Decisions: use COSMIC vs own it
 
@@ -115,8 +112,7 @@ dropping the cruft inherited from the project this started from.
 
 ## Running
 
-- `just run-frontend-debug` — the **new** app.
-- `HEARTHDECK_LEGACY=1 just run-frontend-debug` — the old app.
+- `just run-frontend-debug` — the app.
 
 ## Status
 

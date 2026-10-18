@@ -1,24 +1,11 @@
-hearthdeck = COSMIC App-Bibliotek
 cosmic-library-home = Hjem
 cosmic-office = Kontor
 cosmic-system = System
 cosmic-utilities = Verktøy
-name = Navn
-ok = Ok
-save = Lagre
 cancel = Avbryt
 search-placeholder = Trykk for å søke etter apper...
-pin-to-app-tray = Fest til appskuffen
 run = Kjør
-run-on = Kjør på { $gpu }
-run-on-default = (Standard)
 remove = Flytt til hjem
 delete = Slett
-rename = Gi nytt navn
 delete-folder = Slett mappe?
     .msg = { "." }msg = Sletter du mappen, havner programikonene på Bibliotekets hovedside.
-flatpak = Flatpak
-snap = Snap
-system = System
-local = Lokalt
-nix = Nix

@@ -106,27 +106,24 @@ and the bounds are equal, and a page root layer containing text reports
 The page fade through is the reference implementation. `widgets/transition.rs`
 draws it; the timing around it lives in `src/motion.rs`, which owns when an
 animation started, how far along it is, and when it must end, while the shell
-owns the frame subscription. The rewrite (`app/mod.rs::switch_page`) drives the
-Dashboard / Library / Settings fade through that way; the inherited
-`app_legacy.rs` still carries an inline copy of the same timing until it retires.
+owns the frame subscription. `app/mod.rs::switch_page` drives the Dashboard /
+Library / Settings fade through that way.
 
 1. **State, not pixels.** The shell flips `page` immediately (so routing and tests
    are unaffected) and records the page it came from: `App::page_fade` holds a
-   `motion::Fade<Page>` (legacy: `HearthDeck::page_animation` /
-   `PageAnimation { from, started_at }`).
+   `motion::Fade<Page>`.
 2. **One clock, only when needed.** `subscription()` adds
    `window::frames().map(|(_, at)| Message::Animate(at))` *only* while a page,
-   tab or section transition is in flight - in the rewrite, while `page_fade` is
-   set. An idle window has no frames subscription and schedules no redraws at all.
+   tab or section transition is in flight - while `page_fade` is set. An idle
+   window has no frames subscription and schedules no redraws at all.
 3. **Progress is derived in `view()`.** `motion::Timed::progress` maps
    `now - started_at` through `cosmic::anim::smootherstep` to an eased `0..=1`.
    libcosmic's `Application::update` does not receive a `now` argument the way raw
    iced's `Application` does, so the frame time is carried on `Message::Animate`.
 4. **Bounded lifetime.** Expiry runs at the top of `update` for *every* message
    and drops the transition once `Timed::is_done` says it has exceeded
-   `PAGE_TRANSITION_DURATION` (rewrite: `App::expire_page_fade`; legacy:
-   `expire_page_animation`). A transition therefore cannot outlive its duration
-   even if a frame tick is missed.
+   `PAGE_TRANSITION_DURATION` (`App::expire_page_fade`). A transition therefore
+   cannot outlive its duration even if a frame tick is missed.
 5. **Presentation only in the widget.** `PageTransition` takes `progress: f32`
    and, per frame, draws only the page on the near side of the swap plus a
    surface-colour cover sized by `smootherstep` of the half-phase. It owns no
@@ -141,24 +138,23 @@ implementation deliberately differs from the page fade in one key way: it render
 
 - The shell holds the slide while it runs (`motion::Slide`: a target, a direction
   and a `swapped` flag on one `Timing`), recorded **without changing `cur_group`**,
-  so the outgoing grid is still the current data - rewrite: `App::tab_slide`,
-  legacy: `HearthDeck::tab_animation`.
+  so the outgoing grid is still the current data - `App::tab_slide`.
 - `TabTransition` (`widgets/transition.rs`) draws that single grid sliding out in
   `-direction` while the surface cover rises, then the swapped grid sliding in
   from `+direction` while the cover falls. `slide(progress, direction, width)`
   returns `(offset_x, cover_alpha)` and is unit-tested.
 - The swap happens on a tick, under the opaque cover: the advance step calls
-  `apply_group` once progress passes the midpoint (rewrite: `Slide::step` answers
+  `apply_group` once progress passes the midpoint (`Slide::step` answers
   `Step::Swap`) and drops the slide once it has run its course (`Step::Done`).
-  `apply_group` is the old body of the `SelectGroup` handler, now deferred to the
-  midpoint.
+  `apply_group` is the work the `SelectGroup` handler used to do inline, now
+  deferred to the midpoint.
 - Because only one grid is ever in the tree, no two grids are laid out per frame
   and the shared entry `Id`s never collide. Rendering two live grids would
   duplicate those ids and re-lay out every tile every frame.
 
 Direction comes from `tab_position` (the "all apps" tab is 0, groups follow), so
-the grid slides left when moving right along the strip and vice versa. The rewrite
-reads it through `app::tab_direction`, the legacy app through its own copy.
+the grid slides left when moving right along the strip and vice versa. It is read
+through `app::tab_direction`.
 
 ### Sections: shared-axis slide on Y
 
@@ -166,10 +162,9 @@ The sidebar sections are peers with a spatial relationship too - they are stacke
 top to bottom - so a section change is the same shared-axis slide as a tab
 change, on the other axis. It reuses the tab machinery almost verbatim:
 
-- The shell holds the target section the same way - rewrite: `App::section_slide`,
-  legacy: `HearthDeck::section_animation` - recorded **without changing
-  `cur_section`**, so the outgoing section's title, tabs and grid stay on screen
-  while they slide off.
+- The shell holds the target section the same way - `App::section_slide` -
+  recorded **without changing `cur_section`**, so the outgoing section's title,
+  tabs and grid stay on screen while they slide off.
 - `SectionTransition` is the vertical twin of `TabTransition`, sharing the same
   `slide(progress, direction, extent)` curve, just fed `bounds.height` instead of
   `bounds.width`. It wraps the whole content column, not the grid, so the title
@@ -177,15 +172,15 @@ change, on the other axis. It reuses the tab machinery almost verbatim:
   navigation, and leaving it still is what makes the motion read as "the content
   changed", not "the app moved".
 - The swap happens on a tick, under the opaque cover, exactly as a tab change does:
-  `apply_section` is the old body of the `SelectSection` handler, now deferred to
-  the midpoint.
+  `apply_section` is the work the `SelectSection` handler used to do inline, now
+  deferred to the midpoint.
 - Direction comes from `Section::index()` (sidebar order), so moving down the
   sidebar makes the new content rise from the bottom edge and moving up makes it
-  descend from the top. The rewrite reads it through `app::section_direction`.
+  descend from the top. It is read through `app::section_direction`.
 
 One caveat: the slide travels the library's content column, so a `SelectSection`
 delivered while some other page is showing applies immediately instead of
-animating. The rewrite states that in the handler (`SelectSection` applies at once
+animating. The shell states that in the handler (`SelectSection` applies at once
 when the page is changing); the sidebar is the only thing that emits the message,
 and it only exists on the Library screen.
 
@@ -193,9 +188,9 @@ and it only exists on the Library screen.
 
 When the cursor moves off the edge of a list, the list follows - eased, not snapped,
 so a step reads as the view moving rather than the selection jumping. Every such
-scroll goes through one entry point (rewrite: `App::animate_scroll_to`, legacy:
-`HearthDeck::animate_scroll_to`), so the grid, the dashboard rails, the dashboard
-page and the legacy tab strip all move at `SCROLL_TRANSITION_DURATION`.
+scroll goes through one entry point (`App::animate_scroll_to`), so the grid, the
+dashboard rails and the dashboard page all move at
+`SCROLL_TRANSITION_DURATION`.
 
 - `motion::Eased` carries `from`, `to` and what is being moved; each frame the
   advance step emits a `scroll_to` at the interpolated offset, and the animation is
@@ -250,11 +245,10 @@ they never define their own. Add a token here rather than a literal in a view.
 
 ## Related decisions
 
-- The Library tab strip sets `.animation_duration(Duration::ZERO)` on its
-  `reorderable_flex_row` (`app.rs`). That is a libcosmic slot animation, unrelated
-  to the page transition; it is disabled because its mid-layout repositioning
-  overlapped chips and forced a per-frame full redraw. Revisit only with the
-  performance rules above in mind.
+- libcosmic's `reorderable_flex_row` slot animation is unrelated to the page
+  transition. Set `.animation_duration(Duration::ZERO)` on it: its mid-layout
+  repositioning overlapped chips and forced a per-frame full redraw. Revisit only
+  with the performance rules above in mind.
 
 ## Sources
 
