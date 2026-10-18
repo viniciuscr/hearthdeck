@@ -79,10 +79,11 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
         .and_then(|index| header.groups.get(index))
         .map_or_else(|| header.section.name(), AppGroup::name);
 
-    // Folder management sits beside the title, as the inherited shell's title
-    // actions did: the button that adds a folder is always there, and the one
-    // that takes the current folder away only while a folder tab is up - there
-    // is nothing to delete under "all apps".
+    // Folder management sits beside the title: the one action is taking the
+    // current folder away, offered only while a folder tab is up - there is
+    // nothing to delete under "all apps". Naming new folders is deliberately
+    // not here: folder names come from the entries themselves, not from a name
+    // the user typed.
     let action = |icon_name: &'static str, label: String, message: Message| {
         tooltip(
             container(
@@ -101,13 +102,7 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
             tooltip::Position::Bottom,
         )
     };
-    let mut folder_actions = row![action(
-        "list-add-symbolic",
-        fl!("add-group"),
-        Message::OpenCreateGroup
-    )]
-    .spacing(space_s)
-    .align_y(Alignment::Center);
+    let mut folder_actions = row![].spacing(space_s).align_y(Alignment::Center);
     if let Some(index) = header.selected_group {
         folder_actions = folder_actions.push(action(
             "edit-delete-symbolic",

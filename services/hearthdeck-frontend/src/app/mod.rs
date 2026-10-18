@@ -205,13 +205,9 @@ pub enum Message {
     CloseFilterPanel,
     /// Drop every facet selection.
     ClearFilters,
-    /// The library header's "new group" button: open the dialog that names one.
-    OpenCreateGroup,
     /// The library header's delete button on a group tab: open the dialog that
     /// confirms taking that group away.
     OpenDeleteGroup(usize),
-    /// The create dialog's name field changed.
-    GroupNameChanged(String),
     /// The open dialog's confirm button: do what it asks.
     ConfirmGroupDialog,
     /// The open dialog's cancel button: stand down without acting.
@@ -789,37 +785,18 @@ impl Application for App {
                 self.refilter();
                 return self.list_replaced();
             }
-            // A dialog asking for a name starts by putting the caret in its
-            // field: the pad opened it, and the keyboard is ready to answer it
-            // without reaching for the mouse.
-            Message::OpenCreateGroup => {
-                self.group_dialog.open_create();
-                return widget_focus(group_dialog::name_input_id());
-            }
             Message::OpenDeleteGroup(group) => self.group_dialog.open_delete(group),
-            Message::GroupNameChanged(name) => self.group_dialog.set_name(name),
             Message::ConfirmGroupDialog => {
-                if let Some(effect) = self.group_dialog.confirm() {
-                    match effect {
-                        GroupEffect::Create(name) => {
-                            // A folder is born empty: an entry on the tab strip
-                            // that holds nothing until something is moved in.
-                            self.config.add(self.cur_section, name);
-                            self.persist_config();
-                            return self.focus_task();
-                        }
-                        GroupEffect::Delete(group) => {
-                            // The folder goes and its apps do not: they fall
-                            // back to the library home the folder held them out
-                            // of, and the grid reloads under a tab that is no
-                            // longer there.
-                            self.config.remove(self.cur_section, group);
-                            self.persist_config();
-                            self.cur_group = None;
-                            self.refilter();
-                            return self.list_replaced();
-                        }
-                    }
+                // Only the delete dialog stands for confirmation: the folder
+                // goes and its apps do not - they fall back to the library home
+                // the folder held them out of, and the grid reloads under a tab
+                // that is no longer there.
+                if let Some(GroupEffect::Delete(group)) = self.group_dialog.confirm() {
+                    self.config.remove(self.cur_section, group);
+                    self.persist_config();
+                    self.cur_group = None;
+                    self.refilter();
+                    return self.list_replaced();
                 }
             }
             Message::CancelGroupDialog => {
@@ -2772,7 +2749,7 @@ pub fn run() -> cosmic::iced::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_group::AppGroup;
+    use crate::app_group::{AppGroup, FilterType, GroupSource};
     use crate::providers::daemon::RetroRomVersion;
     use crate::providers::filter::FacetOption;
     use crate::style::PAGE_TRANSITION_DURATION;
@@ -2851,6 +2828,18 @@ mod tests {
             .iter()
             .map(AppGroup::name)
             .collect()
+    }
+
+    /// A folder the user made by hand, the way the config used to get one from
+    /// the create dialog. Names are not editable anymore, so a test that needs
+    /// a folder builds the same entry the derived tabs are materialized as.
+    fn add_user_group(app: &mut App, section: Section, name: &str) {
+        app.config.sections.get_mut(section).push(AppGroup {
+            name: name.to_owned(),
+            icon: "folder-symbolic".to_string(),
+            filter: FilterType::AppIds(Vec::new()),
+            source: GroupSource::Local,
+        });
     }
 
     /// The tabs a section shows are the ones its entries imply. Without them the
@@ -3532,28 +3521,12 @@ mod tests {
         assert_eq!(app.visible.len(), 4, "the library still has the app");
     }
 
-    /// The add dialog's confirm button is what creates the folder, and it lands
-    /// on the section's tab strip.
-    #[test]
-    fn confirming_the_add_dialog_puts_a_folder_on_the_tab_strip() {
-        let mut app = showing(2);
-        assert!(tabs(&app, Section::PcGames).is_empty());
-
-        let _ = app.update(Message::OpenCreateGroup);
-        let _ = app.update(Message::GroupNameChanged("Speedruns".to_owned()));
-        let _ = app.update(Message::ConfirmGroupDialog);
-
-        assert_eq!(tabs(&app, Section::PcGames), ["Speedruns"]);
-    }
-
     /// The delete dialog takes the folder away and nothing else: the apps stay
     /// in the library, and the tab it deleted is not left selected.
     #[test]
     fn confirming_the_delete_dialog_removes_the_folder_but_not_its_apps() {
         let mut app = showing_two_tabs();
-        let _ = app.update(Message::OpenCreateGroup);
-        let _ = app.update(Message::GroupNameChanged("Speedruns".to_owned()));
-        let _ = app.update(Message::ConfirmGroupDialog);
+        add_user_group(&mut app, Section::PcGames, "Speedruns");
         assert_eq!(tabs(&app, Section::PcGames), ["Steam", "Speedruns"]);
 
         let _ = app.update(Message::SelectGroup(Some(1)));
@@ -3575,15 +3548,16 @@ mod tests {
     #[test]
     fn backing_out_of_a_dialog_decides_nothing() {
         let mut app = showing(2);
-        let _ = app.update(Message::OpenCreateGroup);
-        let _ = app.update(Message::GroupNameChanged("Speedruns".to_owned()));
+        add_user_group(&mut app, Section::PcGames, "Speedruns");
+        let _ = app.update(Message::OpenDeleteGroup(0));
 
         send(&mut app, GamepadEvent::Back);
 
         assert!(!app.group_dialog.is_open(), "the dialog stood down");
-        assert!(
-            tabs(&app, Section::PcGames).is_empty(),
-            "and created nothing"
+        assert_eq!(
+            tabs(&app, Section::PcGames),
+            ["Speedruns"],
+            "and deleted nothing"
         );
         assert_eq!(
             app.page,
@@ -3598,8 +3572,8 @@ mod tests {
     #[test]
     fn a_dialog_holds_the_pad_until_it_is_answered() {
         let mut app = showing(2);
-        let _ = app.update(Message::OpenCreateGroup);
-        let _ = app.update(Message::GroupNameChanged("Speedruns".to_owned()));
+        add_user_group(&mut app, Section::PcGames, "Speedruns");
+        let _ = app.update(Message::OpenDeleteGroup(0));
 
         send(&mut app, GamepadEvent::NextGroup);
         send(&mut app, GamepadEvent::MoveDown);
@@ -3611,10 +3585,9 @@ mod tests {
             "the chords behind the dialog do not fire"
         );
         assert_eq!(app.cursors.tile, 0, "the grid behind it does not move");
-        assert_eq!(
-            tabs(&app, Section::PcGames),
-            ["Speedruns"],
-            "and Confirm answers the dialog"
+        assert!(
+            tabs(&app, Section::PcGames).is_empty(),
+            "and Confirm answers the dialog - the folder is gone"
         );
     }
 
@@ -4026,7 +3999,7 @@ mod tests {
     fn restoring_the_defaults_keeps_the_users_folders_and_drops_the_scans() {
         let mut app = showing(4);
         app.cur_section = Section::Applications;
-        app.config.add(Section::Applications, "Mine".to_owned());
+        add_user_group(&mut app, Section::Applications, "Mine");
         let _ = app
             .config
             .sync_categorization(&[crate::app_group::CategorizationGroup {

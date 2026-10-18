@@ -736,17 +736,6 @@ impl AppLibraryConfig {
         &HOME
     }
 
-    /// Appends an empty group to a section's tabs: the effect the create
-    /// dialog confirms. The group starts out holding nothing.
-    pub fn add(&mut self, section: Section, name: String) {
-        self.sections.get_mut(section).push(AppGroup {
-            name,
-            icon: "folder-symbolic".to_string(),
-            filter: FilterType::AppIds(Vec::new()),
-            source: GroupSource::Local,
-        });
-    }
-
     pub fn remove(&mut self, section: Section, i: usize) {
         if i < self.sections.get(section).len() {
             self.sections.get_mut(section).remove(i);
@@ -1283,7 +1272,15 @@ mod tests {
         let mut config = AppLibraryConfig::default();
         config.sync_categorization(&[scan_group("Development", &["editor"])]);
         // The user's own folder, made between the two scans.
-        config.add(Section::Applications, "Mine".into());
+        config
+            .sections
+            .get_mut(Section::Applications)
+            .push(AppGroup {
+                name: "Mine".to_owned(),
+                icon: "folder-symbolic".to_string(),
+                filter: FilterType::AppIds(Vec::new()),
+                source: GroupSource::Local,
+            });
 
         assert!(config.sync_categorization(&[scan_group("Media Center", &["vlc"])]));
 
@@ -1310,8 +1307,15 @@ mod tests {
     #[test]
     fn a_scan_keeps_the_folders_the_user_made() {
         let mut config = AppLibraryConfig::default();
-        config.add(Section::Applications, "Mine".into());
-        config.sections.applications[0].filter = FilterType::AppIds(vec!["writer".into()]);
+        config
+            .sections
+            .get_mut(Section::Applications)
+            .push(AppGroup {
+                name: "Mine".to_owned(),
+                icon: "folder-symbolic".to_string(),
+                filter: FilterType::AppIds(vec!["writer".into()]),
+                source: GroupSource::Local,
+            });
 
         config.sync_categorization(&[scan_group("Development", &["editor"])]);
 
