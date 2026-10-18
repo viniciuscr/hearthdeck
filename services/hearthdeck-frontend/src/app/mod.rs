@@ -55,6 +55,7 @@ use crate::screens::dashboard::{self, Card, Shelf};
 use crate::screens::details::{Details as GameDetails, Flag as DetailsFlag};
 use crate::screens::library::console::{self, ConsoleListing};
 use crate::screens::library::focus::{self, Chrome, Confirm, Cursors, Direction, Layout, Outcome};
+use crate::screens::library::group_dialog::{self, Effect as GroupEffect, GroupDialog};
 use crate::screens::library::sidebar::{self, Sidebar};
 use crate::screens::library::{filters, grid, header};
 use crate::screens::settings;
@@ -160,12 +161,26 @@ pub enum Message {
     CloseFilterPanel,
     /// Drop every facet selection.
     ClearFilters,
+    /// The library header's "new group" button: open the dialog that names one.
+    OpenCreateGroup,
+    /// The library header's delete button on a group tab: open the dialog that
+    /// confirms taking that group away.
+    OpenDeleteGroup(usize),
+    /// The create dialog's name field changed.
+    GroupNameChanged(String),
+    /// The open dialog's confirm button: do what it asks.
+    ConfirmGroupDialog,
+    /// The open dialog's cancel button: stand down without acting.
+    CancelGroupDialog,
     /// A tile was pressed: launch the entry it names.
     Activate(usize),
     /// The menu's controller-compatibility row: turn the per-application
     /// pointer-driving mode on or off for this entry. It is what makes an
     /// application that does not handle a controller itself usable with the pad.
     ToggleControllerCompatibility(usize),
+    /// The menu's remove row: take the entry at this tile out of the group it
+    /// sits in and back to library home.
+    RemoveFromGroup(usize),
     /// The pad's context button: open the tile menu on the tile at this index,
     /// or close it when it is already open on that tile.
     TileContext(usize),
@@ -331,6 +346,10 @@ pub struct App {
     /// highlighted. The menu owns both, so "is it open" cannot disagree with
     /// "what is it on".
     menu: menu::State,
+    /// The group dialog over the shell: naming a new folder, or confirming a
+    /// delete. It owns "is one open", the way the menu owns its open state, so
+    /// the two cannot disagree about it.
+    group_dialog: GroupDialog,
     cur_section: Section,
     cur_group: Option<usize>,
     /// Where the pad is: the tile it is on and the column it came down, the row
@@ -459,6 +478,7 @@ impl Application for App {
             facet_selection: BTreeMap::new(),
             filter_open: false,
             menu: menu::State::default(),
+            group_dialog: GroupDialog::default(),
             cur_section: Section::PcGames,
             cur_group: None,
             categorization: None,
@@ -699,6 +719,58 @@ impl Application for App {
                 }
                 self.refilter();
                 return self.list_replaced();
+            }
+            // A dialog asking for a name starts by putting the caret in its
+            // field: the pad opened it, and the keyboard is ready to answer it
+            // without reaching for the mouse.
+            Message::OpenCreateGroup => {
+                self.group_dialog.open_create();
+                return widget_focus(group_dialog::name_input_id());
+            }
+            Message::OpenDeleteGroup(group) => self.group_dialog.open_delete(group),
+            Message::GroupNameChanged(name) => self.group_dialog.set_name(name),
+            Message::ConfirmGroupDialog => {
+                if let Some(effect) = self.group_dialog.confirm() {
+                    match effect {
+                        GroupEffect::Create(name) => {
+                            // A folder is born empty: an entry on the tab strip
+                            // that holds nothing until something is moved in.
+                            self.config.add(self.cur_section, name);
+                            self.persist_config();
+                            return self.focus_task();
+                        }
+                        GroupEffect::Delete(group) => {
+                            // The folder goes and its apps do not: they fall
+                            // back to the library home the folder held them out
+                            // of, and the grid reloads under a tab that is no
+                            // longer there.
+                            self.config.remove(self.cur_section, group);
+                            self.persist_config();
+                            self.cur_group = None;
+                            self.refilter();
+                            return self.list_replaced();
+                        }
+                    }
+                }
+            }
+            Message::CancelGroupDialog => {
+                // Standing the dialog down decides nothing, and hands the caret
+                // back to the content the dialog stood over.
+                self.group_dialog.cancel();
+                return self.focus_task();
+            }
+            Message::RemoveFromGroup(index) => {
+                // Keyed on the entry's id rather than its tile index: the folder
+                // holds applications, so the removal must survive the list being
+                // filtered or reordered under it.
+                let id = self.visible.get(index).map(|entry| entry.id.clone());
+                if let Some(id) = id {
+                    self.config
+                        .remove_entry(self.cur_section, self.cur_group, &id);
+                    self.persist_config();
+                    self.refilter();
+                    return self.list_replaced();
+                }
             }
             Message::Activate(index) => return self.activate(index),
             // A card carries the id the daemon composed the rail with, exactly
@@ -1103,11 +1175,20 @@ impl App {
             None => content,
         };
 
-        container(row![sidebar, divider, content])
+        let shell = container(row![sidebar, divider, content])
             .width(Length::Fill)
             .height(Length::Fill)
-            .class(theme::Container::Custom(Box::new(root_background)))
-            .into()
+            .class(theme::Container::Custom(Box::new(root_background)));
+
+        // The dialog stands over the whole window, sidebar included: it asks a
+        // question of the user, so while it is up nothing under it can be
+        // reached - and its scrim stands it down. It stacks the same way the
+        // tile menu does, one layer further out because it questions the whole
+        // shell rather than one page of it.
+        match group_dialog::view(&self.group_dialog) {
+            Some(dialog) => stack![shell, dialog].into(),
+            None => shell.into(),
+        }
     }
 
     /// The dashboard screen: the app's front door, with chrome of its own.
@@ -1286,10 +1367,16 @@ impl App {
         } else {
             fl!("enable-controller-compatibility")
         };
-        vec![
+        let mut rows = vec![
             Row::new(fl!("run"), Message::Activate(index)),
             Row::new(compatibility, Message::ToggleControllerCompatibility(index)),
-        ]
+        ];
+        // The row is about the folder a tile sits in: on the all tab every app
+        // is already home, so there is nothing to move it to.
+        if self.cur_group.is_some() {
+            rows.push(Row::new(fl!("remove"), Message::RemoveFromGroup(index)));
+        }
+        rows
     }
 
     /// Runs the row the open menu has highlighted.
@@ -1564,6 +1651,27 @@ impl App {
     /// knows what a step, a confirm and Back mean - and no control that decides
     /// it for itself.
     fn navigate(&mut self, event: GamepadEvent) -> Task<Message> {
+        // A dialog is a question put to the user, so while one is up the pad
+        // answers that question - Confirm decides, Back stands it down - and
+        // nothing behind it moves: a chord that switched section under a dialog
+        // about to act on one would act on the wrong one.
+        if self.group_dialog.is_open() {
+            return match event {
+                GamepadEvent::Confirm => self.update(Message::ConfirmGroupDialog),
+                GamepadEvent::Back => self.back(),
+                GamepadEvent::MoveUp
+                | GamepadEvent::MoveDown
+                | GamepadEvent::MoveLeft
+                | GamepadEvent::MoveRight
+                | GamepadEvent::Search
+                | GamepadEvent::ContextMenu
+                | GamepadEvent::PrevGroup
+                | GamepadEvent::NextGroup
+                | GamepadEvent::PrevTab
+                | GamepadEvent::NextTab
+                | GamepadEvent::FilterPanel => Task::none(),
+            };
+        }
         // The details screen owns the whole surface while it is up: it moves
         // its own cursor and runs its own actions, and the chords belong to the
         // library behind it - switching section under a game's details would
@@ -1764,6 +1872,12 @@ impl App {
     /// the order the surfaces stack. The one rung still missing is the page
     /// behind the library: the Dashboard, which is where Back will end up.
     fn back(&mut self) -> Task<Message> {
+        // The dialog is the surface over everything there is - the menu and the
+        // page alike - so Back reaches it first, and standing it down decides
+        // nothing at all.
+        if self.group_dialog.is_open() {
+            return self.update(Message::CancelGroupDialog);
+        }
         // A failed launch is a message to read, so it is the innermost surface.
         if self.launch_state.error().is_some() {
             return self.update(Message::DismissLaunch);
@@ -2355,6 +2469,7 @@ mod tests {
             facet_selection: BTreeMap::new(),
             filter_open: false,
             menu: menu::State::default(),
+            group_dialog: GroupDialog::default(),
             cur_section: Section::PcGames,
             cur_group: None,
             categorization: None,
@@ -3012,6 +3127,155 @@ mod tests {
         // And the rows wrap, so the pad reaches either one from either end.
         send(&mut app, GamepadEvent::MoveDown);
         assert_eq!(app.menu.selected(), 0);
+    }
+
+    /// The remove row is about the folder a tile sits in: on the all tab every
+    /// app is already home, so the menu does not offer to move it there.
+    #[test]
+    fn the_menu_offers_moving_an_app_home_only_inside_a_group() {
+        let labels = |app: &App| -> Vec<String> {
+            app.menu_rows_for(app.menu_target().expect("the menu is open"))
+                .into_iter()
+                .map(|row| row.label)
+                .collect()
+        };
+
+        let mut app = showing(2);
+        send(&mut app, GamepadEvent::ContextMenu);
+        assert_eq!(
+            labels(&app),
+            [fl!("run"), fl!("enable-controller-compatibility")],
+            "the all tab has no folder to take an app out of"
+        );
+
+        // X's menu only exists on the library grid, and the app opens on the
+        // dashboard - so the test has to stand where the menu lives.
+        let mut app = showing_two_tabs();
+        app.page = Page::Library;
+        let _ = app.update(Message::SelectGroup(Some(0)));
+        settle(&mut app);
+        send(&mut app, GamepadEvent::ContextMenu);
+        assert_eq!(
+            labels(&app),
+            [
+                fl!("run"),
+                fl!("enable-controller-compatibility"),
+                fl!("remove")
+            ],
+            "a folder's tab offers to take the app back home"
+        );
+    }
+
+    /// Moving an app home takes it out of the folder and leaves it in the
+    /// library: the folder's tab stops showing it, the all tab still does.
+    #[test]
+    fn moving_an_app_home_takes_it_out_of_the_folder_but_not_the_library() {
+        // X's menu only exists on the library grid, and the app opens on the
+        // dashboard - so the test has to stand where the menu lives.
+        let mut app = showing_two_tabs();
+        app.page = Page::Library;
+        let _ = app.update(Message::SelectGroup(Some(0)));
+        settle(&mut app);
+        assert_eq!(app.visible.len(), 4, "the folder shows all four apps");
+
+        // The remove row is the menu's last one.
+        send(&mut app, GamepadEvent::ContextMenu);
+        send(&mut app, GamepadEvent::MoveDown);
+        send(&mut app, GamepadEvent::MoveDown);
+        send(&mut app, GamepadEvent::Confirm);
+
+        assert_eq!(app.visible.len(), 3, "the app left the folder's tab");
+        assert!(!app.menu.is_open(), "the menu closed behind the row");
+
+        let _ = app.update(Message::SelectGroup(None));
+        settle(&mut app);
+        assert_eq!(app.visible.len(), 4, "the library still has the app");
+    }
+
+    /// The add dialog's confirm button is what creates the folder, and it lands
+    /// on the section's tab strip.
+    #[test]
+    fn confirming_the_add_dialog_puts_a_folder_on_the_tab_strip() {
+        let mut app = showing(2);
+        assert!(tabs(&app, Section::PcGames).is_empty());
+
+        let _ = app.update(Message::OpenCreateGroup);
+        let _ = app.update(Message::GroupNameChanged("Speedruns".to_owned()));
+        let _ = app.update(Message::ConfirmGroupDialog);
+
+        assert_eq!(tabs(&app, Section::PcGames), ["Speedruns"]);
+    }
+
+    /// The delete dialog takes the folder away and nothing else: the apps stay
+    /// in the library, and the tab it deleted is not left selected.
+    #[test]
+    fn confirming_the_delete_dialog_removes_the_folder_but_not_its_apps() {
+        let mut app = showing_two_tabs();
+        let _ = app.update(Message::OpenCreateGroup);
+        let _ = app.update(Message::GroupNameChanged("Speedruns".to_owned()));
+        let _ = app.update(Message::ConfirmGroupDialog);
+        assert_eq!(tabs(&app, Section::PcGames), ["Steam", "Speedruns"]);
+
+        let _ = app.update(Message::SelectGroup(Some(1)));
+        settle(&mut app);
+        let _ = app.update(Message::OpenDeleteGroup(1));
+        let _ = app.update(Message::ConfirmGroupDialog);
+
+        assert_eq!(tabs(&app, Section::PcGames), ["Steam"]);
+        assert_eq!(app.cur_group, None, "the deleted tab is not left selected");
+        assert_eq!(
+            app.visible.len(),
+            4,
+            "and the apps are still in the library"
+        );
+    }
+
+    /// Back stands a dialog down first - it is the surface over everything -
+    /// and standing it down decides nothing at all.
+    #[test]
+    fn backing_out_of_a_dialog_decides_nothing() {
+        let mut app = showing(2);
+        let _ = app.update(Message::OpenCreateGroup);
+        let _ = app.update(Message::GroupNameChanged("Speedruns".to_owned()));
+
+        send(&mut app, GamepadEvent::Back);
+
+        assert!(!app.group_dialog.is_open(), "the dialog stood down");
+        assert!(
+            tabs(&app, Section::PcGames).is_empty(),
+            "and created nothing"
+        );
+        assert_eq!(
+            app.page,
+            Page::Library,
+            "Back leaves the dialog, not the page"
+        );
+    }
+
+    /// A dialog holds the pad until it is answered: the chords behind it do not
+    /// fire - a section switch under a dialog would act on the wrong section -
+    /// and Confirm answers the dialog rather than the tile under it.
+    #[test]
+    fn a_dialog_holds_the_pad_until_it_is_answered() {
+        let mut app = showing(2);
+        let _ = app.update(Message::OpenCreateGroup);
+        let _ = app.update(Message::GroupNameChanged("Speedruns".to_owned()));
+
+        send(&mut app, GamepadEvent::NextGroup);
+        send(&mut app, GamepadEvent::MoveDown);
+        send(&mut app, GamepadEvent::Confirm);
+
+        assert_eq!(
+            app.cur_section,
+            Section::PcGames,
+            "the chords behind the dialog do not fire"
+        );
+        assert_eq!(app.cursors.tile, 0, "the grid behind it does not move");
+        assert_eq!(
+            tabs(&app, Section::PcGames),
+            ["Speedruns"],
+            "and Confirm answers the dialog"
+        );
     }
 
     /// The dashboard is where the app opens, and the sidebar is the way out of
