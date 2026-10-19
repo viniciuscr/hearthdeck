@@ -86,7 +86,7 @@ impl App {
             // The console grid's facets and records both come from the daemon; it
             // is the one source that loads asynchronously.
             self.refilter();
-            return Task::batch([self.load_console(0), self.load_facets()]);
+            return Task::batch([self.ensure_console_scope(), self.load_facets()]);
         }
         self.rebuild_local_facets();
         self.refilter();
@@ -102,7 +102,7 @@ impl App {
         self.filter_open = false;
         if self.cur_section == Section::ConsoleGames {
             self.refilter();
-            return Task::batch([self.load_console(0), self.load_facets()]);
+            return Task::batch([self.ensure_console_scope(), self.load_facets()]);
         }
         self.rebuild_local_facets();
         self.refilter();
