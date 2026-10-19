@@ -1,11 +1,6 @@
-cancel = Cancel·lar
 run = Executa
 cosmic-library-home = Inici
 cosmic-office = Oficina
 cosmic-system = Sistema
 cosmic-utilities = Utilitats
 search-placeholder = Escriu per a cercar aplicacions…
-delete = Suprimeix
-remove = Mou a l'Inici
-delete-folder = Voleu suprimir aquest grup?
-    .msg = Suprimir aquest grup mourà les icones de les aplicacions a l'Inici.

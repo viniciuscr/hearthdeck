@@ -52,7 +52,6 @@ use crate::screens::dashboard::{self};
 use crate::screens::details::{Details as GameDetails, Flag as DetailsFlag};
 use crate::screens::library::console::{self, ConsoleScope, ConsoleScopes};
 use crate::screens::library::focus::{self, Cursors, Direction, Layout};
-use crate::screens::library::group_dialog::{self, Effect as GroupEffect, GroupDialog};
 use crate::screens::library::sidebar::{self, Sidebar};
 use crate::screens::library::{filters, grid, header};
 use crate::screens::settings;
@@ -61,6 +60,7 @@ use crate::style::{
     WINDOW_WIDTH, content_horizontal_padding, filter_drawer_width, grid_viewport_height_fallback,
     launch_overlay, primary_action_button_class, root_background, sidebar_divider,
 };
+use crate::subscriptions::daemon_events::{FeedEvent, daemon_events};
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
 use crate::ui;
@@ -117,6 +117,7 @@ const STREMIO_PUBLISH_SETTLE: std::time::Duration = std::time::Duration::from_se
 /// Everything the shell can react to.
 #[derive(Debug, Clone)]
 pub enum Message {
+    Romm(settings::romm::Message),
     /// The catalog fetched from the daemon, rendered as tiles, or why it could
     /// not be.
     CatalogLoaded(Result<Vec<Arc<DesktopEntryData>>, String>),
@@ -135,6 +136,8 @@ pub enum Message {
     FacetsLoaded(Result<Vec<Facet>, String>),
     /// The dashboard's collections arrived, which is what its rails are made of.
     CollectionsLoaded(Result<Vec<Collection>, String>),
+    /// The daemon said something changed (or its feed came back).
+    DaemonChanged(FeedEvent),
     /// The settings screen's smart-categories state, as the daemon reports it.
     CategorizationLoaded(Result<crate::providers::daemon::CategorizationSnapshot, String>),
     /// A categorization action finished. The shell re-reads the state either way,
@@ -210,22 +213,12 @@ pub enum Message {
     CloseFilterPanel,
     /// Drop every facet selection.
     ClearFilters,
-    /// The library header's delete button on a group tab: open the dialog that
-    /// confirms taking that group away.
-    OpenDeleteGroup(usize),
-    /// The open dialog's confirm button: do what it asks.
-    ConfirmGroupDialog,
-    /// The open dialog's cancel button: stand down without acting.
-    CancelGroupDialog,
     /// A tile was pressed: launch the entry it names.
     Activate(usize),
     /// The menu's controller-compatibility row: turn the per-application
     /// pointer-driving mode on or off for this entry. It is what makes an
     /// application that does not handle a controller itself usable with the pad.
     ToggleControllerCompatibility(usize),
-    /// The menu's remove row: take the entry at this tile out of the group it
-    /// sits in and back to library home.
-    RemoveFromGroup(usize),
     /// The pad's context button: open the tile menu on the tile at this index,
     /// or close it when it is already open on that tile.
     TileContext(usize),
@@ -419,6 +412,7 @@ pub struct App {
     /// decision layer - each answer from the daemon moves it - so nothing in
     /// `update` decides what a reply means, it only runs what the flow asks for.
     stremio: settings::stremio_link::Flow,
+    romm: settings::romm::Form,
     facet_selection: BTreeMap<String, String>,
     /// Whether the filter sidebar is open.
     filter_open: bool,
@@ -426,10 +420,6 @@ pub struct App {
     /// highlighted. The menu owns both, so "is it open" cannot disagree with
     /// "what is it on".
     menu: menu::State,
-    /// The group dialog over the shell: confirming a folder's deletion. It owns
-    /// "is one open", the way the menu owns its open state, so the two cannot
-    /// disagree about it.
-    group_dialog: GroupDialog,
     cur_section: Section,
     cur_group: Option<usize>,
     /// Where the pad is: the tile it is on and the column it came down, the row
@@ -541,13 +531,13 @@ impl Application for App {
             facet_selection: BTreeMap::new(),
             filter_open: false,
             menu: menu::State::default(),
-            group_dialog: GroupDialog::default(),
             cur_section: Section::PcGames,
             cur_group: None,
             categorization: None,
             categorization_capable: None,
             categorization_notice: None,
             stremio: settings::stremio_link::Flow::default(),
+            romm: settings::romm::Form::default(),
             // The first tile: with nothing loaded yet there is nothing to point
             // at, and every read of the cursor tolerates that.
             cursors: Cursors::default(),
@@ -615,6 +605,11 @@ impl Application for App {
                     }
                 };
                 self.retries.catalog = false;
+                // The feed re-reads on every library event, and most change
+                // nothing; replacing the list would throw the cursor to the top.
+                if entries == self.catalog {
+                    return Task::none();
+                }
                 self.catalog = entries;
                 // The local sections' tabs are the ones their entries imply: a
                 // store or category nothing installed carries is not a tab. The
@@ -726,6 +721,7 @@ impl Application for App {
                 // comes back to it.
                 return self.ensure_console_scope();
             }
+            Message::DaemonChanged(event) => return self.daemon_changed(event),
             Message::CollectionsLoaded(result) => {
                 match result {
                     Ok(collections) => {
@@ -856,39 +852,6 @@ impl Application for App {
                 self.refilter();
                 return self.list_replaced();
             }
-            Message::OpenDeleteGroup(group) => self.group_dialog.open_delete(group),
-            Message::ConfirmGroupDialog => {
-                // Only the delete dialog stands for confirmation: the folder
-                // goes and its apps do not - they fall back to the library home
-                // the folder held them out of, and the grid reloads under a tab
-                // that is no longer there.
-                if let Some(GroupEffect::Delete(group)) = self.group_dialog.confirm() {
-                    self.config.remove(self.cur_section, group);
-                    self.persist_config();
-                    self.cur_group = None;
-                    self.refilter();
-                    return self.list_replaced();
-                }
-            }
-            Message::CancelGroupDialog => {
-                // Standing the dialog down decides nothing, and hands the caret
-                // back to the content the dialog stood over.
-                self.group_dialog.cancel();
-                return self.focus_task();
-            }
-            Message::RemoveFromGroup(index) => {
-                // Keyed on the entry's id rather than its tile index: the folder
-                // holds applications, so the removal must survive the list being
-                // filtered or reordered under it.
-                let id = self.visible.get(index).map(|entry| entry.id.clone());
-                if let Some(id) = id {
-                    self.config
-                        .remove_entry(self.cur_section, self.cur_group, &id);
-                    self.persist_config();
-                    self.refilter();
-                    return self.list_replaced();
-                }
-            }
             Message::Activate(index) => return self.activate(index),
             // A card carries the id the daemon composed the rail with, exactly
             // as it came: what that names is the daemon's side of the wire.
@@ -970,6 +933,7 @@ impl Application for App {
                 // approved with is the one control an unsupported deployment can
                 // still offer.
                 reads.push(self.load_stremio_connection());
+                reads.push(self.load_romm_settings());
                 return Task::batch(reads);
             }
             Message::SetCategorization(on) => {
@@ -1036,6 +1000,7 @@ impl Application for App {
                 return self.categorization_action(CategorizationAction::RemoveModel);
             }
             Message::RestoreDefaultCategories => return self.restore_default_categories(),
+            Message::Romm(message) => return self.update_romm(message),
             // The Stremio section: the flow decides what an answer means and
             // what must happen next, and the shell only runs that. Nothing here
             // reads a reply to decide anything itself.
@@ -1171,6 +1136,7 @@ impl Application for App {
         // while something else owns the screen - the update arm drops events
         // then - so there is nothing to gate here.
         let navigation = gamepad_events().map(Message::GamepadEvent);
+        let daemon = daemon_events(self.daemon_client.clone()).map(Message::DaemonChanged);
         // Only the primary window drives the layout; dialogs are separate
         // surfaces and must not overwrite the width.
         let input = listen_with(|event, status, id| match event {
@@ -1222,7 +1188,7 @@ impl Application for App {
             }) => Some(Message::GamepadEvent(GamepadEvent::Back)),
             _ => None,
         });
-        let mut subs = vec![navigation, input];
+        let mut subs = vec![navigation, input, daemon];
         // The frame clock runs only while motion is in flight: an idle window
         // schedules no redraws at all, and an ungated frame subscription would pin
         // the compositor at the refresh rate forever.
@@ -1376,20 +1342,11 @@ impl App {
             None => content,
         };
 
-        let shell = container(row![sidebar, divider, content])
+        container(row![sidebar, divider, content])
             .width(Length::Fill)
             .height(Length::Fill)
-            .class(theme::Container::Custom(Box::new(root_background)));
-
-        // The dialog stands over the whole window, sidebar included: it asks a
-        // question of the user, so while it is up nothing under it can be
-        // reached - and its scrim stands it down. It stacks the same way the
-        // tile menu does, one layer further out because it questions the whole
-        // shell rather than one page of it.
-        match group_dialog::view(&self.group_dialog) {
-            Some(dialog) => stack![shell, dialog].into(),
-            None => shell.into(),
-        }
+            .class(theme::Container::Custom(Box::new(root_background)))
+            .into()
     }
     /// The dashboard screen: the app's front door, with chrome of its own.
     ///
@@ -1429,6 +1386,7 @@ impl App {
                 capable: self.categorization_capable,
                 notice: self.categorization_notice.as_ref(),
                 stremio: &self.stremio,
+                romm: &self.romm,
             },
             &self.top_bar(top_bar::Destination::Settings),
             navigate,
@@ -1552,16 +1510,10 @@ impl App {
         } else {
             fl!("enable-controller-compatibility")
         };
-        let mut rows = vec![
+        vec![
             Row::new(fl!("run"), Message::Activate(index)),
             Row::new(compatibility, Message::ToggleControllerCompatibility(index)),
-        ];
-        // The row is about the folder a tile sits in: on the all tab every app
-        // is already home, so there is nothing to move it to.
-        if self.cur_group.is_some() {
-            rows.push(Row::new(fl!("remove"), Message::RemoveFromGroup(index)));
-        }
-        rows
+        ]
     }
     /// Runs the row the open menu has highlighted.
     ///

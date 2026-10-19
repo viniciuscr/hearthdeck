@@ -3574,6 +3574,7 @@ dependencies = [
  "smithay-client-toolkit",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-tungstenite",
  "ureq",
  "url",
  "urlencoding",

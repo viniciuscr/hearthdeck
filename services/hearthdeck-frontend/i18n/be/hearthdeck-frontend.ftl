@@ -1,11 +1,6 @@
-cancel = Скасаваць
 cosmic-office = Офіс
 cosmic-system = Сістэма
 cosmic-utilities = Утыліты
 run = Запусціць
-delete = Выдаліць
 cosmic-library-home = Галоўная
-remove = Перамясціць у Галоўную
-delete-folder = Выдаліць папку?
-    .msg = Выдаленне гэтай папкі перанясе значкі праграм на Галоўную старонку бібліятэкі.
 search-placeholder = Увядзіце тэкст, каб знайсці праграму…

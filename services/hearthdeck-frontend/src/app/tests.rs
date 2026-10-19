@@ -34,13 +34,13 @@ fn shell() -> App {
         facet_selection: BTreeMap::new(),
         filter_open: false,
         menu: menu::State::default(),
-        group_dialog: GroupDialog::default(),
         cur_section: Section::PcGames,
         cur_group: None,
         categorization: None,
         categorization_capable: None,
         categorization_notice: None,
         stremio: settings::stremio_link::Flow::default(),
+        romm: settings::romm::Form::default(),
         cursors: Cursors::default(),
         dashboard_cursor: dashboard::focus::Cursor::default(),
         bar_cursor: None,
@@ -72,6 +72,54 @@ fn entry(id: &str, categories: &[&str]) -> Arc<DesktopEntryData> {
     })
 }
 
+#[test]
+fn romm_settings_replies_restore_the_form_and_save_clears_the_secret() {
+    use crate::providers::daemon::RommSettings;
+    use settings::romm::Message as Romm;
+
+    let mut app = showing_a_console_game(Vec::new());
+    app.config.sync_console_groups(&[(7, "SNES".into())]);
+    let scope = app.console_scope();
+    assert!(!app.console.entries(&scope).is_empty());
+    let connection = || RommSettings {
+        base_url: "http://localhost:8080".into(),
+        configured: true,
+    };
+    let _ = app.update(Message::Romm(Romm::Loaded(Ok(Some(connection())))));
+    assert_eq!(app.romm.base_url, "http://localhost:8080");
+    let _ = app.update(Message::Romm(Romm::TokenChanged("private-token".into())));
+    assert_eq!(app.romm.token, "private-token");
+    let _ = app.update(Message::Romm(Romm::Saved(Ok(connection()))));
+    assert!(app.romm.token.is_empty());
+    assert!(app.romm.connection.is_some());
+    assert!(app.console.entries(&scope).is_empty());
+    assert!(app.config.sections.console_games.is_empty());
+    let _ = app.update(Message::Romm(Romm::Removed(Ok(()))));
+    assert!(app.romm.base_url.is_empty());
+    assert!(app.romm.connection.is_none());
+}
+
+#[test]
+fn pending_romm_requests_cannot_be_overwritten_or_submitted_twice() {
+    use settings::romm::Message as Romm;
+
+    let mut app = shell();
+    let _ = app.update(Message::Romm(Romm::UrlChanged(
+        "http://localhost:8080".into(),
+    )));
+    let _ = app.update(Message::Romm(Romm::TokenChanged("private-token".into())));
+    let _ = app.update(Message::Romm(Romm::SavePressed));
+    assert!(app.romm.busy);
+    let _ = app.update(Message::Romm(Romm::UrlChanged(
+        "http://localhost:9090".into(),
+    )));
+    let _ = app.update(Message::Romm(Romm::TokenChanged("other-token".into())));
+    let _ = app.update(Message::Romm(Romm::SavePressed));
+    assert_eq!(app.romm.base_url, "http://localhost:8080");
+    assert_eq!(app.romm.token, "private-token");
+    assert!(app.romm.busy);
+}
+
 /// The labels of a section's tabs, in the order the strip shows them.
 fn tabs(app: &App, section: Section) -> Vec<String> {
     app.config
@@ -82,9 +130,7 @@ fn tabs(app: &App, section: Section) -> Vec<String> {
         .collect()
 }
 
-/// A folder the user made by hand, the way the config used to get one from
-/// the create dialog. Names are not editable anymore, so a test that needs
-/// a folder builds the same entry the derived tabs are materialized as.
+/// A legacy folder, kept when the catalog rebuilds the derived tabs.
 fn add_user_group(app: &mut App, section: Section, name: &str) {
     app.config.sections.get_mut(section).push(AppGroup {
         name: name.to_owned(),
@@ -943,10 +989,8 @@ fn the_menu_walks_every_row_it_shows() {
     assert_eq!(app.menu.selected(), 0);
 }
 
-/// The remove row is about the folder a tile sits in: on the all tab every
-/// app is already home, so the menu does not offer to move it there.
 #[test]
-fn the_menu_offers_moving_an_app_home_only_inside_a_group() {
+fn library_tabs_offer_no_membership_editing() {
     let labels = |app: &App| -> Vec<String> {
         app.menu_rows_for(app.menu_target().expect("the menu is open"))
             .into_iter()
@@ -971,109 +1015,11 @@ fn the_menu_offers_moving_an_app_home_only_inside_a_group() {
     send(&mut app, GamepadEvent::ContextMenu);
     assert_eq!(
         labels(&app),
-        [
-            fl!("run"),
-            fl!("enable-controller-compatibility"),
-            fl!("remove")
-        ],
-        "a folder's tab offers to take the app back home"
+        [fl!("run"), fl!("enable-controller-compatibility")],
+        "a category tab must not offer to change its membership"
     );
-}
-
-/// Moving an app home takes it out of the folder and leaves it in the
-/// library: the folder's tab stops showing it, the all tab still does.
-#[test]
-fn moving_an_app_home_takes_it_out_of_the_folder_but_not_the_library() {
-    // X's menu only exists on the library grid, and the app opens on the
-    // dashboard - so the test has to stand where the menu lives.
-    let mut app = showing_two_tabs();
-    app.page = Page::Library;
-    let _ = app.update(Message::SelectGroup(Some(0)));
-    settle(&mut app);
-    assert_eq!(app.visible.len(), 4, "the folder shows all four apps");
-
-    // The remove row is the menu's last one.
-    send(&mut app, GamepadEvent::ContextMenu);
-    send(&mut app, GamepadEvent::MoveDown);
-    send(&mut app, GamepadEvent::MoveDown);
-    send(&mut app, GamepadEvent::Confirm);
-
-    assert_eq!(app.visible.len(), 3, "the app left the folder's tab");
-    assert!(!app.menu.is_open(), "the menu closed behind the row");
-
-    let _ = app.update(Message::SelectGroup(None));
-    settle(&mut app);
-    assert_eq!(app.visible.len(), 4, "the library still has the app");
-}
-
-/// The delete dialog takes the folder away and nothing else: the apps stay
-/// in the library, and the tab it deleted is not left selected.
-#[test]
-fn confirming_the_delete_dialog_removes_the_folder_but_not_its_apps() {
-    let mut app = showing_two_tabs();
-    add_user_group(&mut app, Section::PcGames, "Speedruns");
-    assert_eq!(tabs(&app, Section::PcGames), ["Steam", "Speedruns"]);
-
-    let _ = app.update(Message::SelectGroup(Some(1)));
-    settle(&mut app);
-    let _ = app.update(Message::OpenDeleteGroup(1));
-    let _ = app.update(Message::ConfirmGroupDialog);
-
     assert_eq!(tabs(&app, Section::PcGames), ["Steam"]);
-    assert_eq!(app.cur_group, None, "the deleted tab is not left selected");
-    assert_eq!(
-        app.visible.len(),
-        4,
-        "and the apps are still in the library"
-    );
-}
-
-/// Back stands a dialog down first - it is the surface over everything -
-/// and standing it down decides nothing at all.
-#[test]
-fn backing_out_of_a_dialog_decides_nothing() {
-    let mut app = showing(2);
-    add_user_group(&mut app, Section::PcGames, "Speedruns");
-    let _ = app.update(Message::OpenDeleteGroup(0));
-
-    send(&mut app, GamepadEvent::Back);
-
-    assert!(!app.group_dialog.is_open(), "the dialog stood down");
-    assert_eq!(
-        tabs(&app, Section::PcGames),
-        ["Speedruns"],
-        "and deleted nothing"
-    );
-    assert_eq!(
-        app.page,
-        Page::Library,
-        "Back leaves the dialog, not the page"
-    );
-}
-
-/// A dialog holds the pad until it is answered: the chords behind it do not
-/// fire - a section switch under a dialog would act on the wrong section -
-/// and Confirm answers the dialog rather than the tile under it.
-#[test]
-fn a_dialog_holds_the_pad_until_it_is_answered() {
-    let mut app = showing(2);
-    add_user_group(&mut app, Section::PcGames, "Speedruns");
-    let _ = app.update(Message::OpenDeleteGroup(0));
-
-    send(&mut app, GamepadEvent::NextGroup);
-    send(&mut app, GamepadEvent::MoveDown);
-    send(&mut app, GamepadEvent::Confirm);
-
-    assert_eq!(
-        app.cur_section,
-        Section::PcGames,
-        "the chords behind the dialog do not fire"
-    );
-    assert_eq!(app.cursors.tile, 0, "the grid behind it does not move");
-    assert!(
-        tabs(&app, Section::PcGames).is_empty(),
-        "and Confirm answers the dialog - the folder is gone"
-    );
+    assert_eq!(app.visible.len(), 4);
 }
 
 /// The dashboard is where the app opens, and the sidebar is the way out of

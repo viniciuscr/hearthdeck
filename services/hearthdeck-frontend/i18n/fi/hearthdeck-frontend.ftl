@@ -1,11 +1,6 @@
-cancel = Peru
 cosmic-office = Toimisto
 cosmic-system = Järjestelmä
 cosmic-utilities = Apuohjelmat
 run = Suorita
 search-placeholder = Kirjoita etsiäksesi sovelluksia…
-delete = Poista
-delete-folder = Poistetaanko kansio?
-    .msg = Tämän kansion poistaminen siirtää sovelluskuvakkeet sovelluskirjastoon.
 cosmic-library-home = Sovelluskirjasto
-remove = Siirrä sovelluskirjastoon

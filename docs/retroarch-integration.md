@@ -12,7 +12,7 @@ unless a phase is marked done.
 ## Goal
 
 RomM stays the console/game catalog and metadata source (already live, read-only,
-in **Settings > System > Retro & RomM**). RetroArch becomes the thing that
+in **Settings > RomM server**). RetroArch becomes the thing that
 actually runs a game when the user presses "Play" on a RomM item, launched and
 supervised the same disciplined way Hearthdeck already launches desktop apps:
 typed request in, no shell string ever crosses the daemon/bridge boundary,
@@ -275,6 +275,20 @@ disagrees.
     the env var. Serving the file straight from RomM instead is not an option
     with the current design: libretro cores open a local path, and the bridge
     only accepts a launch path under this cache directory.
+
+## Configuring the RomM connection
+
+The COSMIC frontend exposes **Settings > RomM server** with a server URL,
+masked API token, **Save connection**, and **Remove connection**. It reads and
+writes the existing authenticated `/v1/retro/settings` endpoint; credentials
+remain in the daemon's settings store, not the frontend config. The daemon only
+accepts HTTP(S) loopback URLs (`localhost`, `127.0.0.1`, or `[::1]`).
+
+The saved token is never returned to the frontend. Editing the connection
+requires entering a token again. Failed writes leave the saved connection and
+the draft intact for retry; successful writes clear the token field and refresh
+the console source without restarting Hearthdeck. A saved connection is not a
+successful reachability check.
 
 ## Starting the RomM server itself
 

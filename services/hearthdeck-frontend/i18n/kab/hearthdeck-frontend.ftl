@@ -1,11 +1,6 @@
 cosmic-library-home = Tamkarḍit tagejdant
 cosmic-system = Anagraw
 cosmic-utilities = Ifecka
-cancel = Sefsex
 search-placeholder = Aru iwakken ad tnadiḍ isnasen…
 run = Selkem
-remove = Smutti ɣer temkarḍit tagejdant
-delete = kkes
-delete-folder = kkes akaram?
-    .msg = Tukksa n ukaram-agi ad imutti tignitin n usnas ɣer temkarḍit tagejdant.
 cosmic-office = Awurmahil

@@ -11,7 +11,8 @@ use std::time::Duration;
 use cosmic::app::Task;
 
 use crate::providers::GameProvider;
-use crate::providers::daemon::DaemonProvider;
+use crate::providers::daemon::{DaemonEvent, DaemonProvider};
+use crate::subscriptions::daemon_events::FeedEvent;
 
 use super::{App, Message, Page};
 
@@ -27,7 +28,59 @@ pub(super) struct Retries {
     pub(super) collections: bool,
 }
 
+/// Which reads a daemon event makes stale.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Stale {
+    catalog: bool,
+    collections: bool,
+    /// Consoles are only re-read while there are none: their loader also
+    /// prefetches every console's games, which is not a per-event cost.
+    missing_consoles: bool,
+}
+
+fn stale_after(event: FeedEvent) -> Stale {
+    match event {
+        FeedEvent::Changed(
+            DaemonEvent::LibraryChanged
+            | DaemonEvent::MetadataChanged
+            | DaemonEvent::CategorizationChanged,
+        ) => Stale {
+            catalog: true,
+            collections: true,
+            missing_consoles: true,
+        },
+        // A play ended or began: Recently Played and Continue Watching move.
+        FeedEvent::Changed(DaemonEvent::ApplicationSessionChanged) => Stale {
+            collections: true,
+            ..Stale::default()
+        },
+        FeedEvent::Resumed => Stale {
+            catalog: true,
+            collections: true,
+            missing_consoles: true,
+        },
+        FeedEvent::Changed(DaemonEvent::Unknown) => Stale::default(),
+    }
+}
+
 impl App {
+    /// Re-reads what `event` says changed. A read already in a retry chain is
+    /// left to it.
+    pub(super) fn daemon_changed(&self, event: FeedEvent) -> Task<Message> {
+        let stale = stale_after(event);
+        let mut reads = Vec::new();
+        if stale.catalog && !self.retries.catalog {
+            reads.push(self.load_catalog(Duration::ZERO));
+        }
+        if stale.collections && !self.retries.collections {
+            reads.push(self.load_collections());
+        }
+        if stale.missing_consoles && self.console_platforms.is_empty() && !self.retries.consoles {
+            reads.push(self.load_consoles());
+        }
+        Task::batch(reads)
+    }
+
     /// Fetches the whole catalog after `delay`.
     pub(super) fn load_catalog(&self, delay: Duration) -> Task<Message> {
         let client = self.daemon_client.clone();
@@ -104,5 +157,43 @@ impl App {
             reads.push(self.load_collections());
         }
         Task::batch(reads)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DaemonEvent, FeedEvent, Stale, stale_after};
+
+    #[test]
+    fn a_finished_play_rereads_only_the_rails() {
+        assert_eq!(
+            stale_after(FeedEvent::Changed(DaemonEvent::ApplicationSessionChanged)),
+            Stale {
+                collections: true,
+                ..Stale::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_library_change_or_a_reconnect_rereads_everything_it_could_have_moved() {
+        let everything = Stale {
+            catalog: true,
+            collections: true,
+            missing_consoles: true,
+        };
+        assert_eq!(
+            stale_after(FeedEvent::Changed(DaemonEvent::LibraryChanged)),
+            everything
+        );
+        assert_eq!(stale_after(FeedEvent::Resumed), everything);
+    }
+
+    #[test]
+    fn an_unknown_event_rereads_nothing() {
+        assert_eq!(
+            stale_after(FeedEvent::Changed(DaemonEvent::Unknown)),
+            Stale::default()
+        );
     }
 }

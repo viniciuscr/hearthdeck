@@ -313,11 +313,6 @@ pub const ICON_SEARCH: u16 = 32;
 pub fn search_icon_padding() -> u16 {
     spacing().space_xxxs
 }
-/// Height of the icon buttons next to the page title (rename/delete); 48px at
-/// Standard.
-pub fn title_action_height() -> f32 {
-    f32::from(spacing().space_xl)
-}
 /// Height of the filter button on the tab row; 48px at Standard. Matches the
 /// tab strip's own height so the control sits on the tabs' baseline instead of
 /// floating under them.
@@ -369,13 +364,9 @@ pub fn tab_width(label: &str) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Dialogs & menus
+// Menus
 // ---------------------------------------------------------------------------
 
-/// Width of the delete-group dialog and its text inputs.
-pub const DIALOG_WIDTH: f32 = 432.0;
-/// Width of a dialog action button.
-pub const DIALOG_ACTION_WIDTH: u16 = 142;
 /// Width of the context menu card. Not a theme token: COSMIC's spacing/density
 /// scale changes how much air the card has *inside* itself, not how wide the
 /// menu wants to be. Kept fixed so the menu reads the same at every density
@@ -390,11 +381,8 @@ pub const MENU_MAX_HEIGHT: f32 = 800.0;
 
 /// Largest icons: sidebar header and dialog artwork.
 pub const ICON_LARGE: u16 = 64;
-/// Icons inside body-sized controls (storage, filter, add group).
+/// Icons inside body-sized controls (storage, filter).
 pub const ICON_BODY: u16 = 24;
-/// Icons inside title-row action buttons (rename/delete); also the width/height
-/// of those icon buttons.
-pub const ICON_TILE_ACTION: f32 = 32.0;
 /// Small icons and inline spacers (menu checkboxes, source badges).
 pub const ICON_SMALL: u16 = 20;
 
@@ -952,7 +940,6 @@ mod tests {
         content_width, dashboard_tile_size, filter_button_height, grid_columns, grid_gap,
         search_icon_padding, sidebar_accent_bar_height, sidebar_header_height, sidebar_item_height,
         sidebar_width, tab_height, tab_underline_height, tile_height, tile_width,
-        title_action_height,
     };
 
     #[test]
@@ -962,7 +949,6 @@ mod tests {
         assert_eq!(sidebar_header_height(), 80.0);
         assert_eq!(sidebar_item_height(), 56.0);
         assert_eq!(sidebar_accent_bar_height(), 40.0);
-        assert_eq!(title_action_height(), 48.0);
         assert_eq!(filter_button_height(), 48.0);
         assert_eq!(tab_height(), 48.0);
         assert_eq!(tab_underline_height(), 4.0);

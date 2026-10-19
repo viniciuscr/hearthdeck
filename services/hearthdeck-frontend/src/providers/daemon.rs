@@ -36,6 +36,12 @@ const DAEMON_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// and is fetched on a blocking thread, which a stalled server would hold for good.
 const ICON_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct RommSettings {
+    pub base_url: String,
+    pub configured: bool,
+}
+
 /// Configuration for connecting to the HearthDeck daemon.
 #[derive(Clone, Debug)]
 pub struct DaemonConfig {
@@ -385,6 +391,36 @@ impl DaemonClient {
     /// Returns the base URL for API requests.
     fn api_url(&self, path: &str) -> String {
         format!("{}{}", self.config.base_url, path)
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.config.base_url
+    }
+
+    /// Opens the daemon's change feed (`GET /v1/events`).
+    pub async fn connect_events(&self) -> Result<EventStream, DaemonError> {
+        use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest};
+
+        let mut url =
+            url::Url::parse(&self.config.base_url).map_err(DaemonError::InvalidBaseUrl)?;
+        let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
+        url.set_scheme(scheme).map_err(|()| {
+            DaemonError::Events(tungstenite::Error::Url(
+                tungstenite::error::UrlError::UnsupportedUrlScheme,
+            ))
+        })?;
+        url.set_path("/v1/events");
+        url.set_query(None);
+
+        let mut request = url
+            .as_str()
+            .into_client_request()
+            .map_err(DaemonError::Events)?;
+        request.headers_mut().extend(self.auth_headers().await?);
+        let (stream, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .map_err(DaemonError::Events)?;
+        Ok(stream)
     }
 
     /// Converts a non-success daemon response into a [`DaemonError`],
@@ -1051,6 +1087,53 @@ impl DaemonClient {
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
+    pub async fn romm_settings(&self) -> Result<Option<RommSettings>, DaemonError> {
+        let response = self
+            .http
+            .get(self.api_url("/v1/retro/settings"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    pub async fn save_romm_settings(
+        &self,
+        base_url: &str,
+        token: &str,
+    ) -> Result<RommSettings, DaemonError> {
+        let response = self
+            .http
+            .put(self.api_url("/v1/retro/settings"))
+            .headers(self.auth_headers().await?)
+            .json(&serde_json::json!({ "base_url": base_url, "token": token }))
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    pub async fn clear_romm_settings(&self) -> Result<(), DaemonError> {
+        let response = self
+            .http
+            .delete(self.api_url("/v1/retro/settings"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+        Ok(())
+    }
+
     /// Unlinks the account: the session and the rows it published go together.
     pub async fn unlink_stremio(&self) -> Result<(), DaemonError> {
         let response = self
@@ -1369,6 +1452,22 @@ pub fn retro_version_list(record: &GameRecord) -> Vec<RetroRomVersion> {
     versions
 }
 
+pub type EventStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// What the daemon says changed. Payloads are dropped: the app re-reads the
+/// affected lists instead of patching them, so only the kind matters.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DaemonEvent {
+    LibraryChanged,
+    MetadataChanged,
+    ApplicationSessionChanged,
+    CategorizationChanged,
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("connection failed: {0}")]
@@ -1394,6 +1493,9 @@ pub enum DaemonError {
 
     #[error("automatic pairing requires a loopback daemon")]
     PairingRequiresLoopback,
+
+    #[error("event feed failed: {0}")]
+    Events(tokio_tungstenite::tungstenite::Error),
 }
 
 /// Maps a daemon error-response body to a [`DaemonError`], surfacing the
@@ -1599,11 +1701,26 @@ pub struct RetroRecordPage {
 #[cfg(test)]
 mod tests {
     use super::{
-        CatalogItem, DaemonClient, DaemonConfig, DaemonError, GameRecord, RetroGame,
+        CatalogItem, DaemonClient, DaemonConfig, DaemonError, DaemonEvent, GameRecord, RetroGame,
         RetroRomVersion, belongs_in_the_app_library, cache_file_name, catalog_item_to_game_record,
         daemon_error_from_body, image_extension, retro_game_to_game_record, retro_rom_query_params,
         retro_rom_versions, retro_version_label,
     };
+
+    #[test]
+    fn daemon_events_are_read_by_kind_and_unknown_kinds_are_tolerated() {
+        let parse = |json: &str| serde_json::from_str::<DaemonEvent>(json).unwrap();
+
+        assert_eq!(
+            parse(r#"{"type":"library_changed","source_id":"romm","record_count":3}"#),
+            DaemonEvent::LibraryChanged
+        );
+        assert_eq!(
+            parse(r#"{"type":"application_session_changed","session":null}"#),
+            DaemonEvent::ApplicationSessionChanged
+        );
+        assert_eq!(parse(r#"{"type":"from_the_future"}"#), DaemonEvent::Unknown);
+    }
 
     /// The extension a cached cover is stored with must come from the response,
     /// not the URL. Metahub poster URLs carry no extension, so the old URL-derived

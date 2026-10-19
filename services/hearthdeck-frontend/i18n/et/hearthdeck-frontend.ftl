@@ -1,11 +1,6 @@
 cosmic-office = Kontoritöö
 cosmic-system = Süsteem
 cosmic-utilities = Tarvikud
-cancel = Katkesta
-delete = Kustuta
 search-placeholder = Rakenduste otsimiseks kirjuta midagi…
 run = Käivita
-remove = Tõsta rakenduste kogu avalehele
-delete-folder = Kas kustutad kausta?
-    .msg = Selle kausta kustutamisel tõstetakse rakenduste ikoonid rakenduste kogu avalehele.
 cosmic-library-home = Rakenduste kogu avaleht

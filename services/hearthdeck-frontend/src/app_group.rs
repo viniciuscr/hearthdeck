@@ -607,29 +607,6 @@ impl AppLibraryConfig {
         }
     }
 
-    pub fn remove(&mut self, section: Section, i: usize) {
-        if i < self.sections.get(section).len() {
-            self.sections.get_mut(section).remove(i);
-        }
-    }
-
-    pub fn remove_entry(&mut self, section: Section, group: Option<usize>, id: &str) {
-        let Some(group) = group.and_then(|i| self.sections.get_mut(section).get_mut(i)) else {
-            return;
-        };
-        match &mut group.filter {
-            FilterType::AppIds(ids) => ids.retain(|conf_id| conf_id != id),
-            FilterType::Categories {
-                exclude, include, ..
-            } => {
-                include.retain(|conf_id| conf_id != id);
-                exclude.retain(|conf_id| conf_id != id);
-                exclude.push(id.to_string());
-            }
-            FilterType::None => {}
-        }
-    }
-
     /// The entries one tab of one section shows: the section's records, the
     /// tab's group, the search box and the facet selection, all applied.
     ///

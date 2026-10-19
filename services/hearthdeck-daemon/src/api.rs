@@ -1190,16 +1190,7 @@ async fn stop_application_session(
     }
     // A stop the user asked for knows when the play ended, so it does not wait for
     // the watcher's next tick.
-    if let Err(error) = state
-        .activity
-        .session_ended(&id, crate::activity::SessionOutcome::Closed)
-        .await
-    {
-        warn!(%error, session_id = %id, "failed to close the stopped play");
-    }
-    let _ = state
-        .events
-        .send(ServerEvent::ApplicationSessionChanged { session: None });
+    crate::activity::play_finished(&state, &id).await;
     Ok(StatusCode::ACCEPTED)
 }
 

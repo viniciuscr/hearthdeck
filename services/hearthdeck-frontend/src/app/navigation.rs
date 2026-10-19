@@ -23,27 +23,6 @@ impl App {
     /// knows what a step, a confirm and Back mean - and no control that decides
     /// it for itself.
     pub(super) fn navigate(&mut self, event: GamepadEvent) -> Task<Message> {
-        // A dialog is a question put to the user, so while one is up the pad
-        // answers that question - Confirm decides, Back stands it down - and
-        // nothing behind it moves: a chord that switched section under a dialog
-        // about to act on one would act on the wrong one.
-        if self.group_dialog.is_open() {
-            return match event {
-                GamepadEvent::Confirm => self.update(Message::ConfirmGroupDialog),
-                GamepadEvent::Back => self.back(),
-                GamepadEvent::MoveUp
-                | GamepadEvent::MoveDown
-                | GamepadEvent::MoveLeft
-                | GamepadEvent::MoveRight
-                | GamepadEvent::Search
-                | GamepadEvent::ContextMenu
-                | GamepadEvent::PrevGroup
-                | GamepadEvent::NextGroup
-                | GamepadEvent::PrevTab
-                | GamepadEvent::NextTab
-                | GamepadEvent::FilterPanel => Task::none(),
-            };
-        }
         // The details screen owns the whole surface while it is up: it moves
         // its own cursor and runs its own actions, and the chords belong to the
         // library behind it - switching section under a game's details would
@@ -243,12 +222,6 @@ impl App {
     /// screen and no drawer handles it for itself - they are unwound here, in
     /// the order the surfaces stack, ending on the Dashboard.
     pub(super) fn back(&mut self) -> Task<Message> {
-        // The dialog is the surface over everything there is - the menu and the
-        // page alike - so Back reaches it first, and standing it down decides
-        // nothing at all.
-        if self.group_dialog.is_open() {
-            return self.update(Message::CancelGroupDialog);
-        }
         // A failed launch is a message to read, so it is the innermost surface.
         if self.launch_state.error().is_some() {
             return self.update(Message::DismissLaunch);

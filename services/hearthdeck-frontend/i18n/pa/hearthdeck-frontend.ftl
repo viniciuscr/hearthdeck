@@ -1,11 +1,6 @@
-delete = ਹਟਾਓ
-cancel = ਰੱਦ ਕਰੋ
 run = ਚਲਾਓ
 cosmic-library-home = ਲਾਇਬਰੇਰੀ ਮੁੱਖ ਸਫ਼ਾ
 cosmic-office = ਆਫ਼ਿਸ
 cosmic-system = ਸਿਸਟਮ
 cosmic-utilities = ਸਹੂਲਤਾਂ
 search-placeholder = ਐਪਾਂ ਲੱਭਣ ਲਈ ਲਿਖੋ…
-remove = ਲਾਇਬਰੇਰੀ ਮੁੱਖ ਸਫ਼ੇ ਉੱਤੇ ਭੇਜੋ
-delete-folder = ਫੋਲਡਰ ਨੂੰ ਹਟਾਉਣਾ ਹੈ?
-    .msg = ਇਸ ਫੋਲਡਰ ਨੂੰ ਹਟਾਉਣ ਨਾਲ ਐਪਲੀਕੇਸ਼ਨ ਆਈਕਨ ਲਾਇਬਰੇਰੀ ਮੁੱਖ ਸਫ਼ੇ ਉਤੇ ਚਲੇ ਜਾਣਗੇ।

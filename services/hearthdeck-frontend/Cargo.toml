@@ -60,6 +60,8 @@ cosmic-app-list-config = { git = "https://github.com/pop-os/cosmic-applets", rev
 # HTTP client for daemon communication
 ureq = "3"
 reqwest.workspace = true
+# The daemon's change feed (/v1/events). Already in the lock file through axum.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
 
 # Wayland client, for asking the compositor to fullscreen a launched app's
 # window (see src/toplevel.rs). These are already in the workspace's lock file:

@@ -1,11 +1,6 @@
 cosmic-library-home = Beranda Pustaka
-cancel = Batalkan
 cosmic-office = Kantor
 cosmic-system = Sistem
 cosmic-utilities = Utilitas
 run = Jalankan
-delete = Hapus
 search-placeholder = Ketik untuk mencari aplikasi…
-remove = Pindahkan ke beranda pustaka
-delete-folder = Hapus map?
-    .msg = Menghapus map ini akan memindahkan ikon aplikasi ke beranda Pustaka.

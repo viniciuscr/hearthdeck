@@ -22,6 +22,7 @@ use crate::style::{
 use crate::widgets::top_bar;
 
 pub mod categorization;
+pub mod romm;
 pub mod stremio_link;
 
 /// What the first scan costs. Named once, so the sentence that warns about it
@@ -42,6 +43,7 @@ pub struct Settings<'a> {
     /// elsewhere, and whether a request is in flight. The flow owns all of it;
     /// this section reads it and names the request each control makes.
     pub stremio: &'a stremio_link::Flow,
+    pub romm: &'a romm::Form,
 }
 
 /// The page: the shared top bar, then the sections.
@@ -61,7 +63,8 @@ pub fn view<'a>(
         scrollable(settings::view_column(vec![
             library_and_dashboard(),
             categorization(state),
-            stremio(state)
+            stremio(state),
+            romm::view(state.romm)
         ]))
         .width(Length::Fill)
         .height(Length::Fill)

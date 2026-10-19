@@ -1,10 +1,7 @@
 //! The library's header: the section/group title, the search box, and the group
 //! tab strip.
 //!
-//! Rewritten from the inherited `view_main_content` header. Deliberately gone:
-//! the group **rename** controls (edit button, inline input, virtual-keyboard
-//! round-trip) and the **draggable/reorderable** tab strip. What is left is a
-//! title, the folder buttons, a search field and a row of tabs.
+//! Tabs are read-only: a title, a search field and a row of category buttons.
 //!
 //! Tied to [`crate::app::Message`] — the new app's own message — not made
 //! generic, because it emits several distinct messages and threading a closure
@@ -18,16 +15,15 @@ use cosmic::iced::Alignment;
 use cosmic::iced::Length;
 use cosmic::iced::alignment::Vertical;
 use cosmic::theme::{self, TextInput};
-use cosmic::widget::{Id, button, column, container, icon, row, space, text, text_input, tooltip};
+use cosmic::widget::{Id, button, column, container, row, space, text, text_input};
 
 use crate::app::Message;
 use crate::app_group::{AppGroup, Section};
 use crate::fl;
 use crate::style::{
-    FILTER_BUTTON_MIN_WIDTH, ICON_BODY, ICON_SEARCH, ICON_TILE_ACTION, SEARCH_WIDTH, TEXT_BODY,
-    TEXT_HEADER, TEXT_TITLE, accent_bar, control_button_class, filter_button_height,
-    icon_button_class, passthrough, search_icon_padding, tab_button_class, tab_height,
-    tab_underline_height, tab_width, title_action_height,
+    FILTER_BUTTON_MIN_WIDTH, ICON_BODY, ICON_SEARCH, SEARCH_WIDTH, TEXT_BODY, TEXT_HEADER,
+    TEXT_TITLE, accent_bar, control_button_class, filter_button_height, passthrough,
+    search_icon_padding, tab_button_class, tab_height, tab_underline_height, tab_width,
 };
 use crate::ui;
 
@@ -67,7 +63,6 @@ pub struct Header<'a> {
 pub fn view(header: Header<'_>) -> Element<'_, Message> {
     let Spacing {
         space_none,
-        space_xs,
         space_s,
         space_m,
         space_l,
@@ -79,41 +74,8 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
         .and_then(|index| header.groups.get(index))
         .map_or_else(|| header.section.name(), AppGroup::name);
 
-    // Folder management sits beside the title: the one action is taking the
-    // current folder away, offered only while a folder tab is up - there is
-    // nothing to delete under "all apps". Naming new folders is deliberately
-    // not here: folder names come from the entries themselves, not from a name
-    // the user typed.
-    let action = |icon_name: &'static str, label: String, message: Message| {
-        tooltip(
-            container(
-                button::custom(
-                    icon::icon(icon::from_name(icon_name).into())
-                        .width(Length::Fixed(ICON_TILE_ACTION))
-                        .height(Length::Fixed(ICON_TILE_ACTION)),
-                )
-                .padding(space_xs)
-                .class(icon_button_class())
-                .on_press(message),
-            )
-            .height(Length::Fixed(title_action_height()))
-            .align_y(Vertical::Center),
-            text::body(label).size(TEXT_BODY),
-            tooltip::Position::Bottom,
-        )
-    };
-    let mut folder_actions = row![].spacing(space_s).align_y(Alignment::Center);
-    if let Some(index) = header.selected_group {
-        folder_actions = folder_actions.push(action(
-            "edit-delete-symbolic",
-            fl!("delete"),
-            Message::OpenDeleteGroup(index),
-        ));
-    }
-
     let top_bar = row![
         container(text(title).size(TEXT_TITLE)).align_y(Vertical::Center),
-        folder_actions,
         space::horizontal().width(Length::FillPortion(1)),
         container(
             text_input(SEARCH_PLACEHOLDER.as_str(), header.search_value)

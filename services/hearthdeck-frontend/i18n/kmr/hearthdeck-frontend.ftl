@@ -1,11 +1,6 @@
 cosmic-system = Pergal
-cancel = Têk bibe
 search-placeholder = Bo li sepanan bigerî binivîse…
 run = Bixebitîne
 cosmic-office = Nivîsgeh
-delete = Jê bibe
 cosmic-library-home = Rûpela sereke ya pirtûkxaneyê
 cosmic-utilities = Amûr
-remove = Biçe rûpela sereke ya pirtûkxaneyê
-delete-folder = Peldankê jê bibe?
-    .msg = Jêbirina vê peldankê wê îkonên sepanê bilivîne bo rûpela destpêkê ya pirtûkxaneyê.

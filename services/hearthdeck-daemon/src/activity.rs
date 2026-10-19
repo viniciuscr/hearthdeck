@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -8,6 +7,8 @@ use serde_json::Value;
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
+
+use crate::state::{AppState, ServerEvent, SharedState};
 
 /// How often the daemon looks at the bridge while something is playing.
 ///
@@ -129,13 +130,21 @@ impl ActivityStore {
         Ok(())
     }
 
-    /// Closes a play, with the duration that has passed since it started.
+    /// Closes a play, with the duration that has passed since it started, and
+    /// answers the catalog source of what was played.
     ///
     /// Idempotent: only the first close of a running session writes anything, so
     /// a press of Stop and the watcher noticing the same exit cannot both take
-    /// credit for it.
-    pub async fn session_ended(&self, session_id: &str, outcome: SessionOutcome) -> Result<()> {
-        sqlx::query(
+    /// credit for it — the second close answers `None`. The source is the
+    /// catalog item's, from the launch snapshot, not the bridge session's: a
+    /// Stremio title runs as a desktop application but its progress lives in
+    /// the Stremio source.
+    pub async fn session_ended(
+        &self,
+        session_id: &str,
+        outcome: SessionOutcome,
+    ) -> Result<Option<String>> {
+        let closed = sqlx::query(
             r#"
             UPDATE play_sessions
             SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
@@ -144,14 +153,26 @@ impl ActivityStore {
                   (julianday('now') - julianday(started_at)) * 86400 AS INTEGER
                 )
             WHERE session_id = ? AND outcome = 'running'
+            RETURNING item_id
             "#,
         )
         .bind(outcome.as_str())
         .bind(session_id)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await
         .context("close play session")?;
-        Ok(())
+        let Some(closed) = closed else {
+            return Ok(None);
+        };
+        let source = sqlx::query_scalar(
+            "SELECT json_extract(snapshot_json, '$.source') FROM launch_activity WHERE item_id = ?",
+        )
+        .bind(closed.get::<String, _>("item_id"))
+        .fetch_optional(&self.pool)
+        .await
+        .context("look up the finished play's source")?
+        .flatten();
+        Ok(source)
     }
 
     /// Session ids of plays that have not been closed.
@@ -249,11 +270,11 @@ fn recent_activity_from_row(row: SqliteRow) -> Result<RecentActivity> {
 ///
 /// The returned handle is deliberately droppable: dropping it detaches the task,
 /// which is what a daemon that never stops wanting this should do.
-pub fn spawn_session_watcher(activity: ActivityStore, bridge_socket: PathBuf) -> JoinHandle<()> {
+pub fn spawn_session_watcher(state: SharedState) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(SESSION_WATCH_INTERVAL).await;
-            let running = match activity.running_sessions().await {
+            let running = match state.activity.running_sessions().await {
                 Ok(running) => running,
                 Err(error) => {
                     warn!(%error, "could not list running plays");
@@ -263,8 +284,10 @@ pub fn spawn_session_watcher(activity: ActivityStore, bridge_socket: PathBuf) ->
             if running.is_empty() {
                 continue;
             }
-            let request =
-                crate::bridge::request(&bridge_socket, BridgeRequest::ActiveApplicationSession);
+            let request = crate::bridge::request(
+                &state.config.bridge_socket_path,
+                BridgeRequest::ActiveApplicationSession,
+            );
             let active = match request.await {
                 Ok(BridgeResponse::ApplicationSession { session }) => session.map(|it| it.id),
                 Ok(_) => {
@@ -279,16 +302,40 @@ pub fn spawn_session_watcher(activity: ActivityStore, bridge_socket: PathBuf) ->
                 }
             };
             for session_id in finished_sessions(&running, active.as_deref()) {
-                match activity
-                    .session_ended(&session_id, SessionOutcome::Closed)
-                    .await
-                {
-                    Ok(()) => info!(%session_id, "play finished"),
-                    Err(error) => warn!(%error, %session_id, "could not close a finished play"),
-                }
+                play_finished(&state, &session_id).await;
             }
         }
     })
+}
+
+/// Everything that follows a play's end, whoever noticed it: the row is
+/// closed, the source it came from is asked to look again — a film watched
+/// moved Continue Watching, a game played moved its playtime — and clients are
+/// told the session is gone.
+///
+/// Only the close that actually ended the play does the rest, so Stop and the
+/// watcher noticing the same exit refresh once, not twice.
+pub async fn play_finished(state: &AppState, session_id: &str) {
+    let source = match state
+        .activity
+        .session_ended(session_id, SessionOutcome::Closed)
+        .await
+    {
+        Ok(Some(source)) => Some(source),
+        Ok(None) => return,
+        Err(error) => {
+            warn!(%error, %session_id, "could not close a finished play");
+            None
+        }
+    };
+    info!(%session_id, source = source.as_deref(), "play finished");
+    // A source with no discovery provider (a retro game) has nothing to refresh.
+    if let (Some(source), Some(discovery)) = (source, &state.discovery) {
+        discovery.request(&source).await;
+    }
+    let _ = state
+        .events
+        .send(ServerEvent::ApplicationSessionChanged { session: None });
 }
 
 /// The running plays the bridge is no longer reporting.
@@ -434,21 +481,30 @@ mod tests {
             .await
             .unwrap();
 
-        activity
-            .session_ended("played", SessionOutcome::Closed)
-            .await
-            .unwrap();
+        // The catalog source, not the bridge session's: that is what gets refreshed.
+        assert_eq!(
+            activity
+                .session_ended("played", SessionOutcome::Closed)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("romm")
+        );
         let (outcome, ended_at, duration) = journal(&pool, "played").await;
         assert_eq!(outcome, SessionOutcome::Closed.as_str());
         assert!(ended_at.is_some(), "a finished play knows when it ended");
         assert!(duration.is_some_and(|seconds| seconds >= 0));
 
         // Stop pressed and the watcher noticing the same exit must not both write:
-        // a second close leaves the first one's numbers alone.
-        activity
-            .session_ended("played", SessionOutcome::Closed)
-            .await
-            .unwrap();
+        // a second close leaves the first one's numbers alone, and names no source
+        // to refresh a second time.
+        assert_eq!(
+            activity
+                .session_ended("played", SessionOutcome::Closed)
+                .await
+                .unwrap(),
+            None
+        );
         assert_eq!(
             journal(&pool, "played").await,
             (outcome, ended_at, duration)

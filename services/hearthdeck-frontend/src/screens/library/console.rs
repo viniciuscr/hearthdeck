@@ -242,6 +242,17 @@ pub struct ConsoleScopes {
 }
 
 impl ConsoleScopes {
+    /// Forget data from the previous server without accepting its in-flight pages.
+    pub fn invalidate(&mut self) {
+        self.prefetch.clear();
+        for log in self.scopes.values_mut() {
+            *log = ConsoleListing {
+                generation: log.generation + 1,
+                ..ConsoleListing::default()
+            };
+        }
+    }
+
     /// The records loaded for `scope` so far, in the source's own order. Empty
     /// for a scope that has never answered.
     #[must_use]
@@ -459,6 +470,24 @@ mod tests {
     /// The scope of one console tab, with nothing narrowing it.
     fn scope(platform: i64) -> ConsoleScope {
         ConsoleScope::plain(Some(platform))
+    }
+
+    #[test]
+    fn changing_server_drops_cached_games_and_rejects_old_pages() {
+        let mut scopes = ConsoleScopes::default();
+        let scope = scope(7);
+        let old = scopes.begin(&scope, 0).unwrap();
+        assert!(scopes.apply(&scope, old, page(0, 1, 2)));
+        let pending = scopes.begin(&scope, 1).unwrap();
+        scopes.invalidate();
+        assert!(scopes.entries(&scope).is_empty());
+        assert!(!scopes.apply(&scope, pending, page(1, 1, 2)));
+        let Ensure::Requested(new) = scopes.ensure(&scope) else {
+            panic!("the new server must be queried");
+        };
+        assert_ne!(old, new);
+        assert!(!scopes.apply(&scope, old, page(0, 1, 1)));
+        assert!(scopes.apply(&scope, new, page(0, 1, 1)));
     }
 
     /// The scope of one console tab narrowed by a search term.

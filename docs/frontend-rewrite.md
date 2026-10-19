@@ -145,6 +145,10 @@ the cruft inherited from the project this started from.
   its virtual-keyboard round-trip.
 - Reorderable group tabs: `reorderable_flex_row`, `ReorderGroup`, the
   `group_keys` / `next_group_key` machinery and the tab-strip reveal.
+- Library group editing: the delete button, confirmation dialog, input capture,
+  and "Move to library home" menu row and config mutations. Library tabs are
+  read-only; browsing, search, filters and controller compatibility remain.
+  No replacement editor is provided.
 
 ## Invariants (not negotiable)
 

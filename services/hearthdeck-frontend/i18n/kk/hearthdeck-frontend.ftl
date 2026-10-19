@@ -1,11 +1,6 @@
-cancel = Бас тарту
-delete = Өшіру
 cosmic-library-home = Кітапхананың басты беті
 cosmic-office = Офис
 cosmic-system = Жүйе
 cosmic-utilities = Утилиталар
 search-placeholder = Қолданбаларды іздеу үшін теріңіз…
 run = Орындау
-remove = Кітапхананың басты бетіне жылжыту
-delete-folder = Буманы өшіру керек пе?
-    .msg = Бұл буманы өшіру қолданба таңбашаларын кітапхананың басты бетіне жылжытады.

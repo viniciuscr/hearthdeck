@@ -112,10 +112,7 @@ async fn main() -> Result<()> {
     // overlay is gone, so a game closed from the couch would never be recorded as
     // finished. Dropping the handle detaches the watcher, which is what a daemon
     // that wants it for its whole life should do.
-    let _session_watcher = activity::spawn_session_watcher(
-        state.activity.clone(),
-        state.config.bridge_socket_path.clone(),
-    );
+    let _session_watcher = activity::spawn_session_watcher(state.clone());
     // Nothing runs at boot, on purpose: the first scan is the user turning smart
     // categorization on, and until they do, the ordinary category tabs stand and
     // no checkpoint is fetched. All this does is say which state the machine is

@@ -1,11 +1,6 @@
-cancel = Hætta við
-delete = Eyða
 cosmic-office = Skrifstofa
 cosmic-system = Kerfi
 cosmic-utilities = Nytjaforrit
 search-placeholder = Slá inn til að leita að forritum…
 run = Keyra
 cosmic-library-home = Forritasafn - forsíða
-remove = Færa á forsíðu forritasafns
-delete-folder = Eyða möppu?
-    .msg = Ef möppunni er eytt er forritstáknið fært á forsíðu forritasafnsins.

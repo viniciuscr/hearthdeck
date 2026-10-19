@@ -1,11 +1,6 @@
-cancel = Ακύρωση
-delete = Διαγραφή
 run = Εκτέλεση
 cosmic-office = Γραφείο
 cosmic-system = Σύστημα
 cosmic-utilities = Βοηθήματα
 search-placeholder = Πληκτρολογήστε για αναζήτηση εφαρμογών…
 cosmic-library-home = Αρχική
-remove = Μετακίνηση στην Αρχική
-delete-folder = Διαγραφή φακέλου;
-    .msg = Η διαγραφή αυτού του φακέλου θα μετακινήσεις τα εικονίδια των εφαρμογών στην Αρχική.

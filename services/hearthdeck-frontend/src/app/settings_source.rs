@@ -1,5 +1,5 @@
 //! The settings screen's reads and writes against the daemon: the
-//! smart-categories state and the Stremio link flow.
+//! smart-categories state, RomM connection and the Stremio link flow.
 
 use cosmic::app::Task;
 
@@ -10,6 +10,104 @@ use super::{
 };
 
 impl App {
+    pub(super) fn load_romm_settings(&mut self) -> Task<Message> {
+        if self.romm.busy {
+            return Task::none();
+        }
+        self.romm.busy = true;
+        self.romm.error = None;
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                client
+                    .romm_settings()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::Romm(settings::romm::Message::Loaded(result))),
+        )
+    }
+
+    pub(super) fn update_romm(&mut self, message: settings::romm::Message) -> Task<Message> {
+        use settings::romm::Message as Romm;
+
+        let changed = match message {
+            Romm::UrlChanged(value) => {
+                if !self.romm.busy {
+                    self.romm.base_url = value;
+                }
+                false
+            }
+            Romm::TokenChanged(value) => {
+                if !self.romm.busy {
+                    self.romm.token = value;
+                }
+                false
+            }
+            Romm::Loaded(result) => {
+                self.romm.loaded(result);
+                false
+            }
+            Romm::SavePressed => {
+                if !self.romm.can_save() {
+                    return Task::none();
+                }
+                self.romm.busy = true;
+                self.romm.error = None;
+                let client = self.daemon_client.clone();
+                let base_url = self.romm.base_url.clone();
+                let token = self.romm.token.clone();
+                return Task::perform(
+                    async move {
+                        client
+                            .save_romm_settings(&base_url, &token)
+                            .await
+                            .map_err(|error| error.to_string())
+                    },
+                    |result| cosmic::Action::App(Message::Romm(Romm::Saved(result))),
+                );
+            }
+            Romm::RemovePressed => {
+                if self.romm.busy || self.romm.connection.is_none() {
+                    return Task::none();
+                }
+                self.romm.busy = true;
+                self.romm.error = None;
+                let client = self.daemon_client.clone();
+                return Task::perform(
+                    async move {
+                        client
+                            .clear_romm_settings()
+                            .await
+                            .map_err(|error| error.to_string())
+                    },
+                    |result| cosmic::Action::App(Message::Romm(Romm::Removed(result))),
+                );
+            }
+            Romm::Saved(result) => self.romm.saved(result),
+            Romm::Removed(result) => self.romm.removed(result),
+        };
+        if !changed {
+            return Task::none();
+        }
+        self.console.invalidate();
+        self.console_platforms.clear();
+        if self.config.sync_console_groups(&[]) {
+            self.persist_config();
+        }
+        if self.cur_section == crate::app_group::Section::ConsoleGames {
+            self.cur_group = None;
+            self.facets.clear();
+            self.facet_selection.clear();
+            self.refilter();
+        }
+        if self.romm.connection.is_some() {
+            self.load_consoles()
+        } else {
+            Task::none()
+        }
+    }
+
     /// Fetches the smart-categories state, which is what the settings screen
     /// draws.
     ///
