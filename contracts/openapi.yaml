@@ -919,6 +919,8 @@ components:
               items: { type: string }
             developer: { type: [string, 'null'] }
             project_license: { type: [string, 'null'] }
+            # Present once the categorization model has judged the application.
+            form_factor: { type: string, enum: [couch, desktop] }
             store: { type: [string, 'null'] }
             runner: { type: [string, 'null'] }
             version: { type: [string, 'null'] }

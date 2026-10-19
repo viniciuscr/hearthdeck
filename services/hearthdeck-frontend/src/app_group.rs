@@ -1,5 +1,6 @@
 use crate::config::APP_ID;
 use crate::fl;
+use crate::form_factor::{self, FormFactor};
 use crate::providers::filter::{Facet, FacetOption};
 use cosmic::cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use cosmic::cosmic_config::{
@@ -11,6 +12,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 const CONSOLE_CATEGORY_PREFIX: &str = "hearthdeck-console:";
+
+/// The name the Applications section's Desktop tab is stored under, which
+/// [`AppGroup::name`] shows in the user's language. Its sibling, the Couch view,
+/// is the section's "all" tab rather than a stored one.
+const DESKTOP_TAB_NAME: &str = "hearthdeck-desktop";
 
 pub fn romm_console_category(platform_id: i64) -> String {
     format!("{CONSOLE_CATEGORY_PREFIX}{platform_id}")
@@ -45,24 +51,6 @@ pub const SOURCE_CATEGORY_PREFIX: &str = "hearthdeck-source:";
 /// application it is matters at least as much as where it was installed, and an
 /// entry may carry both tags, so filtering by either finds it.
 pub const STREAMING_SOURCE: &str = "streaming";
-
-/// The freedesktop main categories an Application is grouped by, and the only
-/// categories offered as its filter values. Fixed, so a stray sub-category does
-/// not become a filter of its own.
-pub const APPLICATION_CATEGORIES: &[&str] = &[
-    "Audio",
-    "AudioVideo",
-    "Development",
-    "Education",
-    "Graphics",
-    "Network",
-    "Office",
-    "Science",
-    "Settings",
-    "System",
-    "Utility",
-    "Video",
-];
 
 /// A RomM metadata field the Console Games grid can be filtered by. Each
 /// variant owns the record-category prefix carrying its values, so adding a
@@ -271,6 +259,8 @@ impl AppGroup {
             fl!("cosmic-system")
         } else if &self.name == "cosmic-utilities" {
             fl!("cosmic-utilities")
+        } else if self.name == DESKTOP_TAB_NAME {
+            fl!("desktop-apps")
         } else {
             self.name.clone()
         }
@@ -333,7 +323,7 @@ impl Section {
     pub fn all_name(&self) -> String {
         match self {
             Section::PcGames | Section::ConsoleGames => fl!("all-games"),
-            Section::Applications => fl!("all-apps"),
+            Section::Applications => fl!("couch-apps"),
         }
     }
 
@@ -581,6 +571,10 @@ pub struct AppLibraryConfig {
     pub sections: Sections,
     #[serde(default)]
     pub desktop_input_apps: Vec<String>,
+    /// Applications the user moved between Couch and Desktop. What they chose
+    /// outranks whatever the rules or a model say.
+    #[serde(default)]
+    pub form_overrides: BTreeMap<String, FormFactor>,
 }
 
 impl AppLibraryConfig {
@@ -596,6 +590,30 @@ impl AppLibraryConfig {
         self.desktop_input_apps
             .iter()
             .any(|configured| configured == id)
+    }
+
+    /// Whether `entry` launches with the pointer-driving input profile.
+    ///
+    /// A Desktop application starts there by default, and the per-app toggle
+    /// flips whichever default the application has.
+    #[must_use]
+    pub fn desktop_input_for(&self, entry: &DesktopEntryData) -> bool {
+        self.desktop_input_enabled(&entry.id) ^ (form_factor::of(entry) == FormFactor::Desktop)
+    }
+
+    pub fn set_form_override(&mut self, id: &str, form: FormFactor) {
+        self.form_overrides.insert(id.to_owned(), form);
+    }
+
+    /// Puts the user's choices onto freshly loaded records.
+    pub fn apply_form_overrides(&self, entries: &mut [Arc<DesktopEntryData>]) {
+        for entry in entries {
+            if let Some(form) = self.form_overrides.get(&entry.id)
+                && form_factor::of(entry) != *form
+            {
+                form_factor::set(Arc::make_mut(entry), *form);
+            }
+        }
     }
 
     pub fn toggle_desktop_input(&mut self, id: &str) {
@@ -622,10 +640,17 @@ impl AppLibraryConfig {
         facets: &BTreeMap<String, String>,
     ) -> Vec<Arc<DesktopEntryData>> {
         let tab_group = tab.and_then(|i| self.sections.get(section).get(i));
+        // The Applications section opens on what suits the couch; a search looks
+        // through both, because the app being looked for may be the other kind.
+        let couch_only =
+            section == Section::Applications && tab.is_none() && input_value.is_empty();
         entries
             .iter()
             .filter(|de| {
                 if !section.matches(de) {
+                    return false;
+                }
+                if couch_only && form_factor::of(de) != FormFactor::Couch {
                     return false;
                 }
                 if let Some(group) = tab_group
@@ -654,33 +679,16 @@ impl AppLibraryConfig {
             .collect()
     }
 
-    /// Rebuild category tabs from the entries currently present while keeping
+    /// Rebuild the derived tabs from the entries currently present while keeping
     /// user-created groups, which use explicit application IDs.
     ///
-    /// Tabs an older scan left behind are dropped: they used to hide every
-    /// derived tab, and a config stuck that way had no way back.
+    /// PC Games gets a tab per store that installed something. Applications gets
+    /// one Desktop tab when anything wants a desktop; the Couch view is the
+    /// section's "all" tab. Tabs an older scan left behind are dropped: they used
+    /// to hide every derived tab, and a config stuck that way had no way back.
     pub fn sync_category_groups(&mut self, entries: &[Arc<DesktopEntryData>]) -> bool {
         let mut changed = false;
         for section in [Section::PcGames, Section::Applications] {
-            let mut categories = BTreeMap::new();
-            for entry in entries.iter().filter(|entry| section.matches(entry)) {
-                for category in &entry.categories {
-                    let visible = match section {
-                        Section::Applications => APPLICATION_CATEGORIES
-                            .iter()
-                            .any(|known| category.eq_ignore_ascii_case(known)),
-                        Section::PcGames => category.starts_with(STORE_CATEGORY_PREFIX),
-                        Section::ConsoleGames => false,
-                    };
-                    if category.eq_ignore_ascii_case("game") || !visible {
-                        continue;
-                    }
-                    categories
-                        .entry(category.to_lowercase())
-                        .or_insert_with(|| category.clone());
-                }
-            }
-
             let existing = self.sections.get(section);
             // Explicit app ids are what make a user's folder survive a rebuild.
             let kept_groups = existing
@@ -690,27 +698,7 @@ impl AppLibraryConfig {
                         && group.source != GroupSource::Categorization
                 })
                 .cloned();
-            let mut groups: Vec<_> = categories
-                .into_values()
-                .map(|category| AppGroup {
-                    name: category
-                        .strip_prefix(STORE_CATEGORY_PREFIX)
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| match category.to_ascii_lowercase().as_str() {
-                            "office" => "cosmic-office".to_string(),
-                            "system" => "cosmic-system".to_string(),
-                            "utility" => "cosmic-utilities".to_string(),
-                            _ => category.clone(),
-                        }),
-                    icon: "folder-symbolic".to_string(),
-                    filter: FilterType::Categories {
-                        categories: vec![category],
-                        include: Vec::new(),
-                        exclude: Vec::new(),
-                    },
-                    source: GroupSource::Local,
-                })
-                .collect();
+            let mut groups = derived_groups(section, entries);
             groups.extend(kept_groups);
 
             if existing != &groups {
@@ -777,10 +765,57 @@ impl AppLibraryConfig {
     }
 }
 
+/// The tabs `section` derives from `entries`, before any folder of the user's.
+fn derived_groups(section: Section, entries: &[Arc<DesktopEntryData>]) -> Vec<AppGroup> {
+    let mut shown = entries.iter().filter(|entry| section.matches(entry));
+    match section {
+        Section::PcGames => {
+            let stores: BTreeMap<String, String> = shown
+                .flat_map(|entry| entry.categories.iter())
+                .filter(|category| category.starts_with(STORE_CATEGORY_PREFIX))
+                .map(|category| (category.to_lowercase(), category.clone()))
+                .collect();
+            stores
+                .into_values()
+                .map(|category| AppGroup {
+                    name: category
+                        .strip_prefix(STORE_CATEGORY_PREFIX)
+                        .map_or_else(|| category.clone(), str::to_owned),
+                    icon: "folder-symbolic".to_string(),
+                    filter: FilterType::Categories {
+                        categories: vec![category],
+                        include: Vec::new(),
+                        exclude: Vec::new(),
+                    },
+                    source: GroupSource::Local,
+                })
+                .collect()
+        }
+        Section::Applications => {
+            if !shown.any(|entry| form_factor::of(entry) == FormFactor::Desktop) {
+                return Vec::new();
+            }
+            vec![AppGroup {
+                name: DESKTOP_TAB_NAME.to_owned(),
+                icon: "folder-symbolic".to_string(),
+                filter: FilterType::Categories {
+                    categories: vec![form_factor::category(FormFactor::Desktop)],
+                    include: Vec::new(),
+                    exclude: Vec::new(),
+                },
+                source: GroupSource::Local,
+            }]
+        }
+        Section::ConsoleGames => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AppGroup, AppLibraryConfig, FilterType, GroupSource, Section, section_facets};
+    use crate::form_factor::{self, FormFactor};
     use cosmic::desktop::{DesktopEntryData, fde::IconSource};
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     #[test]
@@ -808,8 +843,10 @@ mod tests {
         assert_ne!(left.cmp(&right), std::cmp::Ordering::Equal);
     }
 
+    /// A record as a provider hands it over: an application is tagged with its
+    /// form factor on the way in.
     fn entry(id: &str, categories: &[&str]) -> Arc<DesktopEntryData> {
-        Arc::new(DesktopEntryData {
+        let mut entry = DesktopEntryData {
             id: id.into(),
             name: id.into(),
             wm_class: None,
@@ -824,37 +861,82 @@ mod tests {
             mime_types: Vec::new(),
             prefers_dgpu: false,
             terminal: false,
-        })
+        };
+        if Section::Applications.matches(&entry) {
+            form_factor::tag(&mut entry);
+        }
+        Arc::new(entry)
     }
 
     #[test]
-    fn category_tabs_follow_loaded_entries() {
+    fn the_desktop_tab_exists_only_while_something_wants_it() {
+        let stremio = entry("com.stremio.Stremio.desktop", &["AudioVideo"]);
         let mut config = AppLibraryConfig::default();
-        config.sync_category_groups(&[
-            entry("writer", &["Office"]),
-            entry("terminal", &["Utility"]),
-        ]);
 
-        assert_eq!(
-            config
-                .sections
-                .get(Section::Applications)
-                .iter()
-                .map(|group| group.name())
-                .collect::<Vec<_>>(),
-            vec!["Office", "Utilities"]
-        );
+        config.sync_category_groups(std::slice::from_ref(&stremio));
+        assert!(config.sections.applications.is_empty());
 
-        config.sync_category_groups(&[entry("terminal", &["Utility"])]);
-        assert_eq!(
-            config
-                .sections
-                .get(Section::Applications)
+        config.sync_category_groups(&[stremio, entry("writer", &["Office"])]);
+        assert_eq!(tab_names(&config), vec!["hearthdeck-desktop"]);
+    }
+
+    #[test]
+    fn applications_open_on_the_couch_and_a_search_looks_through_both() {
+        let stremio = entry("com.stremio.Stremio.desktop", &["AudioVideo"]);
+        let writer = entry("writer", &["Office"]);
+        let entries = [stremio, writer];
+        let mut config = AppLibraryConfig::default();
+        config.sync_category_groups(&entries);
+        let names = |found: Vec<Arc<DesktopEntryData>>| {
+            found
                 .iter()
-                .map(|group| group.name())
-                .collect::<Vec<_>>(),
-            vec!["Utilities"]
+                .map(|found| found.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let show = |tab, search: &str| {
+            names(config.filtered_by_facets(
+                Section::Applications,
+                tab,
+                search,
+                &entries,
+                &BTreeMap::new(),
+            ))
+        };
+
+        assert_eq!(show(None, ""), vec!["com.stremio.Stremio.desktop"]);
+        assert_eq!(show(Some(0), ""), vec!["writer"]);
+        assert_eq!(show(None, "writer"), vec!["writer"]);
+    }
+
+    #[test]
+    fn what_the_user_chose_outranks_the_rules() {
+        let mut config = AppLibraryConfig::default();
+        let mut entries = [entry("writer", &["Office"])];
+        assert_eq!(form_factor::of(&entries[0]), FormFactor::Desktop);
+
+        config.set_form_override("writer", FormFactor::Couch);
+        config.apply_form_overrides(&mut entries);
+
+        assert_eq!(form_factor::of(&entries[0]), FormFactor::Couch);
+    }
+
+    #[test]
+    fn a_desktop_application_launches_with_the_pointer_unless_told_otherwise() {
+        let mut config = AppLibraryConfig::default();
+        let writer = entry("writer", &["Office"]);
+        let stremio = entry("com.stremio.Stremio.desktop", &["AudioVideo"]);
+
+        assert!(config.desktop_input_for(&writer));
+        assert!(!config.desktop_input_for(&stremio));
+
+        config.toggle_desktop_input("writer");
+        config.toggle_desktop_input("com.stremio.Stremio.desktop");
+
+        assert!(
+            !config.desktop_input_for(&writer),
+            "the toggle flips the default"
         );
+        assert!(config.desktop_input_for(&stremio));
     }
 
     #[test]
@@ -1034,7 +1116,7 @@ mod tests {
 
         assert!(config.sync_category_groups(&[entry("writer", &["Office"])]));
 
-        assert_eq!(tab_names(&config), vec!["cosmic-office"]);
+        assert_eq!(tab_names(&config), vec!["hearthdeck-desktop"]);
     }
 
     #[test]
@@ -1056,7 +1138,7 @@ mod tests {
 
         assert!(config.restore_default_groups(&entries, &platforms));
 
-        assert_eq!(tab_names(&config), vec!["cosmic-office", "Mine"]);
+        assert_eq!(tab_names(&config), vec!["hearthdeck-desktop", "Mine"]);
         assert_eq!(config.sections.pc_games[0].name, "Steam");
         assert_eq!(config.sections.console_games[0].romm_platform_id(), Some(7));
     }

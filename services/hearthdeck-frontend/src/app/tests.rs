@@ -60,8 +60,10 @@ fn shell() -> App {
     }
 }
 
+/// A record as a provider hands it over: an application is tagged with its form
+/// factor on the way in.
 fn entry(id: &str, categories: &[&str]) -> Arc<DesktopEntryData> {
-    Arc::new(DesktopEntryData {
+    let mut entry = DesktopEntryData {
         id: id.to_owned(),
         name: id.to_owned(),
         categories: categories
@@ -69,7 +71,11 @@ fn entry(id: &str, categories: &[&str]) -> Arc<DesktopEntryData> {
             .map(|category| (*category).to_owned())
             .collect(),
         ..DesktopEntryData::default()
-    })
+    };
+    if Section::Applications.matches(&entry) {
+        crate::form_factor::tag(&mut entry);
+    }
+    Arc::new(entry)
 }
 
 #[test]
@@ -153,7 +159,7 @@ fn a_loaded_catalog_gives_each_section_its_category_tabs() {
     ])));
 
     assert_eq!(tabs(&app, Section::PcGames), ["Steam"]);
-    assert_eq!(tabs(&app, Section::Applications), ["Office"]);
+    assert_eq!(tabs(&app, Section::Applications), ["Desktop"]);
 }
 
 /// A tab is a store that installed something: the catalog is where the local
@@ -176,7 +182,7 @@ fn a_store_no_installed_game_comes_from_is_not_a_tab() {
         "the Steam tab outlived the game it came from: {:?}",
         tabs(&app, Section::PcGames)
     );
-    assert_eq!(tabs(&app, Section::Applications), ["Office"]);
+    assert_eq!(tabs(&app, Section::Applications), ["Desktop"]);
 }
 
 /// Console Games' tabs are the platforms the daemon reported, which no
@@ -1439,7 +1445,7 @@ fn restoring_the_defaults_rebuilds_the_tabs_and_keeps_the_users_folders() {
 
     assert_eq!(
         tabs(&app, Section::Applications),
-        ["Office", "Mine"],
+        ["Desktop", "Mine"],
         "the derived tab is back, the scan's is gone and the user's stays"
     );
     assert_eq!(app.cur_group, None, "the library lands on its all tab");
@@ -1464,7 +1470,7 @@ fn turning_smart_categorization_off_restores_the_default_tabs() {
 
     let _ = app.update(Message::SetCategorization(false));
 
-    assert_eq!(tabs(&app, Section::Applications), ["Office"]);
+    assert_eq!(tabs(&app, Section::Applications), ["Desktop"]);
 }
 
 /// Every outcome of a categorization action lands in the section's own
@@ -2221,4 +2227,32 @@ fn restoring_the_dashboard_shows_it_with_the_cursor_on_the_first_card() {
 
     assert_eq!(app.page, Page::Dashboard);
     assert!(app.dashboard_cursor == dashboard::focus::Cursor::default());
+}
+
+/// Moving an application to the other form is a choice that sticks, and the
+/// Desktop tab goes when nothing wants it.
+#[test]
+fn moving_an_application_to_the_couch_takes_it_off_the_desktop_tab() {
+    let mut app = showing(1);
+    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
+        "writer",
+        &["Office"],
+    )])));
+    app.cur_section = Section::Applications;
+    app.cur_group = Some(0);
+    app.refilter();
+    assert_eq!(app.visible.len(), 1, "the Desktop tab shows it");
+
+    let _ = app.update(Message::MoveToForm(
+        0,
+        crate::form_factor::FormFactor::Couch,
+    ));
+
+    assert!(tabs(&app, Section::Applications).is_empty());
+    assert_eq!(app.cur_group, None, "the tab it was on is gone");
+    assert_eq!(app.visible.len(), 1, "the default view shows it now");
+    assert_eq!(
+        app.config.form_overrides.get("writer"),
+        Some(&crate::form_factor::FormFactor::Couch)
+    );
 }

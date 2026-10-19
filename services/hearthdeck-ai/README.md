@@ -33,12 +33,13 @@ AppProfile ──► [AppResearcher] ──► Categorizer ──► LibraryScan
 ## What the model is asked
 
 Laya is an encoder, not a generator: it scores a list of candidate answers
-rather than writing text. So the prompt is fixed and small — three `noul`
+rather than writing text. So the prompt is fixed and small — four `noul`
 propositions plus one `choice`:
 
 - `is_game` — a video game (not a utility, not a media player)
 - `is_emulator` — a console/arcade emulator or retro-game frontend
 - `is_watch_service` — a streaming or broadcast video service
+- `is_couch_friendly` — usable from a sofa with only a gamepad (the library's Couch tab)
 - `category` — one of the taxonomy's labels, or an explicit "none of these"
 
 The section comes out of the two boolean traits (`Section::from_traits`); the

@@ -15,6 +15,8 @@ mod retro;
 mod settings;
 mod state;
 mod stremio;
+mod trait_scheduler;
+mod traits;
 
 use std::{net::TcpListener as StdTcpListener, sync::Arc};
 
@@ -113,6 +115,9 @@ async fn main() -> Result<()> {
     // finished. Dropping the handle detaches the watcher, which is what a daemon
     // that wants it for its whole life should do.
     let _session_watcher = activity::spawn_session_watcher(state.clone());
+    // Follows the first scan: it only ever does work once the user has turned
+    // smart categorization on, and then only for what changed since.
+    let _trait_scheduler = trait_scheduler::spawn(state.clone());
     // Nothing runs at boot, on purpose: the first scan is the user turning smart
     // categorization on, and until they do, the ordinary category tabs stand and
     // no checkpoint is fetched. All this does is say which state the machine is

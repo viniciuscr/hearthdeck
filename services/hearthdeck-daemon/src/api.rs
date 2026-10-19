@@ -754,6 +754,13 @@ async fn disable_categorization(
         Ok(count) => info!(count, "categorization rails removed"),
         Err(error) => warn!(%error, "could not remove the categorization rails"),
     }
+    if let Some(categorization) = state.categorization.as_ref() {
+        match categorization.clear_traits().await {
+            Ok(0) => {}
+            Ok(count) => info!(count, "categorization verdicts removed"),
+            Err(error) => warn!(%error, "could not remove the categorization verdicts"),
+        }
+    }
     info!("categorization disabled");
     Ok(StatusCode::NO_CONTENT)
 }

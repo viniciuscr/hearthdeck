@@ -33,6 +33,10 @@ pub struct AppTraits {
     pub watch_service: Option<f64>,
     /// P(this is a console emulator or retro-game frontend).
     pub emulator: Option<f64>,
+    /// P(this can be used comfortably from a sofa with a gamepad). Absent from
+    /// engines that cannot tell, and from reports written before it existed.
+    #[serde(default)]
+    pub couch: Option<f64>,
 }
 
 impl AppTraits {
@@ -46,6 +50,10 @@ impl AppTraits {
 
     pub fn is_emulator(&self, threshold: f64) -> bool {
         self.emulator.unwrap_or(0.0) >= threshold
+    }
+
+    pub fn is_couch_friendly(&self, threshold: f64) -> bool {
+        self.couch.unwrap_or(0.0) >= threshold
     }
 }
 
@@ -99,5 +107,6 @@ mod tests {
         assert!(!empty.is_game(0.5));
         assert!(!empty.is_watch_service(0.5));
         assert!(!empty.is_emulator(0.5));
+        assert!(!empty.is_couch_friendly(0.5));
     }
 }

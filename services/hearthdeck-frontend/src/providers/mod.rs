@@ -79,6 +79,11 @@ impl GameRecord {
             prefers_dgpu: self.prefers_dgpu,
             terminal: self.terminal,
         };
+        let modeled_couch = self
+            .metadata
+            .get("form_factor")
+            .and_then(serde_json::Value::as_str)
+            == Some("couch");
         // Where the library got this record, for the section that filters by it.
         // Read here rather than inside the tag, because the streaming tag is
         // derived from the finished entry.
@@ -88,6 +93,14 @@ impl GameRecord {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
         crate::app_group::tag_source(&mut entry, source.as_deref());
+        if crate::app_group::Section::Applications.matches(&entry) {
+            crate::form_factor::tag(&mut entry);
+            // A model can only promote: what it calls desktop-only is what the
+            // rules already said, and its doubt must not demote a streaming client.
+            if modeled_couch {
+                crate::form_factor::set(&mut entry, crate::form_factor::FormFactor::Couch);
+            }
+        }
         entry
     }
 }
@@ -197,7 +210,38 @@ mod tests {
 
         assert_eq!(
             application.into_desktop_entry().categories,
-            ["Utility", "hearthdeck-source:flatpak"]
+            [
+                "Utility",
+                "hearthdeck-source:flatpak",
+                "hearthdeck-form:desktop"
+            ]
+        );
+    }
+
+    /// The model can say an application suits the couch, and only that: its
+    /// doubt about one the rules already know is no reason to demote it.
+    #[test]
+    fn a_model_verdict_can_promote_an_application_but_never_demote_one() {
+        let categories = |metadata: serde_json::Value, id: &str| {
+            let mut application = record(None);
+            application.id = id.into();
+            application.metadata = metadata;
+            application.into_desktop_entry().categories
+        };
+
+        assert!(
+            categories(
+                serde_json::json!({"form_factor": "couch"}),
+                "org.gimp.GIMP.desktop"
+            )
+            .contains(&"hearthdeck-form:couch".to_owned())
+        );
+        assert!(
+            categories(
+                serde_json::json!({"form_factor": "desktop"}),
+                "net.stremio.Stremio.desktop"
+            )
+            .contains(&"hearthdeck-form:couch".to_owned())
         );
     }
 
@@ -215,7 +259,8 @@ mod tests {
             [
                 "Video",
                 "hearthdeck-source:flatpak",
-                "hearthdeck-source:streaming"
+                "hearthdeck-source:streaming",
+                "hearthdeck-form:couch"
             ]
         );
     }

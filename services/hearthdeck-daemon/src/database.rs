@@ -140,6 +140,19 @@ impl Database {
               created_at TEXT NOT NULL,
               PRIMARY KEY (collection_slug, item_id)
             );
+            -- What the categorizer decided about one item, kept apart from the
+            -- catalog because every discovery refresh rewrites that. The hash and
+            -- the model stamp are what let a later pass ask only about what changed.
+            CREATE TABLE IF NOT EXISTS item_traits (
+              item_id TEXT NOT NULL,
+              trait TEXT NOT NULL,
+              value TEXT NOT NULL,
+              confidence REAL NOT NULL,
+              input_hash TEXT NOT NULL,
+              model TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (item_id, trait)
+            );
             -- One row, the newest report: a categorization describes the library as
             -- it stood when the scan ran, so a stale one is worthless.
             CREATE TABLE IF NOT EXISTS categorization_reports (

@@ -17,6 +17,11 @@ pub const Q_GAME: &str = "is_game";
 pub const Q_EMULATOR: &str = "is_emulator";
 pub const Q_WATCH: &str = "is_watch_service";
 pub const Q_CATEGORY: &str = "category";
+pub const Q_COUCH: &str = "is_couch_friendly";
+
+/// Bumped whenever the questions or how a reply is read change, so a verdict made
+/// under the old ones is asked again instead of trusted.
+pub const PROMPT_VERSION: u32 = 2;
 
 /// The escape hatch appended to the category choices. An app that lands here is
 /// what tells the aggregate pass that the taxonomy is missing an entry.
@@ -126,6 +131,17 @@ pub fn build_questions(taxonomy: &Taxonomy) -> Map<String, Value> {
         }),
     );
     questions.insert(
+        Q_COUCH.to_owned(),
+        json!({
+            "type": "noul",
+            "instructions": "The following application is used from a sofa, on a television, with only a gamepad or a remote: its interface is large and simple and it works without typing or precise pointing. Streaming clients, media centres, game launchers and console front-ends are made for that. Code editors, terminals, office suites, graphics tools, web browsers and system settings tools are not.",
+            "criteria": {
+                "false": "no, this needs a keyboard and a mouse",
+                "true": "yes, this works comfortably with a gamepad on a television"
+            }
+        }),
+    );
+    questions.insert(
         Q_CATEGORY.to_owned(),
         json!({
             "type": "choice",
@@ -150,6 +166,7 @@ pub fn interpret(
     let game = noul(answers.get(Q_GAME));
     let emulator = noul(answers.get(Q_EMULATOR));
     let watch_service = noul(answers.get(Q_WATCH));
+    let couch = noul(answers.get(Q_COUCH));
     // A reply that answered neither trait question says nothing about where the
     // app belongs, so it is not allowed to look like a confident "Applications".
     let (section, section_confidence) = if game.is_none() && emulator.is_none() {
@@ -192,6 +209,7 @@ pub fn interpret(
             game,
             watch_service,
             emulator,
+            couch,
         },
         provenance: DecisionProvenance::Laya,
         rationale,
@@ -220,8 +238,8 @@ fn confidence(answer: Option<&Value>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CATEGORY_NONE, Q_CATEGORY, Q_EMULATOR, Q_GAME, Q_WATCH, build_questions, build_state,
-        interpret,
+        CATEGORY_NONE, Q_CATEGORY, Q_COUCH, Q_EMULATOR, Q_GAME, Q_WATCH, build_questions,
+        build_state, interpret,
     };
     use crate::categorization::model::{AppKind, AppProfile};
     use crate::categorization::taxonomy::{Section, Taxonomy};
@@ -263,6 +281,23 @@ mod tests {
         assert!(questions[Q_GAME]["criteria"]["true"].is_string());
         assert_eq!(questions[Q_WATCH]["type"], "noul");
         assert_eq!(questions[Q_EMULATOR]["type"], "noul");
+    }
+
+    #[test]
+    fn the_couch_answer_is_read_and_a_missing_one_is_unknown() {
+        let taxonomy = Taxonomy::baseline();
+        assert_eq!(build_questions(&taxonomy)[Q_COUCH]["type"], "noul");
+
+        let asked = interpret(
+            &app(),
+            &answers(&[(Q_COUCH, json!({"noul": 0.88}))]),
+            &taxonomy,
+            0.5,
+        );
+        assert!(asked.traits.is_couch_friendly(0.5));
+
+        let silent = interpret(&app(), &answers(&[]), &taxonomy, 0.5);
+        assert_eq!(silent.traits.couch, None);
     }
 
     #[test]

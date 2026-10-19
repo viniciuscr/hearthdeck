@@ -43,6 +43,7 @@ use cosmic::{Application, Element};
 use crate::app::animation::{ScrollTarget, section_direction, tab_direction};
 use crate::app_group::{AppLibraryConfig, RommFacet, Section, section_facets};
 use crate::fl;
+use crate::form_factor::{self, FormFactor};
 use crate::input_ownership::{Event as InputEvent, InputOwnership};
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState, Overlay};
 use crate::motion::{Eased, Fade, Slide};
@@ -219,6 +220,9 @@ pub enum Message {
     /// pointer-driving mode on or off for this entry. It is what makes an
     /// application that does not handle a controller itself usable with the pad.
     ToggleControllerCompatibility(usize),
+    /// The menu's move row: put the application at this tile in the other of
+    /// Couch and Desktop, which is what a person does when the guess was wrong.
+    MoveToForm(usize, FormFactor),
     /// The pad's context button: open the tile menu on the tile at this index,
     /// or close it when it is already open on that tile.
     TileContext(usize),
@@ -597,7 +601,7 @@ impl Application for App {
             Message::CatalogLoaded(result) => {
                 // A failed read leaves the library as it was: an empty catalog
                 // would also prune the tabs its entries imply, and persist that.
-                let entries = match result {
+                let mut entries = match result {
                     Ok(entries) => entries,
                     Err(error) => {
                         log::error!("catalog fetch failed: {error}");
@@ -605,6 +609,7 @@ impl Application for App {
                     }
                 };
                 self.retries.catalog = false;
+                self.config.apply_form_overrides(&mut entries);
                 // The feed re-reads on every library event, and most change
                 // nothing; replacing the list would throw the cursor to the top.
                 if entries == self.catalog {
@@ -866,6 +871,7 @@ impl Application for App {
                     self.persist_config();
                 }
             }
+            Message::MoveToForm(index, form) => return self.move_to_form(index, form),
             Message::TileContext(index) => {
                 // The button that opens the menu is the one that closes it, so a
                 // second press hands the pad back to the grid.
@@ -1505,15 +1511,24 @@ impl App {
         let Some(entry) = self.visible.get(index) else {
             return Vec::new();
         };
-        let compatibility = if self.config.desktop_input_enabled(&entry.id) {
+        let compatibility = if self.config.desktop_input_for(entry) {
             fl!("disable-controller-compatibility")
         } else {
             fl!("enable-controller-compatibility")
         };
-        vec![
+        let mut rows = vec![
             Row::new(fl!("run"), Message::Activate(index)),
             Row::new(compatibility, Message::ToggleControllerCompatibility(index)),
-        ]
+        ];
+        if self.cur_section == Section::Applications {
+            let other = form_factor::of(entry).other();
+            let label = match other {
+                FormFactor::Couch => fl!("move-to-couch"),
+                FormFactor::Desktop => fl!("move-to-desktop"),
+            };
+            rows.push(Row::new(label, Message::MoveToForm(index, other)));
+        }
+        rows
     }
     /// Runs the row the open menu has highlighted.
     ///
@@ -1556,6 +1571,30 @@ impl App {
             self.facets = section_facets(self.cur_section, &self.catalog);
         }
     }
+    /// Puts the application at tile `index` in `form`, and remembers the choice.
+    ///
+    /// The Desktop tab exists only while something wants it, so the strip is
+    /// rebuilt too, and a selection left past its end falls back to the default
+    /// view.
+    fn move_to_form(&mut self, index: usize, form: FormFactor) -> Task<Message> {
+        let Some(id) = self.visible.get(index).map(|entry| entry.id.clone()) else {
+            return Task::none();
+        };
+        self.config.set_form_override(&id, form);
+        if let Some(entry) = self.catalog.iter_mut().find(|entry| entry.id == id) {
+            form_factor::set(Arc::make_mut(entry), form);
+        }
+        self.config.sync_category_groups(&self.catalog);
+        self.persist_config();
+        let tabs = self.config.sections.get(self.cur_section).len();
+        if self.cur_group.is_some_and(|group| group >= tabs) {
+            self.cur_group = None;
+        }
+        self.rebuild_local_facets();
+        self.refilter();
+        self.focus_task()
+    }
+
     /// Writes the config back to disk, so a derived tab set survives a restart.
     fn persist_config(&self) {
         if let Some(store) = self.config_store.as_ref()

@@ -1299,6 +1299,13 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
             serde_json::Value::String(source.to_string()),
         );
     }
+    // What the categorization model decided, for the form-factor tag.
+    if let Some(form) = metadata.get("form_factor").and_then(|v| v.as_str()) {
+        game_metadata.insert(
+            "form_factor".to_string(),
+            serde_json::Value::String(form.to_string()),
+        );
+    }
 
     // Determine if this prefers dGPU based on metadata
     let prefers_dgpu = metadata

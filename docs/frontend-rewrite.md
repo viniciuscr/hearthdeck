@@ -66,7 +66,11 @@ the cruft inherited from the project this started from.
   one that knows which directory each launcher came from, and the answer travels
   in the catalog metadata beside `store` and `license`. A streaming client
   carries its origin *and* `streaming`, so one facet answers both questions.
-  The tabs are a separate matter and still follow the entries' categories.
+  The tabs are a separate matter: Applications opens on the apps that suit a
+  couch, with one Desktop tab for the ones that want a keyboard and pointer
+  (`form_factor.rs`). Plain rules decide, the user can move an app from its
+  menu, and a Desktop app launches with the pointer-driving input profile by
+  default. A search looks through both.
 - **Paging and search belong to the source, not the loaded page.** The console
   grid asks for one page at a time and sends its search term as the source's own
   query, so a search covers the whole library rather than the pages that happen

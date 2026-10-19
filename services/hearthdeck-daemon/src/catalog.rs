@@ -59,8 +59,11 @@ impl CatalogStore {
               item.id, item.source_id, item.title, item.kind, item.launch_id, item.icon,
               item.metadata_json,
               enrichment.provider_id AS enrichment_provider_id,
-              enrichment.payload_json AS enrichment_payload_json
+              enrichment.payload_json AS enrichment_payload_json,
+              form.value AS form_factor
             FROM library_items AS item
+            LEFT JOIN item_traits AS form
+              ON form.item_id = item.id AND form.trait = 'form_factor'
             LEFT JOIN catalog_enrichments AS enrichment ON enrichment.rowid = (
               SELECT candidate.rowid
               FROM catalog_enrichments AS candidate
@@ -94,8 +97,11 @@ impl CatalogStore {
               item.id, item.source_id, item.title, item.kind, item.launch_id, item.icon,
               item.metadata_json,
               enrichment.provider_id AS enrichment_provider_id,
-              enrichment.payload_json AS enrichment_payload_json
+              enrichment.payload_json AS enrichment_payload_json,
+              form.value AS form_factor
             FROM library_items AS item
+            LEFT JOIN item_traits AS form
+              ON form.item_id = item.id AND form.trait = 'form_factor'
             LEFT JOIN catalog_enrichments AS enrichment ON enrichment.rowid = (
               SELECT candidate.rowid
               FROM catalog_enrichments AS candidate
@@ -164,8 +170,11 @@ impl CatalogStore {
               item.id, item.source_id, item.title, item.kind, item.launch_id, item.icon,
               item.metadata_json,
               enrichment.provider_id AS enrichment_provider_id,
-              enrichment.payload_json AS enrichment_payload_json
+              enrichment.payload_json AS enrichment_payload_json,
+              form.value AS form_factor
             FROM library_items AS item
+            LEFT JOIN item_traits AS form
+              ON form.item_id = item.id AND form.trait = 'form_factor'
             LEFT JOIN catalog_enrichments AS enrichment ON enrichment.rowid = (
               SELECT candidate.rowid
               FROM catalog_enrichments AS candidate
@@ -192,7 +201,13 @@ fn catalog_item_from_row(row: SqliteRow) -> CatalogItem {
     let enrichment_provider: Option<String> = row.get("enrichment_provider_id");
     let title: String = row.get("title");
     let source_id: String = row.get("source_id");
-    let metadata = merged_metadata(&title, &discovery, enrichment.as_ref(), enrichment_provider);
+    let mut metadata =
+        merged_metadata(&title, &discovery, enrichment.as_ref(), enrichment_provider);
+    // What the categorizer decided rides on the record, so a client that reads
+    // the catalog needs no second call to know it.
+    if let Some(form_factor) = row.get::<Option<String>, _>("form_factor") {
+        metadata["form_factor"] = Value::String(form_factor);
+    }
     let kind = served_kind(&source_id, &row.get::<String, _>("kind"));
     CatalogItem {
         id: row.get("id"),
@@ -224,7 +239,7 @@ pub const GAME: &str = "game";
 /// These two are the daemon's own vocabulary for what it serves, so they live here
 /// rather than being borrowed from the categorizer: the categorizer reads records,
 /// it does not own what the catalog serves.
-const APPLICATION: &str = "application";
+pub const APPLICATION: &str = "application";
 
 /// The kind a record is served with.
 ///

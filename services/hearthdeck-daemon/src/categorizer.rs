@@ -18,6 +18,7 @@
 //!   reads it; this module just runs the job it is asked to run.
 
 use std::{
+    collections::HashMap,
     ffi::OsString,
     path::{Path, PathBuf},
     process::Stdio,
@@ -39,6 +40,7 @@ use crate::{
     catalog::{CatalogItem, CatalogStore},
     collections::{self, CollectionStore, OwnedCollection},
     state::ServerEvent,
+    traits::{self, FormFactorVerdict, TraitStore},
 };
 
 /// Which engine the child runs.
@@ -273,7 +275,17 @@ fn rail_collections(report: &ScanReport) -> Vec<OwnedCollection> {
 /// without a checkpoint: tests inject a runner that answers immediately.
 #[async_trait]
 pub trait ScanRunner: Send + Sync {
-    async fn run(&self, apps: Vec<AppProfile>) -> anyhow::Result<ScanReport>;
+    async fn run(&self, apps: Vec<AppProfile>, priority: Priority) -> anyhow::Result<ScanReport>;
+}
+
+/// How much a run may take from whatever else the machine is doing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Priority {
+    /// Somebody asked for this and is waiting on it.
+    Foreground,
+    /// Nobody is waiting: it runs at the lowest CPU priority, so a thin client is
+    /// not slowed down by it.
+    Background,
 }
 
 /// The real runner: hand the library to the categorizer binary.
@@ -317,7 +329,7 @@ impl ProcessScanRunner {
 
 #[async_trait]
 impl ScanRunner for ProcessScanRunner {
-    async fn run(&self, apps: Vec<AppProfile>) -> anyhow::Result<ScanReport> {
+    async fn run(&self, apps: Vec<AppProfile>, priority: Priority) -> anyhow::Result<ScanReport> {
         tokio::fs::create_dir_all(&self.settings.work_dir)
             .await
             .with_context(|| {
@@ -364,7 +376,14 @@ impl ScanRunner for ProcessScanRunner {
             }
         }
 
-        let mut command = tokio::process::Command::new(&self.settings.binary);
+        let mut command = match priority {
+            Priority::Foreground => tokio::process::Command::new(&self.settings.binary),
+            Priority::Background => {
+                let mut command = tokio::process::Command::new("nice");
+                command.args(["-n", "19"]).arg(&self.settings.binary);
+                command
+            }
+        };
         command
             .args(self.arguments())
             // The hub would otherwise cache into the user's shared
@@ -661,6 +680,8 @@ struct CategorizationInner {
     collections: CollectionStore,
     events: broadcast::Sender<ServerEvent>,
     runner: Arc<dyn ScanRunner>,
+    /// What scans decided about single items, laid over the catalog when served.
+    traits: TraitStore,
     state: Mutex<ScanState>,
 }
 
@@ -694,6 +715,7 @@ impl CategorizationService {
                 settings,
                 catalog,
                 store: CategorizationStore::new(pool.clone()),
+                traits: TraitStore::new(pool.clone()),
                 collections: CollectionStore::new(pool),
                 events,
                 runner,
@@ -859,13 +881,112 @@ impl CategorizationService {
         Ok(written)
     }
 
+    /// Stores what a report decided about each application's form factor, and
+    /// tells clients the catalog they hold is out of date.
+    async fn record_form_factors(
+        &self,
+        report: &ScanReport,
+        hashes: &HashMap<String, String>,
+    ) -> anyhow::Result<()> {
+        let verdicts: Vec<FormFactorVerdict> = report
+            .assignments
+            .iter()
+            .filter_map(|assignment| {
+                let probability = assignment.traits.couch?;
+                Some(FormFactorVerdict {
+                    item_id: assignment.app_id.clone(),
+                    value: traits::form_factor_for(probability),
+                    confidence: probability,
+                    input_hash: hashes.get(&assignment.app_id)?.clone(),
+                })
+            })
+            .collect();
+        if verdicts.is_empty() {
+            return Ok(());
+        }
+        self.inner
+            .traits
+            .write_form_factors(&traits::stamp(&report.categorizer), &verdicts)
+            .await?;
+        self.inner.traits.prune().await?;
+        let _ = self.inner.events.send(ServerEvent::LibraryChanged {
+            source_id: TRAITS_SOURCE.to_owned(),
+            record_count: verdicts.len(),
+        });
+        Ok(())
+    }
+
+    /// Classifies the applications nobody has judged under the current model:
+    /// new ones, and ones whose record has changed since.
+    ///
+    /// This is the background pass. It never starts a download - the checkpoint
+    /// is the user's to ask for - and it takes the same one slot a requested scan
+    /// does, so the two cannot run at once.
+    pub async fn classify_pending(&self) -> anyhow::Result<TraitRun> {
+        let settings = &self.inner.settings;
+        if settings.engine != ScanEngine::Laya || model_status(settings) == ModelStatus::Absent {
+            return Ok(TraitRun::UpToDate);
+        }
+        let stamp = traits::stamp(settings.engine.as_str());
+        let items = self.inner.catalog.list().await?;
+        let current = self.inner.traits.current(&stamp).await?;
+        let hashes = application_hashes(&items);
+        let apps: Vec<AppProfile> = items
+            .iter()
+            .filter(|item| {
+                hashes
+                    .get(&item.id)
+                    .is_some_and(|hash| current.get(&item.id) != Some(hash))
+            })
+            .map(profile_from_item)
+            .collect();
+        if apps.is_empty() {
+            return Ok(TraitRun::UpToDate);
+        }
+        if !self.claim(false).await {
+            return Ok(TraitRun::Busy);
+        }
+        let count = apps.len();
+        info!(
+            count,
+            "classifying new and changed applications in the background"
+        );
+        let outcome = async {
+            let report = self.inner.runner.run(apps, Priority::Background).await?;
+            self.record_form_factors(&report, &hashes).await
+        }
+        .await;
+        let mut state = self.inner.state.lock().await;
+        state.running = false;
+        if let Err(error) = &outcome {
+            state.last_error = Some(error.to_string());
+        }
+        outcome.map(|()| TraitRun::Classified(count))
+    }
+
+    /// Forgets what the model decided, which is what turning it off does.
+    pub async fn clear_traits(&self) -> anyhow::Result<u64> {
+        let removed = self.inner.traits.clear().await?;
+        if removed > 0 {
+            let _ = self.inner.events.send(ServerEvent::LibraryChanged {
+                source_id: TRAITS_SOURCE.to_owned(),
+                record_count: 0,
+            });
+        }
+        Ok(removed)
+    }
+
     async fn run_scan(&self) -> anyhow::Result<ScanReport> {
         let items = self.inner.catalog.list().await?;
         let apps: Vec<AppProfile> = items.iter().map(profile_from_item).collect();
+        let hashes = application_hashes(&items);
         info!(app_count = apps.len(), "categorization scan starting");
         let started = Instant::now();
-        let report = self.inner.runner.run(apps).await?;
+        let report = self.inner.runner.run(apps, Priority::Foreground).await?;
         self.inner.store.save(&report).await?;
+        if let Err(error) = self.record_form_factors(&report, &hashes).await {
+            warn!(%error, "could not store what the scan decided about each application");
+        }
         info!(
             app_count = report.app_count,
             failures = report.failures.len(),
@@ -875,6 +996,36 @@ impl CategorizationService {
         );
         Ok(report)
     }
+}
+
+/// The source id a change to what the model decided is announced under.
+const TRAITS_SOURCE: &str = "categorization";
+
+/// How a background pass ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TraitRun {
+    /// This many applications were classified.
+    Classified(usize),
+    /// Every application already has a verdict made under the current model,
+    /// or there is no model to ask.
+    UpToDate,
+    /// A scan is running; try again later.
+    Busy,
+}
+
+/// The input hash of every application in the catalog, by item id. Only
+/// applications: a game or a film has no couch-or-desktop question to answer.
+fn application_hashes(items: &[CatalogItem]) -> HashMap<String, String> {
+    items
+        .iter()
+        .filter(|item| item.kind == crate::catalog::APPLICATION)
+        .map(|item| {
+            (
+                item.id.clone(),
+                traits::input_hash(&profile_from_item(item)),
+            )
+        })
+        .collect()
 }
 
 /// Which stretch of a scan is running, from what the child has written and what
@@ -917,11 +1068,11 @@ fn profile_from_item(item: &CatalogItem) -> AppProfile {
 mod tests {
     use super::{
         CategorizationPhase, CategorizationService, CategorizerSettings, ModelStatus,
-        ProcessScanRunner, ScanEngine, ScanModel, ScanRequest, ScanRunner, model_status,
+        ProcessScanRunner, ScanEngine, ScanModel, ScanRequest, ScanRunner, TraitRun, model_status,
         profile_from_item, rail_collections, sibling_of,
     };
     use crate::{
-        catalog::{CatalogItem, CatalogStore},
+        catalog::{CatalogItem, CatalogRecord, CatalogStore},
         database::Database,
         state::ServerEvent,
     };
@@ -978,7 +1129,11 @@ mod tests {
 
     #[async_trait]
     impl ScanRunner for FixedRunner {
-        async fn run(&self, _apps: Vec<AppProfile>) -> anyhow::Result<ScanReport> {
+        async fn run(
+            &self,
+            _apps: Vec<AppProfile>,
+            _priority: super::Priority,
+        ) -> anyhow::Result<ScanReport> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if self.fail {
                 anyhow::bail!("checkpoint exploded");
@@ -1059,7 +1214,11 @@ mod tests {
 
     #[async_trait]
     impl ScanRunner for HangingRunner {
-        async fn run(&self, _apps: Vec<AppProfile>) -> anyhow::Result<ScanReport> {
+        async fn run(
+            &self,
+            _apps: Vec<AppProfile>,
+            _priority: super::Priority,
+        ) -> anyhow::Result<ScanReport> {
             self.release.notified().await;
             Ok(report())
         }
@@ -1238,6 +1397,156 @@ mod tests {
         );
         // The watch heuristic reads the id and launch target together.
         assert!(profile.signal_terms().contains("netflix"));
+    }
+
+    /// Decides every application it is given is made for the couch, and counts
+    /// how often it was asked.
+    struct CouchRunner {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ScanRunner for CouchRunner {
+        async fn run(
+            &self,
+            apps: Vec<AppProfile>,
+            _priority: super::Priority,
+        ) -> anyhow::Result<ScanReport> {
+            use hearthdeck_ai::categorization::{AppCategorization, AppTraits, DecisionProvenance};
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut report = report();
+            report.categorizer = "laya".to_owned();
+            report.app_count = apps.len();
+            report.assignments = apps
+                .iter()
+                .map(|app| AppCategorization {
+                    app_id: app.id.clone(),
+                    title: app.title.clone(),
+                    section: Section::Applications,
+                    section_confidence: 0.9,
+                    categories: Vec::new(),
+                    needs_category: false,
+                    traits: AppTraits {
+                        couch: Some(0.9),
+                        ..AppTraits::default()
+                    },
+                    provenance: DecisionProvenance::Laya,
+                    rationale: None,
+                })
+                .collect();
+            Ok(report)
+        }
+    }
+
+    fn application(description: &str) -> CatalogRecord {
+        CatalogRecord {
+            id: "kodi".into(),
+            title: "Kodi".into(),
+            kind: "application".into(),
+            launch_id: None,
+            icon: None,
+            metadata: serde_json::json!({ "description": description }),
+            updated_at: "2026-10-19T00:00:00Z".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_application_is_classified_once_and_asked_about_again_only_when_it_changes() {
+        let runner = Arc::new(CouchRunner {
+            calls: AtomicUsize::new(0),
+        });
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture_with(runner.clone(), |settings| {
+            settings.engine = ScanEngine::Laya;
+            // A checkpoint that is "on disk", so the pass has a model to ask.
+            settings.model_path = settings.work_dir.parent().map(ToOwned::to_owned);
+        })
+        .await;
+        let catalog = service.inner.catalog.clone();
+        catalog
+            .replace_source("desktop", vec![application("A media centre")])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service.classify_pending().await.unwrap(),
+            TraitRun::Classified(1)
+        );
+        let served = catalog.get("kodi").await.unwrap().unwrap();
+        assert_eq!(served.metadata["form_factor"], "couch");
+
+        assert_eq!(
+            service.classify_pending().await.unwrap(),
+            TraitRun::UpToDate
+        );
+        assert_eq!(runner.calls.load(Ordering::SeqCst), 1);
+
+        catalog
+            .replace_source("desktop", vec![application("A media centre with add-ons")])
+            .await
+            .unwrap();
+        assert_eq!(
+            service.classify_pending().await.unwrap(),
+            TraitRun::Classified(1)
+        );
+        assert_eq!(runner.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn the_background_pass_never_downloads_a_model_nobody_asked_for() {
+        let runner = Arc::new(CouchRunner {
+            calls: AtomicUsize::new(0),
+        });
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture_with(runner.clone(), |settings| {
+            settings.engine = ScanEngine::Laya
+        })
+        .await;
+        service
+            .inner
+            .catalog
+            .replace_source("desktop", vec![application("A media centre")])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service.classify_pending().await.unwrap(),
+            TraitRun::UpToDate
+        );
+        assert_eq!(runner.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn turning_the_model_off_forgets_what_it_decided() {
+        let runner = Arc::new(CouchRunner {
+            calls: AtomicUsize::new(0),
+        });
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture_with(runner, |settings| {
+            settings.engine = ScanEngine::Laya;
+            settings.model_path = settings.work_dir.parent().map(ToOwned::to_owned);
+        })
+        .await;
+        let catalog = service.inner.catalog.clone();
+        catalog
+            .replace_source("desktop", vec![application("A media centre")])
+            .await
+            .unwrap();
+        service.classify_pending().await.unwrap();
+
+        assert_eq!(service.clear_traits().await.unwrap(), 1);
+
+        let served = catalog.get("kodi").await.unwrap().unwrap();
+        assert!(served.metadata.get("form_factor").is_none());
     }
 
     #[tokio::test]

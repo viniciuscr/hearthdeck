@@ -28,7 +28,13 @@ impl App {
         if !self.input_ownership.frontend_has_control() {
             return Task::none();
         }
-        let input_profile = if self.config.desktop_input_enabled(&item_id) {
+        // Only the catalog's applications have a form; a console game is always
+        // driven by the pad, so its profile is the explicit toggle alone.
+        let wants_desktop_input = match self.catalog.iter().find(|entry| entry.id == item_id) {
+            Some(entry) => self.config.desktop_input_for(entry),
+            None => self.config.desktop_input_enabled(&item_id),
+        };
+        let input_profile = if wants_desktop_input {
             InputProfile::Desktop
         } else {
             InputProfile::Native

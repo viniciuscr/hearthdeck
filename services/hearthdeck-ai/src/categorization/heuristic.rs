@@ -200,6 +200,7 @@ impl Categorizer for HeuristicCategorizer {
                 game: Some(game_probability),
                 watch_service: Some(if watch { HARD } else { 0.0 }),
                 emulator: Some(emulator_probability),
+                couch: None,
             },
             provenance: DecisionProvenance::Heuristic,
             rationale: (!rationale.is_empty()).then(|| rationale.join("; ")),

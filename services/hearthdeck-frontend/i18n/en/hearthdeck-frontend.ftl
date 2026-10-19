@@ -6,7 +6,8 @@ cosmic-library-home = Library Home
 cosmic-office = Office
 cosmic-system = System
 cosmic-utilities = Utilities
-all-apps = All Apps
+couch-apps = Couch
+desktop-apps = Desktop
 all-games = All Games
 filter = Filter
 filter-count = Filter ({ $count })
@@ -76,6 +77,8 @@ categorization-last-run = Last run: { $when }
 enable-controller-compatibility = Enable Controller compatibility
 disable-controller-compatibility = Disable Controller compatibility
 run = Run
+move-to-desktop = Move to Desktop apps
+move-to-couch = Move to Couch apps
 storage-available = Available space
 
 # Console game details screen
