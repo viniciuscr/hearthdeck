@@ -1,7 +1,18 @@
 #!/bin/zsh
 set -e
 
-runtime_dir=$(mktemp -d /tmp/hearthdeck-dev.XXXXXX)
+# Use a persistent database by default so dev runs accumulate data like production.
+# Override with HEARTHDECK_DEV_DB_PATH to use a specific path, or set to "temp"
+# to get the old ephemeral behavior.
+db_path="${HEARTHDECK_DEV_DB_PATH:-$HOME/.local/share/hearthdeck-dev/hearthdeck.db}"
+if [[ "$db_path" == "temp" ]]; then
+    runtime_dir=$(mktemp -d /tmp/hearthdeck-dev.XXXXXX)
+    db_path="$runtime_dir/data/hearthdeck.db"
+    mkdir -p "$runtime_dir/data"
+else
+    runtime_dir=$(mktemp -d /tmp/hearthdeck-dev.XXXXXX)
+    mkdir -p "$(dirname "$db_path")"
+fi
 log_dir="${HEARTHDECK_DEV_LOG_DIR:-$runtime_dir}"
 frontend_command="${HEARTHDECK_DEV_FRONTEND_COMMAND:-}"
 
@@ -46,7 +57,7 @@ env \
   XDG_RUNTIME_DIR="$runtime_dir/runtime" \
   XDG_DATA_HOME="$runtime_dir/data" \
   HEARTHDECK_BRIDGE_SOCKET="$runtime_dir/runtime/bridge.sock" \
-  HEARTHDECK_DATABASE_PATH="$runtime_dir/data/hearthdeck.db" \
+  HEARTHDECK_DATABASE_PATH="$db_path" \
   HEARTHDECK_BIND_ADDRESS="127.0.0.1:$api_port" \
   HEARTHDECK_LOCAL_ADMIN_ADDRESS="127.0.0.1:$admin_port" \
   ./services/target/debug/hearthdeck-daemon \
@@ -95,6 +106,14 @@ done
 
 if [[ "${catalog_count:-0}" -eq 0 ]]; then
   print -u2 "Hearthdeck catalog is still empty; the frontend will continue and reload on the next provider event."
+fi
+
+# Optionally seed the database with dev test data for a populated dashboard.
+if [[ "${HEARTHDECK_DEV_SEED:-false}" == "true" ]]; then
+  print "Seeding dev database..."
+  env \
+    HEARTHDECK_DATABASE_PATH="$db_path" \
+    ./services/target/debug/hearthdeck-daemon --seed-dev
 fi
 
 if [[ -n "$frontend_command" ]]; then

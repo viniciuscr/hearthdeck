@@ -36,6 +36,11 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Check for dev seed flag before initializing logging, so seed output is clean.
+    if std::env::args().any(|arg| arg == "--seed-dev") {
+        return seed_dev_database().await;
+    }
+
     hearthdeck_observability::init(
         "hearthdeck-daemon",
         "hearthdeck_daemon=info,tower_http=info",
@@ -275,4 +280,150 @@ impl HeaderName {
     fn request_id() -> axum::http::HeaderName {
         axum::http::HeaderName::from_static(REQUEST_ID_HEADER)
     }
+}
+
+/// Seeds the database with development test data so the dashboard looks populated.
+/// Runs when `--seed-dev` is passed, then exits.
+async fn seed_dev_database() -> Result<()> {
+    use crate::{
+        activity::ActivityStore,
+        catalog::{CatalogRecord, CatalogStore},
+        collections::CollectionStore,
+        config::Config,
+        database::Database,
+    };
+
+    let config = Config::load()?;
+    let database = Database::connect(&config.database_path).await?;
+    database.migrate().await?;
+
+    let collections = CollectionStore::new(database.pool().clone());
+    let activity = ActivityStore::new(database.pool().clone());
+    let catalog = CatalogStore::new(database.pool().clone());
+
+    // Seed some catalog items so the dashboard has things to show
+    catalog.replace_source("dev-seed", vec![
+        CatalogRecord {
+            id: "dev:game1".into(),
+            title: "Elden Ring".into(),
+            kind: "game".into(),
+            launch_id: Some("steam:1245620".into()),
+            icon: Some("https://cdn.cloudflare.steamstatic.com/steam/apps/1245620/header.jpg".into()),
+            metadata: serde_json::json!({"categories": ["Action", "RPG"], "store": "Steam"}),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        },
+        CatalogRecord {
+            id: "dev:game2".into(),
+            title: "Cyberpunk 2077".into(),
+            kind: "game".into(),
+            launch_id: Some("gog:cyberpunk2077".into()),
+            icon: Some("https://cdn.cloudflare.steamstatic.com/steam/apps/1091500/header.jpg".into()),
+            metadata: serde_json::json!({"categories": ["Action", "RPG"], "store": "GOG"}),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        },
+        CatalogRecord {
+            id: "dev:app1".into(),
+            title: "Discord".into(),
+            kind: "application".into(),
+            launch_id: Some("com.discordapp.Discord.desktop".into()),
+            icon: Some("com.discordapp.Discord".into()),
+            metadata: serde_json::json!({"categories": ["Network", "InstantMessaging"]}),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        },
+    ]).await?;
+
+    // Seed some launch activity (recent plays)
+    use crate::activity::ActivityEntry;
+    use hearthdeck_protocol::ApplicationSession;
+    use hearthdeck_protocol::ApplicationSessionState;
+    let session = |id: &str| ApplicationSession {
+        id: id.into(),
+        source_id: "steam".into(),
+        application_id: id.into(),
+        state: ApplicationSessionState::Running,
+    };
+    for (id, kind, title) in [
+        ("dev:game1", "game", "Elden Ring"),
+        ("dev:game2", "game", "Cyberpunk 2077"),
+        ("dev:app1", "application", "Discord"),
+    ] {
+        let entry = ActivityEntry {
+            id: format!("hearthdeck:{}", id),
+            title: title.into(),
+            icon: None,
+            categories: vec![],
+            kind: Some(kind.into()),
+            source: "dev-seed".into(),
+            metadata: serde_json::Value::Null,
+        };
+        let _ = activity.session_started(entry, &session(id)).await;
+    }
+
+    // Seed a Stremio continue-watching item
+    catalog
+        .replace_source(
+            "stremio",
+            vec![CatalogRecord {
+                id: "stremio:tt1234567".into(),
+                title: "Stranger Things".into(),
+                kind: "series".into(),
+                launch_id: None,
+                icon: Some("https://image.tmdb.org/t/p/w500/stranger_things.jpg".into()),
+                metadata: serde_json::json!({"type": "series", "source": "stremio"}),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            }],
+        )
+        .await?;
+
+    // Seed a RomM console (for consoles rail)
+    catalog
+        .replace_source(
+            "romm",
+            vec![CatalogRecord {
+                id: "romm:platform:7".into(),
+                title: "PlayStation".into(),
+                kind: "game".into(),
+                launch_id: None,
+                icon: Some("/assets/platforms/ps.svg".into()),
+                metadata: serde_json::json!({"platform_id": 7}),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            }],
+        )
+        .await?;
+
+    // Seed some favorites
+    collections
+        .add_item(
+            "favorites",
+            &crate::collections::CollectionItem {
+                item_id: "hearthdeck:dev:game1".into(),
+                name: "Elden Ring".into(),
+                icon: Some(
+                    "https://cdn.cloudflare.steamstatic.com/steam/apps/1245620/header.jpg".into(),
+                ),
+                played: None,
+            },
+        )
+        .await?;
+
+    // Seed play-later
+    collections
+        .add_item(
+            "play-later",
+            &crate::collections::CollectionItem {
+                item_id: "hearthdeck:dev:game2".into(),
+                name: "Cyberpunk 2077".into(),
+                icon: Some(
+                    "https://cdn.cloudflare.steamstatic.com/steam/apps/1091500/header.jpg".into(),
+                ),
+                played: None,
+            },
+        )
+        .await?;
+
+    println!(
+        "Dev database seeded successfully at {}",
+        config.database_path.display()
+    );
+    Ok(())
 }
