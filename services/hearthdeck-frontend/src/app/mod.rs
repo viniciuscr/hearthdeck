@@ -60,8 +60,9 @@ use crate::screens::settings;
 use crate::style::{
     DASHBOARD_RAIL_TILES, DIVIDER_WIDTH, ICON_LARGE, SECTION_TRANSITION_DURATION,
     TAB_TRANSITION_DURATION, WINDOW_HEIGHT, WINDOW_WIDTH, content_horizontal_padding,
-    dashboard_tile_size, filter_drawer_width, grid_viewport_height_fallback, launch_overlay,
-    primary_action_button_class, root_background, sidebar_divider,
+    dashboard_console_tile_size, dashboard_tile_size, filter_drawer_width,
+    grid_viewport_height_fallback, launch_overlay, primary_action_button_class, root_background,
+    sidebar_divider,
 };
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
@@ -178,7 +179,7 @@ pub enum Message {
     /// interval will try again.
     StremioSourceRefreshed(Result<(), String>),
     /// The console list a tab strip is built from: `(platform id, label)`.
-    ConsolesLoaded(Vec<(i64, String)>),
+    ConsolesLoaded(Vec<crate::providers::daemon::RetroConsole>),
     SelectSection(Section),
     /// The dashboard's top bar: show the dashboard itself.
     OpenDashboard,
@@ -194,6 +195,9 @@ pub enum Message {
         /// What the launch overlay shows while it starts.
         title: String,
     },
+    /// A console was selected from the dashboard's consoles rail: switch to
+    /// the Console Games section and select that platform's tab.
+    ActivateConsole(i64),
     SelectGroup(Option<usize>),
     InputChanged(String),
     /// A filter chip was pressed: set (or clear) one facet's value.
@@ -383,6 +387,9 @@ pub struct App {
     /// Every console scope's records, a page at a time, as the daemon reports
     /// them, cached per scope with the cursor that extends them.
     console: ConsoleScopes,
+    /// The console platforms RomM reports, with their cached artwork. Used for
+    /// the dashboard's consoles rail and for the library's console tabs.
+    console_platforms: Vec<crate::providers::daemon::RetroConsole>,
     /// What the grid draws: the section's source after filtering. The console
     /// grid's facets and search are applied by the daemon (see
     /// `fetch_console_page`); every other section is filtered in memory. Kept
@@ -546,6 +553,7 @@ impl Application for App {
             daemon_client,
             catalog: Vec::new(),
             console: ConsoleScopes::default(),
+            console_platforms: Vec::new(),
             visible: Vec::new(),
             facets: Vec::new(),
             collections: Vec::new(),
@@ -633,8 +641,12 @@ impl Application for App {
                 if platforms.is_empty() {
                     return Task::none();
                 }
+                // Store the consoles for the dashboard rail.
+                self.console_platforms = platforms.clone();
+                let platform_tuples: Vec<(i64, String)> =
+                    platforms.into_iter().map(|c| (c.id, c.label)).collect();
                 let mut tasks = vec![self.queue_console_prefetch()];
-                if self.config.sync_console_groups(&platforms) {
+                if self.config.sync_console_groups(&platform_tuples) {
                     self.persist_config();
                     // The chrome the ring walks changed, so its stop may no
                     // longer be one that exists.
@@ -764,6 +776,31 @@ impl Application for App {
                     SECTION_TRANSITION_DURATION,
                 ));
                 return Task::none();
+            }
+            Message::ActivateConsole(platform_id) => {
+                // Switch to Console Games section and select the platform's tab.
+                let arriving = self.page != Page::Library;
+                self.switch_page(Page::Library);
+                self.bar_cursor = None;
+                // Apply the section first, then select the group.
+                if arriving || Section::ConsoleGames != self.cur_section {
+                    return self.apply_section(Section::ConsoleGames);
+                }
+                // Already on ConsoleGames, just need to select the group.
+                // Find the group index for this platform.
+                if let Some(index) = self
+                    .config
+                    .sections
+                    .console_games
+                    .iter()
+                    .position(|group| group.romm_platform_id() == Some(platform_id))
+                {
+                    self.cur_group = Some(index);
+                    return self.apply_group(Some(index));
+                }
+                // Platform not found (maybe sync hasn't run yet), fall back to all-consoles.
+                self.cur_group = None;
+                return self.apply_group(None);
             }
             Message::SelectGroup(group) => {
                 // Re-selecting the tab already showing would be motion for its own
@@ -1590,7 +1627,7 @@ impl App {
     }
 
     /// The dashboard's rails: the daemon's collections, in the order it composes
-    /// them.
+    /// them, with a consoles rail at the top when RomM is configured.
     ///
     /// Drawn from the collections rather than from a list of known shelves, so a
     /// collection nobody wrote frontend code for - which is what a feature's own
@@ -1604,37 +1641,62 @@ impl App {
             content_horizontal_padding(),
             spacing.space_l,
         );
-        let shelves: Vec<Shelf> = self
-            .collections
-            .iter()
-            .filter(|collection| !collection.items.is_empty())
-            .map(|collection| {
-                let cards = collection
-                    .items
-                    .iter()
-                    .take(DASHBOARD_RAIL_TILES)
-                    .enumerate()
-                    .map(|(index, item)| {
-                        Card::new(
-                            dashboard_card_id(&collection.slug, index),
-                            item.name.clone(),
-                            // The card draws the icon the daemon sent with the
-                            // item - already resolved to a file or a theme name
-                            // by the provider - the same way every other surface
-                            // draws one. Looking it up in this client's own
-                            // catalog instead is what left every film, every
-                            // console game and every favourite showing the
-                            // generic mark: a media record is not in the
-                            // application library at all, and a curated item
-                            // carries no icon of its own here.
-                            crate::icon_cache::reference_handle(item.icon.as_deref(), size as u32),
-                            Some(launch_card_message(&item.item_id, &item.name)),
-                        )
-                    })
-                    .collect();
-                Shelf::new(false, dashboard::rail_title(collection), cards)
-            })
-            .collect();
+        let mut shelves = Vec::new();
+
+        // Consoles rail: shows all RomM platforms with their artwork.
+        if !self.console_platforms.is_empty() {
+            let console_size = dashboard_console_tile_size(
+                self.window_width,
+                content_horizontal_padding(),
+                spacing.space_l,
+            );
+            let cards: Vec<Card> = self
+                .console_platforms
+                .iter()
+                .take(DASHBOARD_RAIL_TILES)
+                .enumerate()
+                .map(|(index, platform)| {
+                    Card::new(
+                        dashboard_card_id("consoles", index),
+                        platform.label.clone(),
+                        crate::icon_cache::reference_handle(
+                            platform.artwork.as_deref(),
+                            console_size as u32,
+                        ),
+                        Some(launch_console_message(platform.id)),
+                    )
+                })
+                .collect();
+            shelves.push(Shelf::new(true, fl!("consoles"), cards));
+        }
+
+        // Collection rails from the daemon.
+        shelves.extend(
+            self.collections
+                .iter()
+                .filter(|collection| !collection.items.is_empty())
+                .map(|collection| {
+                    let cards = collection
+                        .items
+                        .iter()
+                        .take(DASHBOARD_RAIL_TILES)
+                        .enumerate()
+                        .map(|(index, item)| {
+                            Card::new(
+                                dashboard_card_id(&collection.slug, index),
+                                item.name.clone(),
+                                crate::icon_cache::reference_handle(
+                                    item.icon.as_deref(),
+                                    size as u32,
+                                ),
+                                Some(launch_card_message(&item.item_id, &item.name)),
+                            )
+                        })
+                        .collect();
+                    Shelf::new(false, dashboard::rail_title(collection), cards)
+                }),
+        );
+
         if shelves.is_empty() {
             return self.library_shelf(size);
         }
@@ -2641,13 +2703,7 @@ impl App {
                     }
                 }
             },
-            |consoles| {
-                let platforms = consoles
-                    .into_iter()
-                    .map(|console| (console.id, console.label))
-                    .collect();
-                cosmic::Action::App(Message::ConsolesLoaded(platforms))
-            },
+            |consoles| cosmic::Action::App(Message::ConsolesLoaded(consoles)),
         )
     }
 
@@ -2852,6 +2908,11 @@ fn launch_card_message(id: &str, title: &str) -> Message {
     }
 }
 
+/// Creates a message to activate a console from the dashboard's consoles rail.
+fn launch_console_message(platform_id: i64) -> Message {
+    Message::ActivateConsole(platform_id)
+}
+
 /// Puts the renderer's focus on one widget.
 ///
 /// The shell's cursor decides what the user is on; this only reproduces it in
@@ -2905,6 +2966,7 @@ mod tests {
             }),
             catalog: Vec::new(),
             console: ConsoleScopes::default(),
+            console_platforms: Vec::new(),
             visible: Vec::new(),
             facets: Vec::new(),
             collections: Vec::new(),
@@ -3011,7 +3073,13 @@ mod tests {
     #[test]
     fn a_loaded_catalog_leaves_the_console_tabs_alone() {
         let mut app = shell();
-        let _ = app.update(Message::ConsolesLoaded(vec![(7, "PlayStation".to_owned())]));
+        let _ = app.update(Message::ConsolesLoaded(vec![
+            crate::providers::daemon::RetroConsole {
+                id: 7,
+                label: "PlayStation".to_owned(),
+                artwork: None,
+            },
+        ]));
 
         let _ = app.update(Message::CatalogLoaded(vec![entry(
             "half-life",

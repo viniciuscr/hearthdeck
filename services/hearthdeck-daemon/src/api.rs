@@ -1599,14 +1599,7 @@ async fn list_collections(
         } else if collection.owner == collections::OWNER_SYSTEM
             && collection.rule.as_deref() == Some(collections::RULE_LAST_PLAYED)
         {
-            collection.items = state
-                .activity
-                .recent(COLLECTION_RULE_ITEM_LIMIT)
-                .await
-                .map_err(ApiError::internal)?
-                .into_iter()
-                .map(played_collection_item)
-                .collect();
+            collection.items = last_played_items(&state).await?;
         }
         // Last, once every rail holds the items it will serve: an item stored
         // without an icon is given the one its id names, so a client can draw
@@ -1778,6 +1771,22 @@ fn played_collection_item(play: RecentActivity) -> CollectionItem {
     }
 }
 
+/// The dashboard's "Recently Played" rail: the most recently played games.
+///
+/// Games are what the games sections play — a Heroic PC game or a RomM console
+/// game — so a launched application and a Stremio film or series are plays the
+/// activity endpoint serves but not cards this rail holds.
+async fn last_played_items(state: &SharedState) -> Result<Vec<CollectionItem>, ApiError> {
+    Ok(state
+        .activity
+        .recent_games(COLLECTION_RULE_ITEM_LIMIT)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .map(played_collection_item)
+        .collect())
+}
+
 /// The Stremio account's unfinished titles, as rail items.
 ///
 /// Read from the records the Stremio provider published rather than from the
@@ -1792,6 +1801,9 @@ fn played_collection_item(play: RecentActivity) -> CollectionItem {
 ///
 /// Nothing an account is not linked to is here: an unlinked account has published no
 /// records, and a link that was removed took its records with it.
+///
+/// Only movies and series belong on the "Continue Watching" rail. The Stremio
+/// provider may publish other types (e.g. channels), which are filtered out here.
 async fn continue_watching_items(state: &SharedState) -> Result<Vec<CollectionItem>, ApiError> {
     let records = state
         .catalog
@@ -1805,6 +1817,11 @@ async fn continue_watching_items(state: &SharedState) -> Result<Vec<CollectionIt
     );
     Ok(records
         .into_iter()
+        .filter(|record| {
+            // Only movies and series belong on the Continue Watching rail.
+            // The catalog's `kind` field carries the Stremio type ("movie", "series", "other").
+            matches!(record.kind.as_str(), "movie" | "series")
+        })
         .map(|record| CollectionItem {
             item_id: format!("{ENTRY_ID_PREFIX}{}", record.id),
             name: record.title,
@@ -3257,6 +3274,66 @@ mod tests {
         assert_eq!(played.entry.kind.as_deref(), Some("game"));
         assert_eq!(played.entry.source, "romm");
         assert_eq!(played.launch_count, 3);
+    }
+
+    /// The dashboard's "Recently Played" rail is composed from the games a person
+    /// played, not from every launch: the application is still a play, and it is
+    /// not a card on this rail.
+    #[tokio::test]
+    async fn the_recently_played_rail_holds_games_and_not_other_plays() {
+        use crate::activity::ActivityEntry;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.socket"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+            },
+            database,
+        ));
+
+        let entry = |id: &str, kind: &str| ActivityEntry {
+            id: id.to_owned(),
+            title: id.to_owned(),
+            icon: None,
+            categories: Vec::new(),
+            kind: Some(kind.to_owned()),
+            source: "test".to_owned(),
+            metadata: serde_json::Value::Null,
+        };
+        let session = |id: &str| ApplicationSession {
+            id: id.to_owned(),
+            source_id: "test".to_owned(),
+            application_id: id.to_owned(),
+            state: ApplicationSessionState::Running,
+        };
+
+        for (id, kind) in [
+            ("romm:7", "game"),
+            ("hearthdeck:desktop:browser", "application"),
+        ] {
+            state
+                .activity
+                .session_started(entry(id, kind), &session(id))
+                .await
+                .unwrap();
+        }
+
+        let items = super::last_played_items(&state)
+            .await
+            .map_err(|error| error.message)
+            .expect("the recently played rail composes");
+        let ids: Vec<&str> = items.iter().map(|item| item.item_id.as_str()).collect();
+        assert_eq!(ids, vec!["romm:7"], "the rail holds the game and no app");
     }
 
     /// The two id shapes a stored rail item can carry are read back as the thing

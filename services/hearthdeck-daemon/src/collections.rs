@@ -22,7 +22,7 @@ pub const KIND_MEMBERSHIP: &str = "membership";
 /// these collections.
 pub const KIND_RULE: &str = "rule";
 
-/// A rule collection holding the most recently launched items.
+/// A rule collection holding the most recently played games.
 pub const RULE_LAST_PLAYED: &str = "last_played";
 
 /// Nobody edits these but the daemon: `last-played`, and any rule the build

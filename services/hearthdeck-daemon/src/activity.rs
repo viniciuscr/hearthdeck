@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use hearthdeck_protocol::{ApplicationSession, BridgeRequest, BridgeResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -26,8 +26,11 @@ pub struct ActivityEntry {
     pub title: String,
     pub icon: Option<String>,
     pub categories: Vec<String>,
-    /// Catalog content kind (`game` / `application`), stored so the client can
-    /// split "Recently Played" into games and apps without provider knowledge.
+    /// The kind the catalog served the record with: `game` for a PC or console
+    /// game, `application` for a program, or a Stremio media type for a film or
+    /// a series. Stored so the daemon can serve the dashboard's "Recently
+    /// Played" rail as games and only games, and so a client can still tell one
+    /// play from another without provider knowledge.
     /// `None` only for snapshots written before this field existed.
     #[serde(default)]
     pub kind: Option<String>,
@@ -190,18 +193,51 @@ impl ActivityStore {
         .await
         .context("list recent launch activity")?;
 
-        rows.into_iter()
-            .map(|row| {
-                let entry = serde_json::from_str(&row.get::<String, _>("snapshot_json"))
-                    .context("deserialize launch activity")?;
-                Ok(RecentActivity {
-                    entry,
-                    last_launched_at: row.get("last_launched_at"),
-                    launch_count: row.get("launch_count"),
-                })
-            })
-            .collect()
+        rows.into_iter().map(recent_activity_from_row).collect()
     }
+
+    /// The most recently played games, most recent first, up to `limit`.
+    ///
+    /// A game is what the games sections play — a Heroic PC game or a RomM
+    /// console game — so a launched application and a Stremio film or series
+    /// are plays the activity endpoint serves but not plays this rail holds.
+    /// The filter is part of the query rather than applied to [`recent`]'s
+    /// answer, so the limit counts games: a run of recent application launches
+    /// cannot leave the rail short of the games behind them.
+    ///
+    /// A play recorded before `kind` existed is not served here. Nothing can
+    /// tell such a snapshot from an application's, and a program or a series on
+    /// the rail is the bug this rule exists to fix; the play reappears once the
+    /// item is launched again and its snapshot is rewritten.
+    pub async fn recent_games(&self, limit: u32) -> Result<Vec<RecentActivity>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT snapshot_json, last_launched_at, launch_count
+            FROM launch_activity
+            WHERE lower(json_extract(snapshot_json, '$.kind')) = ?
+            ORDER BY last_launched_at DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(crate::catalog::GAME)
+        .bind(i64::from(limit.clamp(1, 50)))
+        .fetch_all(&self.pool)
+        .await
+        .context("list recent game activity")?;
+
+        rows.into_iter().map(recent_activity_from_row).collect()
+    }
+}
+
+/// One `launch_activity` row as the play it recorded.
+fn recent_activity_from_row(row: SqliteRow) -> Result<RecentActivity> {
+    let entry = serde_json::from_str(&row.get::<String, _>("snapshot_json"))
+        .context("deserialize launch activity")?;
+    Ok(RecentActivity {
+        entry,
+        last_launched_at: row.get("last_launched_at"),
+        launch_count: row.get("launch_count"),
+    })
 }
 
 /// Watches for plays that have finished, and closes their rows.
@@ -296,6 +332,20 @@ mod tests {
             source_id: "retroarch".into(),
             application_id: "romm:42".into(),
             state: ApplicationSessionState::Running,
+        }
+    }
+
+    /// An entry with the id it is stored under and the kind the catalog would
+    /// have served, which is the only thing `recent_games` reads.
+    fn entry_of(id: &str, kind: &str) -> ActivityEntry {
+        ActivityEntry {
+            id: id.into(),
+            title: id.into(),
+            icon: None,
+            categories: Vec::new(),
+            kind: Some(kind.into()),
+            source: "test".into(),
+            metadata: json!({}),
         }
     }
 
@@ -454,5 +504,92 @@ mod tests {
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].entry.title, "Updated title");
         assert_eq!(recent[0].launch_count, 2);
+    }
+
+    /// The dashboard's "Recently Played" rail is games: an application and a
+    /// Stremio series are plays the activity endpoint serves, but not cards this
+    /// rail holds.
+    #[tokio::test]
+    async fn recent_games_keeps_games_and_drops_every_other_kind_of_play() {
+        let (_directory, activity, _pool) = store().await;
+
+        for (id, kind) in [
+            ("romm:1", "game"),
+            ("hearthdeck:desktop:browser", "application"),
+            ("hearthdeck:stremio:tt0111161", "series"),
+        ] {
+            activity
+                .session_started(entry_of(id, kind), &session(id))
+                .await
+                .unwrap();
+        }
+
+        // Every play is still in the journal, which is what the activity
+        // endpoint reads...
+        assert_eq!(activity.recent(10).await.unwrap().len(), 3);
+
+        // ...but the rail holds only the game.
+        let games = activity.recent_games(10).await.unwrap();
+        let ids: Vec<&str> = games.iter().map(|play| play.entry.id.as_str()).collect();
+        assert_eq!(ids, vec!["romm:1"], "only a game belongs on the rail");
+    }
+
+    /// The filter is part of the query, not applied after the limit, so a run of
+    /// recent applications cannot leave the rail holding fewer games than it
+    /// asked for.
+    #[tokio::test]
+    async fn recent_games_fills_its_limit_with_games_seen_between_other_plays() {
+        let (_directory, activity, _pool) = store().await;
+
+        for index in 0..3 {
+            activity
+                .session_started(
+                    entry_of(&format!("app:{index}"), "application"),
+                    &session(&format!("app-{index}")),
+                )
+                .await
+                .unwrap();
+            activity
+                .session_started(
+                    entry_of(&format!("romm:{index}"), "game"),
+                    &session(&format!("game-{index}")),
+                )
+                .await
+                .unwrap();
+        }
+
+        let games = activity.recent_games(2).await.unwrap();
+        assert_eq!(games.len(), 2, "the limit counts games, not every launch");
+        assert!(
+            games.iter().all(|play| play.entry.id.starts_with("romm:")),
+            "every card is a game: {:?}",
+            games
+                .iter()
+                .map(|play| play.entry.id.as_str())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    /// A snapshot written before `kind` existed cannot be told from an
+    /// application's, so it is not served on the games rail; it comes back when
+    /// the item is launched again and its snapshot is rewritten.
+    #[tokio::test]
+    async fn recent_games_does_not_guess_at_a_play_that_predates_kind() {
+        let (_directory, activity, pool) = store().await;
+
+        sqlx::query(
+            "INSERT INTO launch_activity (item_id, snapshot_json, last_launched_at, launch_count) \
+             VALUES (?, ?, '2020-01-01T00:00:00Z', 1)",
+        )
+        .bind("legacy:1")
+        .bind(
+            r#"{"id":"legacy:1","title":"Legacy","icon":null,"categories":["Game"],"source":"legacy","metadata":{}}"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(activity.recent_games(10).await.unwrap().is_empty());
+        assert_eq!(activity.recent(10).await.unwrap().len(), 1);
     }
 }

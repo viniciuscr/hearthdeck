@@ -21,6 +21,7 @@ search-placeholder = Type to search apps…
 favorite = Favorite
 favorites = Favorites
 recently-played = Recently Played
+consoles = Consoles
 categorization-failed = Categorization failed: { $reason }
 settings-title = Settings
 top-bar-home = Home

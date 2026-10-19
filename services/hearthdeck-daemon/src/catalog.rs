@@ -210,8 +210,14 @@ fn catalog_item_from_row(row: SqliteRow) -> CatalogItem {
 /// The provider whose records are the only ones served as games.
 const HEROIC_SOURCE: &str = "heroic";
 
-/// The kind for a record the library plays.
-const GAME: &str = "game";
+/// The kind for a record the library plays: a Heroic PC game or a RomM console
+/// game, and nothing else.
+///
+/// It is also the `kind` a play is recorded with, which is what lets the
+/// dashboard's "Recently Played" rail be games and only games — a launched
+/// program is an `application` and a Stremio film or series carries its own
+/// media type, so neither is a game here.
+pub const GAME: &str = "game";
 
 /// The kind for a record the library runs.
 ///

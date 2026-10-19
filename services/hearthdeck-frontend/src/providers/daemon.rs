@@ -257,7 +257,7 @@ pub const FAVORITES_COLLECTION: &str = "favorites";
 /// The curated collection a details screen toggles for play later.
 pub const PLAY_LATER_COLLECTION: &str = "play-later";
 
-/// The built-in collection whose items are the most recent plays.
+/// The built-in collection whose items are the most recently played games.
 pub const LAST_PLAYED_COLLECTION: &str = "last-played";
 
 /// The Stremio account's rail.
@@ -377,6 +377,8 @@ pub struct RetroPlatform {
     pub id: i64,
     pub name: String,
     pub display_name: Option<String>,
+    #[serde(default)]
+    pub artwork_paths: Vec<String>,
 }
 
 impl RetroPlatform {
@@ -391,6 +393,7 @@ impl RetroPlatform {
 pub struct RetroConsole {
     pub id: i64,
     pub label: String,
+    pub artwork: Option<String>,
 }
 
 impl DaemonClient {
@@ -664,7 +667,7 @@ impl DaemonClient {
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
-    /// Lists available retro consoles from RomM.
+    /// Lists available retro consoles from RomM, caching their artwork.
     pub async fn list_retro_consoles(&self) -> Result<Vec<RetroConsole>, DaemonError> {
         let response = self
             .http
@@ -683,13 +686,28 @@ impl DaemonClient {
             .await
             .map_err(DaemonError::Deserialization)?;
 
-        Ok(platforms
-            .into_iter()
-            .map(|platform| RetroConsole {
+        let mut consoles = Vec::new();
+        for platform in platforms {
+            let artwork = if !platform.artwork_paths.is_empty() {
+                // Try each artwork path until one loads
+                let mut result = None;
+                for path in &platform.artwork_paths {
+                    if let Some(cached) = self.cache_retro_asset_path(Some(path)).await {
+                        result = Some(cached);
+                        break;
+                    }
+                }
+                result
+            } else {
+                None
+            };
+            consoles.push(RetroConsole {
                 id: platform.id,
                 label: platform.label().to_owned(),
-            })
-            .collect())
+                artwork,
+            });
+        }
+        Ok(consoles)
     }
 
     /// Lists retro ROMs, optionally narrowed by platform, a search term, and
