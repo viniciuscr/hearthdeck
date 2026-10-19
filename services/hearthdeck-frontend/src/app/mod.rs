@@ -51,7 +51,7 @@ use crate::providers::daemon::{
 use crate::providers::filter::{Facet, cycle};
 use crate::screens::dashboard::{self, Card, Shelf};
 use crate::screens::details::{Details as GameDetails, Flag as DetailsFlag};
-use crate::screens::library::console::{self, ConsoleListing};
+use crate::screens::library::console::{self, ConsoleScope, ConsoleScopes};
 use crate::screens::library::focus::{self, Chrome, Confirm, Cursors, Direction, Layout, Outcome};
 use crate::screens::library::group_dialog::{self, Effect as GroupEffect, GroupDialog};
 use crate::screens::library::sidebar::{self, Sidebar};
@@ -122,10 +122,14 @@ const STREMIO_PUBLISH_SETTLE: std::time::Duration = std::time::Duration::from_se
 pub enum Message {
     /// The catalog fetched from the daemon, rendered as tiles.
     CatalogLoaded(Vec<Arc<DesktopEntryData>>),
-    /// A page of console records arrived, for the load it was started for.
+    /// A page of console records arrived, for the scope and load it was started
+    /// for.
     ConsolePageLoaded {
+        /// The scope the page belongs to. Pages of different scopes cache side
+        /// by side and are never mixed into each other's lists.
+        scope: ConsoleScope,
         /// The load this page answers. A page from an older one describes a
-        /// scope the user has already left, and is dropped.
+        /// reload the user has already superseded, and is dropped.
         generation: u64,
         result: Result<console::Page, String>,
     },
@@ -376,13 +380,13 @@ pub struct App {
     daemon_client: DaemonClient,
     /// The full catalog as the daemon reported it (PC games and applications).
     catalog: Vec<Arc<DesktopEntryData>>,
-    /// The console scope's records, a page at a time, as the daemon reports
-    /// them, with the cursor that extends them.
-    console: ConsoleListing,
+    /// Every console scope's records, a page at a time, as the daemon reports
+    /// them, cached per scope with the cursor that extends them.
+    console: ConsoleScopes,
     /// What the grid draws: the section's source after filtering. The console
-    /// grid's facets and search are applied by the daemon (see `load_console`);
-    /// every other section is filtered in memory. Kept in state so `view` stays
-    /// pure.
+    /// grid's facets and search are applied by the daemon (see
+    /// `fetch_console_page`); every other section is filtered in memory. Kept
+    /// in state so `view` stays pure.
     visible: Vec<Arc<DesktopEntryData>>,
     /// The facets the current source offers, and the selection keyed by facet id.
     facets: Vec<Facet>,
@@ -541,7 +545,7 @@ impl Application for App {
             config_store,
             daemon_client,
             catalog: Vec::new(),
-            console: ConsoleListing::default(),
+            console: ConsoleScopes::default(),
             visible: Vec::new(),
             facets: Vec::new(),
             collections: Vec::new(),
@@ -629,6 +633,7 @@ impl Application for App {
                 if platforms.is_empty() {
                     return Task::none();
                 }
+                let mut tasks = vec![self.queue_console_prefetch()];
                 if self.config.sync_console_groups(&platforms) {
                     self.persist_config();
                     // The chrome the ring walks changed, so its stop may no
@@ -637,34 +642,45 @@ impl Application for App {
                     // Indices may have moved, so drop the selection and reload.
                     if self.cur_section == Section::ConsoleGames {
                         self.cur_group = None;
-                        return Task::batch([self.load_console(0), self.load_facets()]);
+                        self.refilter();
+                        tasks.push(self.load_console_page(self.console_scope(), 0));
+                        tasks.push(self.load_facets());
                     }
                 }
+                return Task::batch(tasks);
             }
-            Message::ConsolePageLoaded { generation, result } => {
+            Message::ConsolePageLoaded {
+                scope,
+                generation,
+                result,
+            } => {
                 match result {
                     Ok(page) => {
                         let first_page = page.offset == 0;
-                        if !self.console.apply(generation, page) {
-                            return Task::none();
-                        }
-                        // The console grid is not what is on screen. The page is
-                        // still logged, so the tab is warm when it is next
-                        // opened, but it must not repaint the screen it left.
-                        if self.cur_section != Section::ConsoleGames {
-                            return Task::none();
-                        }
-                        self.refilter();
-                        if first_page {
-                            return self.list_replaced();
+                        // The page is logged in its own scope whether or not
+                        // that scope is on screen - a warm cache is what the
+                        // next tab switch reads - but only the scope the grid
+                        // shows may repaint what is drawn.
+                        if self.console.apply(&scope, generation, page)
+                            && self.cur_section == Section::ConsoleGames
+                            && scope == self.console_scope()
+                        {
+                            self.refilter();
+                            if first_page {
+                                return Task::batch([
+                                    self.list_replaced(),
+                                    self.pump_console_prefetch(),
+                                ]);
+                            }
                         }
                     }
                     Err(error) => {
-                        if self.console.failed(generation) {
+                        if self.console.failed(&scope, generation) {
                             log::error!("console fetch failed: {error}");
                         }
                     }
                 }
+                return self.pump_console_prefetch();
             }
             Message::GridScrolled {
                 offset,
@@ -674,14 +690,16 @@ impl Application for App {
                 self.grid_viewport_height = viewport_height;
                 // Reaching the end of the pages loaded so far is what pulls the
                 // next one in; a scope with nothing left asks for nothing.
-                if self.cur_section == Section::ConsoleGames
-                    && let Some(next) = self.console.extend_offset(
+                if self.cur_section == Section::ConsoleGames {
+                    let scope = self.console_scope();
+                    if let Some(next) = self.console.extend_offset(
+                        &scope,
                         offset,
                         viewport_height,
                         grid::metrics(self.window_width),
-                    )
-                {
-                    return self.load_console(next);
+                    ) {
+                        return self.load_console_page(scope, next);
+                    }
                 }
             }
             Message::ConsoleSearchSettled(value) => {
@@ -690,7 +708,11 @@ impl Application for App {
                 if value != self.search_value || self.cur_section != Section::ConsoleGames {
                     return Task::none();
                 }
-                return self.load_console(0);
+                // The query changed, so the scope did: draw the scope's own
+                // pages (nothing, while it has none yet) and fetch its first
+                // page. The scope the user typed over stays cached for when it
+                // comes back to it.
+                return self.ensure_console_scope();
             }
             Message::CollectionsLoaded(result) => {
                 match result {
@@ -760,12 +782,14 @@ impl Application for App {
             }
             Message::InputChanged(value) => {
                 self.search_value = value;
-                self.refilter();
                 if self.cur_section == Section::ConsoleGames {
                     // The console grid is searched by the source, so the query
-                    // waits for the user to stop typing.
+                    // waits for the user to stop typing - and the list on
+                    // screen waits with it, rather than being replaced by the
+                    // empty list of a scope that has not answered yet.
                     return self.settle_console_search();
                 }
+                self.refilter();
                 return self.list_replaced();
             }
             Message::SelectFacet { facet, value } => {
@@ -780,7 +804,7 @@ impl Application for App {
                 // The console grid is filtered by the source, so a selection
                 // re-queries; a locally-loaded section re-filters in memory.
                 if self.cur_section == Section::ConsoleGames {
-                    return self.load_console(0);
+                    return self.ensure_console_scope();
                 }
                 self.refilter();
                 return self.list_replaced();
@@ -795,7 +819,7 @@ impl Application for App {
             Message::ClearFilters => {
                 self.facet_selection.clear();
                 if self.cur_section == Section::ConsoleGames {
-                    return self.load_console(0);
+                    return self.ensure_console_scope();
                 }
                 self.refilter();
                 return self.list_replaced();
@@ -1404,7 +1428,9 @@ impl App {
     /// that knows the cursor may now point past the end of what exists.
     fn refilter(&mut self) {
         if self.cur_section == Section::ConsoleGames {
-            self.visible = self.console.entries().to_vec();
+            // Only the scope on screen's own records: one scope's pages are
+            // never another scope's list.
+            self.visible = self.console.entries(&self.console_scope()).to_vec();
         } else {
             self.visible = self.config.filtered_by_facets(
                 self.cur_section,
@@ -1451,9 +1477,12 @@ impl App {
     /// is searched, so a superseded wait needs no cancelling.
     fn settle_console_search(&mut self) -> Task<Message> {
         let value = self.search_value.clone();
-        Task::perform(tokio::time::sleep(CONSOLE_SEARCH_DEBOUNCE), move |()| {
-            cosmic::Action::App(Message::ConsoleSearchSettled(value))
-        })
+        Task::perform(
+            // Built when the task runs, not when it is made: making the task
+            // should not need a timer.
+            async move { tokio::time::sleep(CONSOLE_SEARCH_DEBOUNCE).await },
+            move |()| cosmic::Action::App(Message::ConsoleSearchSettled(value)),
+        )
     }
 
     /// What the navigation can move between right now, derived from the state
@@ -2224,20 +2253,61 @@ impl App {
             .and_then(|group| group.romm_platform_id())
     }
 
-    /// Fetches one page of console records for the scope on screen.
+    /// The scope the console grid is showing: the tab's platform, narrowed by
+    /// the search term and the facet selection.
+    fn console_scope(&self) -> ConsoleScope {
+        ConsoleScope {
+            platform: self.console_platform_id(),
+            search: self.search_value.clone(),
+            facets: self.facet_selection.clone(),
+        }
+    }
+
+    /// Makes sure the scope on screen is what the grid draws, requesting its
+    /// first page only if it has never been loaded.
+    ///
+    /// Whatever the scope holds is painted first - its cached pages, or
+    /// nothing while it has never answered - which is what makes switching
+    /// tabs instant and keeps the games of the query being replaced off the
+    /// grid. A scope with a first page already out waits for it rather than
+    /// asking twice.
+    fn ensure_console_scope(&mut self) -> Task<Message> {
+        let scope = self.console_scope();
+        self.refilter();
+        match self.console.ensure(&scope) {
+            console::Ensure::Cached => self.list_replaced(),
+            console::Ensure::Loading => Task::none(),
+            console::Ensure::Requested(generation) => self.fetch_console_page(scope, generation, 0),
+        }
+    }
+
+    /// Records and performs one page request for `scope`, if the log wants it.
+    ///
+    /// Offset 0 opens a new load, abandoning one still in flight; a later page
+    /// is refused while one is outstanding. The request is tagged with the
+    /// generation, so the page that comes back is merged only if it describes
+    /// the load the scope is still waiting for.
+    fn load_console_page(&mut self, scope: ConsoleScope, offset: u32) -> Task<Message> {
+        let Some(generation) = self.console.begin(&scope, offset) else {
+            return Task::none();
+        };
+        self.fetch_console_page(scope, generation, offset)
+    }
+
+    /// Performs the page request the console log already recorded.
     ///
     /// The tab, the facet selection and the search term all narrow the query at
     /// the source, so the grid is never limited to what the pages it already
-    /// holds happened to carry. The request is tagged with the listing's
-    /// generation, so the page that comes back is merged only if the scope it
-    /// describes is still the scope being shown.
-    fn load_console(&mut self, offset: u32) -> Task<Message> {
-        let Some(generation) = self.console.start(offset) else {
-            return Task::none();
-        };
-        let platform_id = self.console_platform_id();
-        let search = self.search_value.clone();
-        let filters = self.facet_selection.clone();
+    /// holds happened to carry.
+    fn fetch_console_page(
+        &self,
+        scope: ConsoleScope,
+        generation: u64,
+        offset: u32,
+    ) -> Task<Message> {
+        let platform_id = scope.platform;
+        let search = scope.search.clone();
+        let filters = scope.facets.clone();
         let client = self.daemon_client.clone();
         Task::perform(
             async move {
@@ -2272,8 +2342,43 @@ impl App {
                     })
                     .map_err(|error| error.to_string())
             },
-            move |result| cosmic::Action::App(Message::ConsolePageLoaded { generation, result }),
+            move |result| {
+                cosmic::Action::App(Message::ConsolePageLoaded {
+                    scope: scope.clone(),
+                    generation,
+                    result,
+                })
+            },
         )
+    }
+
+    /// Queues the background warm-up of every tab's unfiltered scope and issues
+    /// the first requests under the model's inflight cap.
+    ///
+    /// The tabs are queued in the order they stand, the "all consoles" tab
+    /// first: it is the landing view. Scopes that have answered or are loading
+    /// are left out, so a repeat does not fetch them twice.
+    fn queue_console_prefetch(&mut self) -> Task<Message> {
+        let platforms = std::iter::once(None).chain(
+            self.config
+                .sections
+                .console_games
+                .iter()
+                .map(|group| group.romm_platform_id()),
+        );
+        self.console.queue_prefetch(platforms);
+        self.pump_console_prefetch()
+    }
+
+    /// Issues the queued prefetches the log is ready to hand out, so walking the
+    /// tab strip opens every console from cache instead of waiting.
+    fn pump_console_prefetch(&mut self) -> Task<Message> {
+        let requests = self.console.next_prefetch();
+        let fetches: Vec<_> = requests
+            .into_iter()
+            .map(|(scope, generation)| self.fetch_console_page(scope, generation, 0))
+            .collect();
+        Task::batch(fetches)
     }
 
     /// Fetches the smart-categories state, which is what the settings screen
@@ -2799,7 +2904,7 @@ mod tests {
                 token: String::new(),
             }),
             catalog: Vec::new(),
-            console: ConsoleListing::default(),
+            console: ConsoleScopes::default(),
             visible: Vec::new(),
             facets: Vec::new(),
             collections: Vec::new(),
@@ -2978,12 +3083,14 @@ mod tests {
         let mut app = navigable();
         app.page = Page::Library;
         app.cur_section = Section::ConsoleGames;
-        let generation = app.console.start(0).expect("the load is allowed");
+        let scope = app.console_scope();
+        let generation = app.console.begin(&scope, 0).expect("the load is allowed");
         let mut by_id = BTreeMap::new();
         if !versions.is_empty() {
             by_id.insert("romm:42".to_owned(), versions);
         }
         let _ = app.update(Message::ConsolePageLoaded {
+            scope,
             generation,
             result: Ok(console::Page {
                 entries: vec![entry("romm:42", &["Game", "hearthdeck-console:7"])],
@@ -2993,6 +3100,183 @@ mod tests {
             }),
         });
         app
+    }
+
+    /// A shell on the console grid with two console tabs behind it - the
+    /// platforms the daemon reported - showing the first tab's one game.
+    fn showing_console_tabs() -> App {
+        let mut app = navigable();
+        app.page = Page::Library;
+        app.cur_section = Section::ConsoleGames;
+        app.config
+            .sync_console_groups(&[(7, "SNES".to_owned()), (9, "PlayStation".to_owned())]);
+        app.cur_group = Some(0);
+        console_page(
+            &mut app,
+            vec![entry("romm:snes", &["Game", "hearthdeck-console:7"])],
+        );
+        app
+    }
+
+    /// Feeds the console grid one page the way a daemon answer would, for the
+    /// scope the shell is currently showing.
+    fn console_page(app: &mut App, entries: Vec<Arc<DesktopEntryData>>) {
+        let scope = app.console_scope();
+        let generation = app.console.begin(&scope, 0).expect("the load is allowed");
+        let total = entries.len() as u64;
+        let _ = app.update(Message::ConsolePageLoaded {
+            scope,
+            generation,
+            result: Ok(console::Page {
+                entries,
+                versions: BTreeMap::new(),
+                total,
+                offset: 0,
+            }),
+        });
+    }
+
+    /// The entry ids on the grid, in the order they are drawn.
+    fn drawn(app: &App) -> Vec<String> {
+        app.visible.iter().map(|entry| entry.id.clone()).collect()
+    }
+
+    /// Switching console tabs draws the tab that was switched to - its own pages
+    /// when it has any, nothing while its first page is still out - and never
+    /// the games of the tab the user left.
+    #[test]
+    fn switching_console_tabs_does_not_leave_the_last_tabs_games_on_the_grid() {
+        let mut app = showing_console_tabs();
+        assert_eq!(
+            drawn(&app),
+            ["romm:snes"],
+            "the SNES tab shows its own game"
+        );
+
+        let _ = app.update(Message::SelectGroup(Some(1)));
+        settle(&mut app);
+
+        assert_eq!(app.cur_group, Some(1), "the PlayStation tab is showing");
+        assert!(
+            drawn(&app).is_empty(),
+            "the SNES game is still on the grid under the PlayStation tab: {:?}",
+            drawn(&app)
+        );
+    }
+
+    /// A tab that has already answered does not ask again: switching back reads
+    /// its cached pages the moment the swap happens.
+    #[test]
+    fn switching_back_to_a_loaded_console_tab_paints_its_pages_at_once() {
+        let mut app = showing_console_tabs();
+        let _ = app.update(Message::SelectGroup(Some(1)));
+        settle(&mut app);
+        console_page(
+            &mut app,
+            vec![entry("romm:ps", &["Game", "hearthdeck-console:9"])],
+        );
+
+        let _ = app.update(Message::SelectGroup(Some(0)));
+        settle(&mut app);
+
+        assert_eq!(
+            drawn(&app),
+            ["romm:snes"],
+            "switching back must read the cached pages, not wait for a fetch"
+        );
+    }
+
+    /// The console grid is narrowed at the source, so typing cannot re-project
+    /// it: the list the user is leaving stays under their hands while they
+    /// type. Settling the query is different - there the grid snaps to the
+    /// settled scope's own records, nothing at all until its first page lands.
+    #[test]
+    fn typing_a_console_search_keeps_the_grid_while_the_query_is_not_settled() {
+        let mut app = showing_console_tabs();
+
+        let _ = app.update(Message::InputChanged("zeld".to_owned()));
+
+        assert_eq!(
+            drawn(&app),
+            ["romm:snes"],
+            "the grid emptied itself mid-typing"
+        );
+
+        let _ = app.update(Message::ConsoleSearchSettled("zeld".to_owned()));
+        assert!(
+            drawn(&app).is_empty(),
+            "the settled query is still showing the games of the search it replaced: {:?}",
+            drawn(&app)
+        );
+
+        console_page(
+            &mut app,
+            vec![entry("romm:z", &["Game", "hearthdeck-console:7"])],
+        );
+        assert_eq!(drawn(&app), ["romm:z"]);
+    }
+
+    /// Coming back to a query that already answered draws its own games at
+    /// once: the answer is in the cache, so nothing may stay up from the query
+    /// it replaced.
+    #[test]
+    fn clearing_a_console_search_shows_the_unfiltered_scope_again() {
+        let mut app = showing_console_tabs();
+
+        let _ = app.update(Message::InputChanged("zeld".to_owned()));
+        let _ = app.update(Message::ConsoleSearchSettled("zeld".to_owned()));
+        console_page(
+            &mut app,
+            vec![entry("romm:z", &["Game", "hearthdeck-console:7"])],
+        );
+        assert_eq!(drawn(&app), ["romm:z"]);
+
+        let _ = app.update(Message::InputChanged(String::new()));
+        let _ = app.update(Message::ConsoleSearchSettled(String::new()));
+
+        assert_eq!(
+            drawn(&app),
+            ["romm:snes"],
+            "the cleared search is still showing the searched games: {:?}",
+            drawn(&app)
+        );
+    }
+
+    /// A page that warms a tab in the background lands in that tab's cache and
+    /// repaints nothing - but it is what that tab opens from.
+    #[test]
+    fn a_prefetched_page_lands_in_its_own_scope_without_repainting_the_grid() {
+        let mut app = showing_console_tabs();
+
+        let scope = ConsoleScope::plain(Some(9));
+        let generation = app
+            .console
+            .begin(&scope, 0)
+            .expect("the prefetch request is allowed");
+        let _ = app.update(Message::ConsolePageLoaded {
+            scope,
+            generation,
+            result: Ok(console::Page {
+                entries: vec![entry("romm:ps", &["Game", "hearthdeck-console:9"])],
+                versions: BTreeMap::new(),
+                total: 1,
+                offset: 0,
+            }),
+        });
+
+        assert_eq!(
+            drawn(&app),
+            ["romm:snes"],
+            "the warm-up page repainted the screen it does not describe"
+        );
+
+        let _ = app.update(Message::SelectGroup(Some(1)));
+        settle(&mut app);
+        assert_eq!(
+            drawn(&app),
+            ["romm:ps"],
+            "the warmed tab does not open from its cache"
+        );
     }
 
     /// Sends one navigation event, the way the pad or the keyboard would.

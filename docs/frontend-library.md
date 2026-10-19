@@ -19,33 +19,75 @@ of ROMs and the catalog has no pagination. See decision 6 in
 
 ## RomM is scoped, and every scope caches its own pages
 
+The model is `screens/library/console.rs` (`ConsoleScope`, `ConsoleScopes`); `app/mod.rs`
+drives it (`console_scope`, `ensure_console_scope`, `load_console_page`,
+`fetch_console_page`). There is no global ROM list.
+
 ```rust
-enum RommScope { All, Console(i64) }        // "all consoles" is its own scope
-struct RommListing {                        // one per scope, in romm_listings
-    entries: Vec<Arc<DesktopEntryData>>,    // append-only, RomM's order
-    total: Option<u64>,                     // from the first page
-    next_offset: Option<u32>,
-    loading: bool,
-    generation: u64,
+struct ConsoleScope {                        // one per query, in ConsoleScopes
+    platform: Option<i64>,                   // the tab; None is "all consoles"
+    search: String,                          // the source narrows by these two
+    facets: BTreeMap<String, String>,
+}
+struct ConsoleListing {                      // one per scope
+    entries: Vec<Arc<DesktopEntryData>>,     // append-only, the source's order
+    versions: BTreeMap<String, Vec<RetroRomVersion>>,
+    next_offset: Option<u32>,                // None once the scope is fully loaded
+    pending: Option<u64>,                    // generation of the request in flight
+    generation: u64,                         // bumped by every first-page load
+    loaded: bool,                            // has answered at least one page
 }
 ```
 
-A scope is a value (`RommScope`) keyed into a map, not a tuple of globals. That is
-the whole point: opening console B **never clears console A's pages**, so
-switching back is instant and no scope depends on another. An earlier design kept
-one global `total`/`offset`/`loading`/`generation` and poured ROM entries into
-`all_entries`, so every console open had to refetch.
+A scope is a value (`ConsoleScope`) keyed into a map, not a tuple of globals. That is the
+whole point: opening console B **never clears console A's pages**, so switching back is
+instant and no scope depends on another. An earlier design kept one global
+`total`/`offset`/`loading`/`generation` and poured ROM entries into `all_entries`, so every
+console open had to refetch.
 
-`generation` is per scope: a reload bumps only its own, so a page from a previous
-load of *that* scope is dropped while other scopes keep loading in parallel.
+`generation` is per scope: a reload bumps only its own, so a page from a previous load of
+*that* scope is dropped while other scopes keep loading in parallel. That is "the load the
+user superseded" — not "the tab the user left". Pages of tabs the user left are exactly
+what the cache keeps.
+
+The warmth is bounded, so a long session of searching cannot grow the cache without end:
+only `MAX_NARROWED_SCOPES` narrowed scopes (a search or facet selection) stay cached beside
+the tabs, dropped least recently used first. A tab is never dropped — the strip bounds
+them — and neither is a scope with a page in flight, whose answer still has to land in its
+log. A dropped scope is not a failure: opening it again goes through `ensure` and fetches
+page 0 like a first visit.
+
+**Contract: a tab switch snaps to the target tab's own records.** The moment the tab
+changes, the grid draws that scope's cached pages — nothing at all while its first page is
+still out, then that page when it lands. The previous tab's records are never drawn under
+the new tab, not even for a frame. `ConsoleScopes::ensure` is the decision: `Cached` (paint
+from the cache, fetch nothing), `Loading` (a first page is already out, wait), or
+`Requested(generation)` (fetch page 0). `App::refilter` reads only the scope on screen,
+through `ConsoleScopes::entries`; an arriving page is logged into the scope its message
+names (`ConsolePageLoaded { scope, .. }`) whether or not that scope is on screen, and
+repaints only when it *is*.
+
+A settled search or facet change is a new scope and behaves the same way. Typing is not:
+while the user types, the drawn list stays where it is (no `refilter` per keystroke) — the
+console grid is narrowed by the daemon, and re-projecting mid-typing would show the empty
+list of a scope nobody has asked for yet. The snap happens once, when the query settles.
+
+Within one scope, a reload does not blank the grid: what is loaded keeps its order until a
+first page replaces it, so a reload swaps atomically.
+
+This exact regression shipped once. The rewrite kept one global `ConsoleListing` for the
+console grid, so a tab switch copied the previous tab's pages into the drawn list and they
+stayed there until the new tab's page 0 arrived — about a second of the old tab's tiles
+under the new tab's title. The per-scope map and the snap rule above are what prevent it;
+do not collapse them back into one listing.
 
 ## Display order is fixed once drawn
 
 Invariant: **an entry never changes position after it is drawn.**
 
-- `projection_source` yields the catalog (name order) then the active scope's
-  entries (arrival order). `AppLibraryConfig::filtered` filters but preserves that
-  order.
+- Each grid is drawn in exactly one order: a local section is the catalog in name order
+  (`AppLibraryConfig::filtered_by_facets`), and the console grid is one scope's pages in
+  the source's arrival order (`ConsoleScopes::entries`). The two never share a grid.
 - Pages are appended, never re-sorted.
 
 Why: pages arrive a page at a time in RomM's order, which need not match a local
@@ -55,7 +97,8 @@ the user had already scrolled past, every 30 seconds. Keeping ROM records out of
 `all_entries` removes the coupling entirely.
 
 **Trap:** never sort ROM entries together with the catalog, and never re-add a
-global sort over `all_entries`. There is one ordering source, and it is append-only.
+global sort over the loaded pages. There is one ordering source per grid, and the
+console one is append-only.
 
 ## The count has one unit
 
@@ -70,20 +113,21 @@ is unknown the header stays blank rather than showing a number it will replace.
 
 ## Pages load on demand, and prefetch in the background
 
-- When platforms arrive, `queue_romm_prefetch` enqueues `All` plus every console,
-  and `pump_romm_prefetch` issues them under `ROMM_MAX_INFLIGHT` (3), so opening
-  any console paints from cache instead of clearing the grid and waiting.
-- `ensure_romm_scope` shows a prefetched scope instantly; it only requests page 0
-  if the scope has never loaded.
+- When platforms arrive (`Message::ConsolesLoaded`), `queue_console_prefetch` enqueues the
+  "all consoles" tab plus every console tab in tab order — "all" is the landing view — and
+  `pump_console_prefetch` issues them under `MAX_PREFETCH_INFLIGHT` (3), so opening any
+  console paints from cache instead of clearing the grid and waiting. Scopes that already
+  answered or are loading are left out; the prefetch is never cancelled and its limits
+  never shrink.
+- `ensure_console_scope` shows a warmed scope instantly (`Ensure::Cached`); it requests
+  page 0 only if the scope has never loaded (`Ensure::Requested`), and never asks twice
+  while a first page is out (`Ensure::Loading`).
 - Plain browsing loads further pages as the viewport approaches the end
-  (`ScrollYOffset`). A search or an active filter pulls the **whole** scope
-  (`console_needs_all_pages`), because filtering and facets run locally over the
-  loaded records.
-
-**Follow-up:** facets come from loaded records today, so the filter sidebar is
-partial until a scope is fully loaded. The real fix is to source facets from
-RomM's own filter metadata instead of pulling every page; tracked in
-`code-review-roadmap.md`.
+  (`ConsoleScopes::extend_offset`, one row early). A search or an active facet selection
+  narrows at the daemon, so each is its own scope with its own pages — there is no local
+  filtering over loaded records to complete.
+- Console facets come from the daemon per tab (`retro_facets`), not from loaded records,
+  so the filter sidebar does not wait for a scope to page in.
 
 ## The grid is virtualized
 
@@ -114,9 +158,14 @@ the per-page wait.
 
 ## Traps (do not)
 
-- Merge ROM records into `all_entries`.
+- Merge ROM records into the catalog (`App.catalog`).
 - Sort the grid or the catalog with ROM entries in scope.
 - Show RomM's per-platform file count anywhere the grid draws collapsed games.
-- Drop the focused row from `grid_row_window`.
+- Draw one scope's pages as another scope's list. The console grid reads only
+  `ConsoleScopes::entries` of the scope on screen, and a tab switch snaps to the target
+  tab's own records (or nothing at all) — never to what the previous tab had on screen.
+- Re-project the console grid while the user is typing. The snap to the new scope's own
+  records happens once, when the query settles, not per keystroke.
+- Drop the focused row from the virtualized window (`grid::row_window`).
 - Page ROM data through the catalog/`DiscoveryProvider` path (unpaginated, timed
   replacement — see decision 6 in `retroarch-integration.md`).

@@ -42,7 +42,12 @@ impl App {
             return Task::none();
         };
         let cover = entry_icon_handle(&entry.icon, DETAILS_HERO_RASTER);
-        let versions = self.console.versions(&entry.id).to_vec();
+        // Read from the scope the grid showed this entry on, which is the scope
+        // on screen at the moment details open.
+        let versions = self
+            .console
+            .versions(&self.console_scope(), &entry.id)
+            .to_vec();
         self.details = Some(Details::new(
             rom_id,
             entry.name.clone(),
