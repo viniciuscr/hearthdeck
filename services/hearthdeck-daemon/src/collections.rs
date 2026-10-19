@@ -43,6 +43,112 @@ pub const RULE_CONTINUE_WATCHING: &str = "stremio:continue-watching";
 /// feature off removes its collections and leaves everything else alone.
 pub const OWNER_LAYA: &str = "laya";
 
+/// One built-in rail: its slug, how its members are derived, and where it sorts.
+struct Builtin {
+    slug: &'static str,
+    kind: &'static str,
+    rule: Option<&'static str>,
+    role: &'static str,
+    position: i64,
+    owner: &'static str,
+}
+
+/// The rails the dashboard always has, in composition order.
+///
+/// The Stremio rail is seeded rather than published on link: it is empty until
+/// an account is linked and the provider has published, so a row that always
+/// exists costs nothing. Its position is the one a feature's own rails use, so
+/// it sorts after the hand-ordered ones.
+const BUILTINS: [Builtin; 4] = [
+    Builtin {
+        slug: "last-played",
+        kind: KIND_RULE,
+        rule: Some(RULE_LAST_PLAYED),
+        role: "none",
+        position: 0,
+        owner: OWNER_SYSTEM,
+    },
+    Builtin {
+        slug: "favorites",
+        kind: KIND_MEMBERSHIP,
+        rule: None,
+        role: "favorite",
+        position: 1,
+        owner: OWNER_USER,
+    },
+    Builtin {
+        slug: "play-later",
+        kind: KIND_MEMBERSHIP,
+        rule: None,
+        role: "play_later",
+        position: 2,
+        owner: OWNER_USER,
+    },
+    Builtin {
+        slug: RULE_CONTINUE_WATCHING,
+        kind: KIND_RULE,
+        rule: Some(RULE_CONTINUE_WATCHING),
+        role: "none",
+        position: 100,
+        owner: OWNER_STREMIO,
+    },
+];
+
+/// Writes the built-in rails as they are defined here, and keeps them from
+/// being deleted.
+///
+/// Safe to run on every read: a missing row comes back, a row altered by hand
+/// or by an older build is put back as defined, and nothing a person added to
+/// one is touched. The trigger is what makes "cannot be deleted" a property of
+/// the database rather than of whoever happens to call it.
+pub async fn seed_builtin(pool: &SqlitePool) -> Result<()> {
+    for builtin in &BUILTINS {
+        sqlx::query(
+            r#"
+            INSERT INTO collections (slug, kind, rule, role, position, created_at, owner, name)
+            VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, NULL)
+            ON CONFLICT(slug) DO UPDATE SET
+              kind = excluded.kind,
+              rule = excluded.rule,
+              role = excluded.role,
+              position = excluded.position,
+              owner = excluded.owner,
+              name = NULL
+            "#,
+        )
+        .bind(builtin.slug)
+        .bind(builtin.kind)
+        .bind(builtin.rule)
+        .bind(builtin.role)
+        .bind(builtin.position)
+        .bind(builtin.owner)
+        .execute(pool)
+        .await
+        .with_context(|| format!("seed built-in collection {}", builtin.slug))?;
+    }
+    let slugs = BUILTINS
+        .iter()
+        .map(|builtin| format!("'{}'", builtin.slug))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // The slugs are this module's own constants, never input.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE TRIGGER IF NOT EXISTS builtin_collections_are_kept \
+         BEFORE DELETE ON collections WHEN OLD.slug IN ({slugs}) \
+         BEGIN SELECT RAISE(ABORT, 'built-in collections cannot be deleted'); END"
+    )))
+    .execute(pool)
+    .await
+    .context("protect built-in collections")?;
+    Ok(())
+}
+
+/// Whether `owner` is an optional feature, which may replace and remove its own
+/// rails. The built-in owners are not: their rails are not any caller's to lose.
+fn is_feature_owner(owner: &str) -> bool {
+    !matches!(owner, OWNER_SYSTEM | OWNER_USER | OWNER_STREMIO)
+}
+
 /// The rule a feature's rail is resolved by, e.g. `laya:watch`. Namespaced by
 /// owner so a rule can never be mistaken for the daemon's own.
 pub fn owned_rule(owner: &str, rule_id: &str) -> String {
@@ -120,6 +226,9 @@ impl CollectionStore {
     /// Rule collections come back with empty `items`: only the caller knows
     /// where the data each rule reads from lives.
     pub async fn list(&self) -> Result<Vec<Collection>> {
+        // Read, so a rail missing or altered since startup is back before it is
+        // asked for.
+        seed_builtin(&self.pool).await?;
         let collections = sqlx::query(
             "SELECT slug, kind, rule, role, position, owner, name FROM collections ORDER BY position, slug",
         )
@@ -197,6 +306,10 @@ impl CollectionStore {
     /// Replacement rather than merging is what makes a rail that no longer
     /// applies disappear on its own.
     pub async fn replace_owned(&self, owner: &str, replace_with: &[OwnedCollection]) -> Result<()> {
+        anyhow::ensure!(
+            is_feature_owner(owner),
+            "{owner} owns built-in collections, which are not replaceable"
+        );
         // Far enough behind any hand-ordered collection to sort after them, and
         // spaced so the owner's own order survives a rebuild.
         const FIRST_POSITION: i64 = 100;
@@ -237,6 +350,10 @@ impl CollectionStore {
 
     /// Removes everything `owner` owns, which is what turning a feature off does.
     pub async fn remove_owned(&self, owner: &str) -> Result<u64> {
+        anyhow::ensure!(
+            is_feature_owner(owner),
+            "{owner} owns built-in collections, which are not removable"
+        );
         let result = sqlx::query("DELETE FROM collections WHERE owner = ?")
             .bind(owner)
             .execute(&self.pool)
@@ -292,7 +409,7 @@ mod tests {
 
     use super::{
         CollectionItem, CollectionStore, KIND_MEMBERSHIP, KIND_RULE, OWNER_LAYA, OWNER_STREMIO,
-        OWNER_SYSTEM, OwnedCollection, RULE_CONTINUE_WATCHING, RULE_LAST_PLAYED,
+        OWNER_SYSTEM, OWNER_USER, OwnedCollection, RULE_CONTINUE_WATCHING, RULE_LAST_PLAYED,
     };
     use crate::database::Database;
 
@@ -456,6 +573,39 @@ mod tests {
             .collect();
         assert!(!slugs.contains(&"laya:watch".to_owned()));
         assert!(slugs.contains(&"favorites".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn the_built_in_collections_cannot_be_deleted() {
+        let (store, _directory) = store().await;
+
+        let deleted = sqlx::query("DELETE FROM collections WHERE slug = 'last-played'")
+            .execute(&store.pool)
+            .await;
+
+        assert!(deleted.is_err(), "the database refuses the delete");
+        assert!(store.collection("last-played").await.unwrap().is_some());
+        for owner in [OWNER_SYSTEM, OWNER_USER, OWNER_STREMIO] {
+            assert!(store.remove_owned(owner).await.is_err(), "{owner}");
+            assert!(store.replace_owned(owner, &[]).await.is_err(), "{owner}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_built_in_collection_altered_underneath_is_put_back_when_read() {
+        let (store, _directory) = store().await;
+        sqlx::query(
+            "UPDATE collections SET kind = 'membership', position = 9 WHERE slug = 'last-played'",
+        )
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+        let collections = store.list().await.unwrap();
+
+        assert_eq!(collections[0].slug, "last-played");
+        assert_eq!(collections[0].kind, KIND_RULE);
+        assert_eq!(collections[0].position, 0);
     }
 
     #[tokio::test]

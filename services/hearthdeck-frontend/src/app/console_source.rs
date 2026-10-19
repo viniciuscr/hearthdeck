@@ -149,9 +149,15 @@ impl App {
     /// Fetches the console list, so the Console Games tabs match the user's
     /// actual RomM platforms rather than whatever was last persisted.
     pub(super) fn load_consoles(&self) -> Task<Message> {
+        self.load_consoles_after(std::time::Duration::ZERO)
+    }
+
+    /// Fetches the console list after `delay`.
+    pub(super) fn load_consoles_after(&self, delay: std::time::Duration) -> Task<Message> {
         let client = self.daemon_client.clone();
         Task::perform(
             async move {
+                tokio::time::sleep(delay).await;
                 client
                     .list_retro_consoles()
                     .await

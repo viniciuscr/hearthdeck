@@ -19,6 +19,7 @@ mod dashboard_page;
 mod details;
 mod launch;
 mod navigation;
+mod refresh;
 mod settings_source;
 
 use std::collections::BTreeMap;
@@ -45,10 +46,7 @@ use crate::fl;
 use crate::input_ownership::{Event as InputEvent, InputOwnership};
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState, Overlay};
 use crate::motion::{Eased, Fade, Slide};
-use crate::providers::GameProvider;
-use crate::providers::daemon::{
-    Collection, DaemonClient, DaemonConfig, DaemonProvider, RetroDetails,
-};
+use crate::providers::daemon::{Collection, DaemonClient, DaemonConfig, RetroDetails};
 use crate::providers::filter::Facet;
 use crate::screens::dashboard::{self};
 use crate::screens::details::{Details as GameDetails, Flag as DetailsFlag};
@@ -182,6 +180,8 @@ pub enum Message {
     SelectSection(Section),
     /// The dashboard's top bar: show the dashboard itself.
     OpenDashboard,
+    /// Restore dashboard was pressed: read everything it is drawn from again.
+    RestoreDashboard,
     /// The dashboard's top bar: show the library as it was left.
     OpenLibrary,
     /// The dashboard's top bar: show the library with the caret in its search
@@ -480,6 +480,8 @@ pub struct App {
     /// its fade out of view has run: the fade draws the page it is leaving, so
     /// the state outlives the page by exactly that long.
     details: Option<GameDetails>,
+    /// Which failed reads have a retry waiting.
+    retries: refresh::Retries,
 }
 
 impl Application for App {
@@ -519,25 +521,6 @@ impl Application for App {
                 .unwrap_or_else(|_| "http://127.0.0.1:38400".to_string()),
             token: std::env::var("HEARTHDECK_PAIRING_TOKEN").unwrap_or_default(),
         });
-        let load = Task::perform(
-            {
-                let daemon_client = daemon_client.clone();
-                async move {
-                    let provider = DaemonProvider::with_client(daemon_client);
-                    GameProvider::discover(&provider)
-                        .await
-                        .map(|records| {
-                            records
-                                .into_iter()
-                                .map(|record| Arc::new(record.into_desktop_entry()))
-                                .collect()
-                        })
-                        .map_err(|error| format!("{error:?}"))
-                }
-            },
-            |result| cosmic::Action::App(Message::CatalogLoaded(result)),
-        );
-
         let mut app = Self {
             core,
             page: Page::default(),
@@ -582,7 +565,9 @@ impl Application for App {
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
             details: None,
+            retries: refresh::Retries::default(),
         };
+        let load = app.load_catalog(std::time::Duration::ZERO);
         let poll = app.poll_active_session(std::time::Duration::ZERO);
         let consoles = app.load_consoles();
         let disk = app.poll_disk_free(std::time::Duration::ZERO);
@@ -626,9 +611,10 @@ impl Application for App {
                     Ok(entries) => entries,
                     Err(error) => {
                         log::error!("catalog fetch failed: {error}");
-                        return Task::none();
+                        return self.catalog_failed();
                     }
                 };
+                self.retries.catalog = false;
                 self.catalog = entries;
                 // The local sections' tabs are the ones their entries imply: a
                 // store or category nothing installed carries is not a tab. The
@@ -647,9 +633,10 @@ impl Application for App {
                     Ok(platforms) => platforms,
                     Err(error) => {
                         log::error!("console list fetch failed: {error}");
-                        return Task::none();
+                        return self.consoles_failed();
                     }
                 };
+                self.retries.consoles = false;
                 // None reported: keep the persisted tabs rather than wiping them.
                 if platforms.is_empty() {
                     return Task::none();
@@ -749,8 +736,12 @@ impl Application for App {
                         self.dashboard_cursor =
                             dashboard::focus::clamp(self.dashboard_cursor, &rails);
                     }
-                    Err(error) => log::warn!("collection fetch failed: {error}"),
+                    Err(error) => {
+                        log::warn!("collection fetch failed: {error}");
+                        return self.collections_failed();
+                    }
                 }
+                self.retries.collections = false;
             }
             Message::FacetsLoaded(result) => {
                 let facets = result.unwrap_or_else(|error| {
@@ -956,7 +947,9 @@ impl Application for App {
                 self.switch_page(Page::Dashboard);
                 self.cursors.ring = None;
                 self.bar_cursor = None;
+                return self.refresh_dashboard();
             }
+            Message::RestoreDashboard => return self.restore_dashboard(),
             Message::OpenLibrary => {
                 self.switch_page(Page::Library);
                 self.bar_cursor = None;

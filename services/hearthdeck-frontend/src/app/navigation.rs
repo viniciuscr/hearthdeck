@@ -305,7 +305,7 @@ impl App {
             self.bar_cursor = None;
             let rails = self.dashboard_rail_lengths();
             self.dashboard_cursor = dashboard::focus::clamp(self.dashboard_cursor, &rails);
-            return self.focus_dashboard_card();
+            return Task::batch([self.focus_dashboard_card(), self.refresh_dashboard()]);
         }
         self.focus_task()
     }

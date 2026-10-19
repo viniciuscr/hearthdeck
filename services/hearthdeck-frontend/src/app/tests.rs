@@ -56,6 +56,7 @@ fn shell() -> App {
         launch_state: LaunchState::default(),
         input_ownership: InputOwnership::default(),
         details: None,
+        retries: super::refresh::Retries::default(),
     }
 }
 
@@ -2242,4 +2243,36 @@ fn a_focus_step_eases_the_grid_to_its_row() {
 
     settle(&mut app);
     assert!(app.scroll.is_none(), "arriving drops the animation");
+}
+
+/// The daemon is often not answering yet when the app starts; a failed read used
+/// to leave the dashboard on its fallback shelf for the whole session.
+#[test]
+fn a_failed_dashboard_read_is_retried_until_one_succeeds() {
+    let mut app = shell();
+
+    let _ = app.update(Message::CollectionsLoaded(Err("daemon down".to_owned())));
+    assert!(app.retries.collections, "a retry is on its way");
+
+    let _ = app.update(Message::CollectionsLoaded(Ok(Vec::new())));
+    assert!(
+        !app.retries.collections,
+        "a read that landed ends the chain"
+    );
+}
+
+#[test]
+fn restoring_the_dashboard_shows_it_with_the_cursor_on_the_first_card() {
+    let mut app = showing(4);
+    app.page = Page::Settings;
+    app.dashboard_cursor = dashboard::focus::Cursor {
+        rail: 2,
+        card: 3,
+        remembered: 3,
+    };
+
+    let _ = app.update(Message::RestoreDashboard);
+
+    assert_eq!(app.page, Page::Dashboard);
+    assert!(app.dashboard_cursor == dashboard::focus::Cursor::default());
 }

@@ -59,7 +59,7 @@ pub fn view<'a>(
     let sections = column![
         text::title1(fl!("settings-title")).size(TEXT_TITLE),
         scrollable(settings::view_column(vec![
-            library_categories(),
+            library_and_dashboard(),
             categorization(state),
             stremio(state)
         ]))
@@ -83,22 +83,33 @@ pub fn view<'a>(
     .into()
 }
 
-/// The library's own tabs: the one control that puts them back as Hearthdeck
-/// derives them.
+/// The library's own tabs and the dashboard's rails: the controls that put them
+/// back as Hearthdeck derives them.
 ///
-/// Its own section, and always on offer: the tabs can go wrong whether or not
-/// the local model is installed, or even supported, and the way out must not
-/// depend on a feature the user may never have turned on.
-fn library_categories<'a>() -> Element<'a, Message> {
-    settings::section::<Message>()
-        .title(fl!("categories-heading"))
-        .add(text::body(fl!("categories-intro")))
-        .add(action_button(
+/// Its own section, and always on offer: both can go wrong whether or not the
+/// local model is installed, or even supported, and the way out must not depend
+/// on a feature the user may never have turned on.
+fn library_and_dashboard<'a>() -> Element<'a, Message> {
+    let Spacing { space_s, .. } = theme::spacing();
+    let buttons = row![
+        action_button(
             fl!("categories-restore"),
             Message::RestoreDefaultCategories,
             standard_button_class(),
             true,
-        ))
+        ),
+        action_button(
+            fl!("dashboard-restore"),
+            Message::RestoreDashboard,
+            standard_button_class(),
+            true,
+        ),
+    ]
+    .spacing(space_s);
+    settings::section::<Message>()
+        .title(fl!("categories-heading"))
+        .add(text::body(fl!("categories-intro")))
+        .add(buttons)
         .into()
 }
 

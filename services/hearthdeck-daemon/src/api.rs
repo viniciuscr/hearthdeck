@@ -1590,16 +1590,27 @@ async fn list_collections(
     authenticate(&state, &headers).await?;
     let mut collections = state.collections.list().await.map_err(ApiError::internal)?;
     for collection in &mut collections {
-        if collection.owner == collections::OWNER_LAYA {
-            collection.items = modeled_rail_items(&state, collection).await?;
+        // A rail that cannot be resolved is an empty rail, not a failed
+        // dashboard: one broken source used to take every other rail down with it.
+        let resolved = if collection.owner == collections::OWNER_LAYA {
+            Some(modeled_rail_items(&state, collection).await)
         } else if collection.owner == collections::OWNER_STREMIO
             && collection.rule.as_deref() == Some(collections::RULE_CONTINUE_WATCHING)
         {
-            collection.items = continue_watching_items(&state).await?;
+            Some(continue_watching_items(&state).await)
         } else if collection.owner == collections::OWNER_SYSTEM
             && collection.rule.as_deref() == Some(collections::RULE_LAST_PLAYED)
         {
-            collection.items = last_played_items(&state).await?;
+            Some(last_played_items(&state).await)
+        } else {
+            None
+        };
+        match resolved {
+            Some(Ok(items)) => collection.items = items,
+            Some(Err(error)) => {
+                warn!(slug = %collection.slug, error = %error.message, "rail could not be resolved");
+            }
+            None => {}
         }
         // Last, once every rail holds the items it will serve: an item stored
         // without an icon is given the one its id names, so a client can draw
