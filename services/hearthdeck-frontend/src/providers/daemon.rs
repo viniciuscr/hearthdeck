@@ -9,6 +9,7 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
     sync::Arc,
+    time::Duration,
 };
 use tokio::sync::OnceCell;
 
@@ -21,9 +22,19 @@ use crate::providers::filter::Facet;
 ///
 /// It is what ties a library entry back to the catalog row it came from, and it
 /// is the id space a categorization report's `app_id`s have to be mapped into
-/// before they can be used as a tab filter. `input_ownership` strips it again to
-/// route a launch.
+/// before they can be used as a tab filter. It is never used to route a launch:
+/// the daemon decides what an id names.
 pub const CATALOG_ENTRY_PREFIX: &str = "hearthdeck:";
+
+/// How long one daemon request may take before the client gives up.
+///
+/// Without a deadline a hung daemon leaves every poll chain waiting forever, and
+/// the session poll that returns input to the pad never fires again.
+const DAEMON_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long one artwork download may take. Artwork comes from third-party hosts
+/// and is fetched on a blocking thread, which a stalled server would hold for good.
+const ICON_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Configuration for connecting to the HearthDeck daemon.
 #[derive(Clone, Debug)]
@@ -58,24 +69,11 @@ struct PairingCompleteResponse {
     token: String,
 }
 
-/// Response from the /v1/health endpoint.
+/// What the frontend reads of the /v1/health reply: what this deployment
+/// provides at all. The rest of the reply is ignored on the way in.
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct HealthResponse {
-    pub version: String,
-    pub lan_enabled: bool,
-    pub transport: String,
-    pub providers: Vec<ProviderHealthInfo>,
     pub capabilities: HostCapabilities,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct ProviderHealthInfo {
-    pub id: String,
-    pub status: String,
-    pub record_count: Option<u64>,
-    pub last_attempt_at: Option<String>,
 }
 
 // Shared with the daemon so the two sides cannot drift on the payloads the client
@@ -136,44 +134,15 @@ pub enum ModelStatus {
     External { path: std::path::PathBuf },
 }
 
-/// What one scan concluded. This is a projection: the daemon also sends the
-/// per-app assignments, which the UI does not read yet, and unknown fields are
-/// ignored on the way in.
+/// What one scan concluded. This is a projection: the screen only counts the
+/// candidate tabs and the apps that fit none, so their members are not read.
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct ScanReport {
-    pub categorizer: String,
     pub app_count: usize,
-    /// Candidate tabs, best first, with the members each one found.
-    pub categories: Vec<CategoryProposal>,
+    /// Candidate tabs, best first.
+    pub categories: Vec<serde::de::IgnoredAny>,
     /// Apps that fit no candidate category: the taxonomy is missing an entry.
-    pub unclassified: Vec<UnclassifiedApp>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct CategoryProposal {
-    /// The taxonomy's stable name for this category. Tabs are built from the
-    /// display name, but anything that has to *recognise* a category — the
-    /// dashboard's Watch shelf, say — reads this, so a translated `name` cannot
-    /// break it.
-    pub slug: String,
-    pub name: String,
-    /// Snakified `Section`. A proposal only becomes a tab in the section it was
-    /// placed in; the daemon's baseline taxonomy is all applications, but a
-    /// broader one would otherwise offer a tab whose apps the section filter
-    /// then hides.
-    pub section: String,
-    pub app_ids: Vec<String>,
-    /// Cleared the membership and confidence bars, so it is worth a tab.
-    pub recommended: bool,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct UnclassifiedApp {
-    pub app_id: String,
-    pub title: String,
+    pub unclassified: Vec<serde::de::IgnoredAny>,
 }
 
 /// Retro game from the daemon's /v1/retro/roms endpoint.
@@ -399,9 +368,16 @@ pub struct RetroConsole {
 impl DaemonClient {
     /// Creates a new daemon client with the given configuration.
     pub fn new(config: DaemonConfig) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(DAEMON_REQUEST_TIMEOUT)
+            .build()
+            .unwrap_or_else(|error| {
+                log::error!("daemon client built without a timeout: {error}");
+                reqwest::Client::new()
+            });
         Self {
             config,
-            http: reqwest::Client::new(),
+            http,
             token: Arc::new(OnceCell::new()),
         }
     }
@@ -1459,7 +1435,7 @@ impl GameProvider for DaemonProvider {
             .await
             .map_err(|e| anyhow::anyhow!("failed to fetch library: {}", e))?;
 
-        tracing::info!(item_count = items.len(), "fetched catalog from daemon");
+        log::info!("fetched {} catalog items from daemon", items.len());
 
         let items = join_all(items.into_iter().map(|mut item| {
             let client = self.client.clone();
@@ -1520,7 +1496,11 @@ fn cache_icon(url: &str) -> Option<String> {
     // `spawn_blocking` (it reads and writes image files), so a blocking HTTP client
     // is the honest choice. `reqwest` is async and would want a runtime handle this
     // call does not have.
-    let response = ureq::get(url).call().ok()?;
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(ICON_DOWNLOAD_TIMEOUT))
+        .build()
+        .into();
+    let response = agent.get(url).call().ok()?;
     // Resolved to a `&'static str` here, before `response` is consumed below, so
     // the borrow of its headers does not outlive the move into the body reader.
     let extension = image_extension(

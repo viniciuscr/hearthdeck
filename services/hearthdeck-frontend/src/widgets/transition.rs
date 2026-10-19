@@ -15,7 +15,6 @@ use cosmic::iced::core::{
 use cosmic::{Element, Renderer, Theme};
 
 /// Cross-fades `to` in while `from` fades out, through the surface colour.
-#[allow(missing_debug_implementations)]
 pub struct PageTransition<'a, Message> {
     from: Element<'a, Message>,
     to: Element<'a, Message>,
@@ -213,7 +212,6 @@ where
 /// rather than a fade. The current content slides out in `direction`, the
 /// content is swapped under a surface-colour cover, then the new content slides
 /// back in. Only one child exists, so no two grids are ever laid out at once.
-#[allow(missing_debug_implementations)]
 pub struct TabTransition<'a, Message> {
     content: Element<'a, Message>,
     /// Eased progress in `0.0..=1.0` from the outgoing to the incoming tab.
@@ -391,7 +389,6 @@ where
 /// the content is swapped under a surface-colour cover, then the new content
 /// slides back in from the opposite edge. Moving down the sidebar makes the new
 /// content rise from below; moving up makes it descend from above.
-#[allow(missing_debug_implementations)]
 pub struct SectionTransition<'a, Message> {
     content: Element<'a, Message>,
     /// Eased progress in `0.0..=1.0` from the outgoing to the incoming section.

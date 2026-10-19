@@ -7,10 +7,13 @@ the cruft inherited from the project this started from.
 
 ## Layout
 
-- `app/` — **the new frontend, and what `main` runs.** Grown one screen at a
-  time. It reuses the plumbing below the UI (`providers`, `app_group`,
-  `icon_cache`, `input_ownership`, `launch_state`, `style`, `ui`, `widgets`);
-  only the screens and navigation are rewritten.
+- `app/` — **the new frontend, and what `main` runs.** `mod.rs` holds the state,
+  `update`, `view` and the subscriptions; the rest is one `impl App` module per
+  concern (`navigation`, `dashboard_page`, `console_source`, `settings_source`,
+  `launch`, `details`, `animation`), and the tests are in `app/tests.rs`. Grown
+  one screen at a time. It reuses the plumbing below the UI (`providers`,
+  `app_group`, `icon_cache`, `input_ownership`, `launch_state`, `style`, `ui`,
+  `widgets`); only the screens and navigation are rewritten.
 - `ui/` — the design system: shared, styled widgets every screen composes from.
   Grows on second use; never a per-screen copy.
 - `screens/<name>/…` — one module per screen, each owning its own state,
@@ -132,9 +135,9 @@ the cruft inherited from the project this started from.
 | Console tabs derived from the console list | `app/mod.rs` | done |
 | Library: virtualization, paging, source-side search | `screens/library/{grid,console}.rs` | done |
 | Library: pad navigation — the D-pad owns the content, chrome by chords, one global Back | `screens/library/focus.rs`, `app/mod.rs`, `subscriptions/gamepad.rs` | done |
-| Dashboard | | planned |
-| Details | | planned |
-| Settings | | planned |
+| Dashboard | `screens/dashboard/`, `app/dashboard_page.rs` | done |
+| Details | `screens/details/`, `app/details.rs` | done |
+| Settings | `screens/settings/`, `app/settings_source.rs` | done |
 
 ## Dropping (inherited cruft)
 

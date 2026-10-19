@@ -131,9 +131,9 @@ pub fn pressable(action: Action, panel: &Panel<'_>) -> bool {
 mod tests {
     use super::{Action, Panel, Section, pressable, section};
     use crate::providers::daemon::{
-        CategorizationPhase, CategorizationSnapshot, CategorizationStatus, CategoryProposal,
-        ModelStatus, ScanReport, UnclassifiedApp,
+        CategorizationPhase, CategorizationSnapshot, CategorizationStatus, ModelStatus, ScanReport,
     };
+    use serde::de::IgnoredAny;
 
     /// A categorization answer with nothing but the switch set.
     fn snapshot(enabled: bool) -> CategorizationSnapshot {
@@ -156,19 +156,9 @@ mod tests {
     /// have nothing to act on before one exists.
     fn with_report(snapshot: &mut CategorizationSnapshot) {
         snapshot.report = Some(ScanReport {
-            categorizer: "hearthdeck-ai".to_owned(),
             app_count: 3,
-            categories: vec![CategoryProposal {
-                slug: "speedruns".to_owned(),
-                name: "Speedruns".to_owned(),
-                section: "applications".to_owned(),
-                app_ids: vec!["app.one".to_owned()],
-                recommended: true,
-            }],
-            unclassified: vec![UnclassifiedApp {
-                app_id: "app.two".to_owned(),
-                title: "Two".to_owned(),
-            }],
+            categories: vec![IgnoredAny],
+            unclassified: vec![IgnoredAny],
         });
     }
 

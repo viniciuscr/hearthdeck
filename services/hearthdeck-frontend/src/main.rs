@@ -24,8 +24,6 @@ use log::info;
 
 use localize::localize;
 
-// TODO watch the desktop dirs for changes and update the list of apps on change
-
 fn main() -> cosmic::iced::Result {
     // Initialize logger
     pretty_env_logger::try_init().ok();

@@ -18,7 +18,6 @@ use cosmic::iced::core::{
 use cosmic::{Element, Renderer, Theme};
 
 /// Draws its content only while the tile is selected or the pointer is on it.
-#[allow(missing_debug_implementations)]
 pub struct Reveal<'a, Message> {
     content: Element<'a, Message>,
     /// Whether the tile is picked out - the context menu's target or the card

@@ -75,10 +75,12 @@ impl Destination {
     /// the cursor holds while it is on that button.
     #[must_use]
     pub fn index(self) -> usize {
-        Self::ALL
-            .into_iter()
-            .position(|candidate| candidate == self)
-            .expect("ALL lists every destination")
+        match self {
+            Self::Dashboard => 0,
+            Self::Library => 1,
+            Self::Search => 2,
+            Self::Settings => 3,
+        }
     }
 
     /// The destination whose button sits at `index`, or `None` past the bar's

@@ -6,7 +6,15 @@ use cosmic::widget::icon;
 use resvg::{tiny_skia, usvg};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+
+/// The system fonts SVG text is drawn with, scanned once: loading them walks every
+/// font directory, which is far too slow to repeat for each icon rasterized.
+static SVG_FONTS: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
+    let mut fonts = usvg::fontdb::Database::new();
+    fonts.load_system_fonts();
+    Arc::new(fonts)
+});
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct IconCacheKey {
@@ -168,10 +176,8 @@ fn rasterize_svg(svg: &core_svg::Handle, width: u32, height: u32) -> Option<icon
         core_svg::Data::Bytes(bytes) => bytes.to_vec(),
     };
 
-    let mut fontdb = usvg::fontdb::Database::new();
-    fontdb.load_system_fonts();
     let options = usvg::Options {
-        fontdb: Arc::new(fontdb),
+        fontdb: Arc::clone(&SVG_FONTS),
         ..usvg::Options::default()
     };
 
@@ -197,10 +203,12 @@ fn rasterize_svg(svg: &core_svg::Handle, width: u32, height: u32) -> Option<icon
         None => tiny_skia::Transform::default(),
     };
 
-    // SVG rendering can panic on malformed or complex vectors.
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    // SVG rendering can panic on malformed or complex vectors; the caller then
+    // falls back to the unrendered handle rather than caching a blank tile.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         resvg::render(&tree, transform, &mut pixmap.as_mut());
-    }));
+    }))
+    .ok()?;
 
     Some(icon::from_raster_pixels(width, height, pixmap.take()))
 }

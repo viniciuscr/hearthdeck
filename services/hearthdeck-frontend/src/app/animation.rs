@@ -76,8 +76,18 @@ impl App {
     /// already showing - or by [`App::advance_section_slide`] once the cover is
     /// opaque.
     pub(super) fn apply_section(&mut self, section: Section) -> Task<Message> {
+        self.apply_section_with_group(section, None)
+    }
+
+    /// [`App::apply_section`], landing on `group`'s tab rather than the "all"
+    /// tab - which is what a console picked on the dashboard asks for.
+    pub(super) fn apply_section_with_group(
+        &mut self,
+        section: Section,
+        group: Option<usize>,
+    ) -> Task<Message> {
         self.cur_section = section;
-        self.cur_group = None;
+        self.cur_group = group;
         self.search_value.clear();
         self.facet_selection.clear();
         self.facets.clear();
