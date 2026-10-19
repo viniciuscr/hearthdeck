@@ -207,27 +207,24 @@ impl App {
         )
     }
 
-    /// Hands the Applications tabs back to the ones derived from the entries.
+    /// Rebuilds every section's tabs from the catalog and the console platforms,
+    /// dropping what an older scan left behind and keeping the user's own
+    /// folders.
     ///
-    /// This is the way out of a scan the user does not want: their own folders
-    /// survive, because only the scan's tabs are dropped. The selection follows
-    /// the folder it was on rather than the index, because the index no longer
-    /// names the same tab once the scan's tabs are gone.
-    pub(super) fn restore_derived_categories(&mut self) {
-        let selected = self
-            .cur_group
-            .and_then(|index| self.config.sections.get(self.cur_section).get(index))
-            .cloned();
-        if !self.config.sync_categorization(&[]) {
-            return;
+    /// The library lands on its "all" tab: the indices the selection held name
+    /// different tabs once the strips are rebuilt.
+    pub(super) fn restore_default_categories(&mut self) -> Task<Message> {
+        let platforms: Vec<(i64, String)> = self
+            .console_platforms
+            .iter()
+            .map(|console| (console.id, console.label.clone()))
+            .collect();
+        if self
+            .config
+            .restore_default_groups(&self.catalog, &platforms)
+        {
+            self.persist_config();
         }
-        self.persist_config();
-        self.cur_group = selected.and_then(|selected| {
-            self.config
-                .sections
-                .get(self.cur_section)
-                .iter()
-                .position(|group| group == &selected)
-        });
+        self.apply_group(None)
     }
 }

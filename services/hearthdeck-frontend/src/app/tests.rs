@@ -1468,34 +1468,56 @@ fn the_health_reply_says_whether_the_feature_exists_here() {
     assert_eq!(app.categorization_capable, Some(true), "and this one can");
 }
 
-/// Restoring the defaults drops the tabs a scan made and keeps the user's
-/// own, and the selection follows the folder rather than the index it was
-/// sitting at.
+/// Restoring the defaults rebuilds the derived tabs, drops what an older scan
+/// left behind, and keeps the user's own folders.
 #[test]
-fn restoring_the_defaults_keeps_the_users_folders_and_drops_the_scans() {
+fn restoring_the_defaults_rebuilds_the_tabs_and_keeps_the_users_folders() {
     let mut app = showing(4);
     app.cur_section = Section::Applications;
+    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
+        "writer",
+        &["Office"],
+    )])));
     add_user_group(&mut app, Section::Applications, "Mine");
-    let _ = app
-        .config
-        .sync_categorization(&[crate::app_group::CategorizationGroup {
-            name: "Speedruns".to_owned(),
-            entry_ids: vec!["app.one".to_owned()],
-        }]);
+    app.config.sections.applications.push(AppGroup {
+        name: "Speedruns".to_owned(),
+        icon: "folder-symbolic".to_owned(),
+        filter: FilterType::AppIds(vec!["app.one".to_owned()]),
+        source: GroupSource::Categorization,
+    });
+    app.config.sections.applications.remove(0);
     app.cur_group = Some(1);
 
-    let _ = app.update(Message::ResetCategorizationTabs);
+    let _ = app.update(Message::RestoreDefaultCategories);
 
     assert_eq!(
         tabs(&app, Section::Applications),
-        ["Mine"],
-        "the scan's tab goes and the user's folder stays"
+        ["Office", "Mine"],
+        "the derived tab is back, the scan's is gone and the user's stays"
     );
-    assert_eq!(
-        app.cur_group,
-        Some(0),
-        "the selection follows the folder it was on"
-    );
+    assert_eq!(app.cur_group, None, "the library lands on its all tab");
+}
+
+/// Turning smart categorization off must also undo a scan's leftovers: it is
+/// the way out for someone whose tabs it broke.
+#[test]
+fn turning_smart_categorization_off_restores_the_default_tabs() {
+    let mut app = showing(4);
+    app.cur_section = Section::Applications;
+    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
+        "writer",
+        &["Office"],
+    )])));
+    app.config.sections.applications = vec![AppGroup {
+        name: "Speedruns".to_owned(),
+        icon: "folder-symbolic".to_owned(),
+        filter: FilterType::AppIds(vec!["app.one".to_owned()]),
+        source: GroupSource::Categorization,
+    }];
+
+    let _ = app.update(Message::SetCategorization(false));
+
+    assert_eq!(tabs(&app, Section::Applications), ["Office"]);
 }
 
 /// Every outcome of a categorization action lands in the section's own

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::decision::{AppCategorization, Categorizer};
 use super::error::{Error, Result};
@@ -110,10 +110,13 @@ pub struct ScanReport {
 }
 
 impl ScanReport {
-    /// The apps this report put in the categories that share a dashboard rail.
+    /// The apps this report put in the recommended categories that share a
+    /// dashboard rail.
     ///
     /// The one place that knows how a rail's members are worked out, so the thing
-    /// that writes the rail and the thing that resolves it cannot disagree.
+    /// that writes the rail and the thing that resolves it cannot disagree. A
+    /// category below the confidence bar does not make a rail: one shaky guess
+    /// is not a reason to put a row on the front door.
     pub fn rail_app_ids(&self, taxonomy: &Taxonomy, rail_id: &str) -> Vec<String> {
         let slugs: Vec<&str> = taxonomy
             .on_rail(rail_id)
@@ -121,7 +124,7 @@ impl ScanReport {
             .collect();
         let mut app_ids: Vec<String> = Vec::new();
         for category in &self.categories {
-            if !slugs.contains(&category.slug.as_str()) {
+            if !category.recommended || !slugs.contains(&category.slug.as_str()) {
                 continue;
             }
             for app_id in &category.app_ids {
@@ -216,6 +219,15 @@ impl LibraryScanner {
         })
         .await
         .map_err(|error| Error::Worker(error.to_string()))?;
+        if app_count > 0 && assignments.is_empty() {
+            return Err(Error::NothingDecided {
+                failed: decision_failures.len(),
+                first: decision_failures.first().map_or_else(
+                    || "no application was decided".to_owned(),
+                    |f| f.error.clone(),
+                ),
+            });
+        }
         failures.extend(decision_failures);
 
         maybe_progress(
@@ -323,10 +335,13 @@ fn decide(
     for (index, app) in apps.iter().enumerate() {
         match categorizer.categorize(app, taxonomy) {
             Ok(assignment) => assignments.push(assignment),
-            Err(error) => failures.push(ScanFailure {
-                app_id: app.id.clone(),
-                error: error.to_string(),
-            }),
+            Err(error) => {
+                warn!(app_id = app.id, %error, "could not decide this application");
+                failures.push(ScanFailure {
+                    app_id: app.id.clone(),
+                    error: error.to_string(),
+                });
+            }
         }
         maybe_progress(
             progress,
@@ -541,6 +556,60 @@ mod tests {
         assert_eq!(rescued.categories[0].slug, "productivity");
         // Research never rewrites installed truth.
         assert_eq!(rescued.title, "Untagged");
+    }
+
+    struct Broken;
+
+    impl Categorizer for Broken {
+        fn id(&self) -> &'static str {
+            "broken"
+        }
+
+        fn categorize(
+            &self,
+            _app: &AppProfile,
+            _taxonomy: &crate::categorization::taxonomy::Taxonomy,
+        ) -> crate::categorization::error::Result<crate::categorization::decision::AppCategorization>
+        {
+            Err(crate::ai::Error::Inference("model exploded".into()).into())
+        }
+    }
+
+    /// A scan in which every record failed used to finish "successfully" with an
+    /// empty report, which the daemon then stored and the UI showed as done.
+    #[tokio::test]
+    async fn a_scan_that_decides_nothing_is_an_error() {
+        let error = LibraryScanner::new(Arc::new(Broken))
+            .scan(library())
+            .await
+            .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("4 applications"), "{message}");
+        assert!(message.contains("model exploded"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn an_empty_library_is_not_a_failed_scan() {
+        let report = LibraryScanner::new(Arc::new(Broken))
+            .scan(Vec::new())
+            .await
+            .unwrap();
+
+        assert_eq!(report.app_count, 0);
+    }
+
+    #[tokio::test]
+    async fn a_category_below_the_confidence_bar_makes_no_rail() {
+        let scanner =
+            LibraryScanner::new(Arc::new(HeuristicCategorizer::new())).with_options(ScanOptions {
+                min_category_confidence: 2.0,
+                ..ScanOptions::default()
+            });
+        let report = scanner.scan(library()).await.unwrap();
+        let taxonomy = crate::categorization::taxonomy::Taxonomy::baseline();
+
+        assert!(report.rail_app_ids(&taxonomy, "watch").is_empty());
     }
 
     #[tokio::test]

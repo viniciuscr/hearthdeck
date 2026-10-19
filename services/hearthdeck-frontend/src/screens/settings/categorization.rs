@@ -47,8 +47,6 @@ pub enum Action {
     /// Publish the last run's rails as dashboard collections, without calling
     /// the model again.
     CreateCollections,
-    /// Give the tabs back to the ones derived from the entries themselves.
-    Reset,
     /// Free the downloaded checkpoint.
     RemoveModel,
 }
@@ -90,9 +88,9 @@ pub fn section<'a>(panel: &Panel<'a>) -> Section<'a> {
 /// The controls `snapshot` earns, in drawing order.
 ///
 /// Each is added when the thing it acts on exists: the switch is the way in and
-/// is always drawn, the model actions need the opt-in, the two that read the
-/// report need a report to read, and the removal needs a checkpoint this client
-/// downloaded - the deployment's own model is never ours to delete.
+/// is always drawn, the model actions need the opt-in, publishing needs a report
+/// to read, and the removal needs a checkpoint this client downloaded - the
+/// deployment's own model is never ours to delete.
 fn actions(snapshot: &CategorizationSnapshot) -> Vec<Action> {
     let mut actions = vec![Action::Toggle];
     if !snapshot.enabled {
@@ -101,7 +99,6 @@ fn actions(snapshot: &CategorizationSnapshot) -> Vec<Action> {
     actions.push(Action::Categorize);
     if snapshot.report.is_some() {
         actions.push(Action::CreateCollections);
-        actions.push(Action::Reset);
     }
     if matches!(snapshot.status.model, ModelStatus::Downloaded { .. }) {
         actions.push(Action::RemoveModel);
@@ -115,8 +112,8 @@ fn actions(snapshot: &CategorizationSnapshot) -> Vec<Action> {
 /// confirmed is drawn disabled rather than focused and dead.
 ///
 /// Being on offer is not enough on its own: a scan in flight holds back
-/// everything that reads or writes the checkpoint, while the switch and the
-/// restore are the daemon's to honour either way.
+/// everything that reads or writes the checkpoint, while the switch is the
+/// daemon's to honour either way.
 pub fn pressable(action: Action, panel: &Panel<'_>) -> bool {
     let Section::Ready { snapshot, actions } = section(panel) else {
         return false;
@@ -124,7 +121,7 @@ pub fn pressable(action: Action, panel: &Panel<'_>) -> bool {
     if !actions.contains(&action) {
         return false;
     }
-    !snapshot.status.running || matches!(action, Action::Toggle | Action::Reset)
+    !snapshot.status.running || action == Action::Toggle
 }
 
 #[cfg(test)]
@@ -220,15 +217,15 @@ mod tests {
         );
     }
 
-    /// Publishing the last run and restoring the tabs both read the report, so
-    /// neither appears before the library has been categorized once.
+    /// Publishing the last run reads the report, so it does not appear before the
+    /// library has been categorized once.
     #[test]
-    fn publishing_and_restoring_wait_for_a_report() {
+    fn publishing_waits_for_a_report() {
         let mut answered = snapshot(true);
         assert_eq!(
             controls(&panel(Some(true), Some(&answered))),
             vec![Action::Toggle, Action::Categorize],
-            "no report: nothing to publish and nothing to undo"
+            "no report: nothing to publish"
         );
 
         with_report(&mut answered);
@@ -237,10 +234,9 @@ mod tests {
             vec![
                 Action::Toggle,
                 Action::Categorize,
-                Action::CreateCollections,
-                Action::Reset
+                Action::CreateCollections
             ],
-            "a report gives both something to read"
+            "a report gives the publish something to read"
         );
     }
 
@@ -296,10 +292,6 @@ mod tests {
             pressable(Action::Toggle, &running),
             "the switch is not the scan's to hold"
         );
-        assert!(
-            pressable(Action::Reset, &running),
-            "restore defaults is a local change and stays available"
-        );
         for action in [
             Action::Categorize,
             Action::CreateCollections,
@@ -323,7 +315,6 @@ mod tests {
         for action in [
             Action::Categorize,
             Action::CreateCollections,
-            Action::Reset,
             Action::RemoveModel,
         ] {
             assert!(!pressable(action, &off), "{action:?} needs the opt-in");
@@ -340,7 +331,6 @@ mod tests {
             Action::Toggle,
             Action::Categorize,
             Action::CreateCollections,
-            Action::Reset,
             Action::RemoveModel,
         ] {
             assert!(

@@ -24,6 +24,12 @@ pub enum Error {
     #[error("invalid input: {0}")]
     Invalid(String),
 
+    /// Every application failed to be decided, so there is no report to speak
+    /// of. A scan that "succeeds" empty would be stored and published as if the
+    /// model had judged the library.
+    #[error("none of the {failed} applications could be decided; the first error was: {first}")]
+    NothingDecided { failed: usize, first: String },
+
     /// The decision worker panicked or was cancelled.
     #[error("categorizer worker failed: {0}")]
     Worker(String),

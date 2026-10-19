@@ -155,9 +155,9 @@ pub enum Message {
     /// The publish finished: how many collections it created, or why it could
     /// not. The shell re-reads the collections on success.
     CategorizationCollectionsCreated(Result<usize, String>),
-    /// Restore default categories was pressed: the Applications tabs go back to
-    /// the ones derived from the entries themselves.
-    ResetCategorizationTabs,
+    /// Restore default categories was pressed: every section's tabs go back to
+    /// the ones derived from the library and the console platforms.
+    RestoreDefaultCategories,
     /// The downloaded checkpoint should be freed.
     DeleteCategorizationModel,
     /// The Stremio section's link button: ask the daemon for a code.
@@ -980,7 +980,13 @@ impl Application for App {
                 return Task::batch(reads);
             }
             Message::SetCategorization(on) => {
-                return self.categorization_action(CategorizationAction::SetEnabled(on));
+                let action = self.categorization_action(CategorizationAction::SetEnabled(on));
+                if on {
+                    return action;
+                }
+                // Turning it off hands back everything the model changed, which
+                // includes tabs an older scan left in the config.
+                return Task::batch([action, self.restore_default_categories()]);
             }
             Message::ScanCategorization => {
                 return self.categorization_action(CategorizationAction::Scan);
@@ -1036,10 +1042,7 @@ impl Application for App {
             Message::DeleteCategorizationModel => {
                 return self.categorization_action(CategorizationAction::RemoveModel);
             }
-            Message::ResetCategorizationTabs => {
-                self.restore_derived_categories();
-                self.refilter();
-            }
+            Message::RestoreDefaultCategories => return self.restore_default_categories(),
             // The Stremio section: the flow decides what an answer means and
             // what must happen next, and the shell only runs that. Nothing here
             // reads a reply to decide anything itself.

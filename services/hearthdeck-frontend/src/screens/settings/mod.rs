@@ -59,6 +59,7 @@ pub fn view<'a>(
     let sections = column![
         text::title1(fl!("settings-title")).size(TEXT_TITLE),
         scrollable(settings::view_column(vec![
+            library_categories(),
             categorization(state),
             stremio(state)
         ]))
@@ -80,6 +81,25 @@ pub fn view<'a>(
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
+}
+
+/// The library's own tabs: the one control that puts them back as Hearthdeck
+/// derives them.
+///
+/// Its own section, and always on offer: the tabs can go wrong whether or not
+/// the local model is installed, or even supported, and the way out must not
+/// depend on a feature the user may never have turned on.
+fn library_categories<'a>() -> Element<'a, Message> {
+    settings::section::<Message>()
+        .title(fl!("categories-heading"))
+        .add(text::body(fl!("categories-intro")))
+        .add(action_button(
+            fl!("categories-restore"),
+            Message::RestoreDefaultCategories,
+            standard_button_class(),
+            true,
+        ))
+        .into()
 }
 
 /// The smart-categories section: the local model that sorts the library, and
@@ -301,7 +321,7 @@ fn action_class(action: categorization::Action) -> Button {
             primary_action_button_class()
         }
         categorization::Action::RemoveModel => destructive_button_class(),
-        categorization::Action::Toggle | categorization::Action::Reset => standard_button_class(),
+        categorization::Action::Toggle => standard_button_class(),
     }
 }
 
@@ -321,7 +341,6 @@ fn action_message(action: categorization::Action, snapshot: &CategorizationSnaps
         categorization::Action::Toggle => Message::SetCategorization(!snapshot.enabled),
         categorization::Action::Categorize => Message::ScanCategorization,
         categorization::Action::CreateCollections => Message::CreateCategorizationCollections,
-        categorization::Action::Reset => Message::ResetCategorizationTabs,
         categorization::Action::RemoveModel => Message::DeleteCategorizationModel,
     }
 }
@@ -333,7 +352,6 @@ fn action_label(action: categorization::Action, snapshot: &CategorizationSnapsho
         categorization::Action::Toggle => fl!("categorization-toggle"),
         categorization::Action::Categorize => scan_label(snapshot),
         categorization::Action::CreateCollections => fl!("categorization-create-collections"),
-        categorization::Action::Reset => fl!("categorization-reset"),
         categorization::Action::RemoveModel => fl!("categorization-remove-model"),
     }
 }

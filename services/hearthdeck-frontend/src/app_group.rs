@@ -168,9 +168,9 @@ impl PartialOrd for FilterType {
 
 /// Who owns a tab, which decides who is allowed to replace it.
 ///
-/// The distinction exists so a library scan can swap out exactly what a previous
-/// scan put there, instead of guessing from tab names or wiping the user's own
-/// folders along with it.
+/// The distinction exists so a tab an older build's library scan left in the
+/// config can be told from the user's own folders, and dropped without touching
+/// them.
 #[derive(Default, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupSource {
@@ -179,18 +179,9 @@ pub enum GroupSource {
     /// [`AppLibraryConfig::sync_console_groups`].
     #[default]
     Local,
-    /// Proposed by a library scan, and replaced by the next report.
+    /// Left behind by an older build's library scan. Nothing makes these any
+    /// more, and every rebuild drops the ones it finds.
     Categorization,
-}
-
-/// One tab a scan proposed, already resolved to the entry ids it holds.
-///
-/// The scan speaks in catalog item ids and [`AppGroup`] filters in library entry
-/// ids, so the translation happens where the report is read rather than here.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CategorizationGroup {
-    pub name: String,
-    pub entry_ids: Vec<String>,
 }
 
 // Object holding the state
@@ -689,10 +680,8 @@ impl AppLibraryConfig {
     /// Rebuild category tabs from the entries currently present while keeping
     /// user-created groups, which use explicit application IDs.
     ///
-    /// A scan owns the Applications section once it has a report: when the tabs
-    /// it made are present, the derived ones are not rebuilt at all. They are
-    /// exactly what the scan replaced, so rebuilding them would quietly put the
-    /// freedesktop tabs back beside the scan's.
+    /// Tabs an older scan left behind are dropped: they used to hide every
+    /// derived tab, and a config stuck that way had no way back.
     pub fn sync_category_groups(&mut self, entries: &[Arc<DesktopEntryData>]) -> bool {
         let mut changed = false;
         for section in [Section::PcGames, Section::Applications] {
@@ -716,16 +705,14 @@ impl AppLibraryConfig {
             }
 
             let existing = self.sections.get(section);
-            // The scan's own tabs are kept here too: they use explicit app ids,
-            // which is also what makes a user's folder survive a rebuild.
+            // Explicit app ids are what make a user's folder survive a rebuild.
             let kept_groups = existing
                 .iter()
-                .filter(|group| matches!(group.filter, FilterType::AppIds(_)))
+                .filter(|group| {
+                    matches!(group.filter, FilterType::AppIds(_))
+                        && group.source != GroupSource::Categorization
+                })
                 .cloned();
-            let scanned = section == Section::Applications
-                && existing
-                    .iter()
-                    .any(|group| group.source == GroupSource::Categorization);
             let mut groups: Vec<_> = categories
                 .into_values()
                 .map(|category| AppGroup {
@@ -747,9 +734,6 @@ impl AppLibraryConfig {
                     source: GroupSource::Local,
                 })
                 .collect();
-            if scanned {
-                groups.clear();
-            }
             groups.extend(kept_groups);
 
             if existing != &groups {
@@ -788,58 +772,37 @@ impl AppLibraryConfig {
         true
     }
 
-    /// Replaces the Applications tabs with the ones a scan proposed, and nothing
-    /// else.
+    /// Puts every section's derived tabs back, which is the way out of a config
+    /// that has gone wrong: stale or missing tabs, or a scan's leftovers.
     ///
-    /// This is a swap, not a merge: the tabs a previous scan made are dropped,
-    /// the user's own folders are kept, and an empty list removes the scan's tabs
-    /// entirely — which hands the section back to the tabs derived from the
-    /// entries. Tabs the user made are told apart from a scan's by
-    /// [`is_user_group`], never by name.
-    pub fn sync_categorization(&mut self, groups: &[CategorizationGroup]) -> bool {
-        let existing = &self.sections.applications;
-        let mut replacements: Vec<AppGroup> = groups
-            .iter()
-            .map(|group| AppGroup {
-                name: group.name.clone(),
-                icon: "folder-symbolic".to_string(),
-                filter: FilterType::AppIds(group.entry_ids.clone()),
-                source: GroupSource::Categorization,
-            })
-            .collect();
-        replacements.extend(
-            existing
-                .iter()
-                .filter(|group| is_user_group(group))
-                .cloned(),
-        );
-
-        if existing == &replacements {
-            return false;
+    /// The user's own folders are kept; everything else is rebuilt from the
+    /// catalog and the console platforms. A source that reported nothing is left
+    /// as it was rather than rebuilt into an empty strip. Reports whether
+    /// anything changed.
+    pub fn restore_default_groups(
+        &mut self,
+        entries: &[Arc<DesktopEntryData>],
+        platforms: &[(i64, String)],
+    ) -> bool {
+        let before = self.sections.clone();
+        for section in Section::ALL {
+            self.sections
+                .get_mut(section)
+                .retain(|group| group.source != GroupSource::Categorization);
         }
-        self.sections.applications = replacements;
-        true
+        if !entries.is_empty() {
+            self.sync_category_groups(entries);
+        }
+        if !platforms.is_empty() {
+            self.sync_console_groups(platforms);
+        }
+        self.sections != before
     }
-}
-
-/// True for a tab the user made by hand, which nothing may replace.
-///
-/// A `Categories` filter can never be a user's: [`AppLibraryConfig::add`] only
-/// ever produces `AppIds`, so a stored `Categories` group was
-/// derived by this module and is free to drop. Testing the filter as well as the
-/// source is what keeps a config written before [`GroupSource`] existed — where
-/// every tab loads as [`GroupSource::Local`] — from having its derived tabs
-/// mistaken for the user's own.
-fn is_user_group(group: &AppGroup) -> bool {
-    group.source == GroupSource::Local && matches!(group.filter, FilterType::AppIds(_))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AppGroup, AppLibraryConfig, CategorizationGroup, FilterType, GroupSource, Section,
-        section_facets,
-    };
+    use super::{AppGroup, AppLibraryConfig, FilterType, GroupSource, Section, section_facets};
     use cosmic::desktop::{DesktopEntryData, fde::IconSource};
     use std::sync::Arc;
 
@@ -1064,13 +1027,6 @@ mod tests {
         }));
     }
 
-    fn scan_group(name: &str, ids: &[&str]) -> CategorizationGroup {
-        CategorizationGroup {
-            name: name.into(),
-            entry_ids: ids.iter().map(|id| (*id).into()).collect(),
-        }
-    }
-
     fn tab_names(config: &AppLibraryConfig) -> Vec<String> {
         config
             .sections
@@ -1080,90 +1036,74 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn a_scan_replaces_the_derived_tabs() {
-        let mut config = AppLibraryConfig::default();
-        let entries = [entry("writer", &["Office"]), entry("vlc", &["Video"])];
-        config.sync_category_groups(&entries);
-        assert_eq!(tab_names(&config).len(), 2);
-
-        assert!(config.sync_categorization(&[scan_group("Media Center", &["vlc"])]));
-
-        assert_eq!(tab_names(&config), vec!["Media Center"]);
-        // A later rebuild must not put the freedesktop tabs back beside it.
-        assert!(!config.sync_category_groups(&entries));
-        assert_eq!(tab_names(&config), vec!["Media Center"]);
-        assert!(
-            config.sections.applications[0].matches(&entries[1]),
-            "the scan's tab must still narrow to the app it named"
-        );
+    fn group(name: &str, source: GroupSource) -> AppGroup {
+        AppGroup {
+            name: name.to_owned(),
+            icon: "folder-symbolic".to_string(),
+            filter: FilterType::AppIds(vec!["vlc".into()]),
+            source,
+        }
     }
 
+    /// A tab an older scan left in the config used to hide every derived tab,
+    /// for good.
     #[test]
-    fn a_second_scan_swaps_only_the_tabs_a_scan_made() {
+    fn a_leftover_scan_tab_no_longer_hides_the_derived_tabs() {
         let mut config = AppLibraryConfig::default();
-        config.sync_categorization(&[scan_group("Development", &["editor"])]);
-        // The user's own folder, made between the two scans.
         config
             .sections
-            .get_mut(Section::Applications)
-            .push(AppGroup {
-                name: "Mine".to_owned(),
-                icon: "folder-symbolic".to_string(),
-                filter: FilterType::AppIds(Vec::new()),
-                source: GroupSource::Local,
-            });
+            .applications
+            .push(group("Media Center", GroupSource::Categorization));
 
-        assert!(config.sync_categorization(&[scan_group("Media Center", &["vlc"])]));
+        assert!(config.sync_category_groups(&[entry("writer", &["Office"])]));
 
-        assert_eq!(tab_names(&config), vec!["Media Center", "Mine"]);
-        assert_eq!(
-            config.sections.applications[0].source,
-            GroupSource::Categorization
-        );
-    }
-
-    #[test]
-    fn an_empty_report_hands_the_section_back_to_the_derived_tabs() {
-        let mut config = AppLibraryConfig::default();
-        let entries = [entry("writer", &["Office"])];
-        config.sync_categorization(&[scan_group("Development", &["editor"])]);
-
-        config.sync_categorization(&[]);
-        assert!(config.sections.applications.is_empty());
-
-        assert!(config.sync_category_groups(&entries));
         assert_eq!(tab_names(&config), vec!["cosmic-office"]);
     }
 
     #[test]
-    fn a_scan_keeps_the_folders_the_user_made() {
+    fn restoring_rebuilds_every_section_and_keeps_the_users_folders() {
         let mut config = AppLibraryConfig::default();
         config
             .sections
-            .get_mut(Section::Applications)
-            .push(AppGroup {
-                name: "Mine".to_owned(),
-                icon: "folder-symbolic".to_string(),
-                filter: FilterType::AppIds(vec!["writer".into()]),
-                source: GroupSource::Local,
-            });
+            .applications
+            .push(group("Media Center", GroupSource::Categorization));
+        config
+            .sections
+            .applications
+            .push(group("Mine", GroupSource::Local));
+        let entries = [
+            entry("writer", &["Office"]),
+            entry("half-life", &["Game", "hearthdeck-store:Steam"]),
+        ];
+        let platforms = [(7, "SNES".to_owned())];
 
-        config.sync_categorization(&[scan_group("Development", &["editor"])]);
+        assert!(config.restore_default_groups(&entries, &platforms));
 
-        assert_eq!(tab_names(&config), vec!["Development", "Mine"]);
+        assert_eq!(tab_names(&config), vec!["cosmic-office", "Mine"]);
+        assert_eq!(config.sections.pc_games[0].name, "Steam");
+        assert_eq!(config.sections.console_games[0].romm_platform_id(), Some(7));
+    }
+
+    /// The catalog failing to load is not a library with nothing in it.
+    #[test]
+    fn restoring_without_a_catalog_does_not_empty_the_tabs() {
+        let mut config = AppLibraryConfig::default();
+        config.sync_category_groups(&[entry("writer", &["Office"])]);
+        let before = tab_names(&config);
+
+        assert!(!config.restore_default_groups(&[], &[]));
+
+        assert_eq!(tab_names(&config), before);
     }
 
     #[test]
-    fn the_scan_is_idempotent_so_a_poll_does_not_churn_the_config() {
+    fn restoring_twice_changes_nothing_the_second_time() {
         let mut config = AppLibraryConfig::default();
-        let groups = [scan_group("Development", &["editor"])];
+        let entries = [entry("writer", &["Office"])];
 
-        assert!(config.sync_categorization(&groups));
-        assert!(
-            !config.sync_categorization(&groups),
-            "re-applying the same report must not report a change"
-        );
+        config.restore_default_groups(&entries, &[]);
+
+        assert!(!config.restore_default_groups(&entries, &[]));
     }
 
     #[test]
