@@ -90,11 +90,21 @@ impl Destination {
     }
 }
 
-/// The widget id of a destination's button, which is what pointing the
-/// renderer's focus at it addresses - and so what paints the focus ring on it.
+/// The widget id of `destination`'s button on the bar drawn for `current`,
+/// which is what pointing the renderer's focus at it addresses - and so what
+/// paints the focus ring on it.
+///
+/// Scoped by the bar's own destination, because a page change fades two pages
+/// at once and both wear a bar. A widget id is a global name, and one tree
+/// carries one node per name, so buttons that answered to the same name would
+/// leave every one but the last without a state to draw.
 #[must_use]
-pub fn button_id(destination: Destination) -> Id {
-    Id::new(format!("top-bar-{}", destination.id_name()))
+pub fn button_id(current: Destination, destination: Destination) -> Id {
+    Id::new(format!(
+        "top-bar-{}-{}",
+        current.id_name(),
+        destination.id_name()
+    ))
 }
 
 /// Where a sideways step from the button at `index` lands: one along the bar,
@@ -169,7 +179,7 @@ pub fn view<'a>(bar: &TopBar, on_navigate: fn(Destination) -> Message) -> Elemen
         let button = button::custom(
             icon::icon(icon::from_name(destination.icon_name()).into()).size(ICON_BODY),
         )
-        .id(button_id(destination))
+        .id(button_id(bar.current, destination))
         .width(Length::Fixed(button_size))
         .height(Length::Fixed(button_size))
         .class(nav_button_class(destination == bar.current))
@@ -288,11 +298,26 @@ mod tests {
             assert_eq!(Destination::at(index), Some(*destination));
             assert!(!destination.label().is_empty());
         }
-        for (position, first) in Destination::ALL.iter().enumerate() {
-            for second in Destination::ALL.iter().skip(position + 1) {
-                assert_ne!(button_id(*first), button_id(*second));
+        for current in Destination::ALL {
+            for (position, first) in Destination::ALL.iter().enumerate() {
+                for second in Destination::ALL.iter().skip(position + 1) {
+                    assert_ne!(button_id(current, *first), button_id(current, *second));
+                }
             }
         }
         assert_eq!(Destination::at(Destination::ALL.len()), None);
+    }
+
+    /// The two pages that wear the bar are both in the tree while a change
+    /// fades, so neither page's buttons may answer to the other's names.
+    #[test]
+    fn the_two_pages_that_wear_the_bar_do_not_share_a_button_id() {
+        for destination in Destination::ALL {
+            assert_ne!(
+                button_id(Destination::Dashboard, destination),
+                button_id(Destination::Settings, destination),
+                "destination: {destination:?}",
+            );
+        }
     }
 }

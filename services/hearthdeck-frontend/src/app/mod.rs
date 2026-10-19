@@ -322,6 +322,23 @@ enum Page {
     Settings,
 }
 
+impl Page {
+    /// The destination this page marks as current on the top bar it draws,
+    /// which is what scopes that bar's button ids to the page wearing it - see
+    /// [`top_bar::button_id`] for why the ids carry the page at all.
+    ///
+    /// The two views that wear the bar pass the same destination to
+    /// [`App::top_bar`]; the pages that wear chrome of their own instead - the
+    /// library, and the details screen over it - have none.
+    fn bar_destination(self) -> Option<top_bar::Destination> {
+        match self {
+            Self::Dashboard => Some(top_bar::Destination::Dashboard),
+            Self::Settings => Some(top_bar::Destination::Settings),
+            Self::Library | Self::Details => None,
+        }
+    }
+}
+
 /// One thing the settings screen can ask the daemon to do.
 ///
 /// A list rather than a task per button, because they all end the same way: the
@@ -1696,10 +1713,13 @@ impl App {
     /// Points the renderer's focus at the top bar button the cursor is on,
     /// which is where its focus ring comes from.
     fn focus_bar_button(&self) -> Task<Message> {
+        let Some(current) = self.page.bar_destination() else {
+            return Task::none();
+        };
         self.bar_cursor
             .and_then(top_bar::Destination::at)
             .map_or(Task::none(), |destination| {
-                widget_focus(top_bar::button_id(destination))
+                widget_focus(top_bar::button_id(current, destination))
             })
     }
 
