@@ -130,7 +130,7 @@ fn summary<'a>(status: String, intro: String) -> Element<'a, Message> {
 }
 
 /// A section's buttons, set against its right edge like a COSMIC dialog's.
-fn actions<'a>(buttons: Row<'a, Message>) -> Element<'a, Message> {
+fn actions<'a>(buttons: Row<'a, Message, cosmic::Theme>) -> Element<'a, Message> {
     container(buttons).align_right(Length::Fill).into()
 }
 
@@ -150,7 +150,7 @@ fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
 
     let mut section = settings::section::<Message>().title(fl!("categorization-heading"));
 
-    let (snapshot, actions) = match categorization::section(&panel) {
+    let (snapshot, available_actions) = match categorization::section(&panel) {
         // A feature this installation does not have is said plainly, with what it
         // would need - nothing on offer, because nothing here could work.
         categorization::Section::Unsupported => {
@@ -199,7 +199,7 @@ fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
 
     let mut buttons = row![].spacing(space_s);
     let mut has_buttons = false;
-    for action in actions {
+    for action in available_actions {
         // The switch is its own row above, so it is the one offer that is not a
         // button down here (which is why the `action_*` maps still cover it:
         // the match must stay exhaustive).
