@@ -1,6 +1,6 @@
 use cosmic::Element;
 use cosmic::theme;
-use cosmic::widget::{column, row, settings, text, text_input};
+use cosmic::widget::{row, settings, text, text_input};
 
 use crate::app;
 use crate::fl;
@@ -96,7 +96,7 @@ impl Form {
 pub fn view(form: &Form) -> Element<'_, app::Message> {
     let spacing = theme::spacing();
     let mut url = text_input("http://127.0.0.1:8080", &form.base_url);
-    let mut token = text_input(fl!("romm-token"), &form.token).password();
+    let mut token = text_input(fl!("romm-token"), &form.token);
     if !form.busy {
         url = url
             .on_input(|value| app::Message::Romm(Message::UrlChanged(value)))
@@ -114,30 +114,26 @@ pub fn view(form: &Form) -> Element<'_, app::Message> {
     };
     let mut section = settings::section()
         .title(fl!("romm-heading"))
-        .add(text::body(fl!("romm-intro")))
-        .add(text::body(status))
-        .add(column![text::body(fl!("romm-url")), url].spacing(spacing.space_xs))
-        .add(
-            column![
-                text::body(fl!("romm-token")),
-                row![
-                    token,
-                    super::action_button(
-                        fl!("romm-paste-token"),
-                        app::Message::Romm(Message::PastePressed),
-                        standard_button_class(),
-                        !form.busy,
-                    ),
-                ]
-                .spacing(spacing.space_s),
+        .add(super::summary(status, fl!("romm-intro")))
+        .add(settings::item(fl!("romm-url"), url))
+        .add(settings::item(
+            fl!("romm-token"),
+            row![
+                token,
+                super::action_button(
+                    fl!("romm-paste-token"),
+                    app::Message::Romm(Message::PastePressed),
+                    standard_button_class(),
+                    !form.busy,
+                ),
             ]
-            .spacing(spacing.space_xs),
-        );
+            .spacing(spacing.space_s),
+        ));
     if let Some(error) = &form.error {
         section = section.add(text::caption(fl!("romm-failed", reason = error.as_str())));
     }
     section
-        .add(
+        .add(super::actions(
             row![
                 super::action_button(
                     fl!("romm-save"),
@@ -153,7 +149,7 @@ pub fn view(form: &Form) -> Element<'_, app::Message> {
                 ),
             ]
             .spacing(spacing.space_s),
-        )
+        ))
         .into()
 }
 

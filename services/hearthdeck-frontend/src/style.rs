@@ -301,6 +301,9 @@ pub fn details_action_bar_padding() -> u16 {
 /// Widest the details screen's disc picker panel may grow.
 pub const DETAILS_PICKER_WIDTH: f32 = 460.0;
 
+/// Widest the settings page's column may grow; past this, lines get too long to read from a sofa.
+pub const SETTINGS_MAX_WIDTH: f32 = 960.0;
+
 // ---------------------------------------------------------------------------
 // Top bar & controls
 // ---------------------------------------------------------------------------

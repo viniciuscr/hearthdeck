@@ -279,12 +279,12 @@ disagrees.
 ## Configuring the RomM connection
 
 The COSMIC frontend exposes **Settings > RomM server** with a server URL,
-masked API token, **Save connection**, and **Remove connection**. It reads and
+API token, **Save connection**, and **Remove connection**. It reads and
 writes the existing authenticated `/v1/retro/settings` endpoint; credentials
 remain in the daemon's settings store, not the frontend config. The daemon only
 accepts HTTP(S) loopback URLs (`localhost`, `127.0.0.1`, or `[::1]`).
 
-Use **Paste token** beside the masked field to replace it with the clipboard's
+Use **Paste token** beside the token field to replace it with the clipboard's
 text. An empty or unreadable clipboard leaves the field unchanged and shows an
 error. Keyboard paste and text drops use the same edit handlers as typing.
 

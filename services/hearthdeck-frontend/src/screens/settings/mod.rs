@@ -10,14 +10,14 @@ use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::Length;
 use cosmic::theme;
 use cosmic::theme::Button;
-use cosmic::widget::{button, column, container, row, scrollable, settings, text, toggler};
+use cosmic::widget::{Row, button, column, container, row, scrollable, settings, text};
 
 use crate::app::Message;
 use crate::fl;
 use crate::providers::daemon::{CategorizationPhase, CategorizationSnapshot, ModelStatus};
 use crate::style::{
-    TEXT_BODY, TEXT_TITLE, content_horizontal_padding, destructive_button_class,
-    primary_action_button_class, standard_button_class,
+    SETTINGS_MAX_WIDTH, TEXT_BODY, TEXT_TITLE, content_horizontal_padding,
+    destructive_button_class, primary_action_button_class, standard_button_class,
 };
 use crate::widgets::top_bar;
 
@@ -72,8 +72,12 @@ pub fn view<'a>(
         .scroller_width(0),
     ]
     .spacing(space_l)
-    .padding([space_xl, padding])
+    .max_width(SETTINGS_MAX_WIDTH)
     .height(Length::Fill);
+    // One centered column, like COSMIC Settings: rows stay readable on a wide TV.
+    let sections = container(sections)
+        .center_x(Length::Fill)
+        .padding([space_xl, padding]);
 
     // The bar sits where the dashboard's does: a sibling destination wears the
     // same chrome in the same place, so moving between them moves nothing.
@@ -111,9 +115,23 @@ fn library_and_dashboard<'a>() -> Element<'a, Message> {
     .spacing(space_s);
     settings::section::<Message>()
         .title(fl!("categories-heading"))
-        .add(text::body(fl!("categories-intro")))
-        .add(buttons)
+        .add(text::caption(fl!("categories-intro")))
+        .add(actions(buttons))
         .into()
+}
+
+/// A section's opening row: where things stand, with the why beneath it in the
+/// quieter caption style, the way COSMIC Settings describes a row.
+fn summary<'a>(status: String, intro: String) -> Element<'a, Message> {
+    let Spacing { space_xxs, .. } = theme::spacing();
+    column![text::body(status), text::caption(intro)]
+        .spacing(space_xxs)
+        .into()
+}
+
+/// A section's buttons, set against its right edge like a COSMIC dialog's.
+fn actions<'a>(buttons: Row<'a, Message>) -> Element<'a, Message> {
+    container(buttons).align_right(Length::Fill).into()
 }
 
 /// The smart-categories section: the local model that sorts the library, and
@@ -138,7 +156,7 @@ fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
         categorization::Section::Unsupported => {
             return section
                 .add(text::body(fl!("categorization-unsupported")))
-                .add(text::body(fl!("categorization-unsupported-hint")))
+                .add(text::caption(fl!("categorization-unsupported-hint")))
                 .into();
         }
         categorization::Section::Checking => {
@@ -149,15 +167,14 @@ fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
         categorization::Section::Ready { snapshot, actions } => (snapshot, actions),
     };
 
+    // The switch is a whole pressable row, so the controller can flip it from
+    // anywhere on the line, not only by landing on the toggle itself.
     section = section
-        .add(text::body(fl!(
-            "categorization-intro",
-            size = DOWNLOAD_SIZE
-        )))
-        .add(settings::item(
-            fl!("categorization-toggle"),
-            toggler(snapshot.enabled).on_toggle(Message::SetCategorization),
-        ))
+        .add(
+            settings::item::builder(fl!("categorization-toggle"))
+                .description(fl!("categorization-intro", size = DOWNLOAD_SIZE))
+                .toggler(snapshot.enabled, Message::SetCategorization),
+        )
         .add(text::body(status_line(snapshot)));
 
     if let Some(notice) = state.notice {
@@ -168,11 +185,11 @@ fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
     // on; in the off state the promise is that nothing runs, and a model line
     // with no way to act on it would be noise.
     if snapshot.enabled {
-        section = section.add(text::body(model_line(&snapshot.status.model)));
+        section = section.add(text::caption(model_line(&snapshot.status.model)));
     }
 
     if let Some(report) = snapshot.report.as_ref() {
-        section = section.add(text::body(fl!(
+        section = section.add(text::caption(fl!(
             "categorization-report",
             apps = report.app_count,
             categories = report.categories.len(),
@@ -201,7 +218,7 @@ fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
     // A row with nothing in it still claims its spacing; when the switch is
     // the only offer, the section simply ends above it.
     if has_buttons {
-        section = section.add(buttons);
+        section = section.add(actions(buttons));
     }
     section.into()
 }
@@ -218,15 +235,15 @@ fn stremio<'a>(state: &Settings<'a>) -> Element<'a, Message> {
     let Spacing { space_s, .. } = theme::spacing();
     let flow = state.stremio;
 
-    let mut section = settings::section::<Message>()
-        .title(fl!("stremio-heading"))
-        .add(text::body(fl!("stremio-intro")));
+    let section = settings::section::<Message>().title(fl!("stremio-heading"));
 
     // The code replaces the status line rather than sitting under it: while a
     // link is pending, the code is the only thing on this section worth reading.
-    section = match flow.pending.as_ref() {
-        Some(pending) => section.add(pending_block(pending)),
-        None => section.add(text::body(stremio_status_line(flow))),
+    let mut section = match flow.pending.as_ref() {
+        Some(pending) => section
+            .add(text::caption(fl!("stremio-intro")))
+            .add(pending_block(pending)),
+        None => section.add(summary(stremio_status_line(flow), fl!("stremio-intro"))),
     };
 
     // The failure is the daemon's or Stremio's own words, and it sits beside the
@@ -246,7 +263,7 @@ fn stremio<'a>(state: &Settings<'a>) -> Element<'a, Message> {
         ));
     }
 
-    section.add(buttons).into()
+    section.add(actions(buttons)).into()
 }
 
 /// The code, the link that carries it, and how long is left. The code is drawn
