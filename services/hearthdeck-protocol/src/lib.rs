@@ -12,6 +12,9 @@
 //!   Response types the client deliberately narrows to the fields it draws stay
 //!   client-side; those tolerate daemon additions because serde ignores unknown
 //!   fields, and sharing them would couple the client to fields it never reads.
+//!
+//! The dependency list stays deliberately small, so every process can link this
+//! crate without pulling in a transport or UI stack.
 
 use serde::{Deserialize, Serialize};
 
