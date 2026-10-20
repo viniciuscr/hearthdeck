@@ -5,12 +5,14 @@ use cosmic::widget::{column, row, settings, text, text_input};
 use crate::app;
 use crate::fl;
 use crate::providers::daemon::RommSettings;
-use crate::style::{destructive_button_class, primary_action_button_class};
+use crate::style::{destructive_button_class, primary_action_button_class, standard_button_class};
 
 #[derive(Clone)]
 pub enum Message {
     UrlChanged(String),
     TokenChanged(String),
+    PastePressed,
+    ClipboardRead(Option<String>),
     SavePressed,
     RemovePressed,
     Loaded(Result<Option<RommSettings>, String>),
@@ -96,8 +98,12 @@ pub fn view(form: &Form) -> Element<'_, app::Message> {
     let mut url = text_input("http://127.0.0.1:8080", &form.base_url);
     let mut token = text_input(fl!("romm-token"), &form.token).password();
     if !form.busy {
-        url = url.on_input(|value| app::Message::Romm(Message::UrlChanged(value)));
-        token = token.on_input(|value| app::Message::Romm(Message::TokenChanged(value)));
+        url = url
+            .on_input(|value| app::Message::Romm(Message::UrlChanged(value)))
+            .on_paste(|value| app::Message::Romm(Message::UrlChanged(value)));
+        token = token
+            .on_input(|value| app::Message::Romm(Message::TokenChanged(value)))
+            .on_paste(|value| app::Message::Romm(Message::TokenChanged(value)));
     }
     let status = if form.busy {
         fl!("romm-working")
@@ -111,7 +117,22 @@ pub fn view(form: &Form) -> Element<'_, app::Message> {
         .add(text::body(fl!("romm-intro")))
         .add(text::body(status))
         .add(column![text::body(fl!("romm-url")), url].spacing(spacing.space_xs))
-        .add(column![text::body(fl!("romm-token")), token].spacing(spacing.space_xs));
+        .add(
+            column![
+                text::body(fl!("romm-token")),
+                row![
+                    token,
+                    super::action_button(
+                        fl!("romm-paste-token"),
+                        app::Message::Romm(Message::PastePressed),
+                        standard_button_class(),
+                        !form.busy,
+                    ),
+                ]
+                .spacing(spacing.space_s),
+            ]
+            .spacing(spacing.space_xs),
+        );
     if let Some(error) = &form.error {
         section = section.add(text::caption(fl!("romm-failed", reason = error.as_str())));
     }
@@ -222,6 +243,7 @@ mod tests {
     fn credential_input_is_redacted_from_message_debug_output() {
         for message in [
             Message::TokenChanged("private-secret".into()),
+            Message::ClipboardRead(Some("private-secret".into())),
             Message::UrlChanged("http://user:private-secret@localhost".into()),
         ] {
             assert!(!format!("{message:?}").contains("private-secret"));

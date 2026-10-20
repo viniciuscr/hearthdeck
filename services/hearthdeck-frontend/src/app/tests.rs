@@ -106,6 +106,49 @@ fn romm_settings_replies_restore_the_form_and_save_clears_the_secret() {
 }
 
 #[test]
+fn pasting_a_romm_token_replaces_the_draft_without_changing_the_url() {
+    use settings::romm::Message as Romm;
+
+    let mut app = shell();
+    app.romm.base_url = "http://localhost:8080".into();
+    app.romm.token = "old-token".into();
+    let _ = app.update(Message::Romm(Romm::ClipboardRead(Some(
+        "copied-token".into(),
+    ))));
+    assert_eq!(app.romm.token, "copied-token");
+    assert_eq!(app.romm.base_url, "http://localhost:8080");
+    assert!(app.romm.can_save());
+    assert!(app.romm.error.is_none());
+}
+
+#[test]
+fn an_empty_clipboard_keeps_the_romm_token_and_explains_the_failure() {
+    use settings::romm::Message as Romm;
+
+    for contents in [None, Some(String::new()), Some(" \n\t".into())] {
+        let mut app = shell();
+        app.romm.token = "old-token".into();
+        let _ = app.update(Message::Romm(Romm::ClipboardRead(contents)));
+        assert_eq!(app.romm.token, "old-token");
+        assert!(app.romm.error.is_some());
+    }
+}
+
+#[test]
+fn a_clipboard_reply_cannot_change_a_token_while_saving() {
+    use settings::romm::Message as Romm;
+
+    let mut app = shell();
+    app.romm.token = "submitted-token".into();
+    app.romm.busy = true;
+    let _ = app.update(Message::Romm(Romm::ClipboardRead(Some(
+        "copied-token".into(),
+    ))));
+    assert_eq!(app.romm.token, "submitted-token");
+    assert!(app.romm.busy);
+}
+
+#[test]
 fn pending_romm_requests_cannot_be_overwritten_or_submitted_twice() {
     use settings::romm::Message as Romm;
 

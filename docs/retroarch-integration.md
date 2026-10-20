@@ -284,6 +284,10 @@ writes the existing authenticated `/v1/retro/settings` endpoint; credentials
 remain in the daemon's settings store, not the frontend config. The daemon only
 accepts HTTP(S) loopback URLs (`localhost`, `127.0.0.1`, or `[::1]`).
 
+Use **Paste token** beside the masked field to replace it with the clipboard's
+text. An empty or unreadable clipboard leaves the field unchanged and shows an
+error. Keyboard paste and text drops use the same edit handlers as typing.
+
 The saved token is never returned to the frontend. Editing the connection
 requires entering a token again. Failed writes leave the saved connection and
 the draft intact for retry; successful writes clear the token field and refresh

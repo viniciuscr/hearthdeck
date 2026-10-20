@@ -44,6 +44,29 @@ impl App {
                 }
                 false
             }
+            Romm::PastePressed => {
+                if self.romm.busy {
+                    return Task::none();
+                }
+                return cosmic::iced::clipboard::read().map(|contents| {
+                    cosmic::Action::App(Message::Romm(Romm::ClipboardRead(contents)))
+                });
+            }
+            Romm::ClipboardRead(contents) => {
+                if !self.romm.busy {
+                    match contents {
+                        Some(token) if !token.trim().is_empty() => {
+                            self.romm.token = token;
+                            self.romm.error = None;
+                        }
+                        _ => {
+                            log::warn!("RomM token paste failed: clipboard has no readable text");
+                            self.romm.error = Some(crate::fl!("romm-clipboard-empty"));
+                        }
+                    }
+                }
+                false
+            }
             Romm::Loaded(result) => {
                 self.romm.loaded(result);
                 false
