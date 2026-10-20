@@ -9,6 +9,28 @@ use super::{
     App, CategorizationAction, Message, STREMIO_LINK_POLL_INTERVAL, STREMIO_PUBLISH_SETTLE,
 };
 
+async fn read_wl_paste() -> Option<String> {
+    let output = tokio::process::Command::new("wl-paste")
+        .args(["--no-newline", "--type", "text"])
+        .output()
+        .await;
+    match output {
+        Ok(output) if output.status.success() => String::from_utf8(output.stdout).ok(),
+        Ok(output) => {
+            log::warn!(
+                "wl-paste failed ({}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            None
+        }
+        Err(error) => {
+            log::warn!("wl-paste could not run: {error}");
+            None
+        }
+    }
+}
+
 impl App {
     pub(super) fn load_romm_settings(&mut self) -> Task<Message> {
         if self.romm.busy {
@@ -48,15 +70,23 @@ impl App {
                 if self.romm.busy {
                     return Task::none();
                 }
-                return cosmic::iced::clipboard::read().map(|contents| {
-                    cosmic::Action::App(Message::Romm(Romm::ClipboardRead(contents)))
-                });
+                return cosmic::iced::clipboard::read()
+                    .then(|contents| match contents {
+                        Some(text) if !text.trim().is_empty() => {
+                            cosmic::iced::Task::done(Some(text))
+                        }
+                        // The in-process Wayland clipboard drops its error; wl-paste reads it independently.
+                        _ => cosmic::iced::Task::perform(read_wl_paste(), std::convert::identity),
+                    })
+                    .map(|contents| {
+                        cosmic::Action::App(Message::Romm(Romm::ClipboardRead(contents)))
+                    });
             }
             Romm::ClipboardRead(contents) => {
                 if !self.romm.busy {
                     match contents {
                         Some(token) if !token.trim().is_empty() => {
-                            self.romm.token = token;
+                            self.romm.token = token.trim().to_owned();
                             self.romm.error = None;
                         }
                         _ => {

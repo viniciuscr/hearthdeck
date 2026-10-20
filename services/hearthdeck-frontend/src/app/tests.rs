@@ -113,7 +113,7 @@ fn pasting_a_romm_token_replaces_the_draft_without_changing_the_url() {
     app.romm.base_url = "http://localhost:8080".into();
     app.romm.token = "old-token".into();
     let _ = app.update(Message::Romm(Romm::ClipboardRead(Some(
-        "copied-token".into(),
+        "  copied-token\n".into(),
     ))));
     assert_eq!(app.romm.token, "copied-token");
     assert_eq!(app.romm.base_url, "http://localhost:8080");
