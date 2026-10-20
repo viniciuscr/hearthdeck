@@ -595,10 +595,14 @@ impl AppLibraryConfig {
     /// Whether `entry` launches with the pointer-driving input profile.
     ///
     /// A Desktop application starts there by default, and the per-app toggle
-    /// flips whichever default the application has.
+    /// flips whichever default the application has. Games have no form of their
+    /// own - a console game is always pad-driven, and a PC game keeps the
+    /// explicit toggle alone - so the form default applies to applications only.
     #[must_use]
     pub fn desktop_input_for(&self, entry: &DesktopEntryData) -> bool {
-        self.desktop_input_enabled(&entry.id) ^ (form_factor::of(entry) == FormFactor::Desktop)
+        let desktop_by_default =
+            Section::Applications.matches(entry) && form_factor::of(entry) == FormFactor::Desktop;
+        self.desktop_input_enabled(&entry.id) ^ desktop_by_default
     }
 
     pub fn set_form_override(&mut self, id: &str, form: FormFactor) {
@@ -937,6 +941,21 @@ mod tests {
             "the toggle flips the default"
         );
         assert!(config.desktop_input_for(&stremio));
+    }
+
+    #[test]
+    fn games_keep_the_explicit_input_toggle_alone() {
+        let mut config = AppLibraryConfig::default();
+        let game = entry("epic-game", &["Game"]);
+
+        assert!(
+            !config.desktop_input_for(&game),
+            "a PC game stays pad-driven until the switch says otherwise"
+        );
+
+        config.toggle_desktop_input("epic-game");
+
+        assert!(config.desktop_input_for(&game));
     }
 
     #[test]
