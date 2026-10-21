@@ -41,6 +41,18 @@ pub const TEXT_BODY: f32 = 14.0 * TEXT_SCALE;
 /// Caption text (matches `text::caption`).
 pub const TEXT_CAPTION: f32 = 12.0 * TEXT_SCALE;
 
+/// The class a line that reports a failure wears: the theme's destructive color,
+/// so an error does not read as one more quiet caption.
+///
+/// Resolved at draw time rather than snapshotting the active theme, so a theme
+/// change repaints the line with the rest of the page.
+pub fn error_text_class() -> cosmic::theme::Text {
+    cosmic::theme::Text::Custom(|theme| cosmic::iced::widget::text::Style {
+        color: Some(theme.cosmic().destructive_color().into()),
+        ..cosmic::iced::widget::text::Style::default()
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Motion
 //

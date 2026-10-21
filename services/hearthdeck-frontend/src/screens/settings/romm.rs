@@ -2,13 +2,14 @@ use cosmic::Element;
 use cosmic::iced::Length;
 use cosmic::theme;
 use cosmic::widget::qr_code::{self, QRCode};
-use cosmic::widget::{column, container, dialog, row, settings, text, text_input};
+use cosmic::widget::{column, container, dialog, row, text, text_input};
 
 use crate::app;
 use crate::fl;
 use crate::providers::daemon::{RommLink, RommLinkOffer, RommSettings};
 use crate::style::{
-    TEXT_TITLE, destructive_button_class, primary_action_button_class, standard_button_class,
+    TEXT_BODY, TEXT_TITLE, destructive_button_class, primary_action_button_class,
+    standard_button_class,
 };
 
 /// Side length of one QR cell; large enough to scan off a TV across a room.
@@ -243,7 +244,7 @@ fn romm(message: Message) -> app::Message {
 
 pub fn view(form: &Form) -> Element<'_, app::Message> {
     let spacing = theme::spacing();
-    let mut url = text_input("http://127.0.0.1:8080", &form.base_url);
+    let mut url = text_input("http://127.0.0.1:8080", &form.base_url).size(TEXT_BODY);
     if !form.busy && !form.polling {
         url = url.on_input(|value| romm(Message::UrlChanged(value)));
     }
@@ -254,21 +255,21 @@ pub fn view(form: &Form) -> Element<'_, app::Message> {
     } else {
         fl!("romm-not-configured")
     };
-    let mut section = settings::section()
-        .title(fl!("romm-heading"))
+    let section = super::titled_section(fl!("romm-heading"))
         .add(super::summary(status, fl!("romm-intro")))
-        .add(settings::item(fl!("romm-url"), url));
-    if let Some(pending) = &form.pending {
-        section = section.add(pending_block(pending));
-    }
-    match form.notice {
-        Some(Notice::Expired) => section = section.add(text::caption(fl!("romm-link-expired"))),
-        Some(Notice::Denied) => section = section.add(text::caption(fl!("romm-link-denied"))),
-        None => {}
-    }
-    if let Some(error) = &form.error {
-        section = section.add(text::caption(fl!("romm-failed", reason = error.as_str())));
-    }
+        .add(super::item(fl!("romm-url"), url))
+        .add_maybe(form.pending.as_ref().map(pending_block))
+        .add_maybe(form.notice.map(|notice| {
+            super::body_line(match notice {
+                Notice::Expired => fl!("romm-link-expired"),
+                Notice::Denied => fl!("romm-link-denied"),
+            })
+        }))
+        .add_maybe(
+            form.error
+                .as_ref()
+                .map(|error| super::error_line(fl!("romm-failed", reason = error.as_str()))),
+        );
     section
         .add(super::button_row(
             row![
@@ -299,9 +300,9 @@ pub fn view(form: &Form) -> Element<'_, app::Message> {
 fn pending_block(pending: &Pending) -> Element<'_, app::Message> {
     let spacing = theme::spacing();
     let details = column![
-        text::body(fl!("romm-pending", seconds = pending.seconds_left)),
-        text(pending.code.as_str()).size(TEXT_TITLE),
-        text::caption(pending.link.as_str()),
+        super::body_line(fl!("romm-pending", seconds = pending.seconds_left)),
+        text::title1(pending.code.as_str()).size(TEXT_TITLE),
+        super::caption_line(pending.link.clone()),
     ]
     .spacing(spacing.space_xs);
     let mut body = row![].spacing(spacing.space_m);
@@ -311,6 +312,7 @@ fn pending_block(pending: &Pending) -> Element<'_, app::Message> {
     container(body.push(details))
         .padding(spacing.space_s)
         .width(Length::Fill)
+        .class(theme::Container::Primary)
         .into()
 }
 
@@ -318,8 +320,10 @@ fn pending_block(pending: &Pending) -> Element<'_, app::Message> {
 pub fn sign_in_dialog(form: &Form) -> Option<Element<'_, app::Message>> {
     let sign_in = form.sign_in.as_ref()?;
     let spacing = theme::spacing();
-    let mut username = text_input(fl!("romm-username"), &sign_in.username);
-    let mut password = text_input(fl!("romm-password"), &sign_in.password).password();
+    let mut username = text_input(fl!("romm-username"), &sign_in.username).size(TEXT_BODY);
+    let mut password = text_input(fl!("romm-password"), &sign_in.password)
+        .password()
+        .size(TEXT_BODY);
     if !form.busy {
         username = username.on_input(|value| romm(Message::UsernameChanged(value)));
         password = password
@@ -328,7 +332,10 @@ pub fn sign_in_dialog(form: &Form) -> Option<Element<'_, app::Message>> {
     }
     let mut controls = column![username, password].spacing(spacing.space_s);
     if let Some(error) = &form.error {
-        controls = controls.push(text::caption(fl!("romm-failed", reason = error.as_str())));
+        controls = controls.push(super::error_line(fl!(
+            "romm-failed",
+            reason = error.as_str()
+        )));
     }
     Some(
         dialog()
@@ -466,7 +473,10 @@ mod tests {
         assert!(form.take_credentials().is_none());
 
         assert!(!form.signed_in(Err("RomM refused the credentials".into())));
-        assert!(form.sign_in.is_some(), "a refusal keeps the dialog for retry");
+        assert!(
+            form.sign_in.is_some(),
+            "a refusal keeps the dialog for retry"
+        );
         assert!(form.signed_in(Ok(connection())));
         assert!(form.sign_in.is_none());
         assert!(form.connection.is_some());

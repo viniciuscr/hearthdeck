@@ -10,14 +10,17 @@ use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::Length;
 use cosmic::theme;
 use cosmic::theme::Button;
-use cosmic::widget::{button, column, container, row, scrollable, settings, text};
+use cosmic::widget::{
+    ListColumn, button, column, container, list, row, scrollable, settings, space, text, toggler,
+};
 
 use crate::app::Message;
 use crate::fl;
 use crate::providers::daemon::{CategorizationPhase, CategorizationSnapshot, ModelStatus};
 use crate::style::{
-    SETTINGS_MAX_WIDTH, TEXT_BODY, TEXT_TITLE, content_horizontal_padding,
-    destructive_button_class, primary_action_button_class, standard_button_class,
+    SETTINGS_MAX_WIDTH, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE,
+    content_horizontal_padding, destructive_button_class, error_text_class,
+    primary_action_button_class, standard_button_class,
 };
 use crate::widgets::top_bar;
 
@@ -113,20 +116,99 @@ fn library_and_dashboard<'a>() -> Element<'a, Message> {
         ),
     ]
     .spacing(space_s);
-    settings::section::<Message>()
-        .title(fl!("categories-heading"))
-        .add(text::caption(fl!("categories-intro")))
+    titled_section(fl!("categories-heading"))
+        .add(body_line(fl!("categories-intro")))
         .add(button_row(buttons))
         .into()
 }
 
+// ---------------------------------------------------------------------------
+// The page's own building blocks
+//
+// libcosmic's settings widgets are sized for a laptop: `section` titles at 14px
+// and `item` labels at 14px over a 12px description. A television is read from
+// a sofa, so the page keeps libcosmic's structure - the card, the dividers, the
+// whole-row press behaviour - and supplies the type scale.
+// ---------------------------------------------------------------------------
+
+/// A section with its title in the page's own type scale.
+///
+/// The rows get a little more vertical air than the 8px default: the taller
+/// labels would otherwise sit nearly on the dividers between them.
+fn titled_section<'a>(title: String) -> settings::Section<'a, Message> {
+    let Spacing {
+        space_s, space_m, ..
+    } = theme::spacing();
+    settings::section::with_column(ListColumn::default().list_item_padding([space_s, space_m]))
+        .header(text::title4(title).size(TEXT_HEADER))
+}
+
+/// One settings row: its label on the left, its control against the right edge.
+///
+/// Built on [`settings::item_row`], which is the spacing and alignment
+/// `settings::item` uses, because `item` bakes its desktop label size into the
+/// row with no way to override it. The horizontal spacer is the same one
+/// `settings::item` puts between the two, so a wide control (an input) fills the
+/// space the label does not need.
+fn item<'a>(label: String, control: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    settings::item_row(vec![
+        text::body(label).size(TEXT_LARGE).into(),
+        space::horizontal().into(),
+        control.into(),
+    ])
+    .into()
+}
+
+/// A row whose label carries a sentence beneath it, for a control that needs
+/// explaining: the shape `settings::item::builder` draws, at the page's sizes.
+fn described_item<'a>(
+    label: String,
+    description: String,
+    control: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let Spacing { space_xxs, .. } = theme::spacing();
+    settings::item_row(vec![
+        column![
+            text::body(label).size(TEXT_LARGE),
+            text::body(description).size(TEXT_BODY),
+        ]
+        .spacing(space_xxs)
+        .width(Length::Fill)
+        .into(),
+        control.into(),
+    ])
+    .into()
+}
+
+/// A line of the section's own words: a state, a notice, an explanation.
+fn body_line<'a>(line: String) -> Element<'a, Message> {
+    text::body(line).size(TEXT_BODY).into()
+}
+
+/// A quieter line: fine print the section only reports (a model path, a count).
+fn caption_line<'a>(line: String) -> Element<'a, Message> {
+    text::caption(line).size(TEXT_CAPTION).into()
+}
+
+/// A line that reports a failure: the theme's destructive color, so it does not
+/// read as one more quiet note.
+fn error_line<'a>(line: String) -> Element<'a, Message> {
+    text::body(line)
+        .size(TEXT_BODY)
+        .class(error_text_class())
+        .into()
+}
+
 /// A section's opening row: where things stand, with the why beneath it in the
-/// quieter caption style, the way COSMIC Settings describes a row.
+/// quieter style, the way COSMIC Settings describes a row.
 fn summary<'a>(status: String, intro: String) -> Element<'a, Message> {
     let Spacing { space_xxs, .. } = theme::spacing();
-    column![text::body(status), text::caption(intro)]
-        .spacing(space_xxs)
-        .into()
+    column![
+        text::body(status).size(TEXT_LARGE),
+        text::body(intro).size(TEXT_BODY),
+    ]
+    .spacing(space_xxs)
+    .into()
 }
 
 /// A section's buttons, set against its right edge like a COSMIC dialog's.
@@ -148,20 +230,20 @@ fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
         snapshot: state.categorization,
     };
 
-    let mut section = settings::section::<Message>().title(fl!("categorization-heading"));
+    let section = titled_section(fl!("categorization-heading"));
 
     let (snapshot, actions) = match categorization::section(&panel) {
         // A feature this installation does not have is said plainly, with what it
         // would need - nothing on offer, because nothing here could work.
         categorization::Section::Unsupported => {
             return section
-                .add(text::body(fl!("categorization-unsupported")))
-                .add(text::caption(fl!("categorization-unsupported-hint")))
+                .add(body_line(fl!("categorization-unsupported")))
+                .add(caption_line(fl!("categorization-unsupported-hint")))
                 .into();
         }
         categorization::Section::Checking => {
             return section
-                .add(text::body(fl!("categorization-reading-status")))
+                .add(body_line(fl!("categorization-reading-status")))
                 .into();
         }
         categorization::Section::Ready { snapshot, actions } => (snapshot, actions),
@@ -169,33 +251,35 @@ fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
 
     // The switch is a whole pressable row, so the controller can flip it from
     // anywhere on the line, not only by landing on the toggle itself.
-    section = section
+    let mut section = section
         .add(
-            settings::item::builder(fl!("categorization-toggle"))
-                .description(fl!("categorization-intro", size = DOWNLOAD_SIZE))
-                .toggler(snapshot.enabled, Message::SetCategorization),
+            list::button(described_item(
+                fl!("categorization-toggle"),
+                fl!("categorization-intro", size = DOWNLOAD_SIZE),
+                toggler(snapshot.enabled).on_toggle(Message::SetCategorization),
+            ))
+            .on_press(Message::SetCategorization(!snapshot.enabled)),
         )
-        .add(text::body(status_line(snapshot)));
-
-    if let Some(notice) = state.notice {
-        section = section.add(text::body(notice_line(notice)));
-    }
+        .add(body_line(status_line(snapshot)))
+        .add_maybe(state.notice.map(notice_line));
 
     // Where the model lives is the user's business only while the feature is
     // on; in the off state the promise is that nothing runs, and a model line
     // with no way to act on it would be noise.
-    if snapshot.enabled {
-        section = section.add(text::caption(model_line(&snapshot.status.model)));
-    }
+    section = section.add_maybe(
+        snapshot
+            .enabled
+            .then(|| caption_line(model_line(&snapshot.status.model))),
+    );
 
-    if let Some(report) = snapshot.report.as_ref() {
-        section = section.add(text::caption(fl!(
+    section = section.add_maybe(snapshot.report.as_ref().map(|report| {
+        caption_line(fl!(
             "categorization-report",
             apps = report.app_count,
             categories = report.categories.len(),
             unclassified = report.unclassified.len()
-        )));
-    }
+        ))
+    }));
 
     let mut buttons = row![].spacing(space_s);
     let mut has_buttons = false;
@@ -235,13 +319,13 @@ fn stremio<'a>(state: &Settings<'a>) -> Element<'a, Message> {
     let Spacing { space_s, .. } = theme::spacing();
     let flow = state.stremio;
 
-    let section = settings::section::<Message>().title(fl!("stremio-heading"));
+    let section = titled_section(fl!("stremio-heading"));
 
     // The code replaces the status line rather than sitting under it: while a
     // link is pending, the code is the only thing on this section worth reading.
     let mut section = match flow.pending.as_ref() {
         Some(pending) => section
-            .add(text::caption(fl!("stremio-intro")))
+            .add(body_line(fl!("stremio-intro")))
             .add(pending_block(pending)),
         None => section.add(summary(stremio_status_line(flow), fl!("stremio-intro"))),
     };
@@ -249,9 +333,11 @@ fn stremio<'a>(state: &Settings<'a>) -> Element<'a, Message> {
     // The failure is the daemon's or Stremio's own words, and it sits beside the
     // state rather than replacing it: a refused request did not change what the
     // account is.
-    if let Some(error) = flow.error.as_deref() {
-        section = section.add(text::caption(fl!("stremio-failed", reason = error)));
-    }
+    section = section.add_maybe(
+        flow.error
+            .as_deref()
+            .map(|error| error_line(fl!("stremio-failed", reason = error))),
+    );
 
     let mut buttons = row![].spacing(space_s);
     for action in stremio_link::actions(flow) {
@@ -275,14 +361,15 @@ fn pending_block<'a>(pending: &stremio_link::Pending) -> Element<'a, Message> {
     } = theme::spacing();
     container(
         column![
-            text::body(fl!("stremio-pending", seconds = pending.seconds_left)),
-            text(pending.code.clone()).size(TEXT_TITLE),
-            text::caption(pending.link.clone()),
+            body_line(fl!("stremio-pending", seconds = pending.seconds_left)),
+            text::title1(pending.code.clone()).size(TEXT_TITLE),
+            caption_line(pending.link.clone()),
         ]
         .spacing(space_xs),
     )
     .padding(space_s)
     .width(Length::Fill)
+    .class(theme::Container::Primary)
     .into()
 }
 
@@ -387,18 +474,19 @@ fn action_label(action: categorization::Action, snapshot: &CategorizationSnapsho
     }
 }
 
-/// What the last action did, in the daemon's own words.
-fn notice_line(notice: &categorization::Notice) -> String {
+/// What the last action did, in the daemon's own words. A failure wears the
+/// error style; the rest are ordinary status lines.
+fn notice_line<'a>(notice: &categorization::Notice) -> Element<'a, Message> {
     match notice {
         categorization::Notice::Created(count) => {
             // Bound by value: the `fl!` wrapper forwards raw tokens, so a deref
             // inside the call would read as `*(count.into())`.
             let count = *count;
-            fl!("categorization-collections-created", count = count)
+            body_line(fl!("categorization-collections-created", count = count))
         }
-        categorization::Notice::NoCollections => fl!("categorization-collections-empty"),
+        categorization::Notice::NoCollections => body_line(fl!("categorization-collections-empty")),
         categorization::Notice::Failed(reason) => {
-            fl!("categorization-failed", reason = reason.as_str())
+            error_line(fl!("categorization-failed", reason = reason.as_str()))
         }
     }
 }
