@@ -24,6 +24,7 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
     "wayland",
     "tokio",
     "single-instance",
+    "qr_code",
 ] }
 sctk = { package = "smithay-client-toolkit", version = "0.20.0" }
 

@@ -4160,6 +4160,7 @@ dependencies = [
  "log",
  "num-traits",
  "ouroboros",
+ "qrcode",
  "rustc-hash 2.1.2",
  "thiserror 2.0.19",
  "unicode-segmentation",
@@ -6330,6 +6331,12 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
+
+[[package]]
+name = "qrcode"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "166f136dfdb199f98186f3649cf7a0536534a61417a1a30221b492b4fb60ce3f"
 
 [[package]]
 name = "quick-error"

@@ -238,7 +238,7 @@ pub struct RommCredentials {
     pub token: String,
 }
 
-fn normalize_romm_url(value: &str) -> Result<String> {
+pub(crate) fn normalize_romm_url(value: &str) -> Result<String> {
     let base_url = value.trim().trim_end_matches('/');
     if base_url.is_empty() || base_url.chars().count() > 2048 {
         bail!("RomM URL must contain 1 to 2048 characters");

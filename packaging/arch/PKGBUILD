@@ -7,7 +7,7 @@ pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
 license=('MIT')
-depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'libxkbcommon' 'retroarch' 'sqlite' 'systemd' 'wl-clipboard' 'xorg-xwayland')
+depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'libxkbcommon' 'retroarch' 'sqlite' 'systemd' 'xorg-xwayland')
 makedepends=('clang' 'cmake' 'just' 'libxkbcommon' 'ninja' 'pkgconf' 'rust' 'sqlite')
 # RetroArch runs no emulator without a libretro core. Cores are separate
 # packages upstream (docs.libretro.com/guides/download-cores: distro-packaged

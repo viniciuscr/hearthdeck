@@ -9,28 +9,6 @@ use super::{
     App, CategorizationAction, Message, STREMIO_LINK_POLL_INTERVAL, STREMIO_PUBLISH_SETTLE,
 };
 
-async fn read_wl_paste() -> Option<String> {
-    let output = tokio::process::Command::new("wl-paste")
-        .args(["--no-newline", "--type", "text"])
-        .output()
-        .await;
-    match output {
-        Ok(output) if output.status.success() => String::from_utf8(output.stdout).ok(),
-        Ok(output) => {
-            log::warn!(
-                "wl-paste failed ({}): {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-            None
-        }
-        Err(error) => {
-            log::warn!("wl-paste could not run: {error}");
-            None
-        }
-    }
-}
-
 impl App {
     pub(super) fn load_romm_settings(&mut self) -> Task<Message> {
         if self.romm.busy {
@@ -55,45 +33,8 @@ impl App {
 
         let changed = match message {
             Romm::UrlChanged(value) => {
-                if !self.romm.busy {
+                if !self.romm.busy && !self.romm.polling {
                     self.romm.base_url = value;
-                }
-                false
-            }
-            Romm::TokenChanged(value) => {
-                if !self.romm.busy {
-                    self.romm.token = value;
-                }
-                false
-            }
-            Romm::PastePressed => {
-                if self.romm.busy {
-                    return Task::none();
-                }
-                return cosmic::iced::clipboard::read()
-                    .then(|contents| match contents {
-                        Some(text) if !text.trim().is_empty() => {
-                            cosmic::iced::Task::done(Some(text))
-                        }
-                        // The in-process Wayland clipboard drops its error; wl-paste reads it independently.
-                        _ => cosmic::iced::Task::perform(read_wl_paste(), std::convert::identity),
-                    })
-                    .map(|contents| {
-                        cosmic::Action::App(Message::Romm(Romm::ClipboardRead(contents)))
-                    });
-            }
-            Romm::ClipboardRead(contents) => {
-                if !self.romm.busy {
-                    match contents {
-                        Some(token) if !token.trim().is_empty() => {
-                            self.romm.token = token.trim().to_owned();
-                            self.romm.error = None;
-                        }
-                        _ => {
-                            log::warn!("RomM token paste failed: clipboard has no readable text");
-                            self.romm.error = Some(crate::fl!("romm-clipboard-empty"));
-                        }
-                    }
                 }
                 false
             }
@@ -101,31 +42,81 @@ impl App {
                 self.romm.loaded(result);
                 false
             }
-            Romm::SavePressed => {
-                if !self.romm.can_save() {
+            Romm::ConnectPressed => {
+                if !self.romm.can_connect() {
                     return Task::none();
                 }
-                self.romm.busy = true;
-                self.romm.error = None;
+                self.romm.begin();
                 let client = self.daemon_client.clone();
-                let base_url = self.romm.base_url.clone();
-                let token = self.romm.token.clone();
+                let base_url = self.romm.base_url.trim().to_owned();
                 return Task::perform(
                     async move {
                         client
-                            .save_romm_settings(&base_url, &token)
+                            .start_romm_link(&base_url)
                             .await
                             .map_err(|error| error.to_string())
                     },
-                    |result| cosmic::Action::App(Message::Romm(Romm::Saved(result))),
+                    |result| cosmic::Action::App(Message::Romm(Romm::LinkStarted(result))),
                 );
             }
+            Romm::LinkStarted(result) => {
+                if self.romm.link_started(result) {
+                    return self.poll_romm_link();
+                }
+                false
+            }
+            Romm::LinkPolled(result) => match self.romm.link_polled(result) {
+                settings::romm::Next::PollAgain => return self.poll_romm_link(),
+                settings::romm::Next::Stop => false,
+                settings::romm::Next::Connected => true,
+            },
+            Romm::SignInOpened => {
+                if !self.romm.busy {
+                    self.romm.sign_in = Some(settings::romm::SignIn::default());
+                    self.romm.error = None;
+                }
+                false
+            }
+            Romm::SignInClosed => {
+                if !self.romm.busy {
+                    self.romm.sign_in = None;
+                }
+                false
+            }
+            Romm::UsernameChanged(value) => {
+                if let Some(sign_in) = self.romm.sign_in.as_mut().filter(|_| !self.romm.busy) {
+                    sign_in.username = value;
+                }
+                false
+            }
+            Romm::PasswordChanged(value) => {
+                if let Some(sign_in) = self.romm.sign_in.as_mut().filter(|_| !self.romm.busy) {
+                    sign_in.password = value;
+                }
+                false
+            }
+            Romm::SignInPressed => {
+                let Some((username, password)) = self.romm.take_credentials() else {
+                    return Task::none();
+                };
+                let client = self.daemon_client.clone();
+                let base_url = self.romm.base_url.trim().to_owned();
+                return Task::perform(
+                    async move {
+                        client
+                            .romm_login(&base_url, &username, &password)
+                            .await
+                            .map_err(|error| error.to_string())
+                    },
+                    |result| cosmic::Action::App(Message::Romm(Romm::SignedIn(result))),
+                );
+            }
+            Romm::SignedIn(result) => self.romm.signed_in(result),
             Romm::RemovePressed => {
-                if self.romm.busy || self.romm.connection.is_none() {
+                if self.romm.busy || self.romm.polling || self.romm.connection.is_none() {
                     return Task::none();
                 }
-                self.romm.busy = true;
-                self.romm.error = None;
+                self.romm.begin();
                 let client = self.daemon_client.clone();
                 return Task::perform(
                     async move {
@@ -137,7 +128,6 @@ impl App {
                     |result| cosmic::Action::App(Message::Romm(Romm::Removed(result))),
                 );
             }
-            Romm::Saved(result) => self.romm.saved(result),
             Romm::Removed(result) => self.romm.removed(result),
         };
         if !changed {
@@ -159,6 +149,23 @@ impl App {
         } else {
             Task::none()
         }
+    }
+
+    /// One poll of the pending RomM approval; self-rescheduling like Stremio's.
+    fn poll_romm_link(&self) -> Task<Message> {
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                tokio::time::sleep(STREMIO_LINK_POLL_INTERVAL).await;
+                client
+                    .poll_romm_link()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| {
+                cosmic::Action::App(Message::Romm(settings::romm::Message::LinkPolled(result)))
+            },
+        )
     }
 
     /// Fetches the smart-categories state, which is what the settings screen

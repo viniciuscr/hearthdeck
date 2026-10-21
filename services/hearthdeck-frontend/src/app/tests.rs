@@ -79,7 +79,7 @@ fn entry(id: &str, categories: &[&str]) -> Arc<DesktopEntryData> {
 }
 
 #[test]
-fn romm_settings_replies_restore_the_form_and_save_clears_the_secret() {
+fn a_romm_sign_in_reloads_consoles_and_removal_clears_the_url() {
     use crate::providers::daemon::RommSettings;
     use settings::romm::Message as Romm;
 
@@ -93,59 +93,18 @@ fn romm_settings_replies_restore_the_form_and_save_clears_the_secret() {
     };
     let _ = app.update(Message::Romm(Romm::Loaded(Ok(Some(connection())))));
     assert_eq!(app.romm.base_url, "http://localhost:8080");
-    let _ = app.update(Message::Romm(Romm::TokenChanged("private-token".into())));
-    assert_eq!(app.romm.token, "private-token");
-    let _ = app.update(Message::Romm(Romm::Saved(Ok(connection()))));
-    assert!(app.romm.token.is_empty());
-    assert!(app.romm.connection.is_some());
+    let _ = app.update(Message::Romm(Romm::SignInOpened));
+    let _ = app.update(Message::Romm(Romm::UsernameChanged("admin".into())));
+    let _ = app.update(Message::Romm(Romm::PasswordChanged("hunter2".into())));
+    let _ = app.update(Message::Romm(Romm::SignInPressed));
+    assert!(app.romm.busy);
+    let _ = app.update(Message::Romm(Romm::SignedIn(Ok(connection()))));
+    assert!(app.romm.sign_in.is_none());
     assert!(app.console.entries(&scope).is_empty());
     assert!(app.config.sections.console_games.is_empty());
     let _ = app.update(Message::Romm(Romm::Removed(Ok(()))));
     assert!(app.romm.base_url.is_empty());
     assert!(app.romm.connection.is_none());
-}
-
-#[test]
-fn pasting_a_romm_token_replaces_the_draft_without_changing_the_url() {
-    use settings::romm::Message as Romm;
-
-    let mut app = shell();
-    app.romm.base_url = "http://localhost:8080".into();
-    app.romm.token = "old-token".into();
-    let _ = app.update(Message::Romm(Romm::ClipboardRead(Some(
-        "  copied-token\n".into(),
-    ))));
-    assert_eq!(app.romm.token, "copied-token");
-    assert_eq!(app.romm.base_url, "http://localhost:8080");
-    assert!(app.romm.can_save());
-    assert!(app.romm.error.is_none());
-}
-
-#[test]
-fn an_empty_clipboard_keeps_the_romm_token_and_explains_the_failure() {
-    use settings::romm::Message as Romm;
-
-    for contents in [None, Some(String::new()), Some(" \n\t".into())] {
-        let mut app = shell();
-        app.romm.token = "old-token".into();
-        let _ = app.update(Message::Romm(Romm::ClipboardRead(contents)));
-        assert_eq!(app.romm.token, "old-token");
-        assert!(app.romm.error.is_some());
-    }
-}
-
-#[test]
-fn a_clipboard_reply_cannot_change_a_token_while_saving() {
-    use settings::romm::Message as Romm;
-
-    let mut app = shell();
-    app.romm.token = "submitted-token".into();
-    app.romm.busy = true;
-    let _ = app.update(Message::Romm(Romm::ClipboardRead(Some(
-        "copied-token".into(),
-    ))));
-    assert_eq!(app.romm.token, "submitted-token");
-    assert!(app.romm.busy);
 }
 
 #[test]
@@ -156,17 +115,15 @@ fn pending_romm_requests_cannot_be_overwritten_or_submitted_twice() {
     let _ = app.update(Message::Romm(Romm::UrlChanged(
         "http://localhost:8080".into(),
     )));
-    let _ = app.update(Message::Romm(Romm::TokenChanged("private-token".into())));
-    let _ = app.update(Message::Romm(Romm::SavePressed));
+    let _ = app.update(Message::Romm(Romm::ConnectPressed));
     assert!(app.romm.busy);
     let _ = app.update(Message::Romm(Romm::UrlChanged(
         "http://localhost:9090".into(),
     )));
-    let _ = app.update(Message::Romm(Romm::TokenChanged("other-token".into())));
-    let _ = app.update(Message::Romm(Romm::SavePressed));
+    let _ = app.update(Message::Romm(Romm::SignInOpened));
     assert_eq!(app.romm.base_url, "http://localhost:8080");
-    assert_eq!(app.romm.token, "private-token");
-    assert!(app.romm.busy);
+    assert!(app.romm.sign_in.is_none());
+    assert!(!app.romm.can_connect());
 }
 
 /// The labels of a section's tabs, in the order the strip shows them.
@@ -2096,6 +2053,18 @@ fn back_from_another_page_fades_to_the_dashboard() {
     assert_eq!(app.page, Page::Dashboard);
     let fade = app.page_fade.as_ref().expect("Back should fade home");
     assert_eq!(*fade.origin(), Page::Library);
+}
+
+/// The RomM sign-in dialog is modal, so Back closes it and stays on the page.
+#[test]
+fn back_closes_the_romm_sign_in_dialog_before_leaving_the_page() {
+    let mut app = showing(0);
+    app.romm.sign_in = Some(crate::screens::settings::romm::SignIn::default());
+
+    let _ = app.back();
+
+    assert!(app.romm.sign_in.is_none());
+    assert_eq!(app.page, Page::Library);
 }
 
 /// A section change slides the content column vertically: the section being

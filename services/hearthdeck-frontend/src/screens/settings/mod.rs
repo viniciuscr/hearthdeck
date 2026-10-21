@@ -10,7 +10,7 @@ use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::Length;
 use cosmic::theme;
 use cosmic::theme::Button;
-use cosmic::widget::{Row, button, column, container, row, scrollable, settings, text};
+use cosmic::widget::{button, column, container, row, scrollable, settings, text};
 
 use crate::app::Message;
 use crate::fl;
@@ -116,7 +116,7 @@ fn library_and_dashboard<'a>() -> Element<'a, Message> {
     settings::section::<Message>()
         .title(fl!("categories-heading"))
         .add(text::caption(fl!("categories-intro")))
-        .add(actions(buttons))
+        .add(button_row(buttons))
         .into()
 }
 
@@ -130,7 +130,7 @@ fn summary<'a>(status: String, intro: String) -> Element<'a, Message> {
 }
 
 /// A section's buttons, set against its right edge like a COSMIC dialog's.
-fn actions<'a>(buttons: Row<'a, Message>) -> Element<'a, Message> {
+fn button_row<'a>(buttons: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(buttons).align_right(Length::Fill).into()
 }
 
@@ -218,7 +218,7 @@ fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
     // A row with nothing in it still claims its spacing; when the switch is
     // the only offer, the section simply ends above it.
     if has_buttons {
-        section = section.add(actions(buttons));
+        section = section.add(button_row(buttons));
     }
     section.into()
 }
@@ -263,7 +263,7 @@ fn stremio<'a>(state: &Settings<'a>) -> Element<'a, Message> {
         ));
     }
 
-    section.add(actions(buttons)).into()
+    section.add(button_row(buttons)).into()
 }
 
 /// The code, the link that carries it, and how long is left. The code is drawn

@@ -312,6 +312,32 @@ pub enum StremioLink {
     Linked { connection: StremioConnection },
 }
 
+/// A RomM device code the user approves in RomM's web UI, usually by
+/// scanning `link` with a phone on the same network.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RommLinkOffer {
+    pub code: String,
+    pub link: String,
+    pub expires_in_seconds: u64,
+}
+
+/// Where a pending RomM approval stands. Never carries the token.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RommLink {
+    Idle,
+    Expired,
+    Denied,
+    Waiting {
+        code: String,
+        link: String,
+        seconds_left: u64,
+    },
+    Linked {
+        settings: RommSettings,
+    },
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct CollectionItem {
     pub item_id: String,
@@ -1101,16 +1127,53 @@ impl DaemonClient {
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
-    pub async fn save_romm_settings(
+    /// Signs in to RomM through the daemon, which mints and keeps a client
+    /// token. The password crosses this call once and is stored nowhere.
+    pub async fn romm_login(
         &self,
         base_url: &str,
-        token: &str,
+        username: &str,
+        password: &str,
     ) -> Result<RommSettings, DaemonError> {
         let response = self
             .http
-            .put(self.api_url("/v1/retro/settings"))
+            .post(self.api_url("/v1/retro/login"))
             .headers(self.auth_headers().await?)
-            .json(&serde_json::json!({ "base_url": base_url, "token": token }))
+            .json(&serde_json::json!({
+                "base_url": base_url,
+                "username": username,
+                "password": password,
+            }))
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    /// Asks the daemon for a RomM device code the user approves on a phone.
+    pub async fn start_romm_link(&self, base_url: &str) -> Result<RommLinkOffer, DaemonError> {
+        let response = self
+            .http
+            .post(self.api_url("/v1/retro/link"))
+            .headers(self.auth_headers().await?)
+            .json(&serde_json::json!({ "base_url": base_url }))
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    pub async fn poll_romm_link(&self) -> Result<RommLink, DaemonError> {
+        let response = self
+            .http
+            .get(self.api_url("/v1/retro/link"))
+            .headers(self.auth_headers().await?)
             .send()
             .await
             .map_err(DaemonError::Connection)?;

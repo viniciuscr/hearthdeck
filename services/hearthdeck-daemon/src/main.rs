@@ -12,6 +12,7 @@ mod discovery;
 mod enrichment;
 mod provider_worker;
 mod retro;
+mod romm_link;
 mod settings;
 mod state;
 mod stremio;

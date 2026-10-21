@@ -1136,6 +1136,10 @@ impl Application for App {
         self.view_page(self.page)
     }
 
+    fn dialog(&self) -> Option<Element<'_, Self::Message>> {
+        crate::screens::settings::romm::sign_in_dialog(&self.romm)
+    }
+
     fn subscription(&self) -> Subscription<Self::Message> {
         // The pad and the keyboard feed one message, because they are one
         // vocabulary: a step is a step whichever made it. Neither is acted on

@@ -14,6 +14,7 @@ use crate::{
     database::Database,
     discovery::DiscoveryService,
     enrichment::EnrichmentService,
+    romm_link::DeviceLinkState,
     settings::SettingsRepository,
     stremio::{LinkState, StremioRepository},
 };
@@ -32,6 +33,8 @@ pub struct AppState {
     /// within minutes or not at all.
     pub stremio: StremioRepository,
     pub stremio_link: LinkState,
+    /// The RomM device approval a user may be waiting on.
+    pub romm_link: DeviceLinkState,
     pub discovery: Option<DiscoveryService>,
     pub enrichment: Option<EnrichmentService>,
     /// Always present on Linux. It stays an `Option` for the same reason
@@ -130,6 +133,7 @@ impl AppState {
             settings: SettingsRepository::new(database.pool().clone()),
             stremio: StremioRepository::new(database.pool().clone()),
             stremio_link: LinkState::new(),
+            romm_link: DeviceLinkState::new(),
             discovery: None,
             enrichment: None,
             categorization: None,

@@ -278,21 +278,25 @@ disagrees.
 
 ## Configuring the RomM connection
 
-The COSMIC frontend exposes **Settings > RomM server** with a server URL,
-API token, **Save connection**, and **Remove connection**. It reads and
-writes the existing authenticated `/v1/retro/settings` endpoint; credentials
-remain in the daemon's settings store, not the frontend config. The daemon only
-accepts HTTP(S) loopback URLs (`localhost`, `127.0.0.1`, or `[::1]`).
+The COSMIC frontend exposes **Settings > RomM server** with a server URL and
+three actions. The daemon only accepts HTTP(S) loopback URLs (`localhost`,
+`127.0.0.1`, or `[::1]`), so a password never leaves the box.
 
-Use **Paste token** beside the token field to replace it with the clipboard's
-text. An empty or unreadable clipboard leaves the field unchanged and shows an
-error. Keyboard paste and text drops use the same edit handlers as typing.
+- **Connect with phone** (`POST`/`GET /v1/retro/link`) starts RomM's device
+  flow (`/api/auth/device/init`, `/api/auth/device/token`). The screen shows a
+  QR code, the code and the link; the link swaps the loopback host for the
+  box's LAN address, so it only opens if RomM's port is reachable on the LAN.
+  Otherwise type the code into RomM's web UI on any device that reaches it.
+- **Sign in with password** (`POST /v1/retro/login`) opens a dialog. The daemon
+  exchanges the username and password for a session (`/api/token`), mints a
+  non-expiring client token (`/api/client-tokens`) and forgets the
+  credentials. The account needs editor or admin rights; a viewer gets 403.
+- **Remove connection** (`DELETE /v1/retro/settings`) drops the saved token and
+  cancels a pending device code.
 
-The saved token is never returned to the frontend. Editing the connection
-requires entering a token again. Failed writes leave the saved connection and
-the draft intact for retry; successful writes clear the token field and refresh
-the console source without restarting Hearthdeck. A saved connection is not a
-successful reachability check.
+Only the client token is stored, in the daemon's settings store; it is never
+returned to the frontend. A new connection refreshes the console source
+without restarting Hearthdeck. Back closes the sign-in dialog.
 
 ## Starting the RomM server itself
 

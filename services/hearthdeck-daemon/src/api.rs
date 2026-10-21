@@ -27,8 +27,9 @@ use crate::{
     collections::{self, Collection, CollectionItem},
     diagnostics::{self, RommGame, RommPlatform, RommQueryError},
     retro::RetroLaunchError,
+    romm_link::{self, DeviceOffer, DevicePoll},
     settings::{
-        BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
+        self, BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
     },
     state::{ProviderHealth, ServerEvent, SharedState},
     stremio::{self, LinkOffer, LinkPoll, StremioConnection},
@@ -61,6 +62,8 @@ pub fn router(state: SharedState) -> Router {
                 .put(update_romm_settings)
                 .delete(clear_romm_settings),
         )
+        .route("/v1/retro/login", post(romm_login))
+        .route("/v1/retro/link", post(start_romm_link).get(poll_romm_link))
         .route(
             "/v1/stremio/link",
             post(start_stremio_link).get(poll_stremio_link),
@@ -525,12 +528,99 @@ async fn clear_romm_settings(
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
     authenticate(&state, &headers).await?;
+    state.romm_link.cancel().await;
     state
         .settings
         .clear_romm()
         .await
         .map_err(ApiError::internal)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Signs in to RomM once and keeps only the client token it mints.
+///
+/// The URL is validated before anything is dialled, so a password can only ever
+/// be sent to a loopback RomM.
+async fn romm_login(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<RommLoginRequest>,
+) -> Result<Json<RommSettings>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let base_url =
+        settings::normalize_romm_url(&request.base_url).map_err(ApiError::invalid_romm_settings)?;
+    let token = romm_link::mint_token(&base_url, &request.username, &request.password)
+        .await
+        .map_err(ApiError::romm_link)?;
+    state.romm_link.cancel().await;
+    let saved = state
+        .settings
+        .save_romm(&base_url, &token)
+        .await
+        .map_err(ApiError::internal)?;
+    info!("romm connected with a password sign-in");
+    Ok(Json(saved))
+}
+
+/// The pending RomM approval's answer; like Stremio's, it never carries the token.
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum RommLinkResponse {
+    Idle,
+    Expired,
+    Denied,
+    Waiting {
+        code: String,
+        link: String,
+        seconds_left: u64,
+    },
+    Linked {
+        settings: RommSettings,
+    },
+}
+
+async fn start_romm_link(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<StartRommLinkRequest>,
+) -> Result<Json<DeviceOffer>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let base_url =
+        settings::normalize_romm_url(&request.base_url).map_err(ApiError::invalid_romm_settings)?;
+    let offer = state
+        .romm_link
+        .start(&base_url)
+        .await
+        .map_err(ApiError::romm_link)?;
+    info!(code = %offer.code, "romm device approval started");
+    Ok(Json(offer))
+}
+
+async fn poll_romm_link(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<RommLinkResponse>, ApiError> {
+    authenticate(&state, &headers).await?;
+    let response = match state.romm_link.poll().await.map_err(ApiError::romm_link)? {
+        DevicePoll::Idle => RommLinkResponse::Idle,
+        DevicePoll::Expired => RommLinkResponse::Expired,
+        DevicePoll::Denied => RommLinkResponse::Denied,
+        DevicePoll::Waiting(offer, seconds_left) => RommLinkResponse::Waiting {
+            code: offer.code,
+            link: offer.link,
+            seconds_left,
+        },
+        DevicePoll::Linked { base_url, token } => {
+            let settings = state
+                .settings
+                .save_romm(&base_url, &token)
+                .await
+                .map_err(ApiError::internal)?;
+            info!("romm connected by device approval");
+            RommLinkResponse::Linked { settings }
+        }
+    };
+    Ok(Json(response))
 }
 
 /// The pending-link poll's answer.
@@ -1304,6 +1394,19 @@ struct UpdateRommSettingsRequest {
     token: String,
 }
 
+/// Deliberately not `Debug`: it carries a password.
+#[derive(Deserialize)]
+struct RommLoginRequest {
+    base_url: String,
+    username: String,
+    password: String,
+}
+
+#[derive(Deserialize)]
+struct StartRommLinkRequest {
+    base_url: String,
+}
+
 #[derive(Deserialize)]
 struct RommGamesQuery {
     platform_id: Option<i64>,
@@ -2063,6 +2166,16 @@ impl ApiError {
         }
     }
 
+    /// RomM refused or could not finish a sign-in. `romm_link` builds messages
+    /// that never quote the username, password or token.
+    fn romm_link(error: impl std::fmt::Display) -> Self {
+        Self {
+            status: StatusCode::BAD_GATEWAY,
+            message: error.to_string(),
+            settings: None,
+        }
+    }
+
     fn invalid_romm_settings(error: impl std::fmt::Display) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
@@ -2278,6 +2391,17 @@ mod tests {
             Request::delete("/v1/stremio/settings")
                 .body(Body::empty())
                 .unwrap(),
+            Request::post("/v1/retro/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"base_url":"http://127.0.0.1:8080","username":"u","password":"p"}"#,
+                ))
+                .unwrap(),
+            Request::post("/v1/retro/link")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"base_url":"http://127.0.0.1:8080"}"#))
+                .unwrap(),
+            Request::get("/v1/retro/link").body(Body::empty()).unwrap(),
         ] {
             let method = request.method().clone();
             let path = request.uri().path().to_owned();

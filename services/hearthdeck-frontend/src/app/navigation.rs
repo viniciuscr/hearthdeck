@@ -222,6 +222,12 @@ impl App {
     /// screen and no drawer handles it for itself - they are unwound here, in
     /// the order the surfaces stack, ending on the Dashboard.
     pub(super) fn back(&mut self) -> Task<Message> {
+        // A modal dialog sits over every surface, so Back closes it first.
+        if self.romm.sign_in.is_some() {
+            return self.update(Message::Romm(
+                crate::screens::settings::romm::Message::SignInClosed,
+            ));
+        }
         // A failed launch is a message to read, so it is the innermost surface.
         if self.launch_state.error().is_some() {
             return self.update(Message::DismissLaunch);

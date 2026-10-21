@@ -545,6 +545,73 @@ paths:
       responses:
         '204':
           description: RomM connection removed
+  /v1/retro/login:
+    post:
+      operationId: loginRomm
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RommLogin'
+      responses:
+        '200':
+          description: >-
+            Signed in once, minted a RomM client token and saved it. The username
+            and password are used for that exchange only and never stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RommSettings'
+        '400':
+          description: The RomM URL is not a loopback http(s) URL
+        '502':
+          description: RomM refused the sign-in or could not be reached
+  /v1/retro/link:
+    post:
+      operationId: startRommLink
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [base_url]
+              properties:
+                base_url: { type: string, format: uri, maxLength: 2048 }
+      responses:
+        '200':
+          description: >-
+            A RomM device code and the link a phone opens to approve it. The link
+            uses this box's LAN address so a phone on the same network can reach
+            RomM.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RommLinkOffer'
+        '400':
+          description: The RomM URL is not a loopback http(s) URL
+        '502':
+          description: RomM refused the request or could not be reached
+    get:
+      operationId: pollRommLink
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: >-
+            The pending approval's state. Never carries the token; an approved
+            device is saved and reported as linked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RommLinkStatus'
+        '502':
+          description: RomM could not be reached
   /v1/settings:
     get:
       operationId: getUserSettings
@@ -1183,6 +1250,41 @@ components:
       properties:
         base_url: { type: string, format: uri, maxLength: 2048 }
         token: { type: string, minLength: 1, maxLength: 2048 }
+    RommLogin:
+      type: object
+      required: [base_url, username, password]
+      properties:
+        base_url: { type: string, format: uri, maxLength: 2048 }
+        username: { type: string }
+        password: { type: string, format: password }
+    RommLinkOffer:
+      type: object
+      required: [code, link, expires_in_seconds]
+      properties:
+        code:
+          type: string
+          description: The code the user confirms in RomM's web UI.
+        link: { type: string, format: uri }
+        expires_in_seconds: { type: integer }
+    RommLinkStatus:
+      description: The pending RomM approval's state, tagged by `status`.
+      oneOf:
+        - type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [idle, expired, denied] }
+        - type: object
+          required: [status, code, link, seconds_left]
+          properties:
+            status: { type: string, enum: [waiting] }
+            code: { type: string }
+            link: { type: string, format: uri }
+            seconds_left: { type: integer }
+        - type: object
+          required: [status, settings]
+          properties:
+            status: { type: string, enum: [linked] }
+            settings: { $ref: '#/components/schemas/RommSettings' }
     StremioLinkOffer:
       type: object
       required: [code, link, qr, expires_in_seconds]
