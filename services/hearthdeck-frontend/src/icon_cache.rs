@@ -343,6 +343,26 @@ mod tests {
         assert!(GENERIC_ICON.ends_with("-symbolic"));
     }
 
+    /// Metahub serves part of the poster catalogue as webp, and iced decodes a
+    /// cached poster through the `image` crate. With libcosmic's feature set
+    /// alone (bmp, ico, jpeg, png) the decoder answers "the image format WebP is
+    /// not supported", which is why only the titles whose poster is webp drew
+    /// the placeholder in Continue Watching. The frontend's own `image`
+    /// dependency turns that decoder on; this guesses the format from the bytes
+    /// and decodes, which is what iced's loader does for a cached poster.
+    #[test]
+    fn a_webp_poster_decodes_the_way_the_renderer_loads_one() {
+        let poster = include_bytes!("../data/test/poster.webp");
+
+        let image = image::ImageReader::new(std::io::Cursor::new(poster))
+            .with_guessed_format()
+            .expect("a webp poster has a recognisable signature")
+            .decode()
+            .expect("a webp poster must decode");
+
+        assert_eq!((image.width(), image.height()), (4, 4));
+    }
+
     /// A file the provider resolved is drawn as the image it is, and a symbolic
     /// name keeps the theme's own colouring instead of being rasterized into a
     /// fixed one.

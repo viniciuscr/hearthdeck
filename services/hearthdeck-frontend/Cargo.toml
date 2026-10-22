@@ -58,6 +58,13 @@ gilrs = "0.11.2"
 nix = { version = "0.30", features = ["fs"] }
 cosmic-app-list-config = { git = "https://github.com/pop-os/cosmic-applets", rev = "1aa03111c5cd92051c9af28b43cb1ee9f43dbb25" }
 
+# iced decodes a cached poster through the `image` crate, and libcosmic enables
+# only its bmp/ico/jpeg/png features. Metahub serves part of the poster catalogue
+# as webp, so those covers failed to decode and drew the placeholder while the
+# rest of the rail rendered. This dependency exists to add the `webp` feature to
+# that same crate instance; it is not called from this crate's production code.
+image = { version = "0.25", default-features = false, features = ["webp"] }
+
 # HTTP client for daemon communication
 ureq = "3"
 reqwest.workspace = true
