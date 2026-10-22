@@ -66,7 +66,7 @@ impl App {
         self.page_fade.is_some()
             || self.section_slide.is_some()
             || self.tab_slide.is_some()
-            || self.scroll.is_some()
+            || self.scrolls.is_animating()
     }
 
     /// Applies a section selection: reset the view state, reload the grid and put
@@ -160,7 +160,9 @@ impl App {
     ///
     /// Every focus-driven scroll on every list goes through here, so the grid, the
     /// dashboard rails and the dashboard page all move at one speed instead of each
-    /// surface snapping on its own.
+    /// surface snapping on its own. Each [`ScrollTarget`] eases independently, so a
+    /// step that moves two lists at once - the page down to a rail, and the rail
+    /// sideways to the card - keeps both.
     pub(super) fn animate_scroll_to(
         &mut self,
         target: ScrollTarget,
@@ -168,32 +170,75 @@ impl App {
         to: f32,
     ) -> Task<Message> {
         if (to - from).abs() < 0.5 {
+            self.scrolls.stop(target);
             return scroll_task(target, to);
         }
         self.now = Instant::now();
-        self.scroll = Some(Eased::new(
-            target,
-            from,
-            to,
-            self.now,
-            SCROLL_TRANSITION_DURATION,
-        ));
+        self.scrolls.start(target, from, to, self.now);
         Task::none()
     }
 
-    /// Advances the in-flight eased scroll by one frame: emits the `scroll_to` for
-    /// the interpolated offset, and drops the animation once it has arrived.
+    /// Advances the in-flight eased scrolls by one frame: emits each `scroll_to`
+    /// for the interpolated offset, and drops the ones that have arrived.
     pub(super) fn advance_scroll(&mut self) -> Task<Message> {
-        let Some(scroll) = self.scroll.as_ref() else {
-            return Task::none();
-        };
-        let target = *scroll.target();
-        let value = scroll.value(self.now);
-        let done = scroll.is_done(self.now);
-        if done {
-            self.scroll = None;
-        }
-        scroll_task(target, value)
+        self.scrolls.advance(self.now)
+    }
+}
+
+/// The focus-follow scrolls in flight, one per list.
+///
+/// A single step can move two lists at once: landing on a rail below the fold
+/// scrolls the page to it and the rail sideways to the remembered card. A single
+/// animation slot made the second overwrite the first, which left the card off
+/// screen; keying them by [`ScrollTarget`] lets both travel.
+#[derive(Debug, Default)]
+pub(super) struct Scrolls {
+    in_flight: Vec<Eased<ScrollTarget>>,
+}
+
+impl Scrolls {
+    /// Whether any list is still easing.
+    pub(super) fn is_animating(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+
+    /// Starts easing `target` from `from` to `to`, replacing any travel that list
+    /// already had in flight.
+    pub(super) fn start(&mut self, target: ScrollTarget, from: f32, to: f32, now: Instant) {
+        self.stop(target);
+        self.in_flight.push(Eased::new(
+            target,
+            from,
+            to,
+            now,
+            SCROLL_TRANSITION_DURATION,
+        ));
+    }
+
+    /// Drops `target`'s travel, if it has one.
+    pub(super) fn stop(&mut self, target: ScrollTarget) {
+        self.in_flight.retain(|scroll| *scroll.target() != target);
+    }
+
+    /// Advances every scroll by one frame, emitting one `scroll_to` per list and
+    /// dropping the ones that have arrived.
+    pub(super) fn advance(&mut self, now: Instant) -> Task<Message> {
+        let mut tasks = Vec::with_capacity(self.in_flight.len());
+        self.in_flight.retain(|scroll| {
+            let target = *scroll.target();
+            tasks.push(scroll_task(target, scroll.value(now)));
+            !scroll.is_done(now)
+        });
+        Task::batch(tasks)
+    }
+
+    /// The lists currently easing, for tests that assert one step moved two.
+    #[cfg(test)]
+    pub(super) fn targets(&self) -> Vec<ScrollTarget> {
+        self.in_flight
+            .iter()
+            .map(|scroll| *scroll.target())
+            .collect()
     }
 }
 

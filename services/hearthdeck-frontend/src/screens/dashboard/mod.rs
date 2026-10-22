@@ -28,7 +28,7 @@ use crate::providers::daemon::{
 };
 use crate::style::{
     DASHBOARD_GAME_ASPECT, content_horizontal_padding, dashboard_console_tile_size,
-    dashboard_tile_size, sidebar_width,
+    dashboard_tile_size,
 };
 use crate::widgets::application::{LABEL_HEIGHT, Selection, TileLabel, app_label, app_tile};
 use crate::widgets::rail::rail;
@@ -322,20 +322,22 @@ const RAIL_TITLE_HEIGHT: f32 = 40.0;
 /// The scrollable would report its own width, but only once it has scrolled, and
 /// a rail nobody has scrolled has none - so this is derived from the window the
 /// same way [`dashboard_tile_size`] already derives a card, which is the same
-/// approximation. The scrollable clamps what it is handed, so being a few pixels
-/// out costs a few pixels of over-scroll rather than a card the pad cannot reach.
+/// approximation. The dashboard is the whole window - it has no sidebar - so the
+/// rail gets the page's padded content width. The scrollable clamps what it is
+/// handed, so being a few pixels out costs a few pixels of over-scroll rather
+/// than a card the pad cannot reach.
 #[must_use]
 pub fn rail_viewport(window_width: f32) -> f32 {
-    (window_width - sidebar_width(window_width) - 2.0 * f32::from(content_horizontal_padding()))
-        .max(1.0)
+    (window_width - 2.0 * f32::from(content_horizontal_padding())).max(1.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         Card, RAIL_TITLE_HEIGHT, Shelf, card_selection, focus, focused_label, rail_heights,
-        shelf_metrics,
+        rail_viewport, shelf_metrics,
     };
+    use crate::style::content_horizontal_padding;
     use crate::widgets::application::{LABEL_HEIGHT, Selection};
     use cosmic::theme;
     use cosmic::widget::{Id, icon};
@@ -401,6 +403,19 @@ mod tests {
             RAIL_TITLE_HEIGHT + f32::from(theme::spacing().space_m) + size + LABEL_HEIGHT,
             "a rail is measured as exactly what its column stacks: the title, the gap under it, \
              its cards, and the name line below them",
+        );
+    }
+
+    #[test]
+    fn a_rail_gets_the_dashboards_whole_padded_width() {
+        // The dashboard is the whole window and has no sidebar, so a rail is
+        // only inset by the page's own horizontal padding. Measuring it as if a
+        // sidebar were there made every rail scroll before its last visible
+        // card had left the screen.
+        let window_width = 1200.0;
+        assert_eq!(
+            rail_viewport(window_width),
+            window_width - 2.0 * f32::from(content_horizontal_padding()),
         );
     }
 

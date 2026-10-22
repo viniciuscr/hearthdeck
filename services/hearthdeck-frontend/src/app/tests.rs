@@ -18,7 +18,7 @@ fn shell() -> App {
         now: Instant::now(),
         section_slide: None,
         tab_slide: None,
-        scroll: None,
+        scrolls: Scrolls::default(),
         config: AppLibraryConfig::default(),
         config_store: None,
         daemon_client: DaemonClient::new(DaemonConfig {
@@ -1095,6 +1095,60 @@ fn the_pad_walks_the_dashboard_rail() {
     assert_eq!(app.page, Page::Dashboard, "the launch does not navigate");
 }
 
+/// One step can move two lists: landing on a rail below the fold scrolls the
+/// page down to it and that rail across to the remembered card. The two easings
+/// have to coexist; when the page replaced the rail, the cursor landed on a card
+/// no one could see.
+#[test]
+fn a_step_into_an_offscreen_rail_eases_the_page_and_the_rail_together() {
+    let mut app = two_rails();
+    app.dashboard_cursor = dashboard::focus::Cursor {
+        rail: 0,
+        card: 8,
+        remembered: 8,
+    };
+
+    send(&mut app, GamepadEvent::MoveDown);
+
+    let targets = app.scrolls.targets();
+    assert!(
+        targets.contains(&ScrollTarget::Rail(1)),
+        "the rail follows the remembered card: {targets:?}"
+    );
+    assert!(
+        targets.contains(&ScrollTarget::Page),
+        "and the page follows the rail: {targets:?}"
+    );
+}
+
+/// The rail below the fold keeps following the cursor sideways after the page
+/// has settled on it - the step's page scroll must not take the rail's scroll
+/// with it on every move.
+#[test]
+fn a_rail_below_the_fold_still_follows_the_cursor_sideways() {
+    let mut app = two_rails();
+    send(&mut app, GamepadEvent::MoveDown);
+    settle(&mut app);
+    assert_eq!(
+        app.dashboard_cursor,
+        dashboard::focus::Cursor {
+            rail: 1,
+            card: 0,
+            remembered: 0,
+        }
+    );
+
+    for _ in 0..5 {
+        send(&mut app, GamepadEvent::MoveRight);
+    }
+
+    assert_eq!(
+        app.scrolls.targets(),
+        vec![ScrollTarget::Rail(1)],
+        "the fifth card leaves the rail's view, so the rail is the only list moving"
+    );
+}
+
 /// A rail card draws the icon its own item carries, resolved by the provider,
 /// and never one looked up in this client's library by item id.
 ///
@@ -1169,6 +1223,22 @@ fn collection(slug: &str, name: Option<&str>, ids: &[&str]) -> Collection {
             })
             .collect(),
     }
+}
+
+/// A shell whose dashboard has two twelve-card rails, the second below the fold.
+/// The rails are wide enough to scroll sideways, which is what the follow cares
+/// about, and tall enough that the second one needs the page to move.
+fn two_rails() -> App {
+    let mut app = loaded(1);
+    let ids: Vec<String> = (0..12)
+        .map(|index| format!("hearthdeck:game-{index}"))
+        .collect();
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+        collection("last-played", None, &ids),
+        collection("stremio:continue-watching", None, &ids),
+    ])));
+    app
 }
 
 /// The dashboard's rails are the daemon's collections - so a collection this
@@ -2195,18 +2265,21 @@ fn a_focus_step_eases_the_grid_to_its_row() {
         send(&mut app, GamepadEvent::MoveDown);
     }
     assert!(
-        app.scroll.is_none(),
+        !app.scrolls.is_animating(),
         "a step inside the viewport drags nothing"
     );
 
     send(&mut app, GamepadEvent::MoveDown);
 
-    let scroll = app.scroll.as_ref().expect("the grid should be easing");
-    assert_eq!(*scroll.target(), ScrollTarget::Grid);
+    assert_eq!(
+        app.scrolls.targets(),
+        vec![ScrollTarget::Grid],
+        "the grid should be easing"
+    );
     assert!(app.is_animating(), "and the frames are subscribed for it");
 
     settle(&mut app);
-    assert!(app.scroll.is_none(), "arriving drops the animation");
+    assert!(!app.scrolls.is_animating(), "arriving drops the animation");
 }
 
 /// The daemon is often not answering yet when the app starts; a failed read used
