@@ -1,0 +1,33 @@
+[Unit]
+Description=Hearthdeck on-screen keyboard for the Hearthdeck session
+# Same lifecycle contract as hearthdeck-overlay.service: nothing else owns
+# this client, and without the target tie it outlives the compositor it is
+# drawn on - a user manager that stays up across a sign-out keeps it running
+# against a display that is gone. Tied to the target, a session boundary
+# stops it instead.
+PartOf=hearthdeck.target
+# cosmic-osk is an optional dependency (PKGBUILD optdepends). Without the
+# binary the condition skips the unit rather than failing it, so an install
+# without the OSK never restart-loops here.
+ConditionPathExists=/usr/bin/cosmic-osk
+# Never rate-limit the retries: WAYLAND_DISPLAY reaches the user manager only
+# when cosmic-comp is ready, and a slow GPU start (the known EBUSY retry loop
+# in hearthdeck-session) can take longer than systemd's default start limit,
+# which would leave the unit permanently failed and the OSK silently missing.
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/cosmic-osk
+# Same activation-environment race as hearthdeck-overlay.service: cosmic-comp
+# imports WAYLAND_DISPLAY/DISPLAY into the systemd --user activation
+# environment once it is ready, which is after this unit's first start attempt
+# in packaging/arch/hearthdeck-session. Restart with a short delay retries
+# until that environment actually exists instead of needing a polling
+# mechanism. Always restart because this is a persistent session service; a
+# clean unexpected exit must not leave the session without a keyboard.
+Restart=always
+RestartSec=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hearthdeck-osk

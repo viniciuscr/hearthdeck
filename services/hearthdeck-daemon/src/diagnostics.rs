@@ -1509,6 +1509,45 @@ mod tests {
         assert!(justfile.contains("cp deploy/systemd/romm.path"));
     }
 
+    /// The gamepad's only path into a text field is cosmic-osk, and what makes
+    /// it appear is spread across the three files a package ships: the session
+    /// seeds the show/hide config (both keys default to off upstream) and
+    /// starts the unit, the unit carries the compositor's start race and stops
+    /// with the session, and the package installs the unit and declares the
+    /// optional binary. Drop any one and a TV has no keyboard anyone can type
+    /// on, with nothing in the logs to say why.
+    #[test]
+    fn session_seeds_and_starts_the_optional_on_screen_keyboard() {
+        let session = include_str!("../../../packaging/arch/hearthdeck-session");
+        let service = include_str!("../../../packaging/arch/hearthdeck-osk.service");
+        let package = include_str!("../../../packaging/arch/PKGBUILD");
+
+        // Focus-driven show/hide needs ime_activation, the Start+Select
+        // summon needs gamepad_shortcut; each seed must write the key itself
+        // and only where the user has not already set a value.
+        assert!(session.contains("\"$osk_state/ime_activation\""));
+        assert!(session.contains("\"$osk_state/gamepad_shortcut\""));
+        assert!(session.contains("systemctl --user start hearthdeck-osk.service"));
+
+        assert!(service.contains("ExecStart=/usr/bin/cosmic-osk"));
+        assert!(service.contains("Restart=always"));
+        // Nothing else owns this unit, so without the target tie it outlives
+        // the compositor it draws on - the overlay's contract, for the same
+        // reason.
+        assert!(service.contains("PartOf=hearthdeck.target"));
+        // The binary is an optdepend: a missing one must skip the unit, never
+        // fail it into a restart loop.
+        assert!(service.contains("ConditionPathExists=/usr/bin/cosmic-osk"));
+        // cosmic-comp imports WAYLAND_DISPLAY only once it is ready, and its
+        // GPU EBUSY retry loop can outlast systemd's default start rate limit,
+        // which would leave the unit permanently failed and the session
+        // without its keyboard.
+        assert!(service.contains("StartLimitIntervalSec=0"));
+
+        assert!(package.contains("install -Dm644 packaging/arch/hearthdeck-osk.service"));
+        assert!(package.contains("'cosmic-osk: "));
+    }
+
     /// A packaged unit is the deploy unit it is derived from, with one difference:
     /// it runs the installed binary under `/usr/lib` instead of the source
     /// checkout's `~/.local/bin`. Restating a unit in two files is how the packaged
