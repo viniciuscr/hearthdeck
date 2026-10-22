@@ -1511,25 +1511,36 @@ mod tests {
 
     /// The gamepad's only path into a text field is cosmic-osk, and what makes
     /// it appear is spread across the three files a package ships: the session
-    /// seeds the show/hide config (both keys default to off upstream) and
-    /// starts the unit, the unit carries the compositor's start race and stops
-    /// with the session, and the package installs the unit and declares the
-    /// optional binary. Drop any one and a TV has no keyboard anyone can type
-    /// on, with nothing in the logs to say why.
+    /// seeds the one show/hide behavior that fits this session (and turns off
+    /// the one that collides with it) and starts the unit, the unit asks for a
+    /// layer the fullscreen frontend does not hide, carries the compositor's
+    /// start race and stops with the session, and the package installs the unit
+    /// and declares the optional binary. Drop any one and a TV has no keyboard
+    /// anyone can type on, with nothing in the logs to say why.
     #[test]
     fn session_seeds_and_starts_the_optional_on_screen_keyboard() {
         let session = include_str!("../../../packaging/arch/hearthdeck-session");
         let service = include_str!("../../../packaging/arch/hearthdeck-osk.service");
         let package = include_str!("../../../packaging/arch/PKGBUILD");
 
-        // Focus-driven show/hide needs ime_activation, the Start+Select
-        // summon needs gamepad_shortcut; each seed must write the key itself
-        // and only where the user has not already set a value.
-        assert!(session.contains("\"$osk_state/ime_activation\""));
-        assert!(session.contains("\"$osk_state/gamepad_shortcut\""));
+        // Focus-driven show/hide is the only trigger that works in this
+        // session, and it defaults off upstream: seed ime_activation, but only
+        // where the user has not already set a value.
+        assert!(session.contains(
+            "[ -e \"$osk_state/ime_activation\" ] || printf 'true' > \"$osk_state/ime_activation\""
+        ));
+        // cosmic-osk's gamepad_shortcut is hardcoded to Start+Select. Select is
+        // the library's filter button and Start+Select is the RetroArch menu
+        // chord this session pins, so the setting is forced off every session
+        // rather than seeded - a stale `true` is the conflict itself.
+        assert!(session.contains("printf 'false' > \"$osk_state/gamepad_shortcut\""));
         assert!(session.contains("systemctl --user start hearthdeck-osk.service"));
 
-        assert!(service.contains("ExecStart=/usr/bin/cosmic-osk"));
+        // `overlay` is not optional decoration: cosmic-comp renders no Top
+        // layer at all while a fullscreen window has focus, and the Hearthdeck
+        // frontend is exactly that. Without it the OSK is created, logs
+        // "get_layer_surface", and is visible nowhere.
+        assert!(service.contains("ExecStart=/usr/bin/cosmic-osk overlay"));
         assert!(service.contains("Restart=always"));
         // Nothing else owns this unit, so without the target tie it outlives
         // the compositor it draws on - the overlay's contract, for the same

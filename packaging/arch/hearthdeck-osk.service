@@ -18,7 +18,15 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=exec
-ExecStart=/usr/bin/cosmic-osk
+# `overlay` puts the keyboard on the compositor's Overlay layer instead of its
+# default Top layer, and on this session that is the difference between a
+# keyboard nobody can see and one that works: the Hearthdeck frontend is the
+# kiosk's fullscreen client, and cosmic-comp does not render Top-layer surfaces
+# at all while a fullscreen window holds focus. It does render Overlay ones, so
+# the keyboard is drawn over the frontend instead of behind it. The subcommand
+# changes only the layer: focus-driven show/hide still decides *whether* it is
+# on screen.
+ExecStart=/usr/bin/cosmic-osk overlay
 # Same activation-environment race as hearthdeck-overlay.service: cosmic-comp
 # imports WAYLAND_DISPLAY/DISPLAY into the systemd --user activation
 # environment once it is ready, which is after this unit's first start attempt
