@@ -15,7 +15,7 @@ use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
 use crate::app_group::Section;
 use crate::motion::{Eased, Fade, Step};
 use crate::screens::dashboard;
-use crate::screens::library::grid;
+use crate::screens::library::{grid, header};
 use crate::style::{PAGE_TRANSITION_DURATION, SCROLL_TRANSITION_DURATION};
 
 use super::{App, Message, Page};
@@ -92,15 +92,23 @@ impl App {
         self.facet_selection.clear();
         self.facets.clear();
         self.filter_open = false;
-        if section == Section::ConsoleGames {
+        // The strip holds a different section's tabs now, so it goes back to its
+        // start rather than keeping the offset of a strip that no longer exists.
+        let strip = self.reset_tab_strip();
+        let listed = if section == Section::ConsoleGames {
             // The console grid's facets and records both come from the daemon; it
             // is the one source that loads asynchronously.
             self.refilter();
-            return Task::batch([self.ensure_console_scope(), self.load_facets()]);
-        }
-        self.rebuild_local_facets();
-        self.refilter();
-        self.list_replaced()
+            Task::batch([self.ensure_console_scope(), self.load_facets()])
+        } else {
+            self.rebuild_local_facets();
+            self.refilter();
+            self.list_replaced()
+        };
+        // The follow reads the facets the section just rebuilt, because they are
+        // what decides whether the strip shares its row with the filter button.
+        let reveal = self.reveal_tab(header::tab_index(group));
+        Task::batch([listed, strip, reveal])
     }
 
     /// Applies a tab (group) selection, the same way and for the same reasons as
@@ -110,13 +118,15 @@ impl App {
         self.facet_selection.clear();
         self.facets.clear();
         self.filter_open = false;
-        if self.cur_section == Section::ConsoleGames {
+        let listed = if self.cur_section == Section::ConsoleGames {
             self.refilter();
-            return Task::batch([self.ensure_console_scope(), self.load_facets()]);
-        }
-        self.rebuild_local_facets();
-        self.refilter();
-        self.list_replaced()
+            Task::batch([self.ensure_console_scope(), self.load_facets()])
+        } else {
+            self.rebuild_local_facets();
+            self.refilter();
+            self.list_replaced()
+        };
+        Task::batch([listed, self.reveal_tab(header::tab_index(group))])
     }
 
     /// Drives the section slide: apply the pending section under the opaque cover
@@ -252,6 +262,8 @@ impl Scrolls {
 pub(super) enum ScrollTarget {
     /// The library grid, which scrolls vertically by row.
     Grid,
+    /// The library's tab strip, which scrolls horizontally by tab.
+    Tabs,
     /// One dashboard rail, which scrolls horizontally by card.
     Rail(usize),
     /// The dashboard page, which scrolls vertically by rail.
@@ -262,6 +274,7 @@ pub(super) enum ScrollTarget {
 fn scroll_task(target: ScrollTarget, offset: f32) -> Task<Message> {
     match target {
         ScrollTarget::Grid => grid::scroll_to_offset(offset),
+        ScrollTarget::Tabs => scroll_tabs(offset),
         ScrollTarget::Rail(rail) => scroll_rail(rail, offset),
         ScrollTarget::Page => dashboard::scroll_to_page(offset),
     }
@@ -297,6 +310,17 @@ pub(super) fn section_direction(from: Section, to: Section) -> f32 {
 fn scroll_rail(rail: usize, offset: f32) -> Task<Message> {
     scroll_to(
         dashboard::rail_id(rail),
+        AbsoluteOffset {
+            x: Some(offset),
+            y: None,
+        },
+    )
+}
+
+/// Scrolls the library's tab strip sideways, the only axis it has.
+fn scroll_tabs(offset: f32) -> Task<Message> {
+    scroll_to(
+        header::tab_strip_id(),
         AbsoluteOffset {
             x: Some(offset),
             y: None,

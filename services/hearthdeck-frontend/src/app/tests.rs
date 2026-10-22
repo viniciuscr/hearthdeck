@@ -46,6 +46,7 @@ fn shell() -> App {
         bar_cursor: None,
         rail_offsets: Vec::new(),
         page_offset: 0.0,
+        tabs_offset: 0.0,
         search_value: String::new(),
         user_name: String::new(),
         disk_free: String::new(),
@@ -750,6 +751,112 @@ fn the_ring_walks_the_chrome_and_comes_back_to_the_content() {
     // the content instead of moving along it.
     send(&mut app, GamepadEvent::MoveDown);
     assert_eq!(app.cursors.ring, None);
+}
+
+/// A library whose section carries more tabs than its strip can show at once:
+/// the far ones start off the right edge.
+fn showing_a_long_tab_strip() -> App {
+    let mut app = showing(4);
+    for name in [
+        "Nintendo Entertainment System",
+        "Super Nintendo Entertainment System",
+        "Nintendo 64",
+        "Game Boy Advance",
+        "Sega Mega Drive",
+        "Sony PlayStation",
+    ] {
+        add_user_group(&mut app, Section::PcGames, name);
+    }
+    app
+}
+
+/// Whether tab `index` sits entirely inside the strip's visible width, measured
+/// the way the follow measures it.
+fn tab_is_on_screen(app: &App, index: usize) -> bool {
+    let widths = header::tab_widths(app.cur_section, app.config.sections.get(app.cur_section));
+    let viewport = header::tab_viewport(app.window_width, !app.facets.is_empty());
+    let gap = f32::from(theme::spacing().space_m);
+    let start = widths.iter().take(index).sum::<f32>() + index as f32 * gap;
+    start >= app.tabs_offset - 0.5 && start + widths[index] <= app.tabs_offset + viewport + 0.5
+}
+
+/// Triggering through the tabs scrolls the strip once the selection reaches its
+/// edge, so the highlight cannot walk off the right of the window.
+#[test]
+fn a_tab_past_the_strips_edge_scrolls_the_strip_to_it() {
+    let mut app = showing_a_long_tab_strip();
+    assert_eq!(app.tabs_offset, 0.0, "the strip starts at its beginning");
+
+    // The first group's tab is already in view, so the strip stays put for it:
+    // the row does not move until the selection reaches the edge.
+    send(&mut app, GamepadEvent::NextTab);
+    settle(&mut app);
+    assert_eq!(app.tabs_offset, 0.0, "the strip moved for a tab on screen");
+
+    for _ in 0..5 {
+        send(&mut app, GamepadEvent::NextTab);
+        settle(&mut app);
+    }
+
+    assert_eq!(app.cur_group, Some(5), "the last group's tab is selected");
+    assert!(
+        app.tabs_offset > 0.0,
+        "the strip never followed the selection"
+    );
+    assert!(
+        tab_is_on_screen(&app, 6),
+        "the selected tab is off screen at {}",
+        app.tabs_offset
+    );
+}
+
+/// The keyboard's ring walks the same tabs, so a tab it stops on has to be
+/// brought into view the same way - the ring is a cursor on the chrome, and a
+/// cursor the user cannot see is not a cursor.
+#[test]
+fn the_ring_brings_the_tab_it_stops_on_into_view() {
+    let mut app = showing_a_long_tab_strip();
+
+    // Backwards enters the ring at its last stop, which without a filter button
+    // is the last tab.
+    let _ = app.update(Message::ChromePrevious);
+
+    assert_eq!(
+        app.cursors.ring,
+        Some(focus::ring_len(app.layout()) - 1),
+        "the ring is on the last stop"
+    );
+    assert_eq!(
+        app.scrolls.targets(),
+        vec![ScrollTarget::Tabs],
+        "the strip eases to the tab rather than snapping"
+    );
+    assert!(
+        tab_is_on_screen(&app, 6),
+        "the tab the ring is on is off screen at {}",
+        app.tabs_offset
+    );
+}
+
+/// The strip belongs to the section on screen: switching sections puts the new
+/// one's strip back at its start instead of leaving it scrolled where the old
+/// tabs ended.
+#[test]
+fn a_new_section_starts_its_strip_at_the_beginning() {
+    let mut app = showing_a_long_tab_strip();
+    for _ in 0..6 {
+        send(&mut app, GamepadEvent::NextTab);
+        settle(&mut app);
+    }
+    assert!(app.tabs_offset > 0.0);
+
+    let _ = app.update(Message::SelectSection(Section::Applications));
+    settle(&mut app);
+
+    assert_eq!(
+        app.tabs_offset, 0.0,
+        "the new section's strip kept the old one's offset"
+    );
 }
 
 /// The search button puts the caret in the box without taking the pad out of

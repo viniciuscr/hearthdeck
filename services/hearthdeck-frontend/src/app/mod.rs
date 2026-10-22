@@ -269,6 +269,9 @@ pub enum Message {
     /// offset is: the follow needs to know whether the focused rail would leave
     /// the view.
     PageScrolled(f32),
+    /// The library's tab strip scrolled: remembered, so the next tab the
+    /// selection lands on can be told whether it would leave the view.
+    TabsScrolled(f32),
     /// A navigation event, from the pad or from the keyboard - both speak this
     /// one vocabulary, so there is a single place that moves the cursor.
     GamepadEvent(GamepadEvent),
@@ -451,6 +454,10 @@ pub struct App {
     /// same way each rail needs its own offset: the dashboard is a stack of rails
     /// and only some of it is on screen.
     page_offset: f32,
+    /// Where the library's tab strip is scrolled to. The follow needs it for the
+    /// same reason a rail needs its offset: the strip only moves when the tab
+    /// the selection lands on would leave the view.
+    tabs_offset: f32,
     search_value: String,
     user_name: String,
     /// Free space on the home filesystem, as the last poll read it. Blank until
@@ -549,6 +556,7 @@ impl Application for App {
             bar_cursor: None,
             rail_offsets: Vec::new(),
             page_offset: 0.0,
+            tabs_offset: 0.0,
             search_value: String::new(),
             user_name: crate::system_status::current_user_name(),
             disk_free: String::new(),
@@ -905,6 +913,7 @@ impl Application for App {
             } => return self.settle_details_flag(rom_id, flag, previous, result),
             Message::RailScrolled { rail, offset } => self.set_rail_offset(rail, offset),
             Message::PageScrolled(offset) => self.page_offset = offset,
+            Message::TabsScrolled(offset) => self.tabs_offset = offset,
             Message::OpenDashboard => {
                 // Landing on a page hands the cursor to its content, so neither
                 // the library's ring nor the bar's row survives the trip.
