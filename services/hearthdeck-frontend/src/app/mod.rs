@@ -40,13 +40,13 @@ use cosmic::theme;
 use cosmic::widget::{Id, button, column, container, context_drawer, icon, row, space, text};
 use cosmic::{Application, Element};
 
-use crate::app::animation::{ScrollTarget, section_direction, tab_direction};
+use crate::app::animation::{Scrolls, section_direction, tab_direction};
 use crate::app_group::{AppLibraryConfig, RommFacet, Section, section_facets};
 use crate::fl;
 use crate::form_factor::{self, FormFactor};
 use crate::input_ownership::{Event as InputEvent, InputOwnership};
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState, Overlay};
-use crate::motion::{Eased, Fade, Slide};
+use crate::motion::{Fade, Slide};
 use crate::providers::daemon::{Collection, DaemonClient, DaemonConfig, RetroDetails};
 use crate::providers::filter::Facet;
 use crate::screens::dashboard::{self};
@@ -272,6 +272,9 @@ pub enum Message {
     /// offset is: the follow needs to know whether the focused rail would leave
     /// the view.
     PageScrolled(f32),
+    /// The library's tab strip scrolled: remembered, so the next tab the
+    /// selection lands on can be told whether it would leave the view.
+    TabsScrolled(f32),
     /// A navigation event, from the pad or from the keyboard - both speak this
     /// one vocabulary, so there is a single place that moves the cursor.
     GamepadEvent(GamepadEvent),
@@ -380,8 +383,8 @@ pub struct App {
     /// The tab (group) this one slides to, while the slide runs. The same rule:
     /// the current tab stays until the cover is opaque.
     tab_slide: Option<Slide<Option<usize>>>,
-    /// The eased focus-follow scroll in flight, if any.
-    scroll: Option<Eased<ScrollTarget>>,
+    /// The eased focus-follow scrolls in flight, one per list.
+    scrolls: Scrolls,
     config: AppLibraryConfig,
     /// The config file the shell writes through, resolved once at startup so the
     /// shell has exactly one write target. `None` when there is no store to
@@ -461,6 +464,10 @@ pub struct App {
     /// same way each rail needs its own offset: the dashboard is a stack of rails
     /// and only some of it is on screen.
     page_offset: f32,
+    /// Where the library's tab strip is scrolled to. The follow needs it for the
+    /// same reason a rail needs its offset: the strip only moves when the tab
+    /// the selection lands on would leave the view.
+    tabs_offset: f32,
     search_value: String,
     user_name: String,
     /// Free space on the home filesystem, as the last poll read it. Blank until
@@ -536,7 +543,7 @@ impl Application for App {
             now: Instant::now(),
             section_slide: None,
             tab_slide: None,
-            scroll: None,
+            scrolls: Scrolls::default(),
             config,
             config_store,
             daemon_client,
@@ -563,6 +570,7 @@ impl Application for App {
             bar_cursor: None,
             rail_offsets: Vec::new(),
             page_offset: 0.0,
+            tabs_offset: 0.0,
             search_value: String::new(),
             user_name: crate::system_status::current_user_name(),
             disk_free: String::new(),
@@ -920,13 +928,9 @@ impl Application for App {
                 previous,
                 result,
             } => return self.settle_details_flag(rom_id, flag, previous, result),
-            Message::RailScrolled { rail, offset } => {
-                if self.rail_offsets.len() <= rail {
-                    self.rail_offsets.resize(rail + 1, 0.0);
-                }
-                self.rail_offsets[rail] = offset;
-            }
+            Message::RailScrolled { rail, offset } => self.set_rail_offset(rail, offset),
             Message::PageScrolled(offset) => self.page_offset = offset,
+            Message::TabsScrolled(offset) => self.tabs_offset = offset,
             Message::OpenDashboard => {
                 // Landing on a page hands the cursor to its content, so neither
                 // the library's ring nor the bar's row survives the trip.

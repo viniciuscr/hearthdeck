@@ -321,6 +321,34 @@ impl App {
         ))
     }
 
+    /// Scrolls the tab strip so the tab at `index` is on screen.
+    ///
+    /// The strip follows the selection the way a dashboard rail follows its
+    /// card: it moves only when the tab the selection lands on would leave the
+    /// visible width, and then pins it to the nearest edge. Where it is *going*
+    /// is recorded before the animation starts, because a scroll the shell
+    /// drives does not come back as an `on_scroll` event - the same reason the
+    /// dashboard remembers each rail's offset.
+    pub(super) fn reveal_tab(&mut self, index: usize) -> Task<Message> {
+        let widths =
+            header::tab_widths(self.cur_section, self.config.sections.get(self.cur_section));
+        let viewport = header::tab_viewport(self.window_width, !self.facets.is_empty());
+        let from = self.tabs_offset;
+        let Some(offset) = header::tab_scroll_target(&widths, index, from, viewport) else {
+            return Task::none();
+        };
+        self.tabs_offset = offset;
+        self.animate_scroll_to(ScrollTarget::Tabs, from, offset)
+    }
+
+    /// Puts the tab strip back at its start, for when the section above it
+    /// changes and the strip holds a different set of tabs altogether.
+    pub(super) fn reset_tab_strip(&mut self) -> Task<Message> {
+        let from = self.tabs_offset;
+        self.tabs_offset = 0.0;
+        self.animate_scroll_to(ScrollTarget::Tabs, from, 0.0)
+    }
+
     /// One stop along the chrome ring, which is how a keyboard reaches what the
     /// pad reaches by a button. Walking past an end hands the cursor back to the
     /// content, which is where the pad always leaves it.
@@ -337,7 +365,18 @@ impl App {
         }
         if self.page == Page::Library {
             self.cursors.ring = focus::ring_step(self.cursors.ring, backwards, self.layout());
-            return self.focus_task();
+            let focus = self.focus_task();
+            // A tab the ring stops on is a tab the user is looking at, so the
+            // strip follows it the way it follows a selection.
+            let reveal = match self
+                .cursors
+                .ring
+                .and_then(|index| focus::ring_at(index, self.layout()))
+            {
+                Some(Chrome::Tab(index)) => self.reveal_tab(index),
+                _ => Task::none(),
+            };
+            return Task::batch([focus, reveal]);
         }
         self.bar_cursor = top_bar::ring_step(self.bar_cursor, backwards);
         match self.bar_cursor {

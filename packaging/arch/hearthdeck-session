@@ -107,19 +107,27 @@ log "session-critical services are up"
 systemctl --user start hearthdeck-overlay.service || true
 
 # The on-screen keyboard is the gamepad's way into any text field. cosmic-osk
-# ships both show/hide behaviors as config - focus-driven show/hide needs
-# ime_activation, the Start+Select summon needs gamepad_shortcut - and its
-# defaults are off, so seed them once: only where the user has not already
-# written a value, the same contract as the shortcut helper above. Seeding
-# only matters when the optional cosmic-osk binary is installed; the unit's
-# ConditionPathExists skips it otherwise. The start belongs with the overlay's:
-# both are layer-shell clients racing the same activation environment, and the
-# unit's restart policy absorbs that the same way.
+# ships both show/hide behaviors as config, and they are not equivalent here:
+#   - ime_activation makes the keyboard follow text input focus, which is the
+#     only path that works inside Hearthdeck. Seed it once, only where the user
+#     has not already written a value, the same contract as the shortcut helper
+#     above.
+#   - gamepad_shortcut hardcodes Start+Select, and both halves are already
+#     spoken for: Select opens the library's filter drawer, and Start+Select is
+#     the RetroArch menu chord this session pins on purpose (docs/arch-package.md,
+#     decision 9 in docs/retroarch-integration.md). Left on, the keyboard also
+#     pops up over the emulator every time its menu opens. It is written every
+#     session, not seeded, because a leftover `true` from a package that set it
+#     is exactly the conflict this line removes.
+# Seeding only matters when the optional cosmic-osk binary is installed; the
+# unit's ConditionPathExists skips it otherwise. The start belongs with the
+# overlay's: both are layer-shell clients racing the same activation
+# environment, and the unit's restart policy absorbs that the same way.
 if command -v cosmic-osk >/dev/null; then
   osk_state="${XDG_STATE_HOME:-$HOME/.local/state}/cosmic/com.system76.CosmicOSK/v1"
   mkdir -p "$osk_state"
   [ -e "$osk_state/ime_activation" ] || printf 'true' > "$osk_state/ime_activation"
-  [ -e "$osk_state/gamepad_shortcut" ] || printf 'true' > "$osk_state/gamepad_shortcut"
+  printf 'false' > "$osk_state/gamepad_shortcut"
 fi
 systemctl --user start hearthdeck-osk.service || true
 

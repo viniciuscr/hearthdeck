@@ -253,6 +253,10 @@ impl App {
             card_width,
             gap,
         ) {
+            // Remember where the rail is going now, not where the renderer last
+            // reported it: a scroll the shell drives does not come back as an
+            // `on_scroll` event, and the next step has to measure against it.
+            self.set_rail_offset(rail, offset);
             tasks.push(self.animate_scroll_to(ScrollTarget::Rail(rail), rail_offset, offset));
         }
 
@@ -272,10 +276,24 @@ impl App {
             page_viewport,
         ) {
             let from = self.page_offset;
+            // The same reason the rail remembers its target: the page's next
+            // follow step must measure against where this one is sending it.
+            self.page_offset = offset;
             tasks.push(self.animate_scroll_to(ScrollTarget::Page, from, offset));
         }
 
         Task::batch(tasks)
+    }
+
+    /// Records where a rail has been sent, growing the list as rails appear.
+    ///
+    /// Both the shell's own follow scrolls and the rail's `on_scroll` reports go
+    /// through here, so "where is this rail" has one writer and one shape.
+    pub(super) fn set_rail_offset(&mut self, rail: usize, offset: f32) {
+        if self.rail_offsets.len() <= rail {
+            self.rail_offsets.resize(rail + 1, 0.0);
+        }
+        self.rail_offsets[rail] = offset;
     }
 
     /// Fetches the dashboard's collections, which are what its rails are made of.
