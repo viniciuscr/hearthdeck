@@ -89,8 +89,10 @@ paths:
         - bearerAuth: []
       description: >-
         The dashboard's collections in composition order. A membership
-        collection lists its stored items; a rule collection (currently
-        `last-played`) has its items derived by the daemon on every read.
+        collection lists its stored items; a rule collection has its items
+        derived by the daemon on every read. `stremio:new-arrivals` is the one
+        collection a client draws as a hero banner rather than as a rail — its
+        items carry the wide art a banner draws with.
       responses:
         '200':
           description: The dashboard's collections
@@ -1040,6 +1042,14 @@ components:
         item_id: { type: string }
         name: { type: string }
         icon: { type: [string, 'null'] }
+        background:
+          type: [string, 'null']
+          description: >-
+            Wide artwork for a hero banner, present only on the items of a
+            collection that carries art — `stremio:new-arrivals` today. A rail
+            card draws `icon` and has none of the three fields below.
+        logo: { type: [string, 'null'], description: The title's own wordmark, drawn over `background`. }
+        description: { type: [string, 'null'], description: A one-line synopsis of the title. }
         played:
           allOf:
             - $ref: '#/components/schemas/RecentActivity'

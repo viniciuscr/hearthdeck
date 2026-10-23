@@ -84,6 +84,14 @@ pub const SECTION_TRANSITION_DURATION: Duration = Duration::from_millis(300);
 /// long enough to read as motion, short enough not to lag the D-pad.
 pub const SCROLL_TRANSITION_DURATION: Duration = Duration::from_millis(220);
 
+/// How long the dashboard's hero banner holds one slide before moving on.
+///
+/// Long enough to read a wordmark and a line of synopsis, short enough that a
+/// banner nobody is looking at comes round again before anyone misses it. The
+/// banner only advances while the pad is elsewhere, so this is the pace of the
+/// page's own idle motion rather than of anything the user is on.
+pub const HERO_SLIDE_INTERVAL: Duration = Duration::from_secs(8);
+
 // ---------------------------------------------------------------------------
 // Window & layout (proportional — sizes computed from window_width)
 // ---------------------------------------------------------------------------
@@ -254,6 +262,18 @@ pub fn dashboard_console_tile_size(
     tile_gap: u16,
 ) -> f32 {
     dashboard_tile_size(window_width, horizontal_padding, tile_gap) / 2.0
+}
+
+/// The share of the window's height the dashboard's hero banner takes. A third
+/// of the screen is what makes a banner read as one; half of it is a page.
+pub const HERO_HEIGHT_RATIO: f32 = 0.3;
+
+/// The height the dashboard's hero banner takes on a window `window_height`
+/// tall. The banner spans the window's whole width, so only its height has to
+/// be proportioned.
+#[must_use]
+pub fn hero_height(window_height: f32) -> f32 {
+    window_height * HERO_HEIGHT_RATIO
 }
 
 // ---------------------------------------------------------------------------

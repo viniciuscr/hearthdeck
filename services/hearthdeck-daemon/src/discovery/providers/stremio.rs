@@ -311,7 +311,7 @@ fn season_episode(item: &Value, id: &str) -> Option<(u64, u64)> {
 ///
 /// Records in one library carried both `/poster/small/` and `/poster/medium/` for
 /// the same kind of item, and a dashboard card wants the larger one.
-fn poster(item: &Value) -> Option<String> {
+pub(crate) fn poster(item: &Value) -> Option<String> {
     let poster = item.get("poster").and_then(Value::as_str)?.trim();
     if poster.is_empty() {
         return None;
@@ -326,7 +326,7 @@ fn poster(item: &Value) -> Option<String> {
 /// launch time — which the user sees only as a launch that failed, with nothing
 /// saying why. Resolved once per refresh, so an app installed later is picked up on
 /// the next one.
-async fn desktop_entry_for_stremio(bridge_socket_path: &Path) -> Option<String> {
+pub(crate) async fn desktop_entry_for_stremio(bridge_socket_path: &Path) -> Option<String> {
     let response = bridge::request(
         bridge_socket_path,
         BridgeRequest::DiscoverApplications {

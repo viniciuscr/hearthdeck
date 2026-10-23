@@ -231,6 +231,15 @@ fn discovery_providers(
             stremio,
             config.bridge_socket_path.clone(),
         )),
+        // Publishes what has just arrived on Stremio, for the dashboard's hero
+        // banner. Anonymous — it reads a public addon catalog, not the account —
+        // but it needs the bridge for the same reason as above: a banner slide
+        // launches the Stremio desktop entry.
+        Arc::new(
+            discovery::providers::stremio_arrivals::StremioArrivalsProvider::new(
+                config.bridge_socket_path.clone(),
+            ),
+        ),
     ]
 }
 
@@ -404,6 +413,9 @@ async fn seed_dev_database() -> Result<()> {
                 icon: Some(
                     "https://cdn.cloudflare.steamstatic.com/steam/apps/1245620/header.jpg".into(),
                 ),
+                background: None,
+                logo: None,
+                description: None,
                 played: None,
             },
         )
@@ -419,6 +431,9 @@ async fn seed_dev_database() -> Result<()> {
                 icon: Some(
                     "https://cdn.cloudflare.steamstatic.com/steam/apps/1091500/header.jpg".into(),
                 ),
+                background: None,
+                logo: None,
+                description: None,
                 played: None,
             },
         )

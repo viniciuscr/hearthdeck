@@ -8,7 +8,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use hearthdeck_protocol::{ApplicationSource, DiscoveredApplication, HeroicRunner, InputProfile};
+use hearthdeck_protocol::{
+    ApplicationSource, DiscoveredApplication, HeroicRunner, InputProfile, StremioMediaType,
+};
 use tokio::net::UnixDatagram;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
@@ -167,9 +169,10 @@ pub async fn launch_application(
 pub async fn launch_stremio_title(
     application_id: &str,
     video_id: &str,
+    media_type: StremioMediaType,
     session_id: &str,
 ) -> Result<LaunchedApplication> {
-    let uri = stremio_detail_uri(video_id)?;
+    let uri = stremio_detail_uri(video_id, media_type)?;
     let path = desktop_entry_path(DESKTOP_APPS_SOURCE, application_id).await?;
     let launch = command_for_desktop_entry(&path).await?;
     // The entry's command, with the URI where its `%u` field code was. Stremio reads it
@@ -185,12 +188,14 @@ pub async fn launch_stremio_title(
     .await
 }
 
-/// The `stremio://` URI for a video id, built from that id alone.
+/// The `stremio://` URI for a video id, built from that id and what the title is.
 ///
 /// `tt0373074` is a film; `tt0149460:4:7` is season 4, episode 7 of a series. The shape
 /// is the one Stremio's own web UI parses, and it was verified against the installed
-/// app: both forms open the title's page rather than the home screen.
-fn stremio_detail_uri(video_id: &str) -> Result<String> {
+/// app: both forms open the title's page rather than the home screen. A bare id names a
+/// film or a series only as `media_type` says — the same number is a different page for
+/// each — so that form carries the type into the route instead of guessing it.
+fn stremio_detail_uri(video_id: &str, media_type: StremioMediaType) -> Result<String> {
     let mut parts = video_id.split(':');
     let base = parts.next().unwrap_or_default();
     if !is_imdb_id(base) {
@@ -202,7 +207,7 @@ fn stremio_detail_uri(video_id: &str) -> Result<String> {
         bail!("a video id has at most a season and an episode")
     }
     match (season, episode) {
-        (None, None) => Ok(format!("stremio:///detail/movie/{base}")),
+        (None, None) => Ok(format!("stremio:///detail/{}/{base}", media_type.as_str())),
         (Some(season), Some(episode)) => {
             if !is_small_number(season) || !is_small_number(episode) {
                 bail!("a season and an episode must be numbers")
@@ -235,21 +240,38 @@ fn is_small_number(value: &str) -> bool {
 #[cfg(test)]
 mod stremio_uri_tests {
     use super::stremio_detail_uri;
+    use hearthdeck_protocol::StremioMediaType;
 
     #[test]
     fn a_film_opens_its_own_page_and_a_series_opens_its_episode() {
         assert_eq!(
-            stremio_detail_uri("tt0373074").unwrap(),
+            stremio_detail_uri("tt0373074", StremioMediaType::Movie).unwrap(),
             "stremio:///detail/movie/tt0373074"
         );
         assert_eq!(
-            stremio_detail_uri("tt0149460:4:7").unwrap(),
+            stremio_detail_uri("tt0149460:4:7", StremioMediaType::Series).unwrap(),
             "stremio:///detail/series/tt0149460/tt0149460:4:7"
         );
         // A season with a multi-digit episode, which Stremio itself produces.
         assert_eq!(
-            stremio_detail_uri("tt2654620:2:10").unwrap(),
+            stremio_detail_uri("tt2654620:2:10", StremioMediaType::Series).unwrap(),
             "stremio:///detail/series/tt2654620/tt2654620:2:10"
+        );
+    }
+
+    /// A new arrival has no episode to name, and is a film or a series only as its
+    /// record says: the same bare number is a different page for each, so the type
+    /// travels into the route's own segment. An id that does carry an episode is a
+    /// series whatever the type says — the episode half is the stronger claim.
+    #[test]
+    fn a_bare_id_opens_the_kind_of_title_the_record_says() {
+        assert_eq!(
+            stremio_detail_uri("tt0373074", StremioMediaType::Series).unwrap(),
+            "stremio:///detail/series/tt0373074"
+        );
+        assert_eq!(
+            stremio_detail_uri("tt0149460:4:7", StremioMediaType::Movie).unwrap(),
+            "stremio:///detail/series/tt0149460/tt0149460:4:7"
         );
     }
 
@@ -271,7 +293,7 @@ mod stremio_uri_tests {
             "stremio:///detail/movie/tt0149460",
         ] {
             assert!(
-                stremio_detail_uri(refused).is_err(),
+                stremio_detail_uri(refused, StremioMediaType::Movie).is_err(),
                 "{refused} should be refused"
             );
         }

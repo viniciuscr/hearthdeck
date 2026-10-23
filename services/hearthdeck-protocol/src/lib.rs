@@ -20,6 +20,31 @@ use serde::{Deserialize, Serialize};
 
 pub mod paths;
 
+/// Whether a Stremio title is a film or a series.
+///
+/// The detail route is `stremio:///detail/<type>/<id>`, so an id without an
+/// episode needs its type to name the right title: the same `tt` number is a
+/// different page for a film and for a series. A `tt:s:e` video id already says
+/// series on its own, so this only decides the bare-id form.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StremioMediaType {
+    #[default]
+    Movie,
+    Series,
+}
+
+impl StremioMediaType {
+    /// The segment the detail route wears.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Movie => "movie",
+            Self::Series => "series",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BridgeRequest {
@@ -49,6 +74,12 @@ pub enum BridgeRequest {
     LaunchStremioTitle {
         application_id: String,
         video_id: String,
+        /// What the title is, for the bare-id form above: `tt1234567` is a film
+        /// when this says film and a series when it says series. Absent on the
+        /// wire means a film, which is what every record sent before this field
+        /// existed was.
+        #[serde(default)]
+        media_type: StremioMediaType,
         session_id: String,
         #[serde(default)]
         input_profile: InputProfile,

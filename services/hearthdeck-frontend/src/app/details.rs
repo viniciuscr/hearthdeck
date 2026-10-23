@@ -282,6 +282,9 @@ fn flag_write_task(client: DaemonClient, write: FlagWrite) -> Task<Message> {
                 item_id: format!("romm:{rom_id}"),
                 name: title,
                 icon: None,
+                background: None,
+                logo: None,
+                description: None,
             };
             let membership = if value {
                 client.add_collection_item(collection, &item).await

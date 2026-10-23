@@ -156,6 +156,30 @@ Stremio's own home row uses (`CATALOG_PREVIEW_SIZE`).
 `timeOffset` and `duration` are **milliseconds** — confirmed, not assumed: 54
 durations were ≥ 100 000 and **zero** fell in the seconds range.
 
+### New arrivals: the Cinemeta catalog
+
+"What just arrived" is not in the account datastore — that holds what the person
+already has — so it is read from an addon catalog instead. Cinemeta
+(`com.linvo.cinemeta`, the metadata addon Stremio itself ships against) answers it
+anonymously: addon identity is the manifest URL, every call is a plain `GET`, and
+nothing about the account travels with it.
+
+| Checked | Result |
+| --- | --- |
+| `GET https://v3-cinemeta.strem.io/manifest.json` | **live** — `resources: [catalog, meta, addon_catalog]`, `types: [movie, series]`, `idPrefixes: [tt]` |
+| `v3-cinemeta.stremio.com` | **does not resolve** — the host everybody quotes is wrong; the addon is on `v3-cinemeta.strem.io` |
+| Catalogs | `top` (Popular), `year` (**New**, `extraRequired: [genre]` where the options are release years), `imdbRating` (Featured), `last-videos` / `calendar-videos` (id-list lookups) |
+| `GET .../catalog/movie/year/genre=2026.json` | **live** — full Meta objects in `metas`, not previews |
+| Shape of a meta | `id`, `imdb_id`, `type`, `name`, `poster`, `logo`, `background`, `releaseInfo`, `year`, `description`, `genres`, `cast`, `director`, `runtime`, `imdbRating`, `released`, `popularity`, `links` |
+| Ordering | recency-weighted, **not** newest-first: one page listed an October 9 title before October 14/15 ones |
+| Paging | `skip=` answered Cloudflare 504 on both attempts, so the tail of a bucket is unverified and unread |
+
+That is why "recently added" is not a thing the addon protocol has: there is no
+`sort` extra and no `last` catalog id, only an addon's own choice of catalog id.
+What the daemon reads is the **year bucket** — the current year and the previous
+one, so a January dashboard is not an empty banner — and it does the recency
+ordering itself from each meta's `released` date.
+
 ## The traps
 
 These were all observed in real data. Each one silently produces a wrong rail.
@@ -207,6 +231,19 @@ These were all observed in real data. Each one silently produces a wrong rail.
   the app, the bridge did not and refused every launch. The bridge no longer looks the
   entry up at all — the request carries the id discovery already produced, and the
   bridge validates it exactly as it validates any application id.
+
+- **The year catalog is a bucket, not a recency feed.** It is ordered by a blend
+  of release date and popularity, so a client that trusts its order draws a banner
+  that is nearly-newest rather than newest. The daemon sorts by `released`, and
+  falls back to the addon's own order only for the metas nobody dated.
+- **A bucket's type is not a filter.** A series appeared inside the `movie` bucket.
+  What a meta says it is decides what it is.
+- **A meta's id is not always a title id.** Cinemeta prefixes its ids with `tt`,
+  but the library also held `yt_id:` entries; an arrival only counts if its id is
+  an IMDb one, because that is what a launch can name.
+- **`logo` and `background` are populated on arrival metas** even though they were
+  absent on every Continue Watching record. That is the one dependable wide art
+  this feature has — a portrait poster cannot carry a 30 %-tall banner.
 
 ## Schema drift against `stremio-core`
 
@@ -276,6 +313,28 @@ authoritative would drop usable fields:
 10. **Unlinking removes both the credential and the catalog rows** that source
     owns, so a stale rail cannot outlive the account it came from.
 
+11. **New arrivals are read from Cinemeta's "New" catalog, not from the account.**
+    The datastore cannot answer "what just arrived" — it holds what is already
+    there — and the addon protocol is right for exactly that question. The
+    `StremioArrivalsProvider` (`source_id: "stremio-arrivals"`) reads two year
+    buckets for both types, sorts by release, caps at ten, and publishes them as
+    catalog records that launch like the account's own. **Implemented.**
+
+12. **The banner is its own collection**, `stremio:new-arrivals`, seeded beside
+    `stremio:continue-watching` and resolved from those records. `CollectionItem`
+    gained the three fields a banner needs and a rail does not — `background`,
+    `logo`, `description` — and every existing rail still sends none of them. The
+    client draws that slug as the hero over the rails rather than as a rail, so
+    which collection that is stays the daemon's decision. **Implemented.**
+
+13. **A title's launch carries its type.** `LaunchStremioTitle` gained
+    `media_type`, because `stremio:///detail/<type>/<id>` names a different page
+    for a film and for a series, and a bare IMDb id says which only with the
+    record's own type. An id carrying a season and an episode is still a series
+    whatever the type says. **Implemented.** The bare-id series URI is the route
+    form without an episode segment and is **not yet seen on hardware**; the film
+    and episode forms are. See Open questions.
+
 ## Protocol and data model changes
 
 Schema changes are hand-written in `database.rs::migrate()` — there is no
@@ -311,6 +370,14 @@ existing `collections` table upgrade does.
   whatever it carries, which is why the rail is its own shelf rather than a value to
   pick here (Phase 5, built).
 
+- **`CollectionItem` gained `background`, `logo` and `description`** (all
+  optional, and absent on every rail): the art a banner draws with. Only
+  `stremio:new-arrivals` fills them, and both art references go through the
+  client's one place that turns a reference into something drawable.
+- **`BridgeRequest::LaunchStremioTitle` gained `media_type`** (`movie` or
+  `series`; absent on the wire means film, which is what every record sent before
+  the field existed was). See decision 13.
+
 ## Open questions
 
 1. **Does `stremio://` resume actually work, and in what exact form?** The
@@ -336,6 +403,11 @@ existing `collections` table upgrade does.
 7. **`docs/code-review-roadmap.md` is referenced from three places but does not
    exist.** Unrelated to this feature, but the docs map should stop pointing at
    a missing file.
+8. **Does `stremio:///detail/series/<tt>` open the show's page?** The film form and
+   the episode form were verified on hardware; the bare-id series form is what the
+   arrivals banner needs, and it is the same route with its episode segment
+   removed. Check it by opening a series arrival from the banner before calling the
+   banner's launch done.
 
 ## Phased roadmap
 
@@ -406,6 +478,17 @@ Each phase is scoped to be doable in one sitting and independently useful.
 - **Phase 7 — Stretch: keyring-backed `SecretStore`.** Only worth doing if the
   session grows a way to unlock a collection unattended, or the hardware gains a
   TPM. Until then this is the decision above, not a task.
+- **Phase 8 — Dashboard hero banner. DONE, hardware check outstanding.** The
+  dashboard's first row is now the banner: `stremio:new-arrivals` drawn one slide
+  at a time across the window's whole width in 30 % of its height, with the
+  slide's backdrop, its own wordmark, a line of synopsis and a dot per slide. The
+  pad walks the slides with left and right and leaves the row up and down like any
+  other; Confirm launches what the slide names. It turns over by itself every
+  eight seconds **only while the pad is elsewhere**, so a slide never moves under
+  the person reading it, and the collection is not also drawn again as a rail. The
+  rotation and the pad are kept honest by three pure functions — `hero::rotate`,
+  `hero::stepped`, `hero::landed` — which is what makes it testable without a
+  compositor. What remains is the rule every launch has: seen on real hardware.
 
 ## Re-verifying by hand
 

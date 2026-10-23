@@ -348,13 +348,13 @@ mod tests {
         assert_eq!(name, None);
 
         // The other built-ins are seeded alongside the pre-existing row, including
-        // the Stremio rail, which the daemon owns and resolves from the records its
-        // provider published.
+        // the two Stremio ones, which the daemon owns and resolves from records its
+        // providers published.
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM collections")
             .fetch_one(database.pool())
             .await
             .unwrap();
-        assert_eq!(count, 4);
+        assert_eq!(count, 5);
     }
 
     /// A database created before Stremio support gains its table on the next
