@@ -425,29 +425,59 @@ fn active_surface_radius() -> [f32; 4] {
     surface_radius(&cosmic::theme::active())
 }
 
-/// Renders an icon as artwork clipped to the shared surface radius, with an
-/// explicit `ContentFit`. Game covers want [`ContentFit::Cover`] while logos
-/// and other non-cover art want [`ContentFit::Contain`].
+/// Renders an icon as artwork with an explicit `ContentFit`. Game covers want
+/// [`ContentFit::Cover`] while logos and other non-cover art want
+/// [`ContentFit::Contain`].
 ///
 /// Every raster image the app displays goes through here, so rounded corners
-/// are a design-system primitive rather than a per-widget decision. Entry
-/// icons are always raster by this point (the icon cache rasterizes SVGs); an
-/// SVG handle falls back to the plain icon, which has no clip.
+/// are a design-system primitive rather than a per-widget decision - see
+/// [`artwork_fit`] for the clipped surface form and [`backdrop_fit`] for the
+/// full-bleed one. Entry icons are always raster by this point (the icon cache
+/// rasterizes SVGs); an SVG handle falls back to the plain icon, which has no
+/// clip.
+fn fit_artwork<'a, M: 'a>(
+    handle: &icon::Handle,
+    fit: ContentFit,
+    width: Length,
+    height: Length,
+    clip: Option<[f32; 4]>,
+) -> Element<'a, M> {
+    match &handle.data {
+        icon::Data::Image(image) => {
+            let mut artwork = cosmic::widget::image::Image::new(image.clone())
+                .content_fit(fit)
+                .width(width)
+                .height(height);
+            if let Some(radius) = clip {
+                artwork = artwork.border_radius(radius);
+            }
+            artwork.into()
+        }
+        icon::Data::Svg(_) => handle.clone().icon().width(width).height(height).into(),
+    }
+}
+
+/// Renders an icon as artwork clipped to the shared surface radius. See
+/// [`fit_artwork`] for the fit itself.
 pub fn artwork_fit<'a, M: 'a>(
     handle: &icon::Handle,
     fit: ContentFit,
     width: Length,
     height: Length,
 ) -> Element<'a, M> {
-    match &handle.data {
-        icon::Data::Image(image) => cosmic::widget::image::Image::new(image.clone())
-            .content_fit(fit)
-            .border_radius(active_surface_radius())
-            .width(width)
-            .height(height)
-            .into(),
-        icon::Data::Svg(_) => handle.clone().icon().width(width).height(height).into(),
-    }
+    fit_artwork(handle, fit, width, height, Some(active_surface_radius()))
+}
+
+/// [`artwork_fit`] without the surface clip: a full-bleed backdrop - the
+/// dashboard's wallpaper - fills the window, and clipped corners would show
+/// what is beneath it at every edge.
+pub fn backdrop_fit<'a, M: 'a>(
+    handle: &icon::Handle,
+    fit: ContentFit,
+    width: Length,
+    height: Length,
+) -> Element<'a, M> {
+    fit_artwork(handle, fit, width, height, None)
 }
 
 // ---------------------------------------------------------------------------

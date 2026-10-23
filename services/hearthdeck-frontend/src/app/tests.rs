@@ -52,6 +52,7 @@ fn shell() -> App {
         user_name: String::new(),
         disk_free: String::new(),
         system_status: SystemStatus::default(),
+        wallpaper: None,
         window_width: WINDOW_WIDTH,
         grid_scroll_offset: 0.0,
         grid_viewport_height: grid_viewport_height_fallback(),
@@ -1690,6 +1691,89 @@ fn restoring_the_defaults_rebuilds_the_tabs_and_keeps_the_users_folders() {
         "the derived tab is back, the scan's is gone and the user's stays"
     );
     assert_eq!(app.cur_group, None, "the library lands on its all tab");
+}
+
+/// Settings saved outside the shell reach the pages when the watch fires:
+/// the tabs come back rebuilt, and the library lands on its all tab the way
+/// a restore does.
+#[test]
+fn a_live_settings_change_rebuilds_the_tabs() {
+    let mut app = showing(4);
+    app.cur_section = Section::Applications;
+    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
+        "writer",
+        &["Office"],
+    )])));
+    add_user_group(&mut app, Section::Applications, "Mine");
+    app.cur_group = Some(1);
+
+    let mut saved = app.config.clone();
+    saved.sections.applications = vec![AppGroup {
+        name: "FromDisk".to_owned(),
+        icon: "folder-symbolic".to_owned(),
+        filter: FilterType::AppIds(Vec::new()),
+        source: GroupSource::Local,
+    }];
+    let _ = app.update(Message::AppConfigLoaded(saved));
+
+    assert_eq!(
+        tabs(&app, Section::Applications),
+        ["FromDisk"],
+        "the tabs are what the save said"
+    );
+    assert_eq!(app.cur_group, None, "the library lands on its all tab");
+}
+
+/// A save that does not touch these tabs must not move the user: the cursor
+/// stays where it was. The toggle itself is live.
+#[test]
+fn a_live_change_to_the_input_toggles_leaves_the_cursor_alone() {
+    let mut app = showing(4);
+    app.cur_section = Section::Applications;
+    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
+        "writer",
+        &["Office"],
+    )])));
+    app.cur_group = Some(1);
+
+    let mut saved = app.config.clone();
+    saved.desktop_input_apps.push("app.one".to_owned());
+    let _ = app.update(Message::AppConfigLoaded(saved));
+
+    assert_eq!(
+        app.cur_group,
+        Some(1),
+        "the cursor stays on the tab it was on"
+    );
+    assert!(
+        app.config.desktop_input_enabled("app.one"),
+        "the toggle is live"
+    );
+}
+
+/// A form overridden outside the shell moves its tiles between the lists at
+/// once, without waiting for the next catalog load.
+#[test]
+fn a_live_form_override_moves_the_tiles() {
+    let mut app = showing(4);
+    app.cur_section = Section::Applications;
+    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
+        "writer",
+        &["Office"],
+    )])));
+    assert_eq!(
+        app.visible.len(),
+        0,
+        "a desktop form is not what the couch shows"
+    );
+
+    let mut saved = app.config.clone();
+    saved
+        .form_overrides
+        .insert("writer".to_owned(), crate::form_factor::FormFactor::Couch);
+    let _ = app.update(Message::AppConfigLoaded(saved));
+
+    assert_eq!(app.visible.len(), 1, "the default view shows it now");
 }
 
 /// Turning smart categorization off must also undo a scan's leftovers: it is

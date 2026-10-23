@@ -3,6 +3,7 @@
 
 use cosmic::app::Task;
 
+use crate::app_group::AppLibraryConfig;
 use crate::screens::settings;
 
 use super::{
@@ -384,5 +385,31 @@ impl App {
             self.persist_config();
         }
         self.apply_group(None)
+    }
+
+    /// Applies settings that changed outside the shell.
+    ///
+    /// Only what actually changed is rebuilt: a save that does not touch this
+    /// section's tabs leaves the cursor and the scroll where the user left
+    /// them, and the echo of a save this shell made itself moves nothing.
+    pub(super) fn apply_live_config(&mut self, config: AppLibraryConfig) -> Task<Message> {
+        let tabs_changed =
+            config.sections.get(self.cur_section) != self.config.sections.get(self.cur_section);
+        let forms_changed = config.form_overrides != self.config.form_overrides;
+        self.config.desktop_input_apps = config.desktop_input_apps;
+        if forms_changed {
+            self.config.form_overrides = config.form_overrides;
+            // The couch filter reads each entry's form, so an override moves
+            // its tiles between the lists at once.
+            self.config.apply_form_overrides(&mut self.catalog);
+        }
+        self.config.sections = config.sections;
+        if tabs_changed {
+            return self.apply_group(None);
+        }
+        if forms_changed {
+            self.refilter();
+        }
+        Task::none()
     }
 }

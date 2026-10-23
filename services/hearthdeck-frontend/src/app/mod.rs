@@ -58,13 +58,16 @@ use crate::screens::library::{filters, grid, header};
 use crate::screens::settings;
 use crate::style::{
     DIVIDER_WIDTH, ICON_LARGE, SECTION_TRANSITION_DURATION, TAB_TRANSITION_DURATION, WINDOW_HEIGHT,
-    WINDOW_WIDTH, content_horizontal_padding, filter_drawer_width, grid_viewport_height_fallback,
-    launch_overlay, primary_action_button_class, root_background, sidebar_divider,
+    WINDOW_WIDTH, backdrop_fit, content_horizontal_padding, filter_drawer_width,
+    grid_viewport_height_fallback, launch_overlay, primary_action_button_class, root_background,
+    sidebar_divider,
 };
+use crate::subscriptions::config_watch::config_watch;
 use crate::subscriptions::daemon_events::{FeedEvent, daemon_events};
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
 use crate::ui;
+use crate::wallpaper::{self, Wallpaper};
 use crate::widgets::menu::{self, Menu, Row};
 use crate::widgets::top_bar;
 use crate::widgets::transition::{PageTransition, SectionTransition, TabTransition};
@@ -302,6 +305,19 @@ pub enum Message {
     DiskFreeLoaded(String),
     /// The top bar's system status: Wi-Fi and Bluetooth, as the poll read them.
     SystemStatusLoaded(SystemStatus),
+    /// cosmic-bg's configuration was saved: the wallpaper the dashboard draws
+    /// may have moved with it.
+    CosmicBackgroundChanged,
+    /// The desktop wallpaper, re-read from cosmic-config. `None` when cosmic-bg
+    /// has no image configured - a colour background counts as none - and the
+    /// dashboard then keeps the theme's own background.
+    WallpaperLoaded(Option<Wallpaper>),
+    /// Hearthdeck's own settings were saved outside this shell: what the
+    /// pages show may have moved with them.
+    AppConfigChanged,
+    /// The settings, re-read from cosmic-config. Only what actually changed is
+    /// rebuilt, so a save that touches nothing here moves nothing.
+    AppConfigLoaded(AppLibraryConfig),
     /// The main window appeared: go fullscreen, matching the session's kiosk
     /// model.
     Opened,
@@ -478,6 +494,10 @@ pub struct App {
     /// status icons draw. Defaulted, so the bar says "unavailable" rather than
     /// nothing until the first read lands.
     system_status: SystemStatus,
+    /// What cosmic-bg is showing as the desktop wallpaper, as the last read got
+    /// it: the dashboard's page background. `None` draws the theme's own
+    /// background instead.
+    wallpaper: Option<Wallpaper>,
     window_width: f32,
     /// Where the grid is scrolled to, and how tall its viewport is. The
     /// virtualization builds the rows between them, and the console source asks
@@ -516,17 +536,7 @@ impl Application for App {
         core.window.use_template = false;
 
         let config_store = AppLibraryConfig::helper();
-        let config = config_store
-            .as_ref()
-            .map(|store| {
-                AppLibraryConfig::get_entry(store).unwrap_or_else(|(errors, config)| {
-                    for error in errors {
-                        log::error!("{error:?}");
-                    }
-                    config
-                })
-            })
-            .unwrap_or_default();
+        let config = AppLibraryConfig::read(config_store.as_ref());
 
         let daemon_client = DaemonClient::new(DaemonConfig {
             base_url: std::env::var("HEARTHDECK_BACKEND_URL")
@@ -573,6 +583,7 @@ impl Application for App {
             user_name: crate::system_status::current_user_name(),
             disk_free: String::new(),
             system_status: SystemStatus::default(),
+            wallpaper: None,
             window_width: WINDOW_WIDTH,
             grid_scroll_offset: 0.0,
             grid_viewport_height: grid_viewport_height_fallback(),
@@ -593,6 +604,7 @@ impl Application for App {
         // deployment provides, so it is read here rather than only on the way
         // in: a session can be revoked while the shell is running.
         let stremio = app.load_stremio_connection();
+        let wallpaper = App::load_wallpaper();
         (
             app,
             Task::batch([
@@ -605,6 +617,7 @@ impl Application for App {
                 categorization,
                 health,
                 stremio,
+                wallpaper,
             ]),
         )
     }
@@ -1119,6 +1132,18 @@ impl Application for App {
                 self.system_status = status;
                 return self.poll_system_status(SYSTEM_STATUS_POLL_INTERVAL);
             }
+            Message::CosmicBackgroundChanged => {
+                return App::load_wallpaper();
+            }
+            Message::WallpaperLoaded(wallpaper) => {
+                self.wallpaper = wallpaper;
+            }
+            Message::AppConfigChanged => {
+                return App::load_config();
+            }
+            Message::AppConfigLoaded(config) => {
+                return self.apply_live_config(config);
+            }
             Message::Opened => {
                 return window::set_mode(SurfaceId::RESERVED, window::Mode::Fullscreen);
             }
@@ -1223,6 +1248,18 @@ impl Application for App {
             _ => None,
         });
         let mut subs = vec![navigation, input, daemon];
+        // The dashboard's wallpaper follows cosmic-bg live: its config is one
+        // of the watched settings, so changing the background in COSMIC
+        // Settings reaches the shell without a restart.
+        let wallpaper = config_watch(wallpaper::CONFIG_ID, wallpaper::CONFIG_VERSION)
+            .map(|_keys| Message::CosmicBackgroundChanged);
+        subs.push(wallpaper);
+        // Hearthdeck's own settings ride the same wire: a save from anywhere -
+        // this shell, a sync tool, a dotfiles restore - reaches the pages
+        // without a restart.
+        let settings = config_watch(crate::config::APP_ID, AppLibraryConfig::version())
+            .map(|_keys| Message::AppConfigChanged);
+        subs.push(settings);
         // The frame clock runs only while motion is in flight: an idle window
         // schedules no redraws at all, and an ungated frame subscription would pin
         // the compositor at the refresh rate forever.
@@ -1404,7 +1441,20 @@ impl App {
         } else {
             screen
         };
-        container(screen)
+        // The dashboard wears the desktop: whatever cosmic-bg is showing is
+        // drawn full-bleed as the page, over the theme's own background - which
+        // shows through where the image does not reach, and stands in for it
+        // when there is no image at all. The library keeps the plain surface:
+        // its grid is dense art already.
+        let page: Element<'_, Message> = match self.wallpaper.as_ref() {
+            Some(wallpaper) => stack![
+                backdrop_fit(&wallpaper.handle, wallpaper.fit, Length::Fill, Length::Fill),
+                screen
+            ]
+            .into(),
+            None => screen,
+        };
+        container(page)
             .width(Length::Fill)
             .height(Length::Fill)
             .class(theme::Container::Custom(Box::new(root_background)))
@@ -1657,6 +1707,28 @@ impl App {
                 SystemStatus::load().await
             },
             |status| cosmic::Action::App(Message::SystemStatusLoaded(status)),
+        )
+    }
+    /// Reads the desktop wallpaper cosmic-bg has configured, and reports it.
+    ///
+    /// The read is a config lookup plus a possible folder listing, so it
+    /// happens in the effect rather than in `update`.
+    fn load_wallpaper() -> Task<Message> {
+        Task::perform(async { wallpaper::load() }, |wallpaper| {
+            cosmic::Action::App(Message::WallpaperLoaded(wallpaper))
+        })
+    }
+    /// Re-reads the app's own settings.
+    ///
+    /// The read is a few config lookups, so it happens in the effect rather
+    /// than in `update`.
+    fn load_config() -> Task<Message> {
+        Task::perform(
+            async {
+                let store = AppLibraryConfig::helper();
+                AppLibraryConfig::read(store.as_ref())
+            },
+            |config| cosmic::Action::App(Message::AppConfigLoaded(config)),
         )
     }
 }
