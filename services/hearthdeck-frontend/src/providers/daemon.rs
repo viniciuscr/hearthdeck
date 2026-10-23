@@ -584,7 +584,7 @@ impl DaemonClient {
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
-    /// Asks the daemon to categorize the library.
+    /// Asks the daemon to categorize the library and publish its dashboard rails.
     ///
     /// This returns as soon as the scan is accepted, because the scan itself
     /// runs for minutes in the daemon's own process: follow it with
@@ -594,19 +594,17 @@ impl DaemonClient {
         self.post_empty("/v1/categorization/scan").await
     }
 
-    /// Republishes the last scan's rails as dashboard collections, without
-    /// running the scan again. Answers with how many collections were written,
-    /// which is what lets the caller tell "created" from "nothing to create"
-    /// instead of reporting a no-op as done.
-    pub async fn create_categorization_collections(&self) -> Result<usize, DaemonError> {
-        #[derive(serde::Deserialize)]
-        struct Published {
-            collections: usize,
-        }
+    /// Asks the model which applications are couch-friendly. Returns once the
+    /// job is accepted; the verdicts arrive as a library change.
+    pub async fn detect_form_factors(&self) -> Result<(), DaemonError> {
+        self.post_empty("/v1/categorization/form-factors").await
+    }
 
+    /// Removes the dashboard rails the model published.
+    pub async fn remove_categorization_collections(&self) -> Result<(), DaemonError> {
         let response = self
             .http
-            .post(self.api_url("/v1/categorization/collections"))
+            .delete(self.api_url("/v1/categorization/collections"))
             .headers(self.auth_headers().await?)
             .send()
             .await
@@ -614,12 +612,11 @@ impl DaemonClient {
         if !response.status().is_success() {
             return Err(Self::http_error(response).await);
         }
-        let published: Published = response.json().await.map_err(DaemonError::Connection)?;
-        Ok(published.collections)
+        Ok(())
     }
 
-    /// Turns smart categorization on, which is the action that fetches the
-    /// checkpoint when none is cached and produces the first report.
+    /// Turns smart categorization on, which only fetches the checkpoint when
+    /// none is cached.
     pub async fn enable_categorization(&self) -> Result<(), DaemonError> {
         self.post_empty("/v1/categorization/enable").await
     }
@@ -627,24 +624,6 @@ impl DaemonClient {
     /// Turns it off. A scan already running is left to finish.
     pub async fn disable_categorization(&self) -> Result<(), DaemonError> {
         self.post_empty("/v1/categorization/disable").await
-    }
-
-    /// Frees the downloaded checkpoint. Surfaces the daemon's refusal when the
-    /// checkpoint is a directory the deployment owns, or a scan is reading it.
-    pub async fn delete_categorization_model(&self) -> Result<(), DaemonError> {
-        let response = self
-            .http
-            .delete(self.api_url("/v1/categorization/model"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
-        Ok(())
     }
 
     /// A POST that carries nothing and answers nothing.

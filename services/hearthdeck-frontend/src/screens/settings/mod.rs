@@ -40,8 +40,8 @@ pub struct Settings<'a> {
     /// Whether the deployment provides categorization at all, from /v1/health.
     /// None until the health reply lands.
     pub capable: Option<bool>,
-    /// What the last action did, for the section's own status text.
-    pub notice: Option<&'a categorization::Notice>,
+    /// Why the last action was refused, for the section's own status text.
+    pub notice: Option<&'a str>,
     /// The Stremio link flow: the linked account, the code being approved
     /// elsewhere, and whether a request is in flight. The flow owns all of it;
     /// this section reads it and names the request each control makes.
@@ -291,7 +291,7 @@ fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
             continue;
         }
         buttons = buttons.push(action_button(
-            action_label(action, snapshot),
+            action_label(action),
             action_message(action, snapshot),
             action_class(action),
             categorization::pressable(action, &panel),
@@ -430,15 +430,13 @@ fn action_button<'a>(
         .into()
 }
 
-/// What the control wears, by what it does: the affirmative actions are the
-/// primary button, the one that removes the model is the destructive one, and
-/// the rest stay ordinary.
+/// What the control wears, by what it does: the model actions are the primary
+/// button, and the switch stays ordinary.
 fn action_class(action: categorization::Action) -> Button {
     match action {
-        categorization::Action::Categorize | categorization::Action::CreateCollections => {
+        categorization::Action::PublishRails | categorization::Action::DetectCouch => {
             primary_action_button_class()
         }
-        categorization::Action::RemoveModel => destructive_button_class(),
         categorization::Action::Toggle => standard_button_class(),
     }
 }
@@ -457,38 +455,24 @@ fn stremio_action_class(action: stremio_link::Action) -> Button {
 fn action_message(action: categorization::Action, snapshot: &CategorizationSnapshot) -> Message {
     match action {
         categorization::Action::Toggle => Message::SetCategorization(!snapshot.enabled),
-        categorization::Action::Categorize => Message::ScanCategorization,
-        categorization::Action::CreateCollections => Message::CreateCategorizationCollections,
-        categorization::Action::RemoveModel => Message::DeleteCategorizationModel,
+        categorization::Action::PublishRails => Message::ScanCategorization,
+        categorization::Action::DetectCouch => Message::DetectCouchFriendly,
     }
 }
 
 /// The button's own words. The switch reads as the item label above it, which is
 /// why it needs a label even though its row is the toggler's.
-fn action_label(action: categorization::Action, snapshot: &CategorizationSnapshot) -> String {
+fn action_label(action: categorization::Action) -> String {
     match action {
         categorization::Action::Toggle => fl!("categorization-toggle"),
-        categorization::Action::Categorize => scan_label(snapshot),
-        categorization::Action::CreateCollections => fl!("categorization-create-collections"),
-        categorization::Action::RemoveModel => fl!("categorization-remove-model"),
+        categorization::Action::PublishRails => fl!("categorization-publish-rails"),
+        categorization::Action::DetectCouch => fl!("categorization-detect-couch"),
     }
 }
 
-/// What the last action did, in the daemon's own words. A failure wears the
-/// error style; the rest are ordinary status lines.
-fn notice_line<'a>(notice: &categorization::Notice) -> Element<'a, Message> {
-    match notice {
-        categorization::Notice::Created(count) => {
-            // Bound by value: the `fl!` wrapper forwards raw tokens, so a deref
-            // inside the call would read as `*(count.into())`.
-            let count = *count;
-            body_line(fl!("categorization-collections-created", count = count))
-        }
-        categorization::Notice::NoCollections => body_line(fl!("categorization-collections-empty")),
-        categorization::Notice::Failed(reason) => {
-            error_line(fl!("categorization-failed", reason = reason.as_str()))
-        }
-    }
+/// Why the last action was refused, in the daemon's own words.
+fn notice_line<'a>(reason: &str) -> Element<'a, Message> {
+    error_line(fl!("categorization-failed", reason = reason))
 }
 
 /// Where the scan has got to, in the daemon's own words.
@@ -535,16 +519,6 @@ fn model_line(model: &ModelStatus) -> String {
             "categorization-model-external",
             path = path.display().to_string()
         ),
-    }
-}
-
-/// The scan button reads as a first scan until there has been one, so the same
-/// control does not offer to "categorize again" before it ever has.
-fn scan_label(snapshot: &CategorizationSnapshot) -> String {
-    if snapshot.status.last_completed_at.is_some() {
-        fl!("categorization-rescan")
-    } else {
-        fl!("categorization-categorize")
     }
 }
 

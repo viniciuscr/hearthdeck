@@ -180,8 +180,8 @@ paths:
         user's opt-in, the only switch there is: while it is false nothing is
         downloaded, nothing is scanned, and a client must leave the ordinary tabs
         alone. `POST /v1/categorization/enable` is the whole of the setup — it
-        fetches the checkpoint and scans, with no deployment configuration
-        involved.
+        fetches the checkpoint, with no deployment configuration involved.
+        Nothing is classified until a client asks for it.
       responses:
         '200':
           description: The scan status and the latest report
@@ -195,22 +195,22 @@ paths:
       security:
         - bearerAuth: []
       description: >-
-        Turns smart categorization on and starts the scan, which is the one
-        action that fetches the checkpoint when none is cached. This is the only
-        setup there is: the client offers it as a switch, and pressing it is all
-        a user has to do. Answers as soon as the scan is accepted; progress is on
-        `GET /v1/categorization`.
+        Turns smart categorization on and fetches the checkpoint when none is
+        cached. It classifies nothing: scans and form-factor detection each
+        have their own endpoint. Answers as soon as the download is accepted;
+        progress is on `GET /v1/categorization`.
       responses:
         '202':
-          description: Enabled, and the scan accepted
+          description: Enabled, and the download accepted
   /v1/categorization/disable:
     post:
       operationId: disableCategorization
       security:
         - bearerAuth: []
       description: >-
-        Turns it off. A scan already running is left to finish, but its report
-        is not applied by a client honouring `enabled`.
+        Turns it off: removes the rails and verdicts the feature produced. The
+        downloaded checkpoint is kept. A job already running is left to finish,
+        and what it decides is thrown away.
       responses:
         '204':
           description: Disabled
@@ -220,34 +220,42 @@ paths:
       security:
         - bearerAuth: []
       description: >-
-        Starts a further scan, for a library that is already enabled. A scan runs
-        for minutes in its own process, so this answers as soon as it is
-        accepted; the result arrives on the event stream
-        (`categorization_changed`) and in the next `GET`. Requesting a scan while
-        one runs coalesces into it rather than failing.
+        Files the library by rules (no model) and publishes the dashboard rails
+        the result implies (Watch, ...). Answers as soon as it is accepted; the
+        result arrives on the event stream (`categorization_changed`) and in the
+        next `GET`. Requesting it while a job runs coalesces rather than failing.
       responses:
         '202':
           description: Scan accepted
         '409':
           description: Categorization is not enabled
-  /v1/categorization/model:
-    delete:
-      operationId: deleteCategorizationModel
+  /v1/categorization/form-factors:
+    post:
+      operationId: detectFormFactors
       security:
         - bearerAuth: []
       description: >-
-        Removes the downloaded checkpoint, freeing what it costs on disk — most
-        of a gigabyte. The most recent report is kept: it still describes the
-        library, and the tabs it built are still the user's. Never deletes a
-        checkpoint the deployment pointed at with
-        `HEARTHDECK_AI_MODEL_PATH`.
+        Asks the model which applications are couch-friendly, for every
+        application without a current verdict. Answers as soon as the job is
+        accepted; the verdicts arrive as a library change.
       responses:
-        '204':
-          description: Checkpoint removed
+        '202':
+          description: Detection accepted
         '409':
           description: >-
-            The checkpoint is an external directory, or a scan is running and
-            reading it
+            Categorization is not enabled, another job is running, or the model
+            is not downloaded yet
+  /v1/categorization/collections:
+    delete:
+      operationId: removeCategorizationCollections
+      security:
+        - bearerAuth: []
+      description: >-
+        Removes the dashboard rails the model published. Other collections are
+        left alone. Works whether or not categorization is enabled.
+      responses:
+        '204':
+          description: Rails removed
   /v1/retro/consoles:
     get:
       operationId: listRetroConsoles

@@ -151,20 +151,15 @@ pub enum Message {
     OpenSettings,
     /// The smart-categories switch was flipped.
     SetCategorization(bool),
-    /// A categorization scan was asked for.
+    /// Classify the library and publish its dashboard rails.
     ScanCategorization,
+    /// Ask the model which applications are couch-friendly.
+    DetectCouchFriendly,
     /// The daemon's health reply landed: what this deployment provides at all.
     HealthLoaded(Result<crate::providers::daemon::HealthResponse, String>),
-    /// The last run's rails should become dashboard collections.
-    CreateCategorizationCollections,
-    /// The publish finished: how many collections it created, or why it could
-    /// not. The shell re-reads the collections on success.
-    CategorizationCollectionsCreated(Result<usize, String>),
     /// Restore default categories was pressed: every section's tabs go back to
     /// the ones derived from the library and the console platforms.
     RestoreDefaultCategories,
-    /// The downloaded checkpoint should be freed.
-    DeleteCategorizationModel,
     /// The Stremio section's link button: ask the daemon for a code.
     StartStremioLink,
     /// The daemon answered the request for a code: the one to approve, or why
@@ -187,8 +182,11 @@ pub enum Message {
     SelectSection(Section),
     /// The dashboard's top bar: show the dashboard itself.
     OpenDashboard,
-    /// Restore dashboard was pressed: read everything it is drawn from again.
+    /// Restore dashboard was pressed: drop the model's rails and read everything
+    /// the dashboard is drawn from again.
     RestoreDashboard,
+    /// The model's rails are gone, or could not be removed.
+    ModelRailsRemoved(Result<(), String>),
     /// The dashboard's top bar: show the library as it was left.
     OpenLibrary,
     /// The dashboard's top bar: show the library with the caret in its search
@@ -374,7 +372,7 @@ impl Page {
 enum CategorizationAction {
     SetEnabled(bool),
     Scan,
-    RemoveModel,
+    DetectCouch,
 }
 
 pub struct App {
@@ -434,7 +432,8 @@ pub struct App {
     /// What the last categorization action did, for the section's own status
     /// text. There is no toast layer yet, so the section is where the user
     /// reads the outcome.
-    categorization_notice: Option<settings::categorization::Notice>,
+    /// Why the last categorization action was refused.
+    categorization_notice: Option<String>,
     /// The Stremio link flow: the account the daemon holds, the code being
     /// approved elsewhere, and what the shell must do next. The flow is the
     /// decision layer - each answer from the daemon moves it - so nothing in
@@ -949,6 +948,12 @@ impl Application for App {
                 return self.refresh_dashboard();
             }
             Message::RestoreDashboard => return self.restore_dashboard(),
+            Message::ModelRailsRemoved(result) => {
+                if let Err(error) = result {
+                    log::warn!("could not remove the model's dashboard rails: {error}");
+                }
+                return self.load_collections();
+            }
             Message::OpenLibrary => {
                 self.switch_page(Page::Library);
                 self.bar_cursor = None;
@@ -984,11 +989,13 @@ impl Application for App {
             Message::ScanCategorization => {
                 return self.categorization_action(CategorizationAction::Scan);
             }
+            Message::DetectCouchFriendly => {
+                return self.categorization_action(CategorizationAction::DetectCouch);
+            }
             Message::CategorizationDone(result) => {
                 if let Err(error) = result {
                     log::warn!("categorization action failed: {error}");
-                    self.categorization_notice =
-                        Some(settings::categorization::Notice::Failed(error));
+                    self.categorization_notice = Some(error);
                 }
                 return self.load_categorization();
             }
@@ -1006,35 +1013,6 @@ impl Application for App {
                 // deployment lost the feature.
                 Err(error) => log::warn!("health read failed: {error}"),
             },
-            Message::CreateCategorizationCollections => {
-                return self.create_categorization_collections();
-            }
-            Message::CategorizationCollectionsCreated(result) => {
-                match result {
-                    Ok(0) => {
-                        log::warn!("the last categorization produced no dashboard collections");
-                        self.categorization_notice =
-                            Some(settings::categorization::Notice::NoCollections);
-                    }
-                    Ok(created) => {
-                        log::info!("created {created} dashboard collections");
-                        self.categorization_notice =
-                            Some(settings::categorization::Notice::Created(created));
-                    }
-                    // A refusal leaves the dashboard as it was, so there is
-                    // nothing new to read back: the reason is the whole answer.
-                    Err(error) => {
-                        log::warn!("could not create the dashboard collections: {error}");
-                        self.categorization_notice =
-                            Some(settings::categorization::Notice::Failed(error));
-                        return Task::none();
-                    }
-                }
-                return self.load_collections();
-            }
-            Message::DeleteCategorizationModel => {
-                return self.categorization_action(CategorizationAction::RemoveModel);
-            }
             Message::RestoreDefaultCategories => return self.restore_default_categories(),
             Message::Romm(message) => return self.update_romm(message),
             // The Stremio section: the flow decides what an answer means and
@@ -1468,7 +1446,7 @@ impl App {
             &settings::Settings {
                 categorization: self.categorization.as_ref(),
                 capable: self.categorization_capable,
-                notice: self.categorization_notice.as_ref(),
+                notice: self.categorization_notice.as_deref(),
                 stremio: &self.stremio,
                 romm: &self.romm,
             },
