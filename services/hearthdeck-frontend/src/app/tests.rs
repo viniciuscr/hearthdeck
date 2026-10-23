@@ -50,6 +50,7 @@ fn shell() -> App {
         user_name: String::new(),
         disk_free: String::new(),
         system_status: SystemStatus::default(),
+        wallpaper: None,
         window_width: WINDOW_WIDTH,
         grid_scroll_offset: 0.0,
         grid_viewport_height: grid_viewport_height_fallback(),

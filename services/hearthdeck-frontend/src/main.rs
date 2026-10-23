@@ -18,6 +18,7 @@ mod subscriptions;
 mod system_status;
 mod toplevel;
 mod ui;
+mod wallpaper;
 mod widgets;
 
 use config::{APP_ID, VERSION};
