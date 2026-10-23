@@ -33,6 +33,11 @@ pub enum GamepadEvent {
     /// Open or close the filter drawer: the one surface over the grid that the
     /// pad reaches on its own, since it cannot be walked to.
     FilterPanel,
+    /// Start+Select: summon the on-screen keyboard by putting the caret in a
+    /// text field. The shell owns this chord rather than the keyboard's own
+    /// process so it can clear the pad's other bindings for as long as the
+    /// keyboard is up.
+    Keyboard,
 }
 
 /// Subscribe to gamepad navigation events.
@@ -198,8 +203,65 @@ fn map_button(button: Button) -> Option<GamepadEvent> {
         Button::RightTrigger => Some(GamepadEvent::NextGroup),
         Button::LeftTrigger2 => Some(GamepadEvent::PrevTab),
         Button::RightTrigger2 => Some(GamepadEvent::NextTab),
+        // The one press that waits: `Chords` opens the drawer on Select's
+        // release so that Start+Select can be the keyboard instead.
         Button::Select => Some(GamepadEvent::FilterPanel),
         _ => None,
+    }
+}
+
+/// Select's two jobs, told apart by Start.
+///
+/// Select opens the filter drawer, and Start+Select summons the keyboard. Both
+/// keys have to keep working, so the filter cannot fire on the press: when
+/// Start was pressed first the drawer would open under the keyboard, and when
+/// Select was pressed first it would open before Start even arrived. The
+/// filter therefore waits for Select's release, and a chord in the meantime
+/// cancels it. Handling the release costs a tap's worth of latency and buys a
+/// chord that works in either press order.
+#[derive(Default)]
+struct Chords {
+    select_held: bool,
+    /// A chord already fired for this pair of presses, so releasing Select must
+    /// not also open the drawer and holding both must not fire twice.
+    chord_fired: bool,
+}
+
+impl Chords {
+    /// One button went down. `start_held` is the pad's own Start state at that
+    /// moment, which is what makes Start-first and Select-first fold into the
+    /// same state machine.
+    fn pressed(&mut self, button: Button, start_held: bool) -> Option<GamepadEvent> {
+        match button {
+            Button::Select => {
+                self.select_held = true;
+                if start_held {
+                    self.chord_fired = true;
+                    return Some(GamepadEvent::Keyboard);
+                }
+                None
+            }
+            Button::Start => {
+                if self.select_held && !self.chord_fired {
+                    self.chord_fired = true;
+                    return Some(GamepadEvent::Keyboard);
+                }
+                None
+            }
+            _ => map_button(button),
+        }
+    }
+
+    /// One button came back up: Select's deferred action, if the chord did not
+    /// take it.
+    fn released(&mut self, button: Button) -> Option<GamepadEvent> {
+        if button != Button::Select {
+            return None;
+        }
+        self.select_held = false;
+        let open_filter = !self.chord_fired;
+        self.chord_fired = false;
+        open_filter.then_some(GamepadEvent::FilterPanel)
     }
 }
 
@@ -225,8 +287,11 @@ fn gilrs_loop(tx: UnboundedSender<GamepadEvent>) {
     while gilrs.next_event().is_some() {}
 
     // Per-gamepad navigation state: a stuck button on one pad must not
-    // affect navigation coming from another pad.
+    // affect navigation coming from another pad. The chords are stateful for
+    // the same reason - Select waits for its release - so each pad keeps its
+    // own.
     let mut nav_states: HashMap<GamepadId, NavState> = HashMap::new();
+    let mut chords: HashMap<GamepadId, Chords> = HashMap::new();
 
     while !tx.is_closed() {
         while let Some(Event { id, event, .. }) = gilrs.next_event() {
@@ -234,11 +299,16 @@ fn gilrs_loop(tx: UnboundedSender<GamepadEvent>) {
             if !gamepad.is_connected() {
                 continue;
             }
-            let EventType::ButtonPressed(button, _) = event else {
-                continue;
+            let chord = chords.entry(id).or_default();
+            let event = match event {
+                EventType::ButtonPressed(button, _) => {
+                    chord.pressed(button, gamepad.is_pressed(Button::Start))
+                }
+                EventType::ButtonReleased(button, _) => chord.released(button),
+                _ => None,
             };
-            if let Some(ev) = map_button(button)
-                && tx.unbounded_send(ev).is_err()
+            if let Some(event) = event
+                && tx.unbounded_send(event).is_err()
             {
                 return;
             }
@@ -259,7 +329,7 @@ fn gilrs_loop(tx: UnboundedSender<GamepadEvent>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Button, Direction, GamepadEvent, direction_after_neutral, map_button};
+    use super::{Button, Chords, Direction, GamepadEvent, direction_after_neutral, map_button};
 
     /// The pad's vocabulary: which button means what. This is the whole contract
     /// between the controller and the shell - a change here changes how the app
@@ -286,6 +356,78 @@ mod tests {
         for button in [Button::DPadUp, Button::Start, Button::Mode, Button::C] {
             assert_eq!(map_button(button), None, "button: {button:?}");
         }
+    }
+
+    #[test]
+    fn select_alone_opens_the_filter_when_it_is_released() {
+        let mut chords = Chords::default();
+
+        // Nothing on the press: the drawer waits to see whether the chord is
+        // coming, so a Start+Select never opens it on the way past.
+        assert_eq!(chords.pressed(Button::Select, false), None);
+        assert_eq!(
+            chords.released(Button::Select),
+            Some(GamepadEvent::FilterPanel)
+        );
+    }
+
+    /// Start+Select is the keyboard, in either press order, and neither press
+    /// may also open the filter drawer.
+    #[test]
+    fn the_keyboard_chord_cancels_the_filter_in_both_press_orders() {
+        // Start first: the Select press is already part of the chord.
+        let mut chords = Chords::default();
+        assert_eq!(chords.pressed(Button::Start, true), None);
+        assert_eq!(
+            chords.pressed(Button::Select, true),
+            Some(GamepadEvent::Keyboard)
+        );
+        assert_eq!(chords.released(Button::Select), None);
+        assert_eq!(chords.released(Button::Start), None);
+
+        // Select first: the chord forms on Start and cancels Select's release.
+        let mut chords = Chords::default();
+        assert_eq!(chords.pressed(Button::Select, false), None);
+        assert_eq!(
+            chords.pressed(Button::Start, true),
+            Some(GamepadEvent::Keyboard)
+        );
+        assert_eq!(chords.released(Button::Select), None);
+        assert_eq!(chords.released(Button::Start), None);
+    }
+
+    #[test]
+    fn holding_the_chord_fires_it_once() {
+        let mut chords = Chords::default();
+        assert_eq!(chords.pressed(Button::Select, false), None);
+        assert_eq!(
+            chords.pressed(Button::Start, true),
+            Some(GamepadEvent::Keyboard)
+        );
+
+        // A second Start press while Select is still down is still the same
+        // chord, not a second one - and it must not re-arm the filter either.
+        assert_eq!(chords.released(Button::Start), None);
+        assert_eq!(chords.pressed(Button::Start, true), None);
+        assert_eq!(chords.released(Button::Select), None);
+    }
+
+    #[test]
+    fn a_new_tap_of_select_opens_the_filter_after_a_chord() {
+        let mut chords = Chords::default();
+        assert_eq!(chords.pressed(Button::Select, false), None);
+        assert_eq!(
+            chords.pressed(Button::Start, true),
+            Some(GamepadEvent::Keyboard)
+        );
+        assert_eq!(chords.released(Button::Select), None);
+        assert_eq!(chords.released(Button::Start), None);
+
+        assert_eq!(chords.pressed(Button::Select, false), None);
+        assert_eq!(
+            chords.released(Button::Select),
+            Some(GamepadEvent::FilterPanel)
+        );
     }
 
     #[test]

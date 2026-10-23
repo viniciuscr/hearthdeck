@@ -102,9 +102,19 @@ the cruft inherited from the project this started from.
   The chrome is reached by its own buttons instead: the shoulders switch section,
   the triggers switch tab, the search button puts the caret in the search box,
   and Select opens the filter drawer, which is a surface over the grid rather
-  than a place in it and so cannot be walked to. A keyboard reaches the same
+  than a place in it and so cannot be walked to. Select acts on the release
+  rather than the press, so that Start+Select can mean the keyboard without the
+  drawer opening under it, in either press order. A keyboard reaches the same
   controls through the ring `Tab` walks, and every stop on that ring performs the
   action its button does, so the two cannot drift apart.
+- **The keyboard takes the pad.** Focusing a text field raises the on-screen
+  keyboard - the compositor activates the input method on focus - and from then
+  until it is dismissed every pad button belongs to the keyboard: the shell
+  drops navigation events, so the screen behind does not move under the keys.
+  Back is the dismissal: it takes the caret out of the field, which takes the
+  keyboard down, and stays on the screen it was typed on. Start+Select summons
+  the same thing by putting the caret in the search box, which is the text field
+  the pad can reach on its own.
 - **The pad remembers where it was.** A vertical step returns to the column the
   cursor came down, so a row that ends early - or the short last row of a console
   grid - does not drag it back to the first column. The drawer keeps a row of its

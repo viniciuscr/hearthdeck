@@ -33,6 +33,7 @@ fn shell() -> App {
         collections: Vec::new(),
         facet_selection: BTreeMap::new(),
         filter_open: false,
+        text_focused: false,
         menu: menu::State::default(),
         cur_section: Section::PcGames,
         cur_group: None,
@@ -529,6 +530,69 @@ fn the_pad_does_nothing_until_the_frontend_owns_input() {
     send(&mut app, GamepadEvent::MoveDown);
 
     assert_eq!(app.cursors, before);
+}
+
+#[test]
+fn the_keyboard_chord_puts_the_caret_in_the_search_box() {
+    let mut app = shell();
+    app.input_ownership
+        .update(crate::input_ownership::Event::SessionObserved(false));
+
+    // The shell's own search box is where the pad can type, so the chord shows
+    // the library and focuses the box - which is what makes the keyboard
+    // appear. On a sibling page that means showing the library first.
+    send(&mut app, GamepadEvent::Keyboard);
+
+    assert_eq!(app.page, Page::Library);
+    assert!(
+        app.text_focused,
+        "the chord did not hand the pad to the keyboard"
+    );
+}
+
+/// The keyboard takes the pad: while a text field owns the caret no button but
+/// Back reaches the screen, and Back gives the pad back without leaving the
+/// page it was typing on.
+#[test]
+fn the_pad_belongs_to_the_keyboard_while_a_text_field_has_the_caret() {
+    let mut app = showing(12);
+    app.input_ownership
+        .update(crate::input_ownership::Event::SessionObserved(false));
+    let before = app.cursors;
+
+    app.text_focused = true;
+    for event in [
+        GamepadEvent::MoveDown,
+        GamepadEvent::MoveRight,
+        GamepadEvent::Confirm,
+        GamepadEvent::Search,
+        GamepadEvent::FilterPanel,
+    ] {
+        send(&mut app, event);
+    }
+
+    assert_eq!(
+        app.cursors, before,
+        "a button moved the screen behind the keys"
+    );
+    assert!(
+        !app.filter_open,
+        "Select opened the drawer under the keyboard"
+    );
+    assert!(app.text_focused, "only Back dismisses the keyboard");
+
+    send(&mut app, GamepadEvent::Back);
+
+    assert!(!app.text_focused, "Back did not give the pad back");
+    assert_eq!(
+        app.page,
+        Page::Library,
+        "dismissing the keyboard also left the page"
+    );
+
+    // With the caret gone the pad drives the screen again.
+    send(&mut app, GamepadEvent::MoveDown);
+    assert_ne!(app.cursors, before);
 }
 
 #[test]
