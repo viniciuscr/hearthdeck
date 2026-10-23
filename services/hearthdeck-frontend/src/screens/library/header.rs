@@ -159,6 +159,10 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
         container(
             text_input(SEARCH_PLACEHOLDER.as_str(), header.search_value)
                 .on_input(Message::InputChanged)
+                // The keyboard follows the caret, so a focused box means the
+                // pad belongs to the keyboard until Back dismisses it.
+                .on_focus(Message::TextFocus(true))
+                .on_unfocus(Message::TextFocus(false))
                 .style(TextInput::Search)
                 .width(Length::Fixed(SEARCH_WIDTH))
                 .size(TEXT_HEADER)

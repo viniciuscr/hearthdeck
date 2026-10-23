@@ -206,6 +206,11 @@ pub enum Message {
     ActivateConsole(i64),
     SelectGroup(Option<usize>),
     InputChanged(String),
+    /// A text field gained or lost the caret. The on-screen keyboard follows
+    /// that focus - the compositor activates the input method when the field
+    /// takes it - so this is also what tells the shell that the pad belongs to
+    /// the keyboard now instead of to the screen behind it.
+    TextFocus(bool),
     /// A filter chip was pressed: set (or clear) one facet's value.
     SelectFacet {
         facet: String,
@@ -442,6 +447,12 @@ pub struct App {
     facet_selection: BTreeMap<String, String>,
     /// Whether the filter sidebar is open.
     filter_open: bool,
+    /// Whether a text field owns the caret, which is also what says the
+    /// on-screen keyboard is up: focusing a field is what activates the input
+    /// method. While this is set the pad belongs to the keyboard - every button
+    /// but Back is dropped before it reaches the screen - so the app does not
+    /// move behind the keys the user is pressing.
+    text_focused: bool,
     /// The tile menu: which tile it is open on, and which of its rows is
     /// highlighted. The menu owns both, so "is it open" cannot disagree with
     /// "what is it on".
@@ -559,6 +570,7 @@ impl Application for App {
             collections: Vec::new(),
             facet_selection: BTreeMap::new(),
             filter_open: false,
+            text_focused: false,
             menu: menu::State::default(),
             cur_section: Section::PcGames,
             cur_group: None,
@@ -859,6 +871,7 @@ impl Application for App {
                 self.refilter();
                 return self.list_replaced();
             }
+            Message::TextFocus(focused) => self.text_focused = focused,
             Message::SelectFacet { facet, value } => {
                 match value {
                     Some(value) => {
@@ -1075,6 +1088,13 @@ impl Application for App {
                 // session's controller input from driving the library behind
                 // it.)
                 if !self.input_ownership.frontend_has_control() {
+                    return Task::none();
+                }
+                // A text field owns the caret, so the on-screen keyboard is up
+                // and the pad is how its keys get pressed. Nothing else reaches
+                // the screen until the keyboard is dismissed - Back is the one
+                // button that does (see `App::back`).
+                if self.text_focused && event != GamepadEvent::Back {
                     return Task::none();
                 }
                 return self.navigate(event);
@@ -1825,6 +1845,17 @@ fn launch_console_message(platform_id: i64) -> Message {
 /// system's focus ring - comes from.
 fn widget_focus(id: Id) -> Task<Message> {
     runtime::task::widget(focus(id))
+}
+
+/// Takes the renderer's focus off whatever holds it.
+///
+/// A text field that loses focus this way stops asking for the input method,
+/// and the compositor takes the on-screen keyboard down with it - so this is
+/// how Back dismisses the keyboard without also leaving the screen.
+fn unfocus() -> Task<Message> {
+    use cosmic::iced::core::widget::operation::focusable;
+
+    runtime::task::widget(focusable::unfocus())
 }
 
 pub fn run() -> cosmic::iced::Result {

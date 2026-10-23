@@ -244,7 +244,10 @@ fn romm(message: Message) -> app::Message {
 
 pub fn view(form: &Form) -> Element<'_, app::Message> {
     let spacing = theme::spacing();
-    let mut url = text_input("http://127.0.0.1:8080", &form.base_url).size(TEXT_BODY);
+    let mut url = text_input("http://127.0.0.1:8080", &form.base_url)
+        .size(TEXT_BODY)
+        .on_focus(app::Message::TextFocus(true))
+        .on_unfocus(app::Message::TextFocus(false));
     if !form.busy && !form.polling {
         url = url.on_input(|value| romm(Message::UrlChanged(value)));
     }
@@ -320,10 +323,15 @@ fn pending_block(pending: &Pending) -> Element<'_, app::Message> {
 pub fn sign_in_dialog(form: &Form) -> Option<Element<'_, app::Message>> {
     let sign_in = form.sign_in.as_ref()?;
     let spacing = theme::spacing();
-    let mut username = text_input(fl!("romm-username"), &sign_in.username).size(TEXT_BODY);
+    let mut username = text_input(fl!("romm-username"), &sign_in.username)
+        .size(TEXT_BODY)
+        .on_focus(app::Message::TextFocus(true))
+        .on_unfocus(app::Message::TextFocus(false));
     let mut password = text_input(fl!("romm-password"), &sign_in.password)
         .password()
-        .size(TEXT_BODY);
+        .size(TEXT_BODY)
+        .on_focus(app::Message::TextFocus(true))
+        .on_unfocus(app::Message::TextFocus(false));
     if !form.busy {
         username = username.on_input(|value| romm(Message::UsernameChanged(value)));
         password = password

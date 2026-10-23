@@ -14,7 +14,7 @@ use crate::screens::library::{focus, grid, header, sidebar};
 use crate::subscriptions::gamepad::GamepadEvent;
 use crate::widgets::top_bar;
 
-use super::{App, Message, Page, widget_focus};
+use super::{App, Message, Page, unfocus, widget_focus};
 
 impl App {
     /// Acts on one navigation event.
@@ -41,7 +41,8 @@ impl App {
                 | GamepadEvent::NextGroup
                 | GamepadEvent::PrevTab
                 | GamepadEvent::NextTab
-                | GamepadEvent::FilterPanel => Task::none(),
+                | GamepadEvent::FilterPanel
+                | GamepadEvent::Keyboard => Task::none(),
             };
         }
         match event {
@@ -54,6 +55,12 @@ impl App {
             // Search puts the caret in the search box - which, off the library,
             // means showing it first, the same way the bar's Search button does.
             GamepadEvent::Search => self.update(Message::OpenSearch),
+            // Start+Select is the keyboard. The search box is the text field the
+            // pad can reach on its own, so the chord puts the caret there rather
+            // than raising a keyboard with nothing to type into - and once the
+            // box has it, the keyboard takes the pad (see the gamepad arm of
+            // `update`).
+            GamepadEvent::Keyboard => self.update(Message::OpenSearch),
             GamepadEvent::ContextMenu => self.context_action(),
             // The shoulder buttons switch section and the triggers switch tab.
             // They are chords rather than places on the screen, so they wrap
@@ -222,6 +229,14 @@ impl App {
     /// screen and no drawer handles it for itself - they are unwound here, in
     /// the order the surfaces stack, ending on the Dashboard.
     pub(super) fn back(&mut self) -> Task<Message> {
+        // A text field owns the caret, so the keyboard is up over everything:
+        // Back dismisses the input and the keyboard first, keeps the screen
+        // open, and hands the pad back to it. Nothing else can be reached
+        // while the keyboard has the pad, so this is the whole dismissal.
+        if self.text_focused {
+            self.text_focused = false;
+            return unfocus();
+        }
         // A modal dialog sits over every surface, so Back closes it first.
         if self.romm.sign_in.is_some() {
             return self.update(Message::Romm(
@@ -297,6 +312,11 @@ impl App {
     pub(super) fn focus_search(&mut self) -> Task<Message> {
         self.cursors.ring = None;
         self.bar_cursor = None;
+        // A text field is about to own the caret, so the keyboard is coming up
+        // and the pad belongs to it. `on_focus` only reports a click; a caret
+        // the shell places through a task has to be recorded here, or the pad
+        // would keep driving the screen under the keyboard.
+        self.text_focused = true;
         text_input::focus(header::search_id())
     }
 
@@ -366,13 +386,18 @@ impl App {
         if self.page == Page::Library {
             self.cursors.ring = focus::ring_step(self.cursors.ring, backwards, self.layout());
             let focus = self.focus_task();
-            // A tab the ring stops on is a tab the user is looking at, so the
-            // strip follows it the way it follows a selection.
-            let reveal = match self
+            let stop = self
                 .cursors
                 .ring
-                .and_then(|index| focus::ring_at(index, self.layout()))
-            {
+                .and_then(|index| focus::ring_at(index, self.layout()));
+            // Landing on the search box puts the caret in it, so the keyboard
+            // comes up and takes the pad - the same state the pad's own search
+            // button leaves behind. Any other stop hands focus to a button, so
+            // there is no text field left with the caret.
+            self.text_focused = stop == Some(Chrome::Search);
+            // A tab the ring stops on is a tab the user is looking at, so the
+            // strip follows it the way it follows a selection.
+            let reveal = match stop {
                 Some(Chrome::Tab(index)) => self.reveal_tab(index),
                 _ => Task::none(),
             };
