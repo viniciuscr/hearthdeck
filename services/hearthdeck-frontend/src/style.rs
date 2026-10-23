@@ -41,6 +41,17 @@ pub const TEXT_BODY: f32 = 14.0 * TEXT_SCALE;
 /// Caption text (matches `text::caption`).
 pub const TEXT_CAPTION: f32 = 12.0 * TEXT_SCALE;
 
+/// Details screen title — larger for TV viewing distance.
+pub const DETAILS_TEXT_TITLE: f32 = 56.0 * TEXT_SCALE;
+/// Details screen header text.
+pub const DETAILS_TEXT_HEADER: f32 = 28.0 * TEXT_SCALE;
+/// Details screen emphasis text (action buttons).
+pub const DETAILS_TEXT_LARGE: f32 = 22.0 * TEXT_SCALE;
+/// Details screen body text (facts, summary).
+pub const DETAILS_TEXT_BODY: f32 = 18.0 * TEXT_SCALE;
+/// Details screen caption text (chips, labels).
+pub const DETAILS_TEXT_CAPTION: f32 = 16.0 * TEXT_SCALE;
+
 /// The class a line that reports a failure wears: the theme's destructive color,
 /// so an error does not read as one more quiet caption.
 ///

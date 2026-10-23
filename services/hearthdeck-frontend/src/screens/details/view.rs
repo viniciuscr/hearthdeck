@@ -24,11 +24,11 @@ use crate::fl;
 use crate::screens::details::{Details, Hero, focus};
 use crate::style::{
     DETAILS_ACTION_WIDTH, DETAILS_FACT_LABEL_WIDTH, DETAILS_PICKER_WIDTH, DETAILS_PLAY_WIDTH,
-    DETAILS_SHOT_ASPECT, DETAILS_SHOT_SIZE, ICON_BODY, ICON_SMALL, MENU_MAX_HEIGHT, TEXT_BODY,
-    TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE, action_bar, artwork_fit, backdrop_scrim,
-    backdrop_wash, card_surface, details_action_bar_padding, details_action_height,
-    details_hero_width, details_toggle_button_class, hero_card, modal_scrim, passthrough,
-    primary_action_button_class,
+    DETAILS_SHOT_ASPECT, DETAILS_SHOT_SIZE, DETAILS_TEXT_BODY, DETAILS_TEXT_CAPTION,
+    DETAILS_TEXT_HEADER, DETAILS_TEXT_LARGE, DETAILS_TEXT_TITLE, ICON_BODY, ICON_SMALL,
+    MENU_MAX_HEIGHT, action_bar, artwork_fit, backdrop_scrim, backdrop_wash, card_surface,
+    details_action_bar_padding, details_action_height, details_hero_width,
+    details_toggle_button_class, hero_card, modal_scrim, passthrough, primary_action_button_class,
 };
 use crate::widgets::application::{Selection, TileLabel, app_tile};
 use crate::widgets::rail::rail;
@@ -89,9 +89,13 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
         .align_y(Vertical::Center)
         .into(),
     };
+    // Hero card uses 16:9 aspect ratio to match screenshot proportions,
+    // so horizontal screenshots display correctly without cropping.
+    let hero_width = details_hero_width(window_width);
+    let hero_height = hero_width * 9.0 / 16.0;
     let art_card = container(hero)
-        .width(Length::Fixed(details_hero_width(window_width)))
-        .height(Length::Fill)
+        .width(Length::Fixed(hero_width))
+        .height(Length::Fixed(hero_height))
         .padding(space_s)
         .class(theme::Container::Custom(Box::new(hero_card)));
 
@@ -110,7 +114,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
             container(
                 row![
                     icon::icon(icon::from_name(icon_name).size(ICON_BODY).into()),
-                    text::body(label).size(TEXT_LARGE),
+                    text::body(label).size(DETAILS_TEXT_LARGE),
                 ]
                 .spacing(space_s)
                 .align_y(Alignment::Center),
@@ -193,7 +197,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
         .chips()
         .into_iter()
         .map(|label| {
-            container(text(label).size(TEXT_CAPTION))
+            container(text(label).size(DETAILS_TEXT_CAPTION))
                 .padding([space_xxs, space_s])
                 .class(theme::Container::Custom(Box::new(card_surface)))
                 .into()
@@ -218,7 +222,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
                 list::button(
                     row![
                         icon::icon(icon::from_name(icon_name).size(ICON_SMALL).into()),
-                        text::body(version.title.clone()).size(TEXT_BODY),
+                        text::body(version.title.clone()).size(DETAILS_TEXT_BODY),
                     ]
                     .spacing(space_s)
                     .align_y(Alignment::Center),
@@ -231,7 +235,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
         container(
             container(
                 column![
-                    text::title3(fl!("disc-selection")).size(TEXT_HEADER),
+                    text::title3(fl!("disc-selection")).size(DETAILS_TEXT_HEADER),
                     autosize(
                         container(scrollable(rows.into_element())).padding(1),
                         Id::new("details-disc-autosize"),
@@ -257,9 +261,11 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
         .into_iter()
         .map(|(label, value)| {
             row![
-                container(text::caption(label).size(TEXT_CAPTION))
+                container(text::caption(label).size(DETAILS_TEXT_CAPTION))
                     .width(Length::Fixed(DETAILS_FACT_LABEL_WIDTH)),
-                text::body(value).size(TEXT_BODY).width(Length::Fill),
+                text::body(value)
+                    .size(DETAILS_TEXT_BODY)
+                    .width(Length::Fill),
             ]
             .spacing(space_m)
             .align_y(Alignment::Start)
@@ -269,11 +275,15 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
 
     let summary: Element<'_, Message> = match details.summary() {
         Some(summary) => column![
-            text::caption(fl!("about")).size(TEXT_CAPTION),
-            scrollable(text::body(summary).size(TEXT_BODY).width(Length::Fill))
-                .height(Length::Fill)
-                .scrollbar_width(0)
-                .scroller_width(0),
+            text::caption(fl!("about")).size(DETAILS_TEXT_CAPTION),
+            scrollable(
+                text::body(summary)
+                    .size(DETAILS_TEXT_BODY)
+                    .width(Length::Fill)
+            )
+            .height(Length::Fill)
+            .scrollbar_width(0)
+            .scroller_width(0),
         ]
         .spacing(space_xxs)
         .height(Length::Fill)
@@ -283,7 +293,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
 
     let mut right = column![
         text(details.title.clone())
-            .size(TEXT_TITLE)
+            .size(DETAILS_TEXT_TITLE)
             .width(Length::Fill)
     ]
     .spacing(space_s)
@@ -300,7 +310,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
             row![
                 icon::icon(icon::from_name("dialog-warning-symbolic").into()).size(ICON_SMALL),
                 text::caption(fl!("details-unavailable", reason = reason.to_owned()))
-                    .size(TEXT_CAPTION),
+                    .size(DETAILS_TEXT_CAPTION),
             ]
             .spacing(space_xs)
             .align_y(Alignment::Center),
