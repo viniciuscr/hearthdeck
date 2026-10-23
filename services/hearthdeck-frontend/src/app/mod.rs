@@ -307,6 +307,12 @@ pub enum Message {
     /// has no image configured - a colour background counts as none - and the
     /// dashboard then keeps the theme's own background.
     WallpaperLoaded(Option<Wallpaper>),
+    /// Hearthdeck's own settings were saved outside this shell: what the
+    /// pages show may have moved with them.
+    AppConfigChanged,
+    /// The settings, re-read from cosmic-config. Only what actually changed is
+    /// rebuilt, so a save that touches nothing here moves nothing.
+    AppConfigLoaded(AppLibraryConfig),
     /// The main window appeared: go fullscreen, matching the session's kiosk
     /// model.
     Opened,
@@ -519,17 +525,7 @@ impl Application for App {
         core.window.use_template = false;
 
         let config_store = AppLibraryConfig::helper();
-        let config = config_store
-            .as_ref()
-            .map(|store| {
-                AppLibraryConfig::get_entry(store).unwrap_or_else(|(errors, config)| {
-                    for error in errors {
-                        log::error!("{error:?}");
-                    }
-                    config
-                })
-            })
-            .unwrap_or_default();
+        let config = AppLibraryConfig::read(config_store.as_ref());
 
         let daemon_client = DaemonClient::new(DaemonConfig {
             base_url: std::env::var("HEARTHDECK_BACKEND_URL")
@@ -1122,6 +1118,12 @@ impl Application for App {
             Message::WallpaperLoaded(wallpaper) => {
                 self.wallpaper = wallpaper;
             }
+            Message::AppConfigChanged => {
+                return App::load_config();
+            }
+            Message::AppConfigLoaded(config) => {
+                return self.apply_live_config(config);
+            }
             Message::Opened => {
                 return window::set_mode(SurfaceId::RESERVED, window::Mode::Fullscreen);
             }
@@ -1232,6 +1234,12 @@ impl Application for App {
         let wallpaper = config_watch(wallpaper::CONFIG_ID, wallpaper::CONFIG_VERSION)
             .map(|_keys| Message::CosmicBackgroundChanged);
         subs.push(wallpaper);
+        // Hearthdeck's own settings ride the same wire: a save from anywhere -
+        // this shell, a sync tool, a dotfiles restore - reaches the pages
+        // without a restart.
+        let settings = config_watch(crate::config::APP_ID, AppLibraryConfig::version())
+            .map(|_keys| Message::AppConfigChanged);
+        subs.push(settings);
         // The frame clock runs only while motion is in flight: an idle window
         // schedules no redraws at all, and an ungated frame subscription would pin
         // the compositor at the refresh rate forever.
@@ -1689,6 +1697,19 @@ impl App {
         Task::perform(async { wallpaper::load() }, |wallpaper| {
             cosmic::Action::App(Message::WallpaperLoaded(wallpaper))
         })
+    }
+    /// Re-reads the app's own settings.
+    ///
+    /// The read is a few config lookups, so it happens in the effect rather
+    /// than in `update`.
+    fn load_config() -> Task<Message> {
+        Task::perform(
+            async {
+                let store = AppLibraryConfig::helper();
+                AppLibraryConfig::read(store.as_ref())
+            },
+            |config| cosmic::Action::App(Message::AppConfigLoaded(config)),
+        )
     }
 }
 

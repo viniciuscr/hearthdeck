@@ -586,6 +586,21 @@ impl AppLibraryConfig {
         cosmic_config::Config::new(APP_ID, Self::version()).ok()
     }
 
+    /// Reads the saved entry, falling back to the defaults where a key is
+    /// missing or does not parse - a broken key must not take the shell down.
+    pub fn read(store: Option<&cosmic_config::Config>) -> Self {
+        store
+            .map(|store| {
+                Self::get_entry(store).unwrap_or_else(|(errors, config)| {
+                    for error in errors {
+                        log::error!("{error:?}");
+                    }
+                    config
+                })
+            })
+            .unwrap_or_default()
+    }
+
     pub fn desktop_input_enabled(&self, id: &str) -> bool {
         self.desktop_input_apps
             .iter()
