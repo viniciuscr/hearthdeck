@@ -15,6 +15,27 @@ Read this first, load the skill that matches your change, then work.
 On conflict, the lower number wins. If a skill and this file disagree, this file is right and
 the skill should be fixed.
 
+## Reasoning
+
+This governs hidden thinking only. What you say to the user is still the report block.
+
+- **No audience.** Do not narrate, joke, role-play, or talk to yourself. Thinking is a decision
+  log, not prose.
+- **Plan → decide → act.** State what you are establishing, establish it, move on. Stop thinking
+  the moment the next tool call is known.
+- **Fragments beat sentences.** `cause: X → fix: Y`, or `read A, then B`. If a thought does not
+  change the next action, drop it.
+- **No re-explaining.** Do not restate the request, the file you just read, or the plan you
+  already made. Re-read the diff, not your own reasoning.
+- **No unnumbered options.** Weigh only the branches you might take; if one is obviously right,
+  take it and name the trade-off in one clause — or not at all.
+- **Recon has a budget.** Enough to act, not enough to be certain. Open the file instead of
+  reasoning about what it probably contains.
+- **Wrong is cheap.** A failed command costs one round trip; paragraphs speculating about it cost
+  more. Run it.
+- **Test:** if the reasoning could move into the report unchanged, it was thinking that belonged
+  in the work instead.
+
 ## The one rule
 
 **No change is done until the command that proves it has run and passed, in this session.**

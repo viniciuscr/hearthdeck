@@ -72,6 +72,9 @@ impl App {
                         crate::icon_cache::reference_handle(
                             platform.artwork.as_deref(),
                             console_size as u32,
+                            // A platform's logo is drawn square on the card, so
+                            // there is nothing to turn.
+                            crate::icon_cache::Orientation::AsIs,
                         ),
                         Some(launch_console_message(platform.id)),
                     )
@@ -100,6 +103,9 @@ impl App {
                                 crate::icon_cache::reference_handle(
                                     item.icon.as_deref(),
                                     size as u32,
+                                    // A rail card is a portrait poster: a
+                                    // horizontal box is turned to fill it.
+                                    crate::icon_cache::Orientation::Portrait,
                                 ),
                                 Some(launch_card_message(&item.item_id, &item.name)),
                             )
@@ -139,14 +145,20 @@ impl App {
                 let background = crate::icon_cache::reference_handle(
                     item.background.as_deref().or(item.icon.as_deref()),
                     size as u32,
+                    // The banner is a wide surface: it takes the art as it is.
+                    crate::icon_cache::Orientation::AsIs,
                 );
                 Card::banner(
                     dashboard_card_id(NEW_ARRIVALS_COLLECTION, index),
                     item.name.clone(),
                     background,
-                    item.logo
-                        .as_deref()
-                        .map(|logo| crate::icon_cache::reference_handle(Some(logo), size as u32)),
+                    item.logo.as_deref().map(|logo| {
+                        crate::icon_cache::reference_handle(
+                            Some(logo),
+                            size as u32,
+                            crate::icon_cache::Orientation::AsIs,
+                        )
+                    }),
                     item.description.clone(),
                     Some(launch_card_message(&item.item_id, &item.name)),
                 )
@@ -192,7 +204,11 @@ impl App {
                 Card::new(
                     dashboard_card_id("library", index),
                     entry.name.clone(),
-                    crate::icon_cache::entry_icon_handle(&entry.icon, size as u32),
+                    crate::icon_cache::entry_icon_handle(
+                        &entry.icon,
+                        size as u32,
+                        crate::icon_cache::Orientation::Portrait,
+                    ),
                     Some(launch_card_message(&entry.id, &entry.name)),
                 )
             })

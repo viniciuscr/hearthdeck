@@ -138,6 +138,28 @@ pub fn classify(reference: &str) -> Option<IconReference<'_>> {
     )
 }
 
+/// How a surface wants its artwork drawn.
+///
+/// A portrait card is the library's grid tile and the dashboard's rail card: it
+/// is taller than it is wide, and a cover drawn for a horizontal box bands inside
+/// it. A details backdrop and the banner's own artwork are the opposite shape and
+/// must keep the image as it is, so the surface says which it is rather than the
+/// cache guessing from a size.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Orientation {
+    /// The artwork as it is, for a surface shaped like the picture.
+    AsIs,
+    /// A portrait card: a clearly landscape cover is turned a quarter turn so it
+    /// fills the card instead of banding inside it.
+    Portrait,
+}
+
+/// How much wider than tall a cover has to be before it counts as horizontal box
+/// art and is turned on its side for a portrait card. A third wider keeps
+/// near-square artwork - an application's own icon, a cover only slightly off
+/// square - out of the rule, so nothing straight is drawn crooked.
+const LANDSCAPE_RATIO: f32 = 1.3;
+
 /// Draws one icon reference: a file the provider resolved, or a name the icon
 /// theme resolves.
 ///
@@ -146,10 +168,14 @@ pub fn classify(reference: &str) -> Option<IconReference<'_>> {
 /// unfetched - a poster URL or a RomM path the provider has not turned into a
 /// file yet - draws [`GENERIC_ICON`], because a card is never blank and a path
 /// that does not exist is not artwork.
-pub fn reference_handle(reference: Option<&str>, size: u32) -> icon::Handle {
+pub fn reference_handle(
+    reference: Option<&str>,
+    size: u32,
+    orientation: Orientation,
+) -> icon::Handle {
     match reference.and_then(classify) {
         Some(IconReference::File(path)) => {
-            entry_icon_handle(&IconSource::Path(PathBuf::from(path)), size)
+            entry_icon_handle(&IconSource::Path(PathBuf::from(path)), size, orientation)
         }
         // A symbolic name is monochrome and the theme decides its colour, which
         // a rasterized copy loses (it comes out black), so it is drawn through
@@ -158,7 +184,7 @@ pub fn reference_handle(reference: Option<&str>, size: u32) -> icon::Handle {
             icon_cache_handle(name, size as u16)
         }
         Some(IconReference::Name(name)) => {
-            entry_icon_handle(&IconSource::Name(name.to_owned()), size)
+            entry_icon_handle(&IconSource::Name(name.to_owned()), size, orientation)
         }
         Some(IconReference::Remote(_) | IconReference::RommAsset(_)) | None => {
             icon_cache_handle(GENERIC_ICON, size as u16)
@@ -229,6 +255,9 @@ fn handle_identity(base: &icon::Handle) -> String {
 struct RasterIconKey {
     identity: String,
     size: u32,
+    /// A cover turned to fill a portrait card is a different picture from the
+    /// same cover drawn as it is, so the two are cached apart.
+    portrait: bool,
 }
 
 static RASTER_ICON_CACHE: OnceLock<Mutex<HashMap<RasterIconKey, icon::Handle>>> = OnceLock::new();
@@ -244,13 +273,16 @@ const RASTER_ICON_CACHE_CAP: usize = 256;
 
 /// Resolve an entry icon into an [`icon::Handle`], pre-rendering SVG icons to
 /// raw RGBA at `size` so the renderer never rasterizes vectors on the render
-/// thread (which froze page scrolling). PNGs are kept as-is (cheap to decode),
-/// and results are cached by handle identity.
-pub fn entry_icon_handle(source: &IconSource, size: u32) -> icon::Handle {
+/// thread (which froze page scrolling). PNGs are kept as-is (cheap to decode) —
+/// except on a portrait card, where a clearly landscape cover is turned a
+/// quarter turn so it fills the card. Results are cached by handle identity, the
+/// size, and whether the cover was turned.
+pub fn entry_icon_handle(source: &IconSource, size: u32, orientation: Orientation) -> icon::Handle {
     let base = source.as_cosmic_icon();
     let key = RasterIconKey {
         identity: handle_identity(&base),
         size,
+        portrait: orientation == Orientation::Portrait,
     };
 
     let mut cache = RASTER_ICON_CACHE
@@ -262,9 +294,14 @@ pub fn entry_icon_handle(source: &IconSource, size: u32) -> icon::Handle {
         return handle.clone();
     }
 
-    let handle = match &base.data {
-        icon::Data::Svg(svg) => rasterize_svg(svg, size, size).unwrap_or(base),
-        icon::Data::Image(_) => base,
+    let handle = match (&base.data, orientation) {
+        (icon::Data::Svg(svg), _) => rasterize_svg(svg, size, size).unwrap_or(base),
+        // A cover drawn for a horizontal box, on a card taller than it is wide:
+        // turned, so the picture fills the card instead of banding inside it.
+        (icon::Data::Image(image), Orientation::Portrait) => {
+            turned_for_portrait(image).unwrap_or(base)
+        }
+        (icon::Data::Image(_), Orientation::AsIs) => base,
     };
 
     if cache.len() >= RASTER_ICON_CACHE_CAP {
@@ -275,9 +312,51 @@ pub fn entry_icon_handle(source: &IconSource, size: u32) -> icon::Handle {
     handle
 }
 
+/// A landscape cover turned a quarter turn clockwise, as an icon of its own.
+///
+/// `None` is every case the rule does not apply to - the picture is not clearly
+/// landscape, its bytes cannot be read or decoded, or it is already a raster in
+/// memory - and the caller then draws the artwork as it is, so a cover nothing is
+/// known about still draws.
+fn turned_for_portrait(image: &core_image::Handle) -> Option<icon::Handle> {
+    let core_image::Handle::Path(_, path) = image else {
+        return None;
+    };
+    let bytes = std::fs::read(path).ok()?;
+    let decoded = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+
+    let turned = turned_portrait(&decoded.to_rgba8())?;
+    let (width, height) = turned.dimensions();
+    Some(icon::from_raster_pixels(width, height, turned.into_raw()))
+}
+
+/// Whether a raster is horizontal box art: at least [`LANDSCAPE_RATIO`] times as
+/// wide as it is tall.
+#[must_use]
+fn is_landscape(width: u32, height: u32) -> bool {
+    height > 0 && width as f32 / height as f32 >= LANDSCAPE_RATIO
+}
+
+/// The quarter turn clockwise, or `None` when the picture is not clearly
+/// landscape. Clockwise, so the cover's left edge becomes the card's top edge.
+fn turned_portrait(raster: &image::RgbaImage) -> Option<image::RgbaImage> {
+    let (width, height) = raster.dimensions();
+    if !is_landscape(width, height) {
+        return None;
+    }
+    Some(image::imageops::rotate90(raster))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{GENERIC_ICON, IconReference, classify, reference_handle};
+    use super::{
+        GENERIC_ICON, IconReference, Orientation, classify, is_landscape, reference_handle,
+        turned_portrait,
+    };
 
     /// A reference is the daemon's, and it means one of four things. Reading it
     /// wrong is the whole of the bug this vocabulary exists to stop: a poster URL
@@ -336,7 +415,7 @@ mod tests {
             Some("/assets/romm/resources/roms/9/4014/cover/small.png"),
         ] {
             assert!(
-                reference_handle(reference, 64).symbolic,
+                reference_handle(reference, 64, Orientation::AsIs).symbolic,
                 "{reference:?} is not artwork, so it draws the mark"
             );
         }
@@ -368,9 +447,53 @@ mod tests {
     /// fixed one.
     #[test]
     fn a_resolved_file_is_drawn_as_an_image() {
-        let cached = reference_handle(Some("/tmp/hearthdeck-cache/cover.png"), 64);
+        let cached = reference_handle(
+            Some("/tmp/hearthdeck-cache/cover.png"),
+            64,
+            Orientation::AsIs,
+        );
         assert!(!cached.symbolic);
 
-        assert!(reference_handle(Some("app-source-flatpak-symbolic"), 16).symbolic);
+        assert!(
+            reference_handle(Some("app-source-flatpak-symbolic"), 16, Orientation::AsIs).symbolic
+        );
+    }
+
+    /// A cover drawn for a horizontal box bands inside a portrait card, so the
+    /// card turns it a quarter turn - and only when it is clearly landscape. A
+    /// square application icon and a portrait cover are left exactly as they are.
+    #[test]
+    fn only_clearly_landscape_art_is_turned_for_a_portrait_card() {
+        assert!(is_landscape(52, 40), "exactly a third wider is box art");
+        assert!(is_landscape(1920, 1080), "16:9 is box art");
+        assert!(!is_landscape(12, 10), "a fifth wider is not");
+        assert!(!is_landscape(10, 10), "a square icon is never turned");
+        assert!(
+            !is_landscape(10, 20),
+            "a portrait cover is already the card's shape"
+        );
+        assert!(!is_landscape(10, 0), "a height of nothing is not a picture");
+    }
+
+    /// The quarter turn swaps the sides and carries the picture's own corner with
+    /// it: clockwise, so the cover's left edge becomes the card's top edge and the
+    /// title reads with the head tilted left.
+    #[test]
+    fn the_quarter_turn_swaps_the_sides_and_keeps_the_pictures_corner() {
+        let mut raster = image::RgbaImage::new(8, 4);
+        raster.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+
+        let turned = turned_portrait(&raster).expect("a 2:1 picture is landscape");
+
+        assert_eq!(turned.dimensions(), (4, 8), "the sides swap");
+        assert_eq!(
+            turned.get_pixel(3, 0),
+            &image::Rgba([255, 0, 0, 255]),
+            "the top-left corner moved to the top-right"
+        );
+        assert!(
+            turned_portrait(&image::RgbaImage::new(4, 4)).is_none(),
+            "a square is drawn as it is"
+        );
     }
 }

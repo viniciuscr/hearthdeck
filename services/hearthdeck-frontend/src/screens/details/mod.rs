@@ -474,7 +474,11 @@ impl Details {
 /// rasterized icon handle. Building a handle is then a local read rather than
 /// a download.
 fn details_handle(path: &str, size: u32) -> icon::Handle {
-    entry_icon_handle(&IconSource::Path(PathBuf::from(path)), size)
+    entry_icon_handle(
+        &IconSource::Path(PathBuf::from(path)),
+        size,
+        crate::icon_cache::Orientation::AsIs,
+    )
 }
 
 #[cfg(test)]

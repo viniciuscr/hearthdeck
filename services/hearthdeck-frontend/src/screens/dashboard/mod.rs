@@ -467,6 +467,24 @@ mod tests {
     // rail and the scroll stops with the focused name off the bottom of the
     // screen.
     #[test]
+    fn a_banner_row_takes_the_height_of_a_banner_and_not_of_a_rail() {
+        let banner = Shelf::banner("New on Stremio", vec![card("Slide")]);
+        let rail = Shelf::new(false, "Recently Played", vec![card("Half-Life 2")]);
+
+        let heights = rail_heights(&[banner, rail], 1200.0);
+
+        assert_eq!(
+            heights[0],
+            crate::style::hero_height(crate::style::WINDOW_HEIGHT),
+            "the banner is the height the page reserves for it: {heights:?}"
+        );
+        assert!(
+            heights[0] > heights[1],
+            "the artwork gets the height of a banner, not of a rail: {heights:?}"
+        );
+    }
+
+    #[test]
     fn a_rail_reserves_room_for_the_name_line_below_its_cards() {
         let shelves = vec![Shelf::new(true, "Consoles", vec![card("Hades")])];
         let heights = rail_heights(&shelves, 1200.0);

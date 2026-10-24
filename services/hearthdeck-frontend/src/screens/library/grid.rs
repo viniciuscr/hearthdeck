@@ -25,7 +25,7 @@ use cosmic::theme;
 use cosmic::widget::{Id, column, container, row, scrollable, space};
 
 use crate::app::Message;
-use crate::style::{GRID_OVERSCAN_ROWS, grid_columns, grid_gap, tile_height, tile_width};
+use crate::style::{GRID_OVERSCAN_ROWS, grid_columns, grid_gap, grid_tile_height, tile_width};
 use crate::widgets::application::{Selection, TileLabel, app_tile};
 
 /// The grid's scrollable. Held here because it is the grid's own widget, and
@@ -55,7 +55,9 @@ pub struct Metrics {
 pub fn metrics(window_width: f32) -> Metrics {
     let columns = grid_columns(false).max(1);
     let tile_width = tile_width(window_width, columns);
-    let tile_height = tile_height(tile_width, false);
+    // The dashboard's portrait card, so a cover is the same proportion on both
+    // screens - and so a horizontal box has a card tall enough to be turned into.
+    let tile_height = grid_tile_height(tile_width);
     let gap = grid_gap(window_width, columns);
     Metrics {
         columns,
@@ -216,7 +218,11 @@ pub fn view(grid: Grid<'_>) -> Element<'_, Message> {
         let mut children: Vec<Element<'_, Message>> = Vec::with_capacity(metrics.columns);
         for (column_index, entry) in grid.entries[start..end].iter().enumerate() {
             let index = start + column_index;
-            let icon = crate::icon_cache::entry_icon_handle(&entry.icon, metrics.tile_width as u32);
+            let icon = crate::icon_cache::entry_icon_handle(
+                &entry.icon,
+                metrics.tile_width as u32,
+                crate::icon_cache::Orientation::Portrait,
+            );
             children.push(app_tile(
                 tile_id(entry),
                 &entry.name,
@@ -309,6 +315,10 @@ mod tests {
         let metrics = metrics(1200.0);
         assert_eq!(metrics.columns, crate::style::GRID_COLUMNS);
         assert!((metrics.row_height - (metrics.tile_height + metrics.gap)).abs() < f32::EPSILON);
+        assert!(
+            metrics.tile_height > metrics.tile_width,
+            "the grid draws the dashboard's portrait card: {metrics:?}"
+        );
     }
 
     #[test]
