@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::{
     activity::{ActivityEntry, RecentActivity},
-    categorizer::{CategorizationStatus, ScanRequest},
+    categorizer::{CategorizationStatus, ModelStatus, ScanRequest},
     collections::{self, Collection, CollectionItem},
     diagnostics::{self, RommGame, RommPlatform, RommQueryError},
     retro::RetroLaunchError,
@@ -81,12 +81,9 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/categorization/scan", post(start_categorization))
         .route(
             "/v1/categorization/collections",
-            post(publish_categorization_collections),
+            delete(remove_categorization_collections),
         )
-        .route(
-            "/v1/categorization/model",
-            delete(delete_categorization_model),
-        )
+        .route("/v1/categorization/form-factors", post(detect_form_factors))
         .route("/v1/settings", get(get_settings).put(update_settings))
         .route("/v1/discovery/{source_id}/refresh", post(refresh_source))
         .route("/v1/metadata/{provider_id}/refresh", post(refresh_metadata))
@@ -790,9 +787,8 @@ async fn categorization(
     }))
 }
 
-/// Turns smart categorization on, which is the one action that fetches the
-/// checkpoint and produces the first report.
-///
+/// Turns smart categorization on, which only fetches the checkpoint. Nothing is
+/// classified until a button asks for it.
 async fn enable_categorization(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -807,23 +803,16 @@ async fn enable_categorization(
         .set_categorization_enabled(true)
         .await
         .map_err(ApiError::internal)?;
-    match service.request_scan().await {
-        ScanRequest::Started => {
-            info!("categorization enabled; first scan started");
-            Ok(StatusCode::ACCEPTED)
-        }
-        ScanRequest::AlreadyRunning => {
-            info!("categorization enabled; a scan is already running");
-            Ok(StatusCode::ACCEPTED)
-        }
+    match service.request_download().await {
+        ScanRequest::Started => info!("categorization enabled; model is ready or downloading"),
+        ScanRequest::AlreadyRunning => info!("categorization enabled; a job is already running"),
     }
+    Ok(StatusCode::ACCEPTED)
 }
 
-/// Turns it off. Any scan already running is left to finish — it is a child
-/// process doing one job, and killing it mid-write helps nobody — but its report
-/// is not applied, because applying is the client's decision and the client only
-/// applies while this is on.
-///
+/// Turns it off and undoes what the model changed. A job already running is
+/// left to finish, but what it decides is thrown away. The downloaded model is
+/// kept, so turning it back on does not fetch it again.
 async fn disable_categorization(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -834,18 +823,7 @@ async fn disable_categorization(
         .set_categorization_enabled(false)
         .await
         .map_err(ApiError::internal)?;
-    // The rails the model created go with it. A person's collections and the
-    // built-in ones are not this feature's to touch, and the dashboard is left
-    // with exactly what it had before the feature was ever turned on.
-    match state
-        .collections
-        .remove_owned(collections::OWNER_LAYA)
-        .await
-    {
-        Ok(0) => {}
-        Ok(count) => info!(count, "categorization rails removed"),
-        Err(error) => warn!(%error, "could not remove the categorization rails"),
-    }
+    remove_laya_collections(&state).await;
     if let Some(categorization) = state.categorization.as_ref() {
         match categorization.clear_traits().await {
             Ok(0) => {}
@@ -857,9 +835,76 @@ async fn disable_categorization(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Starts a scan. A scan takes minutes, so this answers `202` as soon as it is
-/// accepted; the result arrives on the event stream and in the next `GET`.
-/// Requesting one while another runs is not an error: it coalesces.
+/// The rails the feature created, and whatever the running job would still
+/// write. A person's collections and the built-in ones are not this feature's
+/// to touch.
+async fn remove_laya_collections(state: &SharedState) {
+    if let Some(categorization) = state.categorization.as_ref() {
+        categorization.discard_running().await;
+    }
+    match state
+        .collections
+        .remove_owned(collections::OWNER_LAYA)
+        .await
+    {
+        Ok(0) => {}
+        Ok(count) => info!(count, "categorization rails removed"),
+        Err(error) => warn!(%error, "could not remove the categorization rails"),
+    }
+}
+
+/// Restore dashboard: drops the rails the model published, whether or not the
+/// feature is still on.
+async fn remove_categorization_collections(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    remove_laya_collections(&state).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Detect couch-friendly apps: asks the model about every application it has
+/// no current verdict for. Answers `202`; the result arrives as a library change.
+/// Refused with `409` while the model is missing or another job holds it.
+async fn detect_form_factors(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    let service = state
+        .categorization
+        .as_ref()
+        .ok_or_else(ApiError::service_unavailable)?
+        .clone();
+    if !state
+        .settings
+        .get()
+        .await
+        .map_err(ApiError::internal)?
+        .categorization_enabled
+    {
+        return Err(ApiError::conflict("categorization is not enabled"));
+    }
+    let status = service.status().await;
+    if status.running {
+        return Err(ApiError::conflict("another categorization job is running"));
+    }
+    if status.model == ModelStatus::Absent {
+        return Err(ApiError::conflict("the model is not downloaded yet"));
+    }
+    tokio::spawn(async move {
+        match service.classify_pending().await {
+            Ok(run) => info!(?run, "form-factor detection finished"),
+            Err(error) => warn!(%error, "form-factor detection failed"),
+        }
+    });
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Publish dashboard rails: files the library by rules (no model) and writes the
+/// rails that implies. Answers `202`; the result arrives on the event stream.
+/// Requesting one while another job runs is not an error: it coalesces.
 async fn start_categorization(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -888,61 +933,6 @@ async fn start_categorization(
             Ok(StatusCode::ACCEPTED)
         }
     }
-}
-
-/// The answer to publishing: how many dashboard collections the stored report
-/// implied. Zero is a result, not a success — the client has to be able to say
-/// "nothing was created" instead of reporting a no-op as done.
-#[derive(Serialize)]
-struct PublishedCollections {
-    collections: usize,
-}
-
-/// Writes the dashboard collections the last scan implies, without classifying
-/// the library again. The heavy work already happened; this republishes its
-/// answer, so the client refreshes its collections when this answers.
-async fn publish_categorization_collections(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<Json<PublishedCollections>, ApiError> {
-    authenticate(&state, &headers).await?;
-    let service = state
-        .categorization
-        .as_ref()
-        .ok_or_else(ApiError::service_unavailable)?;
-    if !state
-        .settings
-        .get()
-        .await
-        .map_err(ApiError::internal)?
-        .categorization_enabled
-    {
-        return Err(ApiError::conflict("categorization is not enabled"));
-    }
-    let collections = service
-        .publish_collections()
-        .await
-        .map_err(|error| ApiError::conflict(error.to_string()))?;
-    info!(count = collections, "categorization collections published");
-    Ok(Json(PublishedCollections { collections }))
-}
-
-/// Frees what the checkpoint costs on disk. The report it produced is kept: it
-/// still describes the library, and the tabs it built are still the user's.
-async fn delete_categorization_model(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
-    let service = state
-        .categorization
-        .as_ref()
-        .ok_or_else(ApiError::service_unavailable)?;
-    service
-        .delete_model()
-        .await
-        .map_err(|error| ApiError::conflict(error.to_string()))?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_settings(
@@ -3061,6 +3051,51 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(launched["application_id"], "com.stremio.Stremio.desktop");
         bridge.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn restoring_the_dashboard_drops_only_the_models_rails() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.socket"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+            },
+            database,
+        ));
+        state
+            .collections
+            .replace_owned(
+                crate::collections::OWNER_LAYA,
+                &[crate::collections::OwnedCollection {
+                    slug: "laya:watch".to_owned(),
+                    name: Some("Watch".to_owned()),
+                    rule: crate::collections::owned_rule(crate::collections::OWNER_LAYA, "watch"),
+                }],
+            )
+            .await
+            .unwrap();
+        let before = state.collections.list().await.unwrap();
+        assert!(before.iter().any(|row| row.slug == "laya:watch"));
+
+        super::remove_laya_collections(&state).await;
+
+        let after = state.collections.list().await.unwrap();
+        assert!(
+            after
+                .iter()
+                .all(|row| row.owner != crate::collections::OWNER_LAYA)
+        );
+        assert_eq!(after.len(), before.len() - 1, "the built-in rails stay");
     }
 
     #[tokio::test]

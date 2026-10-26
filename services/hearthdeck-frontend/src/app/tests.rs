@@ -1666,7 +1666,6 @@ use crate::providers::daemon::{
     CategorizationPhase, CategorizationSnapshot, CategorizationStatus, CollectionItem, ModelStatus,
     NEW_ARRIVALS_COLLECTION,
 };
-use crate::screens::settings::categorization::Notice;
 
 /// A health reply that carries one capability and nothing else, so a test can
 /// say what this deployment provides without building a whole host.
@@ -1926,45 +1925,21 @@ fn turning_smart_categorization_off_restores_the_default_tabs() {
     assert_eq!(tabs(&app, Section::Applications), ["Desktop"]);
 }
 
-/// Every outcome of a categorization action lands in the section's own
-/// status text, and asking for the next one starts it clean.
+/// A refused categorization action lands in the section's own status text,
+/// and asking for the next one starts it clean.
 #[test]
-fn each_outcome_lands_in_the_sections_own_status_text() {
+fn a_refused_action_lands_in_the_sections_own_status_text() {
     let mut app = showing(4);
-
-    let _ = app.update(Message::CategorizationCollectionsCreated(Ok(3)));
-    assert_eq!(
-        app.categorization_notice,
-        Some(Notice::Created(3)),
-        "how many collections the publish made"
-    );
-
-    let _ = app.update(Message::CategorizationCollectionsCreated(Ok(0)));
-    assert_eq!(
-        app.categorization_notice,
-        Some(Notice::NoCollections),
-        "zero is not four: it says the run implies no collection"
-    );
-
-    let _ = app.update(Message::CategorizationCollectionsCreated(Err(
-        "refused".to_owned()
-    )));
-    assert!(
-        matches!(&app.categorization_notice, Some(Notice::Failed(reason)) if reason == "refused"),
-        "the daemon's own reason is what the user reads: {:?}",
-        app.categorization_notice
-    );
 
     let _ = app.update(Message::CategorizationDone(Err(
         "the scan was refused".to_owned()
     )));
-    assert!(
-        matches!(app.categorization_notice, Some(Notice::Failed(_))),
-        "a refused action is news the section has to carry: {:?}",
-        app.categorization_notice
+    assert_eq!(
+        app.categorization_notice.as_deref(),
+        Some("the scan was refused")
     );
 
-    let _ = app.update(Message::SetCategorization(true));
+    let _ = app.update(Message::DetectCouchFriendly);
     assert_eq!(
         app.categorization_notice, None,
         "a new action starts from a clean slate"
