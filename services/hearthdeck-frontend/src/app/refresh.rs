@@ -141,9 +141,6 @@ impl App {
         if self.console_platforms.is_empty() && !self.retries.consoles {
             reads.push(self.load_consoles());
         }
-        if stale.categorization {
-            reads.push(self.load_categorization());
-        }
         Task::batch(reads)
     }
 
