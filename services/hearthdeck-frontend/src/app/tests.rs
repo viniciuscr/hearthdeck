@@ -57,6 +57,7 @@ fn shell() -> App {
         window_width: WINDOW_WIDTH,
         grid_scroll_offset: 0.0,
         grid_viewport_height: grid_viewport_height_fallback(),
+        grid_restore_pending: false,
         launch_state: LaunchState::default(),
         input_ownership: InputOwnership::default(),
         details: None,
@@ -1020,6 +1021,81 @@ fn the_grid_follows_the_cursor_out_of_the_viewport() {
     assert!(
         app.grid_scroll_offset > 0.0,
         "the cursor left the viewport and the grid did not follow it"
+    );
+}
+
+/// Walks the grid past the fold the way the pad does, so the follow has
+/// scrolled and the cursor sits rows below the top.
+fn walked_past_the_fold(app: &mut App) {
+    let metrics = grid::metrics(app.window_width);
+    let visible_rows = ((app.grid_viewport_height / metrics.row_height).floor() as usize).max(1);
+    for _ in 0..visible_rows + 3 {
+        send(app, GamepadEvent::MoveDown);
+    }
+    settle(app);
+}
+
+/// Coming back to the library rebuilds its grid at the top of the list - the
+/// scrollable's offset lives in the widget tree the trip drops - while the
+/// cursors keep their tile. The follow has to run again for the rebuilt grid,
+/// or the user returns to a viewport scrolled away from where the focus is.
+#[test]
+fn returning_to_the_library_puts_the_scroll_back_under_the_focus() {
+    let mut app = showing(8 * 40);
+    walked_past_the_fold(&mut app);
+    let focused = app.cursors.tile;
+    let followed = app.grid_scroll_offset;
+    assert!(followed > 0.0, "the walk should have scrolled the grid");
+
+    // Off to a sibling page and back: the round trip a tab switch makes.
+    let _ = app.update(Message::OpenDashboard);
+    age_page_fade(&mut app);
+    let _ = app.update(Message::OpenLibrary);
+    age_page_fade(&mut app);
+    let _ = app.update(Message::Animate(Instant::now()));
+
+    assert_eq!(app.cursors.tile, focused, "the cursors keep their tile");
+    assert_eq!(
+        app.scrolls.targets(),
+        vec![ScrollTarget::Grid],
+        "the follow is re-run for the rebuilt grid"
+    );
+    assert_eq!(
+        app.grid_scroll_offset, followed,
+        "the viewport lands where the focus left it"
+    );
+}
+
+/// A launch takes the screen over: the overlay stands in for the grid until
+/// the game runs, and a session can last hours. The follow has to run when the
+/// overlay drops, not when the game exits - the user comes back from the game
+/// to the tile they launched.
+#[test]
+fn a_dismissed_launch_puts_the_scroll_back_under_the_launched_tile() {
+    let mut app = showing(8 * 40);
+    walked_past_the_fold(&mut app);
+    let focused = app.cursors.tile;
+    let followed = app.grid_scroll_offset;
+    assert!(followed > 0.0, "the walk should have scrolled the grid");
+
+    send(&mut app, GamepadEvent::Confirm);
+    // The daemon's acceptance is what schedules the delayed dismissal of the
+    // overlay; the dismissal itself is the message that drops it.
+    let _ = app.update(Message::DismissLaunch);
+    let _ = app.update(Message::Animate(Instant::now()));
+
+    assert_eq!(
+        app.cursors.tile, focused,
+        "the cursors keep the launched tile"
+    );
+    assert_eq!(
+        app.scrolls.targets(),
+        vec![ScrollTarget::Grid],
+        "the follow is re-run when the overlay drops"
+    );
+    assert_eq!(
+        app.grid_scroll_offset, followed,
+        "the grid waits under the focus for the game to end"
     );
 }
 

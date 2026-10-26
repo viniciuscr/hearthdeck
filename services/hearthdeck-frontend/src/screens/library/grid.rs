@@ -158,6 +158,17 @@ impl Metrics {
     }
 }
 
+/// How a cover fills a grid tile.
+///
+/// Scaled until it covers the card, so what spills over is cropped rather than
+/// banded. Box art arrives in every proportion — a horizontal box turned a quarter
+/// turn is 3:4 where the card is 2:3 — and a card with bands down its sides reads
+/// as a missing image at television distance.
+#[must_use]
+pub fn tile_fit() -> ContentFit {
+    ContentFit::Cover
+}
+
 /// The widget id of a tile, so the controller's cursor can address it.
 ///
 /// Keyed on the entry rather than on its position, so a tile keeps its identity
@@ -229,7 +240,7 @@ pub fn view(grid: Grid<'_>) -> Element<'_, Message> {
                 icon,
                 metrics.tile_width,
                 metrics.tile_height,
-                ContentFit::Contain,
+                tile_fit(),
                 1,
                 Some(Message::TileContext(index)),
                 Some(Message::Activate(index)),
@@ -294,7 +305,8 @@ fn tile_selection(focused_tile: Option<usize>, index: usize) -> Selection {
 
 #[cfg(test)]
 mod tests {
-    use super::{GRID_OVERSCAN_ROWS, Metrics, Selection, metrics, tile_selection};
+    use super::{GRID_OVERSCAN_ROWS, Metrics, Selection, metrics, tile_fit, tile_selection};
+    use cosmic::iced::ContentFit;
 
     /// A viewport `rows` rows tall. Deliberately not a whole number of rows:
     /// asking for a window that lands exactly on a row boundary is a question
@@ -308,6 +320,15 @@ mod tests {
         assert_eq!(tile_selection(Some(5), 5), Selection::Selected);
         assert_eq!(tile_selection(Some(5), 4), Selection::Unselected);
         assert_eq!(tile_selection(None, 5), Selection::Unselected);
+    }
+
+    #[test]
+    fn a_cover_fills_its_tile_instead_of_banding_inside_it() {
+        assert_eq!(
+            tile_fit(),
+            ContentFit::Cover,
+            "an image smaller than its card is enlarged until it covers it"
+        );
     }
 
     #[test]

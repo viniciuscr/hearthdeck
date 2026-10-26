@@ -37,6 +37,11 @@ impl App {
         }
         let from = self.page;
         self.page = to;
+        // The switch drops the grid from the tree, and the library's return
+        // rebuilds it at its top: the follow is owed when the fade lands.
+        if to == Page::Library {
+            self.grid_restore_pending = true;
+        }
         // Take the frame clock once, so the first drawn frame is at progress 0.
         self.now = Instant::now();
         self.page_fade = Some(Fade::new(from, self.now, PAGE_TRANSITION_DURATION));
@@ -67,6 +72,9 @@ impl App {
             || self.section_slide.is_some()
             || self.tab_slide.is_some()
             || self.scrolls.is_animating()
+            // An owed follow is not motion, but it needs its frame to run on:
+            // without one it would wait forever for a redraw nothing asked for.
+            || self.grid_restore_pending
     }
 
     /// Applies a section selection: reset the view state, reload the grid and put

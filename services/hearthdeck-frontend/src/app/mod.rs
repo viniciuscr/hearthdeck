@@ -512,6 +512,12 @@ pub struct App {
     /// for its next page when they reach the end of the records it holds.
     grid_scroll_offset: f32,
     grid_viewport_height: f32,
+    /// Whether the grid's follow is owed a run. The grid is dropped and rebuilt
+    /// at its top by every trip off the library - a sibling page, a launch
+    /// overlay - and the scroll has to be put back under the focus once the
+    /// tree it lands on has settled. Set where the grid is re-shown, taken by
+    /// the frame that follows.
+    grid_restore_pending: bool,
     /// The launch overlay: progress while a game starts, or its failure.
     launch_state: LaunchState,
     /// Who owns input: the frontend, a launch in flight, or a running session.
@@ -596,6 +602,7 @@ impl Application for App {
             window_width: WINDOW_WIDTH,
             grid_scroll_offset: 0.0,
             grid_viewport_height: grid_viewport_height_fallback(),
+            grid_restore_pending: false,
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
             details: None,
@@ -1120,7 +1127,16 @@ impl Application for App {
                 }
             }
             Message::DismissLaunch => {
+                let launch_was_up = self.launch_state.is_visible();
                 self.launch_state.update(LaunchEvent::Dismiss);
+                // The launch layer stood in for the grid the whole launch, so
+                // the grid it drops here is rebuilt at its top - while a game
+                // may run for hours. The follow is owed now, not when the game
+                // exits and the user comes back to a grid scrolled away from
+                // the tile they launched.
+                if launch_was_up && self.page == Page::Library {
+                    self.grid_restore_pending = true;
+                }
             }
             Message::ActiveSessionResult(result) => {
                 match result {
@@ -1174,11 +1190,19 @@ impl Application for App {
             // tick drives is everything else.
             Message::Animate(now) => {
                 self.now = now;
-                return Task::batch([
+                let mut tasks = vec![
                     self.advance_section_slide(),
                     self.advance_tab_slide(),
                     self.advance_scroll(),
-                ]);
+                ];
+                // The rebuilt grid is only in its lasting tree once the fade is
+                // over, so the owed follow waits for that and runs on the first
+                // frame after it - the scroll it drives is what lands and stays.
+                if self.grid_restore_pending && self.page_fade.is_none() {
+                    self.grid_restore_pending = false;
+                    tasks.push(self.restore_grid_scroll());
+                }
+                return Task::batch(tasks);
             }
         }
         Task::none()
