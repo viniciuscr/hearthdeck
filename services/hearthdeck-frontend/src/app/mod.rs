@@ -275,6 +275,9 @@ pub enum Message {
     /// offset is: the follow needs to know whether the focused rail would leave
     /// the view.
     PageScrolled(f32),
+    /// The banner's slide interval elapsed. What has arrived moves on by itself
+    /// while nobody is on it; what to do about that is the update's call.
+    HeroTick,
     /// The library's tab strip scrolled: remembered, so the next tab the
     /// selection lands on can be told whether it would leave the view.
     TabsScrolled(f32),
@@ -465,6 +468,11 @@ pub struct App {
     /// Where the pad is on the dashboard, which is a different surface with a
     /// different shape: rails of cards rather than a grid of tiles.
     dashboard_cursor: dashboard::focus::Cursor,
+    /// Which slide of the dashboard's banner is showing. The banner's own card
+    /// and the banner's own art, held beside the cursor rather than in it: the
+    /// banner moves on while the pad is somewhere else, and a rotation that
+    /// dragged the cursor with it would pull the pad off its row.
+    hero_index: usize,
     /// Where the pad is on the top bar both sibling pages wear: the destination
     /// button at this index, or `None` when the bar does not hold the cursor.
     ///
@@ -574,6 +582,7 @@ impl Application for App {
             // at, and every read of the cursor tolerates that.
             cursors: Cursors::default(),
             dashboard_cursor: dashboard::focus::Cursor::default(),
+            hero_index: 0,
             bar_cursor: None,
             rail_offsets: Vec::new(),
             page_offset: 0.0,
@@ -764,7 +773,11 @@ impl Application for App {
                     Ok(collections) => {
                         self.collections = collections;
                         // The rails just changed under the cursor, so it may be
-                        // pointing past the end of them now.
+                        // pointing past the end of them now - and with them the
+                        // banner, which may have lost slides.
+                        self.hero_index = self
+                            .hero_index
+                            .min(self.dashboard_hero_len().saturating_sub(1));
                         let rails = self.dashboard_rail_lengths();
                         self.dashboard_cursor =
                             dashboard::focus::clamp(self.dashboard_cursor, &rails);
@@ -938,6 +951,7 @@ impl Application for App {
             } => return self.settle_details_flag(rom_id, flag, previous, result),
             Message::RailScrolled { rail, offset } => self.set_rail_offset(rail, offset),
             Message::PageScrolled(offset) => self.page_offset = offset,
+            Message::HeroTick => return self.rotate_hero(),
             Message::TabsScrolled(offset) => self.tabs_offset = offset,
             Message::OpenDashboard => {
                 // Landing on a page hands the cursor to its content, so neither
@@ -1244,6 +1258,16 @@ impl Application for App {
         if self.is_animating() {
             subs.push(window::frames().map(|(_window, at)| Message::Animate(at)));
         }
+        // The banner moves on by itself only while the pad is elsewhere: a slide
+        // that advanced under the pad would move what the person is reading, and
+        // an idle banner nobody is looking at is the whole point of rotating it.
+        if self.page == Page::Dashboard
+            && dashboard::hero::rotates(self.dashboard_hero_len(), self.dashboard_cursor)
+        {
+            subs.push(
+                iced::time::every(crate::style::HERO_SLIDE_INTERVAL).map(|_| Message::HeroTick),
+            );
+        }
         Subscription::batch(subs)
     }
 }
@@ -1405,7 +1429,10 @@ impl App {
     fn view_dashboard(&self) -> Element<'_, Message> {
         let screen = dashboard::view(
             &self.dashboard_shelves(),
-            self.dashboard_cursor,
+            dashboard::Placement {
+                cursor: self.dashboard_cursor,
+                hero_slide: self.hero_index,
+            },
             &self.top_bar(top_bar::Destination::Dashboard),
             self.window_width,
             navigate,

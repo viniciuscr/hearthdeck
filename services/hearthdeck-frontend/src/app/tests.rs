@@ -16,6 +16,7 @@ fn shell() -> App {
         page: Page::default(),
         page_fade: None,
         now: Instant::now(),
+        hero_index: 0,
         section_slide: None,
         tab_slide: None,
         scrolls: Scrolls::default(),
@@ -1352,6 +1353,9 @@ fn a_rail_card_draws_the_icon_its_own_item_carries() {
                 item_id: "hearthdeck:game-0".to_owned(),
                 name: "Game 0".to_owned(),
                 icon: icon.map(str::to_owned),
+                background: None,
+                logo: None,
+                description: None,
             }],
         }])));
     };
@@ -1381,6 +1385,50 @@ fn a_rail_card_draws_the_icon_its_own_item_carries() {
     );
 }
 
+/// The banner's collection as the daemon composes one: every slide carries the
+/// wide art a banner draws with, which no rail item has.
+fn arrivals(ids: &[&str]) -> Collection {
+    let mut collection = collection(NEW_ARRIVALS_COLLECTION, None, ids);
+    for (index, item) in collection.items.iter_mut().enumerate() {
+        item.background = Some(format!("/home/user/.cache/hearthdeck/backdrop-{index}.png"));
+        item.description = Some(format!("About {}", item.name));
+    }
+    collection
+}
+
+/// The banner is the page's first row, its cards are the slides, and it moves on
+/// by itself only while the pad is elsewhere: on it, the pad owns the slide.
+#[test]
+fn the_banner_is_the_first_row_and_moves_on_only_while_the_pad_is_elsewhere() {
+    let mut app = shell();
+    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+        arrivals(&[
+            "hearthdeck:stremio-arrivals:tt1",
+            "hearthdeck:stremio-arrivals:tt2",
+        ]),
+        collection("favorites", None, &["hearthdeck:game-0"]),
+    ])));
+
+    let shelves = app.dashboard_shelves();
+    assert!(shelves[0].hero, "the banner is the page's first row");
+    assert_eq!(
+        app.dashboard_rail_lengths(),
+        vec![2, 1],
+        "the pad walks the slides before it walks the rails"
+    );
+
+    // On the banner the pad owns the slide, and the timer changes nothing.
+    let _ = app.step_dashboard(Direction::Right);
+    assert_eq!(app.hero_index, 1, "right on the banner is the next slide");
+    let _ = app.update(Message::HeroTick);
+    assert_eq!(app.hero_index, 1, "a tick under the pad moves nothing");
+
+    // Leave it for the rails below and it moves on by itself, wrapping round.
+    let _ = app.step_dashboard(Direction::Down);
+    let _ = app.update(Message::HeroTick);
+    assert_eq!(app.hero_index, 0, "the last slide wraps to the first");
+}
+
 /// A collection as the daemon composes one.
 fn collection(slug: &str, name: Option<&str>, ids: &[&str]) -> Collection {
     Collection {
@@ -1392,6 +1440,9 @@ fn collection(slug: &str, name: Option<&str>, ids: &[&str]) -> Collection {
                 item_id: (*id).to_owned(),
                 name: (*id).to_owned(),
                 icon: None,
+                background: None,
+                logo: None,
+                description: None,
             })
             .collect(),
     }
@@ -1537,6 +1588,7 @@ fn a_card_id_reaches_the_launch_route_exactly_as_the_rail_carried_it() {
 
 use crate::providers::daemon::{
     CategorizationPhase, CategorizationSnapshot, CategorizationStatus, CollectionItem, ModelStatus,
+    NEW_ARRIVALS_COLLECTION,
 };
 
 /// A health reply that carries one capability and nothing else, so a test can

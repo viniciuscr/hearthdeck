@@ -13,7 +13,7 @@ use futures_util::{StreamExt, stream};
 use hearthdeck_ai::categorization::{ScanReport, Taxonomy};
 use hearthdeck_protocol::{
     ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner, HostCapabilities,
-    InputProfile, RetroRomVersion,
+    InputProfile, RetroRomVersion, StremioMediaType,
 };
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,8 @@ use crate::{
     state::{ProviderHealth, ServerEvent, SharedState},
     stremio::{self, LinkOffer, LinkPoll, StremioConnection},
 };
+
+use crate::discovery::providers::stremio_arrivals;
 
 pub fn router(state: SharedState) -> Router {
     Router::new()
@@ -1084,8 +1086,12 @@ async fn launch_catalog(
         .ok_or_else(ApiError::not_found)?;
     let launch_id = item.launch_id.as_deref().ok_or_else(ApiError::not_found)?;
     let session_id = Uuid::new_v4().to_string();
-    let stremio_title = (item.source_id == stremio::SOURCE_ID)
-        .then(|| stremio_video_id(&item))
+    // Both catalog sources this integration publishes name Stremio titles: the
+    // account's Continue Watching records, and the new arrivals the hero banner
+    // shows.
+    let stremio_title = (item.source_id == stremio::SOURCE_ID
+        || item.source_id == stremio_arrivals::SOURCE_ID)
+        .then(|| stremio_title_target(&item))
         .flatten();
     let request = if item.source_id == "heroic" {
         let (runner, application_id) =
@@ -1096,7 +1102,7 @@ async fn launch_catalog(
             session_id,
             input_profile,
         }
-    } else if let Some(video_id) = stremio_title {
+    } else if let Some((video_id, media_type)) = stremio_title {
         // A Stremio record names a title, so the bridge is asked for that title rather
         // than for the application the record carries. The id travels, not a URL: the
         // bridge validates it and builds the URI itself.
@@ -1106,6 +1112,7 @@ async fn launch_catalog(
             // it and the video id, and builds the URI itself.
             application_id: launch_id.to_owned(),
             video_id,
+            media_type,
             session_id,
             input_profile,
         }
@@ -1162,18 +1169,29 @@ struct RecentActivityQuery {
 
 /// The Stremio title a record names, when it names one.
 ///
-/// The provider publishes it in the record's own metadata, which the catalog keeps
-/// under `discovery`. A record without one is launched as a plain application instead:
-/// an older record, or one whose account has since been unlinked. Either way the card
-/// does something rather than failing.
-fn stremio_video_id(item: &crate::catalog::CatalogItem) -> Option<String> {
-    item.metadata
-        .get("discovery")?
+/// The Stremio title a record names: its video id, and whether that id is a film
+/// or a series.
+///
+/// The provider publishes both in the record's own metadata, which the catalog keeps
+/// under `discovery`. The type matters only for a bare IMDb id — `tt0149460` is a
+/// different page for a film and for a series — while `tt0149460:4:7` already says
+/// series by carrying an episode. A record without a video id is launched as a plain
+/// application instead: an older record, or one whose account has since been
+/// unlinked. Either way the card does something rather than failing.
+fn stremio_title_target(item: &crate::catalog::CatalogItem) -> Option<(String, StremioMediaType)> {
+    let discovery = item.metadata.get("discovery")?;
+    let video_id = discovery
         .get("video_id")?
         .as_str()
         .map(str::trim)
-        .filter(|video_id| !video_id.is_empty())
-        .map(str::to_owned)
+        .filter(|video_id| !video_id.is_empty())?;
+    let media_type = match discovery.get("type").and_then(serde_json::Value::as_str) {
+        Some("series") => StremioMediaType::Series,
+        // Anything not spelled series — including records that predate the field —
+        // was launched as a film before the two kinds were told apart, and stays one.
+        _ => StremioMediaType::Movie,
+    };
+    Some((video_id.to_owned(), media_type))
 }
 
 fn catalog_activity_entry(item: &crate::catalog::CatalogItem) -> ActivityEntry {
@@ -1689,6 +1707,10 @@ async fn list_collections(
             && collection.rule.as_deref() == Some(collections::RULE_CONTINUE_WATCHING)
         {
             Some(continue_watching_items(&state).await)
+        } else if collection.owner == collections::OWNER_STREMIO
+            && collection.rule.as_deref() == Some(collections::RULE_NEW_ARRIVALS)
+        {
+            Some(new_arrival_items(&state).await)
         } else if collection.owner == collections::OWNER_SYSTEM
             && collection.rule.as_deref() == Some(collections::RULE_LAST_PLAYED)
         {
@@ -1851,6 +1873,9 @@ async fn modeled_rail_items(
             item_id: format!("{ENTRY_ID_PREFIX}{app_id}"),
             name,
             icon,
+            background: None,
+            logo: None,
+            description: None,
             played: None,
         });
     }
@@ -1869,6 +1894,9 @@ fn played_collection_item(play: RecentActivity) -> CollectionItem {
         item_id: play.entry.id.clone(),
         name: play.entry.title.clone(),
         icon: play.entry.icon.clone(),
+        background: None,
+        logo: None,
+        description: None,
         played: Some(play),
     }
 }
@@ -1928,7 +1956,49 @@ async fn continue_watching_items(state: &SharedState) -> Result<Vec<CollectionIt
             item_id: format!("{ENTRY_ID_PREFIX}{}", record.id),
             name: record.title,
             icon: record.icon,
+            background: None,
+            logo: None,
+            description: None,
             played: None,
+        })
+        .collect())
+}
+
+/// What has just arrived on Stremio, as the hero banner's slides.
+///
+/// The records the arrivals provider published, newest release first — the same
+/// order the provider wrote them in, since it dates each record by its release.
+/// The banner's art rides on each item: these are the records that hold a wide
+/// background and the title's own wordmark, which a rail card has no use for.
+async fn new_arrival_items(state: &SharedState) -> Result<Vec<CollectionItem>, ApiError> {
+    let records = state
+        .catalog
+        .list_source(
+            stremio_arrivals::SOURCE_ID,
+            COLLECTION_RULE_ITEM_LIMIT as usize,
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(records
+        .into_iter()
+        .map(|record| {
+            let art = |key: &str| {
+                record
+                    .metadata
+                    .get("discovery")
+                    .and_then(|metadata| metadata.get(key))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            };
+            CollectionItem {
+                item_id: format!("{ENTRY_ID_PREFIX}{}", record.id),
+                name: record.title,
+                icon: record.icon,
+                background: art("background"),
+                logo: art("logo"),
+                description: art("description"),
+                played: None,
+            }
         })
         .collect())
 }
@@ -1962,6 +2032,9 @@ async fn add_collection_item(
         icon: request.icon,
         // A curated item is what the client added, not a play: the rule items are
         // the only ones that carry a record.
+        background: None,
+        logo: None,
+        description: None,
         played: None,
     };
     state
@@ -2439,7 +2512,7 @@ mod tests {
                         icon: None,
                         // The provider's own payload: the catalog wraps it under
                         // `discovery` when it serves the record, which is the shape
-                        // `stremio_video_id` reads back.
+                        // `stremio_title_target` reads back.
                         metadata: serde_json::json!({
                             "source": "stremio",
                             "video_id": "tt0149460:4:7"
@@ -2486,6 +2559,7 @@ mod tests {
                 video_id,
                 session_id,
                 input_profile,
+                ..
             } = request
             else {
                 panic!("expected a LaunchStremioTitle request, got {request:?}");
@@ -2636,6 +2710,7 @@ mod tests {
                 video_id,
                 session_id,
                 input_profile,
+                ..
             } = request
             else {
                 panic!("expected a LaunchStremioTitle request, got {request:?}");
@@ -2775,6 +2850,207 @@ mod tests {
             ),
         };
         assert!(empty.is_empty());
+    }
+
+    /// The hero banner's collection is composed from what the arrivals provider
+    /// published: newest release first, and carrying the wide art — a background,
+    /// the title's own wordmark, a synopsis — that a rail item never has.
+    #[tokio::test]
+    async fn the_banner_collection_carries_the_art_the_hero_draws_with() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.socket"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+            },
+            database,
+        ));
+
+        let arrival = |tt: &str, title: &str, released: &str| CatalogRecord {
+            id: format!("stremio-arrivals:{tt}"),
+            title: title.to_owned(),
+            kind: "series".to_owned(),
+            launch_id: Some("com.stremio.Stremio.desktop".to_owned()),
+            icon: Some(format!(
+                "https://images.metahub.space/poster/medium/{tt}/img"
+            )),
+            metadata: serde_json::json!({
+                "source": "stremio-arrivals",
+                "type": "series",
+                "video_id": tt,
+                "background": format!("https://images.metahub.space/background/medium/{tt}/img"),
+                "logo": format!("https://images.metahub.space/logo/medium/{tt}/img"),
+                "description": format!("About {title}"),
+                "released": released,
+            }),
+            // The provider dates a record by its release, so newest release first
+            // is the order this listing answers with.
+            updated_at: released.to_owned(),
+        };
+        state
+            .catalog
+            .replace_source(
+                "stremio-arrivals",
+                vec![
+                    arrival("tt1", "Older", "2026-10-01T00:00:00.000Z"),
+                    arrival("tt2", "Newer", "2026-10-20T00:00:00.000Z"),
+                ],
+            )
+            .await
+            .unwrap();
+        // Another source's records must not leak into the banner.
+        state
+            .catalog
+            .replace_source(
+                "stremio",
+                vec![CatalogRecord {
+                    id: "stremio:tt3".to_owned(),
+                    title: "Not an arrival".to_owned(),
+                    kind: "movie".to_owned(),
+                    launch_id: None,
+                    icon: None,
+                    metadata: serde_json::json!({"source": "stremio"}),
+                    updated_at: "2026-09-01T00:00:00.000Z".to_owned(),
+                }],
+            )
+            .await
+            .unwrap();
+
+        let items = match super::new_arrival_items(&state).await {
+            Ok(items) => items,
+            Err(error) => panic!("the banner should have composed: {}", error.message),
+        };
+        let ids: Vec<&str> = items.iter().map(|item| item.item_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "hearthdeck:stremio-arrivals:tt2",
+                "hearthdeck:stremio-arrivals:tt1"
+            ]
+        );
+        assert_eq!(items[0].name, "Newer");
+        // The whole reason this collection is not just names and posters like
+        // every rail: the art the hero banner draws with.
+        assert_eq!(
+            items[0].background.as_deref(),
+            Some("https://images.metahub.space/background/medium/tt2/img")
+        );
+        assert_eq!(
+            items[0].logo.as_deref(),
+            Some("https://images.metahub.space/logo/medium/tt2/img")
+        );
+        assert_eq!(items[0].description.as_deref(), Some("About Newer"));
+    }
+
+    /// A new arrival names its own kind, and the launch route carries it to the
+    /// bridge: a bare IMDb id is a film or a series only as the record says, so a
+    /// series banner slide opens the series' page rather than the film one.
+    #[tokio::test]
+    async fn launching_an_arrival_opens_the_kind_of_title_the_record_says() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.socket"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+            },
+            database,
+        ));
+
+        state
+            .catalog
+            .replace_source(
+                "stremio-arrivals",
+                vec![CatalogRecord {
+                    id: "stremio-arrivals:tt1234567".to_owned(),
+                    title: "A series".to_owned(),
+                    kind: "series".to_owned(),
+                    launch_id: Some("com.stremio.Stremio.desktop".to_owned()),
+                    icon: None,
+                    metadata: serde_json::json!({
+                        "source": "stremio-arrivals",
+                        "type": "series",
+                        "video_id": "tt1234567"
+                    }),
+                    updated_at: "2026-10-20T00:00:00.000Z".to_owned(),
+                }],
+            )
+            .await
+            .unwrap();
+
+        // The launch route is authenticated, so pair first.
+        let (_, pairing) = response_json(
+            local_router(state.clone()),
+            Request::post("/v1/pairing").body(Body::empty()).unwrap(),
+        )
+        .await;
+        let code = pairing["code"].as_str().unwrap();
+        let (_, paired) = response_json(
+            router(state.clone()),
+            Request::post("/v1/pairing/complete")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"code": code, "client_name": "arrival-launch"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        let token = paired["token"].as_str().unwrap().to_owned();
+
+        let bridge = spawn_fake_bridge(state.config.bridge_socket_path.clone(), |request| {
+            let BridgeRequest::LaunchStremioTitle {
+                application_id,
+                video_id,
+                media_type,
+                session_id,
+                ..
+            } = request
+            else {
+                panic!("expected a LaunchStremioTitle request, got {request:?}");
+            };
+            assert_eq!(application_id, "com.stremio.Stremio.desktop");
+            // The bare id reaches the bridge, and its kind with it: the two
+            // together are what names the series' own page.
+            assert_eq!(video_id, "tt1234567");
+            assert_eq!(media_type, hearthdeck_protocol::StremioMediaType::Series);
+            BridgeResponse::LaunchAccepted {
+                session: ApplicationSession {
+                    id: session_id,
+                    source_id: "desktop-apps".to_owned(),
+                    application_id: "com.stremio.Stremio.desktop".to_owned(),
+                    state: ApplicationSessionState::Running,
+                },
+            }
+        });
+
+        let (status, launched) = response_json(
+            router(state.clone()),
+            Request::post("/v1/launch/hearthdeck:stremio-arrivals:tt1234567?input_profile=desktop")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(launched["application_id"], "com.stremio.Stremio.desktop");
+        bridge.await.unwrap();
     }
 
     #[tokio::test]
@@ -3599,6 +3875,9 @@ mod tests {
                     item_id: "hearthdeck:desktop:org.example.App".to_owned(),
                     name: "Example".to_owned(),
                     icon: None,
+                    background: None,
+                    logo: None,
+                    description: None,
                     played: None,
                 },
             )

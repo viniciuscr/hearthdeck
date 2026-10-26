@@ -41,6 +41,17 @@ pub const TEXT_BODY: f32 = 14.0 * TEXT_SCALE;
 /// Caption text (matches `text::caption`).
 pub const TEXT_CAPTION: f32 = 12.0 * TEXT_SCALE;
 
+/// Details screen title — larger for TV viewing distance.
+pub const DETAILS_TEXT_TITLE: f32 = 56.0 * TEXT_SCALE;
+/// Details screen header text.
+pub const DETAILS_TEXT_HEADER: f32 = 28.0 * TEXT_SCALE;
+/// Details screen emphasis text (action buttons).
+pub const DETAILS_TEXT_LARGE: f32 = 22.0 * TEXT_SCALE;
+/// Details screen body text (facts, summary).
+pub const DETAILS_TEXT_BODY: f32 = 18.0 * TEXT_SCALE;
+/// Details screen caption text (chips, labels).
+pub const DETAILS_TEXT_CAPTION: f32 = 16.0 * TEXT_SCALE;
+
 /// The class a line that reports a failure wears: the theme's destructive color,
 /// so an error does not read as one more quiet caption.
 ///
@@ -83,6 +94,14 @@ pub const SECTION_TRANSITION_DURATION: Duration = Duration::from_millis(300);
 /// so they all move at this speed. Short, because it fires on each focus step:
 /// long enough to read as motion, short enough not to lag the D-pad.
 pub const SCROLL_TRANSITION_DURATION: Duration = Duration::from_millis(220);
+
+/// How long the dashboard's hero banner holds one slide before moving on.
+///
+/// Long enough to read a wordmark and a line of synopsis, short enough that a
+/// banner nobody is looking at comes round again before anyone misses it. The
+/// banner only advances while the pad is elsewhere, so this is the pace of the
+/// page's own idle motion rather than of anything the user is on.
+pub const HERO_SLIDE_INTERVAL: Duration = Duration::from_secs(8);
 
 // ---------------------------------------------------------------------------
 // Window & layout (proportional — sizes computed from window_width)
@@ -232,9 +251,12 @@ pub fn tile_width(window_width: f32, columns: usize) -> f32 {
     ((cw - (columns as f32 - 1.0) * gap) / columns as f32).max(60.0)
 }
 
-/// Games use common 2:3 portrait cover art; applications remain square.
-pub fn tile_height(tile_width: f32, is_game: bool) -> f32 {
-    tile_width * if is_game { 1.5 } else { 1.0 }
+/// The library grid's tile height: the dashboard's own portrait card, so a cover
+/// is drawn at the same proportion wherever it appears. The width is the grid's
+/// and the height follows from it, which keeps a row's pitch exact.
+#[must_use]
+pub fn grid_tile_height(tile_width: f32) -> f32 {
+    tile_width / DASHBOARD_GAME_ASPECT
 }
 
 /// Square dashboard tiles fill one horizontal row without shifting on focus.
@@ -254,6 +276,22 @@ pub fn dashboard_console_tile_size(
     tile_gap: u16,
 ) -> f32 {
     dashboard_tile_size(window_width, horizontal_padding, tile_gap) / 2.0
+}
+
+/// The share of the window's height the dashboard's hero banner takes.
+///
+/// Three times the third it started at: a third of the screen left the artwork
+/// too short to read as a poster wall, so the banner now fills almost the whole
+/// window. The rails below it are reached by scrolling the page - that is the
+/// trade this buys the art.
+pub const HERO_HEIGHT_RATIO: f32 = 0.9;
+
+/// The height the dashboard's hero banner takes on a window `window_height`
+/// tall. The banner spans the window's whole width, so only its height has to
+/// be proportioned.
+#[must_use]
+pub fn hero_height(window_height: f32) -> f32 {
+    window_height * HERO_HEIGHT_RATIO
 }
 
 // ---------------------------------------------------------------------------
@@ -981,10 +1019,11 @@ pub fn details_toggle_button_class(active: bool) -> Button {
 #[cfg(test)]
 mod tests {
     use super::{
-        CONSOLE_GRID_COLUMNS, DASHBOARD_VISIBLE_TILES, GRID_COLUMNS, content_horizontal_padding,
-        content_width, dashboard_tile_size, filter_button_height, grid_columns, grid_gap,
-        search_icon_padding, sidebar_accent_bar_height, sidebar_header_height, sidebar_item_height,
-        sidebar_width, tab_height, tab_underline_height, tile_height, tile_width,
+        CONSOLE_GRID_COLUMNS, DASHBOARD_GAME_ASPECT, DASHBOARD_VISIBLE_TILES, GRID_COLUMNS,
+        content_horizontal_padding, content_width, dashboard_tile_size, filter_button_height,
+        grid_columns, grid_gap, grid_tile_height, search_icon_padding, sidebar_accent_bar_height,
+        sidebar_header_height, sidebar_item_height, sidebar_width, tab_height,
+        tab_underline_height, tile_width,
     };
 
     #[test]
@@ -1043,9 +1082,16 @@ mod tests {
     }
 
     #[test]
-    fn game_tiles_are_portrait_and_application_tiles_are_square() {
+    fn a_library_tile_is_the_dashboards_portrait_card() {
         let width = tile_width(1200.0, GRID_COLUMNS);
-        assert_eq!(tile_height(width, false), width);
-        assert_eq!(tile_height(width, true), width * 1.5);
+
+        assert!(
+            grid_tile_height(width) > width,
+            "a horizontal box only fits a card taller than it is wide"
+        );
+        assert!(
+            (grid_tile_height(width) - width / DASHBOARD_GAME_ASPECT).abs() < f32::EPSILON,
+            "the library tile wears the dashboard card's proportion"
+        );
     }
 }

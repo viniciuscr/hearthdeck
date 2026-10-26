@@ -36,6 +36,11 @@ pub const OWNER_STREMIO: &str = "stremio";
 /// The Stremio rail's rule and slug, which are the same string for the same reason
 /// `laya:watch` is: an owner and the rail it owns.
 pub const RULE_CONTINUE_WATCHING: &str = "stremio:continue-watching";
+/// The Stremio new-arrivals collection's rule and slug, same again. The dashboard
+/// draws this one as the hero banner over the rails rather than as a rail: it is
+/// what has just arrived on Stremio, and its items carry the wide art a banner
+/// draws with.
+pub const RULE_NEW_ARRIVALS: &str = "stremio:new-arrivals";
 /// Collections an optional feature owns, such as the categorization model.
 ///
 /// One owner per feature, so a feature writes only under its own name and can
@@ -59,7 +64,7 @@ struct Builtin {
 /// an account is linked and the provider has published, so a row that always
 /// exists costs nothing. Its position is the one a feature's own rails use, so
 /// it sorts after the hand-ordered ones.
-const BUILTINS: [Builtin; 4] = [
+const BUILTINS: [Builtin; 5] = [
     Builtin {
         slug: "last-played",
         kind: KIND_RULE,
@@ -90,6 +95,16 @@ const BUILTINS: [Builtin; 4] = [
         rule: Some(RULE_CONTINUE_WATCHING),
         role: "none",
         position: 100,
+        owner: OWNER_STREMIO,
+    },
+    Builtin {
+        slug: RULE_NEW_ARRIVALS,
+        kind: KIND_RULE,
+        rule: Some(RULE_NEW_ARRIVALS),
+        role: "none",
+        // Just above the Continue Watching rail: a client that draws every
+        // collection as a rail gets the banner's own order as the rails' order.
+        position: 99,
         owner: OWNER_STREMIO,
     },
 ];
@@ -201,6 +216,16 @@ pub struct CollectionItem {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// The art a hero banner draws with: one wide background, the title's own
+    /// wordmark over it, and a one-line synopsis. A rail card has no use for any
+    /// of them and carries none — only a collection resolved from records that
+    /// hold artwork fills these (`stremio:new-arrivals`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// The play a rule derived this item from, in the same shape the activity
     /// endpoint serves. A client draws, classifies and launches it with the code
     /// it already has for a play, so a rail built from a collection needs no
@@ -252,6 +277,9 @@ impl CollectionStore {
                     item_id: row.get("item_id"),
                     name: row.get("name"),
                     icon: row.get("icon"),
+                    background: None,
+                    logo: None,
+                    description: None,
                     played: None,
                 });
         }
@@ -410,6 +438,7 @@ mod tests {
     use super::{
         CollectionItem, CollectionStore, KIND_MEMBERSHIP, KIND_RULE, OWNER_LAYA, OWNER_STREMIO,
         OWNER_SYSTEM, OWNER_USER, OwnedCollection, RULE_CONTINUE_WATCHING, RULE_LAST_PLAYED,
+        RULE_NEW_ARRIVALS,
     };
     use crate::database::Database;
 
@@ -430,6 +459,9 @@ mod tests {
             item_id: id.to_owned(),
             name: name.to_owned(),
             icon: None,
+            background: None,
+            logo: None,
+            description: None,
             played: None,
         }
     }
@@ -446,6 +478,7 @@ mod tests {
                 "last-played",
                 "favorites",
                 "play-later",
+                "stremio:new-arrivals",
                 "stremio:continue-watching"
             ]
         );
@@ -454,11 +487,15 @@ mod tests {
         assert_eq!(collections[1].kind, KIND_MEMBERSHIP);
         assert_eq!(collections[1].role, "favorite");
         assert_eq!(collections[2].role, "play_later");
-        // The Stremio rail is a rule too, owned by the feature that resolves it, and
-        // it holds nothing of its own: an unlinked account has published no records.
+        // Both Stremio collections are rules too, owned by the feature that resolves
+        // them, and they hold nothing of their own: the arrivals are what a public
+        // addon catalog published, and an unlinked account has published no records.
         assert_eq!(collections[3].kind, KIND_RULE);
         assert_eq!(collections[3].owner, OWNER_STREMIO);
-        assert_eq!(collections[3].rule.as_deref(), Some(RULE_CONTINUE_WATCHING));
+        assert_eq!(collections[3].rule.as_deref(), Some(RULE_NEW_ARRIVALS));
+        assert_eq!(collections[4].kind, KIND_RULE);
+        assert_eq!(collections[4].owner, OWNER_STREMIO);
+        assert_eq!(collections[4].rule.as_deref(), Some(RULE_CONTINUE_WATCHING));
         assert!(collections.iter().all(|one| one.items.is_empty()));
     }
 

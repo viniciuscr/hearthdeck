@@ -247,6 +247,7 @@ async fn handle_request(
         BridgeRequest::LaunchStremioTitle {
             application_id,
             video_id,
+            media_type,
             session_id,
             input_profile,
         } => {
@@ -273,7 +274,14 @@ async fn handle_request(
                     message: error.to_string(),
                 };
             }
-            match platform::launch_stremio_title(&application_id, &video_id, &session_id).await {
+            match platform::launch_stremio_title(
+                &application_id,
+                &video_id,
+                media_type,
+                &session_id,
+            )
+            .await
+            {
                 Ok(launched) => {
                     register_launch(
                         sessions,
