@@ -9,6 +9,12 @@ Type=exec
 EnvironmentFile=-%h/.config/hearthdeck/daemon.env
 Environment=HEARTHDECK_LOG_FORMAT=json
 Environment=RUST_LOG=hearthdeck_bridge=info
+# Production default for the RetroArch save/state tree, preset so a packaged
+# install writes saves where the docs say without anyone creating daemon.env.
+# The EnvironmentFile above still wins, which is how a box points the tree at a
+# pCloud/Dropbox folder. The bridge resolves the same path from XDG when this
+# is empty, and a test in platform/linux.rs keeps the three in step.
+Environment=HEARTHDECK_RETRO_SAVE_ROOT=%h/.local/share/hearthdeck/retroarch
 ExecStart=%h/.local/bin/hearthdeck-bridge
 Restart=on-failure
 RestartSec=2

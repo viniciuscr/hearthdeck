@@ -152,20 +152,15 @@ pub enum Message {
     OpenSettings,
     /// The smart-categories switch was flipped.
     SetCategorization(bool),
-    /// A categorization scan was asked for.
+    /// Classify the library and publish its dashboard rails.
     ScanCategorization,
+    /// Ask the model which applications are couch-friendly.
+    DetectCouchFriendly,
     /// The daemon's health reply landed: what this deployment provides at all.
     HealthLoaded(Result<crate::providers::daemon::HealthResponse, String>),
-    /// The last run's rails should become dashboard collections.
-    CreateCategorizationCollections,
-    /// The publish finished: how many collections it created, or why it could
-    /// not. The shell re-reads the collections on success.
-    CategorizationCollectionsCreated(Result<usize, String>),
     /// Restore default categories was pressed: every section's tabs go back to
     /// the ones derived from the library and the console platforms.
     RestoreDefaultCategories,
-    /// The downloaded checkpoint should be freed.
-    DeleteCategorizationModel,
     /// The Stremio section's link button: ask the daemon for a code.
     StartStremioLink,
     /// The daemon answered the request for a code: the one to approve, or why
@@ -188,8 +183,11 @@ pub enum Message {
     SelectSection(Section),
     /// The dashboard's top bar: show the dashboard itself.
     OpenDashboard,
-    /// Restore dashboard was pressed: read everything it is drawn from again.
+    /// Restore dashboard was pressed: drop the model's rails and read everything
+    /// the dashboard is drawn from again.
     RestoreDashboard,
+    /// The model's rails are gone, or could not be removed.
+    ModelRailsRemoved(Result<(), String>),
     /// The dashboard's top bar: show the library as it was left.
     OpenLibrary,
     /// The dashboard's top bar: show the library with the caret in its search
@@ -386,7 +384,7 @@ impl Page {
 enum CategorizationAction {
     SetEnabled(bool),
     Scan,
-    RemoveModel,
+    DetectCouch,
 }
 
 pub struct App {
@@ -446,7 +444,8 @@ pub struct App {
     /// What the last categorization action did, for the section's own status
     /// text. There is no toast layer yet, so the section is where the user
     /// reads the outcome.
-    categorization_notice: Option<settings::categorization::Notice>,
+    /// Why the last categorization action was refused.
+    categorization_notice: Option<String>,
     /// The Stremio link flow: the account the daemon holds, the code being
     /// approved elsewhere, and what the shell must do next. The flow is the
     /// decision layer - each answer from the daemon moves it - so nothing in
@@ -521,6 +520,12 @@ pub struct App {
     /// for its next page when they reach the end of the records it holds.
     grid_scroll_offset: f32,
     grid_viewport_height: f32,
+    /// Whether the grid's follow is owed a run. The grid is dropped and rebuilt
+    /// at its top by every trip off the library - a sibling page, a launch
+    /// overlay - and the scroll has to be put back under the focus once the
+    /// tree it lands on has settled. Set where the grid is re-shown, taken by
+    /// the frame that follows.
+    grid_restore_pending: bool,
     /// The launch overlay: progress while a game starts, or its failure.
     launch_state: LaunchState,
     /// Who owns input: the frontend, a launch in flight, or a running session.
@@ -605,6 +610,7 @@ impl Application for App {
             window_width: WINDOW_WIDTH,
             grid_scroll_offset: 0.0,
             grid_viewport_height: grid_viewport_height_fallback(),
+            grid_restore_pending: false,
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
             details: None,
@@ -974,6 +980,12 @@ impl Application for App {
                 return self.refresh_dashboard();
             }
             Message::RestoreDashboard => return self.restore_dashboard(),
+            Message::ModelRailsRemoved(result) => {
+                if let Err(error) = result {
+                    log::warn!("could not remove the model's dashboard rails: {error}");
+                }
+                return self.load_collections();
+            }
             Message::OpenLibrary => {
                 self.switch_page(Page::Library);
                 self.bar_cursor = None;
@@ -1009,11 +1021,13 @@ impl Application for App {
             Message::ScanCategorization => {
                 return self.categorization_action(CategorizationAction::Scan);
             }
+            Message::DetectCouchFriendly => {
+                return self.categorization_action(CategorizationAction::DetectCouch);
+            }
             Message::CategorizationDone(result) => {
                 if let Err(error) = result {
                     log::warn!("categorization action failed: {error}");
-                    self.categorization_notice =
-                        Some(settings::categorization::Notice::Failed(error));
+                    self.categorization_notice = Some(error);
                 }
                 return self.load_categorization();
             }
@@ -1031,35 +1045,6 @@ impl Application for App {
                 // deployment lost the feature.
                 Err(error) => log::warn!("health read failed: {error}"),
             },
-            Message::CreateCategorizationCollections => {
-                return self.create_categorization_collections();
-            }
-            Message::CategorizationCollectionsCreated(result) => {
-                match result {
-                    Ok(0) => {
-                        log::warn!("the last categorization produced no dashboard collections");
-                        self.categorization_notice =
-                            Some(settings::categorization::Notice::NoCollections);
-                    }
-                    Ok(created) => {
-                        log::info!("created {created} dashboard collections");
-                        self.categorization_notice =
-                            Some(settings::categorization::Notice::Created(created));
-                    }
-                    // A refusal leaves the dashboard as it was, so there is
-                    // nothing new to read back: the reason is the whole answer.
-                    Err(error) => {
-                        log::warn!("could not create the dashboard collections: {error}");
-                        self.categorization_notice =
-                            Some(settings::categorization::Notice::Failed(error));
-                        return Task::none();
-                    }
-                }
-                return self.load_collections();
-            }
-            Message::DeleteCategorizationModel => {
-                return self.categorization_action(CategorizationAction::RemoveModel);
-            }
             Message::RestoreDefaultCategories => return self.restore_default_categories(),
             Message::Romm(message) => return self.update_romm(message),
             // The Stremio section: the flow decides what an answer means and
@@ -1160,7 +1145,16 @@ impl Application for App {
                 }
             }
             Message::DismissLaunch => {
+                let launch_was_up = self.launch_state.is_visible();
                 self.launch_state.update(LaunchEvent::Dismiss);
+                // The launch layer stood in for the grid the whole launch, so
+                // the grid it drops here is rebuilt at its top - while a game
+                // may run for hours. The follow is owed now, not when the game
+                // exits and the user comes back to a grid scrolled away from
+                // the tile they launched.
+                if launch_was_up && self.page == Page::Library {
+                    self.grid_restore_pending = true;
+                }
             }
             Message::ActiveSessionResult(result) => {
                 match result {
@@ -1214,11 +1208,19 @@ impl Application for App {
             // tick drives is everything else.
             Message::Animate(now) => {
                 self.now = now;
-                return Task::batch([
+                let mut tasks = vec![
                     self.advance_section_slide(),
                     self.advance_tab_slide(),
                     self.advance_scroll(),
-                ]);
+                ];
+                // The rebuilt grid is only in its lasting tree once the fade is
+                // over, so the owed follow waits for that and runs on the first
+                // frame after it - the scroll it drives is what lands and stays.
+                if self.grid_restore_pending && self.page_fade.is_none() {
+                    self.grid_restore_pending = false;
+                    tasks.push(self.restore_grid_scroll());
+                }
+                return Task::batch(tasks);
             }
         }
         Task::none()
@@ -1535,7 +1537,7 @@ impl App {
             &settings::Settings {
                 categorization: self.categorization.as_ref(),
                 capable: self.categorization_capable,
-                notice: self.categorization_notice.as_ref(),
+                notice: self.categorization_notice.as_deref(),
                 stremio: &self.stremio,
                 romm: &self.romm,
             },

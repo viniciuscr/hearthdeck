@@ -36,18 +36,23 @@ struct Stale {
     /// Consoles are only re-read while there are none: their loader also
     /// prefetches every console's games, which is not a per-event cost.
     missing_consoles: bool,
+    /// The settings screen's model status: a job just finished.
+    categorization: bool,
 }
 
 fn stale_after(event: FeedEvent) -> Stale {
     match event {
-        FeedEvent::Changed(
-            DaemonEvent::LibraryChanged
-            | DaemonEvent::MetadataChanged
-            | DaemonEvent::CategorizationChanged,
-        ) => Stale {
+        FeedEvent::Changed(DaemonEvent::LibraryChanged | DaemonEvent::MetadataChanged) => Stale {
             catalog: true,
             collections: true,
             missing_consoles: true,
+            ..Stale::default()
+        },
+        FeedEvent::Changed(DaemonEvent::CategorizationChanged) => Stale {
+            catalog: true,
+            collections: true,
+            missing_consoles: true,
+            categorization: true,
         },
         // A play ended or began: Recently Played and Continue Watching move.
         FeedEvent::Changed(DaemonEvent::ApplicationSessionChanged) => Stale {
@@ -58,6 +63,7 @@ fn stale_after(event: FeedEvent) -> Stale {
             catalog: true,
             collections: true,
             missing_consoles: true,
+            ..Stale::default()
         },
         FeedEvent::Changed(DaemonEvent::Unknown) => Stale::default(),
     }
@@ -77,6 +83,9 @@ impl App {
         }
         if stale.missing_consoles && self.console_platforms.is_empty() && !self.retries.consoles {
             reads.push(self.load_consoles());
+        }
+        if stale.categorization {
+            reads.push(self.load_categorization());
         }
         Task::batch(reads)
     }
@@ -135,12 +144,9 @@ impl App {
         Task::batch(reads)
     }
 
-    /// Puts the dashboard back as the daemon composes it: every read again, the
-    /// cursor on the first card, and the dashboard on screen.
-    ///
-    /// The built-in rails live in the daemon, which restores them on read; what
-    /// this client can get wrong is only what it holds, so this is what it
-    /// throws away.
+    /// Puts the dashboard back as the daemon composes it: the model's rails
+    /// removed, every read again, the cursor on the first card, and the
+    /// dashboard on screen. The collections are read once the removal answers.
     pub(super) fn restore_dashboard(&mut self) -> Task<Message> {
         self.switch_page(Page::Dashboard);
         self.cursors.ring = None;
@@ -153,9 +159,16 @@ impl App {
         if !self.retries.consoles {
             reads.push(self.load_consoles());
         }
-        if !self.retries.collections {
-            reads.push(self.load_collections());
-        }
+        let client = self.daemon_client.clone();
+        reads.push(Task::perform(
+            async move {
+                client
+                    .remove_categorization_collections()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::ModelRailsRemoved(result)),
+        ));
         Task::batch(reads)
     }
 }
@@ -181,12 +194,19 @@ mod tests {
             catalog: true,
             collections: true,
             missing_consoles: true,
+            ..Stale::default()
         };
         assert_eq!(
             stale_after(FeedEvent::Changed(DaemonEvent::LibraryChanged)),
             everything
         );
         assert_eq!(stale_after(FeedEvent::Resumed), everything);
+    }
+
+    #[test]
+    fn a_finished_categorization_job_rereads_its_status_too() {
+        assert!(stale_after(FeedEvent::Changed(DaemonEvent::CategorizationChanged)).categorization);
+        assert!(!stale_after(FeedEvent::Changed(DaemonEvent::LibraryChanged)).categorization);
     }
 
     #[test]

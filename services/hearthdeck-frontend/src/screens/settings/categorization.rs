@@ -36,34 +36,17 @@ pub enum Section<'a> {
     },
 }
 
-/// One control the section offers.
+/// One control the section offers. Each model action is its own button: the
+/// switch only installs the model, and nothing is classified until one is pressed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// The opt-in itself: turning it on is what installs and activates the
-    /// model, and turning it off restores everything the model changed.
+    /// The opt-in itself: turning it on downloads the model, and turning it off
+    /// removes the model and restores everything it changed.
     Toggle,
-    /// Classify the library with the model.
-    Categorize,
-    /// Publish the last run's rails as dashboard collections, without calling
-    /// the model again.
-    CreateCollections,
-    /// Free the downloaded checkpoint.
-    RemoveModel,
-}
-
-/// What the last action did, for the section to say in its own status text.
-///
-/// The toast layer that would normally carry these outcomes does not exist yet,
-/// so the section's own status line is where the user reads them.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Notice {
-    /// The last run's rails were published: this many dashboard collections.
-    Created(usize),
-    /// The publish was accepted, but the last run implies no dashboard
-    /// collection - which is not the same as "updated none", and says so.
-    NoCollections,
-    /// An action was refused, with the daemon's own reason.
-    Failed(String),
+    /// Classify the library and publish its dashboard rails (Watch, ...).
+    PublishRails,
+    /// Ask the model which applications are couch-friendly (the Couch tab).
+    DetectCouch,
 }
 
 /// What the section draws for the state [`Panel`] describes.
@@ -87,21 +70,15 @@ pub fn section<'a>(panel: &Panel<'a>) -> Section<'a> {
 
 /// The controls `snapshot` earns, in drawing order.
 ///
-/// Each is added when the thing it acts on exists: the switch is the way in and
-/// is always drawn, the model actions need the opt-in, publishing needs a report
-/// to read, and the removal needs a checkpoint this client downloaded - the
-/// deployment's own model is never ours to delete.
+/// The switch is the way in and is always drawn; the model actions need the
+/// opt-in and a model on disk to run.
 fn actions(snapshot: &CategorizationSnapshot) -> Vec<Action> {
     let mut actions = vec![Action::Toggle];
-    if !snapshot.enabled {
-        return actions;
-    }
-    actions.push(Action::Categorize);
-    if snapshot.report.is_some() {
-        actions.push(Action::CreateCollections);
-    }
-    if matches!(snapshot.status.model, ModelStatus::Downloaded { .. }) {
-        actions.push(Action::RemoveModel);
+    if snapshot.enabled {
+        actions.push(Action::PublishRails);
+        if !matches!(snapshot.status.model, ModelStatus::Absent) {
+            actions.push(Action::DetectCouch);
+        }
     }
     actions
 }
@@ -128,9 +105,8 @@ pub fn pressable(action: Action, panel: &Panel<'_>) -> bool {
 mod tests {
     use super::{Action, Panel, Section, pressable, section};
     use crate::providers::daemon::{
-        CategorizationPhase, CategorizationSnapshot, CategorizationStatus, ModelStatus, ScanReport,
+        CategorizationPhase, CategorizationSnapshot, CategorizationStatus, ModelStatus,
     };
-    use serde::de::IgnoredAny;
 
     /// A categorization answer with nothing but the switch set.
     fn snapshot(enabled: bool) -> CategorizationSnapshot {
@@ -149,14 +125,11 @@ mod tests {
         }
     }
 
-    /// Give the answer a last run to read: the two publish-and-restore buttons
-    /// have nothing to act on before one exists.
-    fn with_report(snapshot: &mut CategorizationSnapshot) {
-        snapshot.report = Some(ScanReport {
-            app_count: 3,
-            categories: vec![IgnoredAny],
-            unclassified: vec![IgnoredAny],
-        });
+    fn downloaded() -> ModelStatus {
+        ModelStatus::Downloaded {
+            bytes: 64,
+            path: "/cache/model".into(),
+        }
     }
 
     fn panel<'a>(capable: Option<bool>, snapshot: Option<&'a CategorizationSnapshot>) -> Panel<'a> {
@@ -172,171 +145,78 @@ mod tests {
         }
     }
 
-    /// An installation that cannot run smart categorization says so plainly and
-    /// offers nothing: a control that cannot work is worse than no control.
     #[test]
     fn an_installation_that_cannot_categorize_offers_nothing() {
         let answered = snapshot(true);
-        assert!(
-            matches!(
-                section(&panel(Some(false), Some(&answered))),
-                Section::Unsupported
-            ),
-            "the feature does not exist here, whatever the user wants"
-        );
-        assert!(
-            matches!(section(&panel(Some(false), None)), Section::Unsupported),
-            "and the state read cannot make it exist"
-        );
+        assert!(matches!(
+            section(&panel(Some(false), Some(&answered))),
+            Section::Unsupported
+        ));
+        assert!(matches!(
+            section(&panel(Some(false), None)),
+            Section::Unsupported
+        ));
     }
 
-    /// Nothing is drawn in a state nobody reported: until the health reply and
-    /// the daemon's answer have both landed, the section says it is checking.
     #[test]
     fn the_controls_wait_for_the_reads_to_land() {
         let answered = snapshot(true);
-        assert!(
-            matches!(section(&panel(None, Some(&answered))), Section::Checking),
-            "the health reply has not said whether the feature exists"
-        );
-        assert!(
-            matches!(section(&panel(Some(true), None)), Section::Checking),
-            "and the daemon's own state has not been read either"
-        );
+        assert!(matches!(
+            section(&panel(None, Some(&answered))),
+            Section::Checking
+        ));
+        assert!(matches!(
+            section(&panel(Some(true), None)),
+            Section::Checking
+        ));
     }
 
-    /// Before anything is turned on there is only the switch to draw: the
-    /// model actions have nothing to act on and must not pretend otherwise.
+    /// The switch only installs the model: no model action is offered until the
+    /// model is on disk, and each one is its own button after that.
     #[test]
-    fn the_switch_alone_is_offered_before_anything_is_turned_on() {
-        let answered = snapshot(false);
+    fn each_model_action_is_a_button_once_the_model_is_installed() {
+        let mut answered = snapshot(false);
+        answered.status.model = downloaded();
         assert_eq!(
             controls(&panel(Some(true), Some(&answered))),
             vec![Action::Toggle],
-            "enabled=false: only the way in is on offer"
+            "off: only the way in"
         );
-    }
 
-    /// Publishing the last run reads the report, so it does not appear before the
-    /// library has been categorized once.
-    #[test]
-    fn publishing_waits_for_a_report() {
-        let mut answered = snapshot(true);
+        answered.enabled = true;
+        answered.status.model = ModelStatus::Absent;
         assert_eq!(
             controls(&panel(Some(true), Some(&answered))),
-            vec![Action::Toggle, Action::Categorize],
-            "no report: nothing to publish"
+            vec![Action::Toggle, Action::PublishRails],
+            "on but still downloading: rails need no model, couch detection does"
         );
 
-        with_report(&mut answered);
+        answered.status.model = downloaded();
         assert_eq!(
             controls(&panel(Some(true), Some(&answered))),
-            vec![
-                Action::Toggle,
-                Action::Categorize,
-                Action::CreateCollections
-            ],
-            "a report gives the publish something to read"
+            vec![Action::Toggle, Action::PublishRails, Action::DetectCouch]
         );
     }
 
-    /// The checkpoint can only be freed once one is on disk: the deployment's
-    /// own model is never Hearthdeck's to delete.
     #[test]
-    fn remove_model_waits_for_a_downloaded_checkpoint() {
+    fn the_switch_stays_live_during_a_job_but_the_model_actions_do_not() {
         let mut answered = snapshot(true);
-        let cases = [
-            (ModelStatus::Absent, false, "nothing on disk to remove"),
-            (
-                ModelStatus::External {
-                    path: "/opt/models".into(),
-                },
-                false,
-                "the deployment's own model is not ours to delete",
-            ),
-            (
-                ModelStatus::Downloaded {
-                    bytes: 64,
-                    path: "/cache/model".into(),
-                },
-                true,
-                "a checkpoint we downloaded is ours to free",
-            ),
-        ];
-        for (model, offered, why) in cases {
-            let label = format!("{model:?}");
-            answered.status.model = model;
-            assert_eq!(
-                controls(&panel(Some(true), Some(&answered))).contains(&Action::RemoveModel),
-                offered,
-                "model {label}: {why}"
-            );
-        }
-    }
-
-    /// The switch stays live while a scan runs - the daemon lets a running scan
-    /// finish either way - but the actions that need the checkpoint are off
-    /// until the run is done.
-    #[test]
-    fn the_switch_stays_live_during_a_scan_but_the_model_actions_do_not() {
-        let mut answered = snapshot(true);
-        with_report(&mut answered);
+        answered.status.model = downloaded();
         answered.status.running = true;
-        answered.status.model = ModelStatus::Downloaded {
-            bytes: 64,
-            path: "/cache/model".into(),
-        };
         let running = panel(Some(true), Some(&answered));
 
-        assert!(
-            pressable(Action::Toggle, &running),
-            "the switch is not the scan's to hold"
-        );
-        for action in [
-            Action::Categorize,
-            Action::CreateCollections,
-            Action::RemoveModel,
-        ] {
-            assert!(
-                !pressable(action, &running),
-                "{action:?} needs the checkpoint to be free"
-            );
+        assert!(pressable(Action::Toggle, &running));
+        for action in [Action::PublishRails, Action::DetectCouch] {
+            assert!(!pressable(action, &running), "{action:?} waits for the job");
         }
     }
 
-    /// Nothing but the switch is pressable before the opt-in: the model actions
-    /// act on something that does not exist yet.
-    #[test]
-    fn nothing_but_the_switch_is_pressable_before_the_opt_in() {
-        let answered = snapshot(false);
-        let off = panel(Some(true), Some(&answered));
-
-        assert!(pressable(Action::Toggle, &off), "the switch is the way in");
-        for action in [
-            Action::Categorize,
-            Action::CreateCollections,
-            Action::RemoveModel,
-        ] {
-            assert!(!pressable(action, &off), "{action:?} needs the opt-in");
-        }
-    }
-
-    /// On an installation that cannot run the feature, nothing here can be
-    /// confirmed - not even the switch, which would only fail.
     #[test]
     fn an_unsupported_installation_makes_nothing_pressable() {
         let answered = snapshot(true);
         let unsupported = panel(Some(false), Some(&answered));
-        for action in [
-            Action::Toggle,
-            Action::Categorize,
-            Action::CreateCollections,
-            Action::RemoveModel,
-        ] {
-            assert!(
-                !pressable(action, &unsupported),
-                "{action:?} cannot work here, so it cannot be pressed"
-            );
+        for action in [Action::Toggle, Action::PublishRails, Action::DetectCouch] {
+            assert!(!pressable(action, &unsupported), "{action:?}");
         }
     }
 }

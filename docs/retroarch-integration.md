@@ -276,6 +276,73 @@ disagrees.
     with the current design: libretro cores open a local path, and the bridge
     only accepts a launch path under this cache directory.
 
+11. **Saves and save states live in one per-game tree under the XDG data
+    home**, `~/.local/share/hearthdeck/retroarch/{saves,states}/<game>/`,
+    overridable in full by `HEARTHDECK_RETRO_SAVE_ROOT`. The bridge unit
+    presets that root (`%h/.local/share/hearthdeck/retroarch`) so a packaged
+    install writes there with no configuration, and `daemon.env` still
+    overrides it (systemd applies `EnvironmentFile=` over `Environment=`).
+    The bridge pins
+    `savefile_directory` and `savestate_directory` per launch and creates both
+    folders before it writes the managed config — necessary, not defensive:
+    RetroArch *ignores* a directory that does not exist yet, logs a single
+    warning, and falls back to its own default. The four `sort_*` flags are
+    pinned off because none of them produces a per-game folder
+    (`sort_savefiles_enable` appends the core's library name,
+    `sort_savefiles_by_content_enable` appends the ROM's parent directory,
+    which in RomM's library is the platform folder), and both
+    `*_in_content_dir` flags would write saves beside the ROM, inside RomM's
+    library mount. Rationale: backup and cloud sync (pCloud, Dropbox, or RomM
+    itself in phases 6–7) should be a folder copy of a readable tree, and a
+    save should follow the game rather than whichever core ran it. Trade-offs:
+    a user who played through a desktop RetroArch keeps those saves in the old
+    default directory and has to move them once, and a save file is still named
+    after the ROM stem (RetroArch's own rule), so two ROMs with the same stem
+    and different extensions still collide.
+
+## Where saves and save states live
+
+Every launch is told to write into one Hearthdeck-owned tree (decision 11):
+
+```
+~/.local/share/hearthdeck/retroarch/
+  saves/<game>/<game>.srm
+  states/<game>/<game>.state
+```
+
+`<game>` is the ROM's file stem, with the bytes that would break RetroArch's
+config — quotes, backslashes, control characters — replaced by `_`. The bridge
+unit already presets `HEARTHDECK_RETRO_SAVE_ROOT` to the default above, so a
+packaged install writes there with no configuration; putting it in
+`~/.config/hearthdeck/daemon.env` overrides the unit, which is how a box points
+the tree straight at a pCloud/Dropbox folder instead of symlinking one into it.
+The `saves/` and `states/` subdirectories are kept either way, so the layout is
+identical wherever it lives, and backing it up or syncing it needs no RetroArch
+knowledge at all.
+
+Two things to know before relying on it:
+
+- **Writes made before this change are not migrated.** RetroArch used to resolve
+  its compiled defaults here (`~/.config/retroarch/saves` and `…/states`), which
+  is the *desktop* install's folder. If that tree is flat, move each save into
+  the folder its game names:
+
+  ```sh
+  for save in ~/.config/retroarch/saves/*.srm; do
+    game=$(basename "$save" .srm)
+    mkdir -p ~/.local/share/hearthdeck/retroarch/saves/"$game"
+    mv "$save" ~/.local/share/hearthdeck/retroarch/saves/"$game"/
+  done
+  ```
+
+  The same applies to `~/.config/retroarch/states/*.state*`. A tree that was
+  already sorted by RetroArch's own flags keeps its extra folder level and has
+  to be flattened by hand.
+- **A save file is still named after the ROM stem.** Two ROMs with the same
+  stem and different extensions (`Game.sfc` and `Game.md`) therefore share one
+  folder and one `.srm` name. That is RetroArch's own behaviour rather than
+  something this layout adds; rename one of the ROMs if it matters.
+
 ## Configuring the RomM connection
 
 The COSMIC frontend exposes **Settings > RomM server** with a server URL and
@@ -443,15 +510,12 @@ provider-refresh controls on the same screen. Only shown/wired for the
    event, not something that needs to happen every launch. Until (1) is
    solved, fall back to bundling a small curated set of common-platform
    cores via `depends`/`optdepends` in `PKGBUILD`, with the rest manual.
-3. **State storage location for Hearthdeck's own RetroArch config.**
-   RomM's `/api/states` endpoints exist and work; the open part is purely
-   Hearthdeck-side: where RetroArch writes states locally (per decision 2,
-   inside the Hearthdeck-owned config/save directory, likely sorted by
-   core and content directory the same way saves are, per RetroArch's own
-   directory-organization settings), and when Hearthdeck uploads/downloads
-   them relative to a play session (after `StopApplicationSession`, before
-   `LaunchRetroGame`). No RomM-side blocker remains; this is scheduling and
-   local path bookkeeping, not a protocol design question.
+3. **When Hearthdeck syncs states relative to a play session.** The local
+   location is settled by decision 11; what is left is scheduling: upload after
+   `StopApplicationSession` and fetch the latest before `LaunchRetroGame`, and
+   whether a fetch may also need to handle a state newer on the server than on
+   disk. No RomM-side blocker remains, and no local path bookkeeping does
+   either — this is now purely the sync client's own design (phase 7).
 4. **Graceful stop → save flush.** Stopping a game today is
    `systemctl --user stop <unit>` (SIGTERM). Need to confirm RetroArch
    flushes `.srm` saves on SIGTERM alone, or whether we need its network
@@ -536,13 +600,14 @@ Each phase is scoped to be doable in one sitting and independently useful.
   frontend was replaced by the Rust/iced app; the Rust frontend browses
   RomM through its Console Games section, so this phase is historical.
 - **Phase 6 — Save-file sync.** RomM sync-orchestrator client (hash local
-  saves in the Hearthdeck-owned RetroArch save directory, POST to RomM,
-  execute the returned plan).
+  saves in the per-game tree decision 11 pins, POST to RomM, execute the
+  returned plan).
 - **Phase 7 — Save-state backup.** Simpler than Phase 6 on purpose: no
   conflict orchestration available server-side yet, so just upload the
-  state(s) for a ROM to RomM's `/api/states` when a play session ends, and
-  fetch the latest one before a launch if the local copy is missing or
-  older. Revisit if RomM adds device-sync orchestration for states later.
+  state(s) for a ROM from its per-game folder (decision 11) to RomM's
+  `/api/states` when a play session ends, and fetch the latest one before a
+  launch if the local copy is missing or older. Revisit if RomM adds
+  device-sync orchestration for states later.
 - **Phase 8 — On-demand core install (stretch).** Only after open question 2
   has a real answer: detect first-ROM-for-new-platform, trigger the
   install-request flow end-to-end (approval UI + privileged helper), replace
@@ -551,6 +616,7 @@ Each phase is scoped to be doable in one sitting and independently useful.
 ## Next concrete step
 
 Phases 0, 1, and 2 are done, along with the code for Phase 3 and the launch
-route for Phase 4. Phase 5 targeted the now-removed Flutter client. Next up
-is the `RemoteLibraryAdapter` half of Phase 4 if richer RomM
-search/filter/sort is wanted.
+route for Phase 4. Phase 5 targeted the now-removed Flutter client. The local
+save/state layout is settled (decision 11), so the sync clients in Phases 6
+and 7 are unblocked. Next up is the `RemoteLibraryAdapter` half of Phase 4 if
+richer RomM search/filter/sort is wanted.

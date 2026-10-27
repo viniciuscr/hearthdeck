@@ -41,7 +41,13 @@ impl App {
             warn!("details requested for a non-RomM entry: {}", entry.id);
             return Task::none();
         };
-        let cover = entry_icon_handle(&entry.icon, DETAILS_HERO_RASTER);
+        // The details screen's hero is a wide backdrop, not a card: it takes the
+        // cover in its own orientation, so a landscape box is never turned here.
+        let cover = entry_icon_handle(
+            &entry.icon,
+            DETAILS_HERO_RASTER,
+            crate::icon_cache::Orientation::AsIs,
+        );
         // Read from the scope the grid showed this entry on, which is the scope
         // on screen at the moment details open.
         let versions = self

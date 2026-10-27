@@ -57,6 +57,7 @@ fn shell() -> App {
         window_width: WINDOW_WIDTH,
         grid_scroll_offset: 0.0,
         grid_viewport_height: grid_viewport_height_fallback(),
+        grid_restore_pending: false,
         launch_state: LaunchState::default(),
         input_ownership: InputOwnership::default(),
         details: None,
@@ -1160,6 +1161,81 @@ fn the_grid_follows_the_cursor_out_of_the_viewport() {
     );
 }
 
+/// Walks the grid past the fold the way the pad does, so the follow has
+/// scrolled and the cursor sits rows below the top.
+fn walked_past_the_fold(app: &mut App) {
+    let metrics = grid::metrics(app.window_width);
+    let visible_rows = ((app.grid_viewport_height / metrics.row_height).floor() as usize).max(1);
+    for _ in 0..visible_rows + 3 {
+        send(app, GamepadEvent::MoveDown);
+    }
+    settle(app);
+}
+
+/// Coming back to the library rebuilds its grid at the top of the list - the
+/// scrollable's offset lives in the widget tree the trip drops - while the
+/// cursors keep their tile. The follow has to run again for the rebuilt grid,
+/// or the user returns to a viewport scrolled away from where the focus is.
+#[test]
+fn returning_to_the_library_puts_the_scroll_back_under_the_focus() {
+    let mut app = showing(8 * 40);
+    walked_past_the_fold(&mut app);
+    let focused = app.cursors.tile;
+    let followed = app.grid_scroll_offset;
+    assert!(followed > 0.0, "the walk should have scrolled the grid");
+
+    // Off to a sibling page and back: the round trip a tab switch makes.
+    let _ = app.update(Message::OpenDashboard);
+    age_page_fade(&mut app);
+    let _ = app.update(Message::OpenLibrary);
+    age_page_fade(&mut app);
+    let _ = app.update(Message::Animate(Instant::now()));
+
+    assert_eq!(app.cursors.tile, focused, "the cursors keep their tile");
+    assert_eq!(
+        app.scrolls.targets(),
+        vec![ScrollTarget::Grid],
+        "the follow is re-run for the rebuilt grid"
+    );
+    assert_eq!(
+        app.grid_scroll_offset, followed,
+        "the viewport lands where the focus left it"
+    );
+}
+
+/// A launch takes the screen over: the overlay stands in for the grid until
+/// the game runs, and a session can last hours. The follow has to run when the
+/// overlay drops, not when the game exits - the user comes back from the game
+/// to the tile they launched.
+#[test]
+fn a_dismissed_launch_puts_the_scroll_back_under_the_launched_tile() {
+    let mut app = showing(8 * 40);
+    walked_past_the_fold(&mut app);
+    let focused = app.cursors.tile;
+    let followed = app.grid_scroll_offset;
+    assert!(followed > 0.0, "the walk should have scrolled the grid");
+
+    send(&mut app, GamepadEvent::Confirm);
+    // The daemon's acceptance is what schedules the delayed dismissal of the
+    // overlay; the dismissal itself is the message that drops it.
+    let _ = app.update(Message::DismissLaunch);
+    let _ = app.update(Message::Animate(Instant::now()));
+
+    assert_eq!(
+        app.cursors.tile, focused,
+        "the cursors keep the launched tile"
+    );
+    assert_eq!(
+        app.scrolls.targets(),
+        vec![ScrollTarget::Grid],
+        "the follow is re-run when the overlay drops"
+    );
+    assert_eq!(
+        app.grid_scroll_offset, followed,
+        "the grid waits under the focus for the game to end"
+    );
+}
+
 /// The pad's context button opens the tile menu on the tile the cursor is
 /// on, and the menu takes the pad: the grid behind it stops moving.
 #[test]
@@ -1727,7 +1803,6 @@ use crate::providers::daemon::{
     CategorizationPhase, CategorizationSnapshot, CategorizationStatus, CollectionItem, ModelStatus,
     NEW_ARRIVALS_COLLECTION,
 };
-use crate::screens::settings::categorization::Notice;
 
 /// A health reply that carries one capability and nothing else, so a test can
 /// say what this deployment provides without building a whole host.
@@ -1987,45 +2062,21 @@ fn turning_smart_categorization_off_restores_the_default_tabs() {
     assert_eq!(tabs(&app, Section::Applications), ["Desktop"]);
 }
 
-/// Every outcome of a categorization action lands in the section's own
-/// status text, and asking for the next one starts it clean.
+/// A refused categorization action lands in the section's own status text,
+/// and asking for the next one starts it clean.
 #[test]
-fn each_outcome_lands_in_the_sections_own_status_text() {
+fn a_refused_action_lands_in_the_sections_own_status_text() {
     let mut app = showing(4);
-
-    let _ = app.update(Message::CategorizationCollectionsCreated(Ok(3)));
-    assert_eq!(
-        app.categorization_notice,
-        Some(Notice::Created(3)),
-        "how many collections the publish made"
-    );
-
-    let _ = app.update(Message::CategorizationCollectionsCreated(Ok(0)));
-    assert_eq!(
-        app.categorization_notice,
-        Some(Notice::NoCollections),
-        "zero is not four: it says the run implies no collection"
-    );
-
-    let _ = app.update(Message::CategorizationCollectionsCreated(Err(
-        "refused".to_owned()
-    )));
-    assert!(
-        matches!(&app.categorization_notice, Some(Notice::Failed(reason)) if reason == "refused"),
-        "the daemon's own reason is what the user reads: {:?}",
-        app.categorization_notice
-    );
 
     let _ = app.update(Message::CategorizationDone(Err(
         "the scan was refused".to_owned()
     )));
-    assert!(
-        matches!(app.categorization_notice, Some(Notice::Failed(_))),
-        "a refused action is news the section has to carry: {:?}",
-        app.categorization_notice
+    assert_eq!(
+        app.categorization_notice.as_deref(),
+        Some("the scan was refused")
     );
 
-    let _ = app.update(Message::SetCategorization(true));
+    let _ = app.update(Message::DetectCouchFriendly);
     assert_eq!(
         app.categorization_notice, None,
         "a new action starts from a clean slate"

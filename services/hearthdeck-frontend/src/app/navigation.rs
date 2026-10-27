@@ -531,4 +531,19 @@ impl App {
         self.grid_scroll_offset = offset;
         self.animate_scroll_to(ScrollTarget::Grid, from, offset)
     }
+
+    /// Puts the grid back under the focused tile when the library is drawn
+    /// again.
+    ///
+    /// The scrollable's offset lives in the widget tree, and that tree goes
+    /// away whenever the grid stops being drawn - a sibling page, the launch
+    /// overlay. Coming back rebuilds the scrollable at its top while the
+    /// cursors kept their tile, so the follow is re-run from where the rebuilt
+    /// grid actually starts instead of from the offset the old one held. That
+    /// stale offset is why it is zeroed first: the follow has to measure
+    /// against the grid the user is looking at, not the one that is gone.
+    pub(super) fn restore_grid_scroll(&mut self) -> Task<Message> {
+        self.grid_scroll_offset = 0.0;
+        self.scroll_to_tile(self.cursors.tile)
+    }
 }

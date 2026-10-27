@@ -23,13 +23,15 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
-use hearthdeck_ai::categorization::{AppKind, AppProfile, ScanReport, Taxonomy};
+use hearthdeck_ai::categorization::{
+    AppKind, AppProfile, HeuristicCategorizer, LibraryScanner, ScanReport, Taxonomy,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
@@ -275,17 +277,7 @@ fn rail_collections(report: &ScanReport) -> Vec<OwnedCollection> {
 /// without a checkpoint: tests inject a runner that answers immediately.
 #[async_trait]
 pub trait ScanRunner: Send + Sync {
-    async fn run(&self, apps: Vec<AppProfile>, priority: Priority) -> anyhow::Result<ScanReport>;
-}
-
-/// How much a run may take from whatever else the machine is doing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Priority {
-    /// Somebody asked for this and is waiting on it.
-    Foreground,
-    /// Nobody is waiting: it runs at the lowest CPU priority, so a thin client is
-    /// not slowed down by it.
-    Background,
+    async fn run(&self, apps: Vec<AppProfile>) -> anyhow::Result<ScanReport>;
 }
 
 /// The real runner: hand the library to the categorizer binary.
@@ -329,7 +321,7 @@ impl ProcessScanRunner {
 
 #[async_trait]
 impl ScanRunner for ProcessScanRunner {
-    async fn run(&self, apps: Vec<AppProfile>, priority: Priority) -> anyhow::Result<ScanReport> {
+    async fn run(&self, apps: Vec<AppProfile>) -> anyhow::Result<ScanReport> {
         tokio::fs::create_dir_all(&self.settings.work_dir)
             .await
             .with_context(|| {
@@ -376,14 +368,7 @@ impl ScanRunner for ProcessScanRunner {
             }
         }
 
-        let mut command = match priority {
-            Priority::Foreground => tokio::process::Command::new(&self.settings.binary),
-            Priority::Background => {
-                let mut command = tokio::process::Command::new("nice");
-                command.args(["-n", "19"]).arg(&self.settings.binary);
-                command
-            }
-        };
+        let mut command = tokio::process::Command::new(&self.settings.binary);
         command
             .args(self.arguments())
             // The hub would otherwise cache into the user's shared
@@ -632,6 +617,9 @@ struct ScanState {
     /// download. Fixed when the scan starts, because it is what the phase means
     /// for the whole of that phase.
     downloading: bool,
+    /// The feature was turned off or its rails removed while the job ran: what
+    /// it decides is thrown away instead of written.
+    discard: bool,
     last_error: Option<String>,
     last_completed_at: Option<String>,
 }
@@ -747,19 +735,11 @@ impl CategorizationService {
         self.inner.store.latest().await
     }
 
-    /// Ask for a scan. Returns as soon as the scan is accepted, not when it is
-    /// finished; completion is announced on the event stream and is visible in
+    /// Ask for the dashboard rails. Returns as soon as the job is accepted;
+    /// completion is announced on the event stream and is visible in
     /// [`CategorizationService::status`].
-    ///
-    /// The first scan of an empty cache fetches the checkpoint as part of loading
-    /// the engine, so this is also what turns a machine with no model into one
-    /// with a model. Nothing else in the daemon does.
     pub async fn request_scan(&self) -> ScanRequest {
-        // Answered before the slot is claimed, because it is what the phase means
-        // for the whole of that phase: asked mid-run it would flip to "loading"
-        // the moment the download finished.
-        let downloading = model_status(&self.inner.settings) == ModelStatus::Absent;
-        if !self.claim(downloading).await {
+        if !self.claim(false).await {
             return ScanRequest::AlreadyRunning;
         }
         let service = self.clone();
@@ -767,29 +747,31 @@ impl CategorizationService {
         ScanRequest::Started
     }
 
-    /// Removes a downloaded checkpoint, freeing what it costs on disk.
-    ///
-    /// Only this project's own cache is ever removed. A checkpoint the deployment
-    /// pointed at belongs to the deployment, so this refuses instead of deleting
-    /// a directory it does not own.
-    pub async fn delete_model(&self) -> anyhow::Result<()> {
-        let settings = &self.inner.settings;
-        if settings.model_path.is_some() {
-            anyhow::bail!("the checkpoint is a directory this deployment pointed at");
+    /// Fetches the checkpoint and classifies nothing: what turning the feature
+    /// on does. A machine that already has a model has nothing to fetch.
+    pub async fn request_download(&self) -> ScanRequest {
+        if model_status(&self.inner.settings) != ModelStatus::Absent {
+            return ScanRequest::Started;
         }
-        if self.inner.state.lock().await.running {
-            anyhow::bail!("a scan is running and is reading the checkpoint");
+        if !self.claim(true).await {
+            return ScanRequest::AlreadyRunning;
         }
-        match tokio::fs::remove_dir_all(&settings.cache_dir).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("could not remove the checkpoint cache"),
+        let service = self.clone();
+        tokio::spawn(async move { service.download().await });
+        ScanRequest::Started
+    }
+
+    /// Loads the engine over an empty library, which downloads the checkpoint,
+    /// and releases the slot. No report is stored and no rail is written.
+    async fn download(&self) {
+        let outcome = self.inner.runner.run(Vec::new()).await;
+        self.release(outcome.as_ref().err().map(ToString::to_string), false)
+            .await;
+        match outcome {
+            Ok(_) => info!("categorization model ready"),
+            Err(error) => error!(%error, "categorization model download failed"),
         }
-        info!(
-            cache_dir = %settings.cache_dir.display(),
-            "categorization checkpoint removed"
-        );
-        Ok(())
+        self.announce(0, 0);
     }
 
     /// Take the scan slot, if it is free.
@@ -800,44 +782,66 @@ impl CategorizationService {
         }
         state.running = true;
         state.downloading = downloading;
+        state.discard = false;
         state.last_error = None;
         true
     }
 
-    /// Run a scan and release the slot, whatever the outcome. A failure must
-    /// leave `running` false, or every later request would be swallowed forever.
+    /// Frees the slot and answers whether the job's result must be thrown away.
+    /// A failure must leave `running` false, or every later request would be
+    /// swallowed forever.
+    async fn release(&self, error: Option<String>, completes_a_run: bool) -> bool {
+        let mut state = self.inner.state.lock().await;
+        state.running = false;
+        match error {
+            Some(error) => state.last_error = Some(error),
+            None if completes_a_run => state.last_completed_at = Some(Utc::now().to_rfc3339()),
+            None => {}
+        }
+        state.discard
+    }
+
+    /// Throws away what the running job, if any, would still write.
+    pub async fn discard_running(&self) {
+        let mut state = self.inner.state.lock().await;
+        if state.running {
+            state.discard = true;
+        }
+    }
+
+    /// Tells clients a job ended, so a settings page re-reads the status.
+    fn announce(&self, app_count: usize, categories: usize) {
+        let _ = self.inner.events.send(ServerEvent::CategorizationChanged {
+            categorizer: self.inner.settings.engine.as_str().to_owned(),
+            app_count,
+            categories,
+        });
+    }
+
     async fn run_and_record(&self) {
-        let outcome = self.run_scan().await;
-        {
-            let mut state = self.inner.state.lock().await;
-            state.running = false;
-            match &outcome {
-                Ok(_) => state.last_completed_at = Some(Utc::now().to_rfc3339()),
-                Err(error) => state.last_error = Some(error.to_string()),
+        let outcome = self.run_scan().await.map_err(|error| error.to_string());
+        let discarded = self.release(outcome.as_ref().err().cloned(), true).await;
+        let report = match outcome {
+            Ok(report) if !discarded => report,
+            Ok(_) => {
+                info!("rails discarded: removed while publishing");
+                return self.announce(0, 0);
             }
-        }
-        match outcome {
-            Ok(report) => {
-                if let Err(error) = self.write_rail_collections(&report).await {
-                    warn!(%error, "could not write the collections this scan implies");
-                }
-                let _ = self.inner.events.send(ServerEvent::CategorizationChanged {
-                    categorizer: report.categorizer.clone(),
-                    app_count: report.app_count,
-                    categories: report.recommended_categories().count(),
-                });
+            Err(error) => {
+                error!(%error, "categorization scan failed");
+                return self.announce(0, 0);
             }
-            Err(error) => error!(%error, "categorization scan failed"),
+        };
+        if let Err(error) = self.write_rail_collections(&report).await {
+            warn!(%error, "could not write the collections this scan implies");
         }
+        self.announce(report.app_count, report.recommended_categories().count());
     }
 
     /// Replaces this feature's rails with the ones this report implies.
     ///
     /// Replacement, not merging: a rail the scan no longer has anything for is
-    /// gone on the next scan, without anybody deleting it by hand. The caller
-    /// decides whether a failure matters: a scan keeps its report either way, so
-    /// it warns and carries on, while the publish button has nothing else to do
-    /// and hands the error back.
+    /// gone on the next scan, without anybody deleting it by hand.
     async fn write_rail_collections(&self, report: &ScanReport) -> anyhow::Result<usize> {
         let collections = rail_collections(report);
         let count = collections.len();
@@ -849,36 +853,6 @@ impl CategorizationService {
             .context("could not write the collections this report implies")?;
         info!(count, ?slugs, "scan rails written");
         Ok(count)
-    }
-
-    /// Writes the dashboard collections the last stored report implies, without
-    /// re-running the scan. This is the dashboard-collections button: the heavy
-    /// work (classifying the library) already happened, and this only republishes
-    /// its answer. A database with no report yet has nothing to publish.
-    pub async fn publish_collections(&self) -> anyhow::Result<usize> {
-        let report = self
-            .inner
-            .store
-            .latest()
-            .await?
-            .context("no categorization report has been produced yet")?;
-        info!(
-            app_count = report.app_count,
-            categories = report.categories.len(),
-            generated_at = %report.generated_at,
-            "publishing dashboard collections from the stored report"
-        );
-        let written = self.write_rail_collections(&report).await?;
-        // A stored report that implies no rail is not success, it is the case
-        // the user is most likely to hit and least likely to understand. Say so,
-        // loudly, rather than letting the endpoint answer 2xx for a no-op.
-        if written == 0 {
-            warn!(
-                categories = report.categories.len(),
-                "the stored report implies no dashboard collections; categorize apps again"
-            );
-        }
-        Ok(written)
     }
 
     /// Stores what a report decided about each application's form factor, and
@@ -919,9 +893,9 @@ impl CategorizationService {
     /// Classifies the applications nobody has judged under the current model:
     /// new ones, and ones whose record has changed since.
     ///
-    /// This is the background pass. It never starts a download - the checkpoint
-    /// is the user's to ask for - and it takes the same one slot a requested scan
-    /// does, so the two cannot run at once.
+    /// This is the couch-detection button. It never starts a download - turning
+    /// the feature on does that - and it takes the same one slot a scan does, so
+    /// the two cannot run at once.
     pub async fn classify_pending(&self) -> anyhow::Result<TraitRun> {
         let settings = &self.inner.settings;
         if settings.engine != ScanEngine::Laya || model_status(settings) == ModelStatus::Absent {
@@ -947,21 +921,19 @@ impl CategorizationService {
             return Ok(TraitRun::Busy);
         }
         let count = apps.len();
-        info!(
-            count,
-            "classifying new and changed applications in the background"
-        );
-        let outcome = async {
-            let report = self.inner.runner.run(apps, Priority::Background).await?;
-            self.record_form_factors(&report, &hashes).await
+        info!(count, "classifying new and changed applications");
+        let outcome = self.inner.runner.run(apps).await;
+        let discarded = self
+            .release(outcome.as_ref().err().map(ToString::to_string), false)
+            .await;
+        self.announce(count, 0);
+        let report = outcome?;
+        if discarded {
+            info!(count, "form factors discarded: the feature was turned off");
+            return Ok(TraitRun::Classified(0));
         }
-        .await;
-        let mut state = self.inner.state.lock().await;
-        state.running = false;
-        if let Err(error) = &outcome {
-            state.last_error = Some(error.to_string());
-        }
-        outcome.map(|()| TraitRun::Classified(count))
+        self.record_form_factors(&report, &hashes).await?;
+        Ok(TraitRun::Classified(count))
     }
 
     /// Forgets what the model decided, which is what turning it off does.
@@ -976,23 +948,21 @@ impl CategorizationService {
         Ok(removed)
     }
 
+    /// Files the library by rules, in process: the rails need no model.
     async fn run_scan(&self) -> anyhow::Result<ScanReport> {
         let items = self.inner.catalog.list().await?;
         let apps: Vec<AppProfile> = items.iter().map(profile_from_item).collect();
-        let hashes = application_hashes(&items);
-        info!(app_count = apps.len(), "categorization scan starting");
-        let started = Instant::now();
-        let report = self.inner.runner.run(apps, Priority::Foreground).await?;
+        let scanner = LibraryScanner::new(Arc::new(HeuristicCategorizer::new()));
+        // `scan`'s future is not provably `Send`, so it cannot live inside a spawned task.
+        let report = tokio::task::spawn_blocking(move || {
+            tokio::runtime::Handle::current().block_on(scanner.scan(apps))
+        })
+        .await??;
         self.inner.store.save(&report).await?;
-        if let Err(error) = self.record_form_factors(&report, &hashes).await {
-            warn!(%error, "could not store what the scan decided about each application");
-        }
         info!(
             app_count = report.app_count,
-            failures = report.failures.len(),
             unclassified = report.unclassified.len(),
-            duration_ms = started.elapsed().as_millis() as u64,
-            "categorization scan stored"
+            "dashboard rails decided"
         );
         Ok(report)
     }
@@ -1129,11 +1099,7 @@ mod tests {
 
     #[async_trait]
     impl ScanRunner for FixedRunner {
-        async fn run(
-            &self,
-            _apps: Vec<AppProfile>,
-            _priority: super::Priority,
-        ) -> anyhow::Result<ScanReport> {
+        async fn run(&self, _apps: Vec<AppProfile>) -> anyhow::Result<ScanReport> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if self.fail {
                 anyhow::bail!("checkpoint exploded");
@@ -1214,11 +1180,7 @@ mod tests {
 
     #[async_trait]
     impl ScanRunner for HangingRunner {
-        async fn run(
-            &self,
-            _apps: Vec<AppProfile>,
-            _priority: super::Priority,
-        ) -> anyhow::Result<ScanReport> {
+        async fn run(&self, _apps: Vec<AppProfile>) -> anyhow::Result<ScanReport> {
             self.release.notified().await;
             Ok(report())
         }
@@ -1407,11 +1369,7 @@ mod tests {
 
     #[async_trait]
     impl ScanRunner for CouchRunner {
-        async fn run(
-            &self,
-            apps: Vec<AppProfile>,
-            _priority: super::Priority,
-        ) -> anyhow::Result<ScanReport> {
+        async fn run(&self, apps: Vec<AppProfile>) -> anyhow::Result<ScanReport> {
             use hearthdeck_ai::categorization::{AppCategorization, AppTraits, DecisionProvenance};
             self.calls.fetch_add(1, Ordering::SeqCst);
             let mut report = report();
@@ -1435,6 +1393,20 @@ mod tests {
                 })
                 .collect();
             Ok(report)
+        }
+    }
+
+    /// A [`CouchRunner`] that waits for the test to let it answer.
+    struct GatedCouchRunner {
+        gate: Arc<tokio::sync::Notify>,
+        inner: CouchRunner,
+    }
+
+    #[async_trait]
+    impl ScanRunner for GatedCouchRunner {
+        async fn run(&self, apps: Vec<AppProfile>) -> anyhow::Result<ScanReport> {
+            self.gate.notified().await;
+            self.inner.run(apps).await
         }
     }
 
@@ -1550,97 +1522,172 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_successful_scan_is_stored_and_announced() {
+    async fn publishing_rails_files_streaming_apps_by_rules_without_the_model() {
         let runner = Arc::new(FixedRunner::succeeding());
         let Fixture {
             service,
             _directory,
             ..
         } = fixture(runner.clone()).await;
+        let mut netflix = application("Watch films");
+        netflix.id = "netflix".into();
+        netflix.title = "Netflix".into();
+        service
+            .inner
+            .catalog
+            .replace_source("desktop", vec![netflix])
+            .await
+            .unwrap();
         let mut events = service.inner.events.subscribe();
 
         assert!(service.claim(false).await);
         service.run_and_record().await;
 
+        assert_eq!(runner.calls.load(Ordering::SeqCst), 0, "no model is asked");
         let stored = service
             .latest_report()
             .await
             .unwrap()
             .expect("stored report");
-        assert_eq!(stored.categorizer, "fake");
-        assert_eq!(stored.app_count, 2);
+        assert_eq!(stored.categorizer, "heuristic");
+        assert_eq!(stored.app_count, 1);
+        let rows = service.inner.collections.list().await.unwrap();
+        assert!(rows.iter().any(|row| row.slug == "laya:watch"));
         let status = service.status().await;
         assert!(!status.running);
-        assert_eq!(status.phase, CategorizationPhase::Idle);
-        assert!(status.last_error.is_none());
         assert!(status.last_completed_at.is_some());
         assert!(matches!(
             events.try_recv(),
-            Ok(ServerEvent::CategorizationChanged { app_count: 2, .. })
+            Ok(ServerEvent::CategorizationChanged { app_count: 1, .. })
         ));
-        assert_eq!(runner.calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn publishing_collections_writes_the_latest_reports_rails_without_a_scan() {
+    async fn rails_removed_while_publishing_are_not_written_back() {
         let Fixture {
             service,
             _directory,
             ..
         } = fixture(Arc::new(FixedRunner::succeeding())).await;
+        let mut netflix = application("Watch films");
+        netflix.id = "netflix".into();
+        service
+            .inner
+            .catalog
+            .replace_source("desktop", vec![netflix])
+            .await
+            .unwrap();
 
-        // Nothing to publish before any scan has produced a report.
-        assert!(service.publish_collections().await.is_err());
+        assert!(service.claim(false).await);
+        service.discard_running().await;
+        service.run_and_record().await;
 
-        let mut stored = report();
-        stored.categories = vec![proposal("video_streaming", &["desktop:netflix.desktop"])];
-        service.inner.store.save(&stored).await.unwrap();
-
-        let written = service.publish_collections().await.unwrap();
-        assert_eq!(written, 1);
         let rows = service.inner.collections.list().await.unwrap();
         assert!(
             rows.iter()
-                .any(|row| row.slug == "laya:watch" && row.owner == crate::collections::OWNER_LAYA)
+                .all(|row| row.owner != crate::collections::OWNER_LAYA)
         );
     }
 
     #[tokio::test]
-    async fn publishing_a_report_with_no_rails_writes_nothing() {
+    async fn couch_verdicts_are_dropped_when_the_feature_is_turned_off_mid_run() {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let runner = Arc::new(GatedCouchRunner {
+            gate: gate.clone(),
+            inner: CouchRunner {
+                calls: AtomicUsize::new(0),
+            },
+        });
         let Fixture {
             service,
             _directory,
             ..
-        } = fixture(Arc::new(FixedRunner::succeeding())).await;
+        } = fixture_with(runner, |settings| {
+            settings.engine = ScanEngine::Laya;
+            settings.model_path = settings.work_dir.parent().map(ToOwned::to_owned);
+        })
+        .await;
+        let catalog = service.inner.catalog.clone();
+        catalog
+            .replace_source("desktop", vec![application("A media centre")])
+            .await
+            .unwrap();
 
-        // A report can be perfectly valid and still name nothing the dashboard has
-        // a rail for. That is not an error - but it is not a success either, and
-        // the count is what lets the caller say which.
-        let mut stored = report();
-        stored.categories = vec![proposal("development", &["desktop:builder.desktop"])];
-        service.inner.store.save(&stored).await.unwrap();
+        let job = tokio::spawn({
+            let service = service.clone();
+            async move { service.classify_pending().await }
+        });
+        while !service.status().await.running {
+            tokio::task::yield_now().await;
+        }
+        service.discard_running().await;
+        gate.notify_one();
+        job.await.unwrap().unwrap();
 
-        assert_eq!(service.publish_collections().await.unwrap(), 0);
-        let rows = service.inner.collections.list().await.unwrap();
+        let served = catalog.get("kodi").await.unwrap().unwrap();
+        assert!(served.metadata.get("form_factor").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_download_fetches_the_model_and_neither_stores_nor_publishes() {
+        let runner = Arc::new(FixedRunner::succeeding());
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture(runner.clone()).await;
+
+        assert!(service.claim(true).await);
+        service.download().await;
+
+        assert_eq!(runner.calls.load(Ordering::SeqCst), 1);
+        assert!(service.latest_report().await.unwrap().is_none());
         assert!(
-            !rows
+            service
+                .inner
+                .collections
+                .list()
+                .await
+                .unwrap()
                 .iter()
-                .any(|row| row.owner == crate::collections::OWNER_LAYA)
+                .all(|row| row.owner != crate::collections::OWNER_LAYA)
+        );
+        let status = service.status().await;
+        assert!(!status.running);
+        assert!(
+            status.last_completed_at.is_none(),
+            "nothing was categorized"
         );
     }
 
     #[tokio::test]
-    async fn a_failed_scan_releases_the_slot_and_stores_nothing() {
+    async fn turning_it_on_with_a_model_present_runs_nothing() {
+        let runner = Arc::new(FixedRunner::succeeding());
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture_with(runner.clone(), |settings| {
+            settings.model_path = settings.work_dir.parent().map(ToOwned::to_owned);
+        })
+        .await;
+
+        assert_eq!(service.request_download().await, ScanRequest::Started);
+        assert!(!service.status().await.running);
+        assert_eq!(runner.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_failed_download_releases_the_slot() {
         let Fixture {
             service,
             _directory,
             ..
         } = fixture(Arc::new(FixedRunner::failing())).await;
 
-        assert!(service.claim(false).await);
-        service.run_and_record().await;
+        assert!(service.claim(true).await);
+        service.download().await;
 
-        assert!(service.latest_report().await.unwrap().is_none());
         let status = service.status().await;
         assert!(!status.running, "a failure must not wedge the scan slot");
         assert_eq!(status.last_error.as_deref(), Some("checkpoint exploded"));
@@ -1658,7 +1705,7 @@ mod tests {
         }))
         .await;
 
-        assert_eq!(service.request_scan().await, ScanRequest::Started);
+        assert_eq!(service.request_download().await, ScanRequest::Started);
         assert_eq!(service.request_scan().await, ScanRequest::AlreadyRunning);
         release.notify_waiters();
     }
@@ -1675,7 +1722,7 @@ mod tests {
         }))
         .await;
 
-        assert_eq!(service.request_scan().await, ScanRequest::Started);
+        assert_eq!(service.request_download().await, ScanRequest::Started);
         let status = service.status().await;
 
         assert_eq!(
@@ -1702,7 +1749,7 @@ mod tests {
             release: release.clone(),
         }))
         .await;
-        assert_eq!(service.request_scan().await, ScanRequest::Started);
+        assert_eq!(service.request_download().await, ScanRequest::Started);
 
         std::fs::create_dir_all(&settings.work_dir).unwrap();
         std::fs::write(
@@ -1729,7 +1776,7 @@ mod tests {
             release: release.clone(),
         }))
         .await;
-        assert_eq!(service.request_scan().await, ScanRequest::Started);
+        assert_eq!(service.request_download().await, ScanRequest::Started);
 
         std::fs::create_dir_all(&settings.work_dir).unwrap();
         // A status poll can land between the child's write and its rename, so a
@@ -1770,8 +1817,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn an_external_checkpoint_is_reported_and_never_deleted() {
+    #[test]
+    fn an_external_checkpoint_is_reported_as_external() {
         let external = tempfile::tempdir().unwrap();
         let path = external.path().join("sideloaded");
         std::fs::create_dir_all(&path).unwrap();
@@ -1780,62 +1827,7 @@ mod tests {
         external_settings.model_path = Some(path.clone());
         assert_eq!(
             model_status(&external_settings),
-            ModelStatus::External { path: path.clone() }
+            ModelStatus::External { path }
         );
-
-        let sideloaded = path.clone();
-        let runner = Arc::new(FixedRunner::succeeding());
-        let Fixture {
-            service,
-            _directory,
-            ..
-        } = fixture_with(runner, |settings| {
-            settings.model_path = Some(sideloaded);
-        })
-        .await;
-        let error = service.delete_model().await.unwrap_err();
-
-        let message = error.to_string();
-        assert!(
-            message.contains("pointed at"),
-            "unexpected error: {message}"
-        );
-        assert!(path.is_dir(), "the deployment's directory must survive");
-    }
-
-    #[tokio::test]
-    async fn deleting_a_checkpoint_frees_it_and_is_safe_to_repeat() {
-        let Fixture {
-            service,
-            settings,
-            _directory,
-        } = fixture(Arc::new(FixedRunner::succeeding())).await;
-        let checkpoint = settings.cache_dir.join("models--convaiinnovations--laya");
-        std::fs::create_dir_all(&checkpoint).unwrap();
-        std::fs::write(checkpoint.join("model.safetensors"), b"weights").unwrap();
-
-        assert!(service.delete_model().await.is_ok());
-        assert!(!settings.cache_dir.exists());
-        assert!(service.delete_model().await.is_ok());
-        assert_eq!(service.status().await.model, ModelStatus::Absent);
-    }
-
-    #[tokio::test]
-    async fn a_running_scan_cannot_have_its_checkpoint_deleted() {
-        let release = Arc::new(tokio::sync::Notify::new());
-        let Fixture {
-            service,
-            _directory,
-            ..
-        } = fixture(Arc::new(HangingRunner {
-            release: release.clone(),
-        }))
-        .await;
-        assert_eq!(service.request_scan().await, ScanRequest::Started);
-
-        let error = service.delete_model().await.unwrap_err();
-
-        assert!(error.to_string().contains("scan is running"));
-        release.notify_waiters();
     }
 }

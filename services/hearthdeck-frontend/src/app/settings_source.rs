@@ -364,30 +364,11 @@ impl App {
                         }
                     }
                     CategorizationAction::Scan => client.start_categorization_scan().await,
-                    CategorizationAction::RemoveModel => client.delete_categorization_model().await,
+                    CategorizationAction::DetectCouch => client.detect_form_factors().await,
                 }
                 .map_err(|error| error.to_string())
             },
             |result| cosmic::Action::App(Message::CategorizationDone(result)),
-        )
-    }
-
-    /// Publishes the last run's rails as dashboard collections.
-    ///
-    /// The report the publish reads is already the daemon's, so this asks for
-    /// that work rather than calling the model again - and clears the last notice,
-    /// because the user has now asked for something.
-    pub(super) fn create_categorization_collections(&mut self) -> Task<Message> {
-        self.categorization_notice = None;
-        let client = self.daemon_client.clone();
-        Task::perform(
-            async move {
-                client
-                    .create_categorization_collections()
-                    .await
-                    .map_err(|error| error.to_string())
-            },
-            |result| cosmic::Action::App(Message::CategorizationCollectionsCreated(result)),
         )
     }
 

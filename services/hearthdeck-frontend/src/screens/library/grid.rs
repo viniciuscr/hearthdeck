@@ -25,7 +25,7 @@ use cosmic::theme;
 use cosmic::widget::{Id, column, container, row, scrollable, space};
 
 use crate::app::Message;
-use crate::style::{GRID_OVERSCAN_ROWS, grid_columns, grid_gap, tile_height, tile_width};
+use crate::style::{GRID_OVERSCAN_ROWS, grid_columns, grid_gap, grid_tile_height, tile_width};
 use crate::widgets::application::{Selection, TileLabel, app_tile};
 
 /// The grid's scrollable. Held here because it is the grid's own widget, and
@@ -55,7 +55,9 @@ pub struct Metrics {
 pub fn metrics(window_width: f32) -> Metrics {
     let columns = grid_columns(false).max(1);
     let tile_width = tile_width(window_width, columns);
-    let tile_height = tile_height(tile_width, false);
+    // The dashboard's portrait card, so a cover is the same proportion on both
+    // screens - and so a horizontal box has a card tall enough to be turned into.
+    let tile_height = grid_tile_height(tile_width);
     let gap = grid_gap(window_width, columns);
     Metrics {
         columns,
@@ -156,6 +158,17 @@ impl Metrics {
     }
 }
 
+/// How a cover fills a grid tile.
+///
+/// Scaled until it covers the card, so what spills over is cropped rather than
+/// banded. Box art arrives in every proportion — a horizontal box turned a quarter
+/// turn is 3:4 where the card is 2:3 — and a card with bands down its sides reads
+/// as a missing image at television distance.
+#[must_use]
+pub fn tile_fit() -> ContentFit {
+    ContentFit::Cover
+}
+
 /// The widget id of a tile, so the controller's cursor can address it.
 ///
 /// Keyed on the entry rather than on its position, so a tile keeps its identity
@@ -216,14 +229,18 @@ pub fn view(grid: Grid<'_>) -> Element<'_, Message> {
         let mut children: Vec<Element<'_, Message>> = Vec::with_capacity(metrics.columns);
         for (column_index, entry) in grid.entries[start..end].iter().enumerate() {
             let index = start + column_index;
-            let icon = crate::icon_cache::entry_icon_handle(&entry.icon, metrics.tile_width as u32);
+            let icon = crate::icon_cache::entry_icon_handle(
+                &entry.icon,
+                metrics.tile_width as u32,
+                crate::icon_cache::Orientation::Portrait,
+            );
             children.push(app_tile(
                 tile_id(entry),
                 &entry.name,
                 icon,
                 metrics.tile_width,
                 metrics.tile_height,
-                ContentFit::Contain,
+                tile_fit(),
                 1,
                 Some(Message::TileContext(index)),
                 Some(Message::Activate(index)),
@@ -288,7 +305,8 @@ fn tile_selection(focused_tile: Option<usize>, index: usize) -> Selection {
 
 #[cfg(test)]
 mod tests {
-    use super::{GRID_OVERSCAN_ROWS, Metrics, Selection, metrics, tile_selection};
+    use super::{GRID_OVERSCAN_ROWS, Metrics, Selection, metrics, tile_fit, tile_selection};
+    use cosmic::iced::ContentFit;
 
     /// A viewport `rows` rows tall. Deliberately not a whole number of rows:
     /// asking for a window that lands exactly on a row boundary is a question
@@ -305,10 +323,23 @@ mod tests {
     }
 
     #[test]
+    fn a_cover_fills_its_tile_instead_of_banding_inside_it() {
+        assert_eq!(
+            tile_fit(),
+            ContentFit::Cover,
+            "an image smaller than its card is enlarged until it covers it"
+        );
+    }
+
+    #[test]
     fn a_row_is_a_tile_plus_the_gap_beneath_it() {
         let metrics = metrics(1200.0);
         assert_eq!(metrics.columns, crate::style::GRID_COLUMNS);
         assert!((metrics.row_height - (metrics.tile_height + metrics.gap)).abs() < f32::EPSILON);
+        assert!(
+            metrics.tile_height > metrics.tile_width,
+            "the grid draws the dashboard's portrait card: {metrics:?}"
+        );
     }
 
     #[test]

@@ -1,9 +1,12 @@
 use std::{
     collections::{HashMap, HashSet},
     env,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fs,
-    os::unix::fs::PermissionsExt,
+    os::unix::{
+        ffi::{OsStrExt, OsStringExt},
+        fs::PermissionsExt,
+    },
     path::{Path, PathBuf},
 };
 
@@ -539,6 +542,12 @@ pub async fn launch_retro_game(
     tokio::fs::create_dir_all(&config_directory)
         .await
         .context("could not create Hearthdeck's RetroArch config directory")?;
+    // Both directories are created before RetroArch reads the config: a
+    // `savefile_directory` or `savestate_directory` that does not exist is
+    // *ignored* (RetroArch logs one warning and silently falls back to its own
+    // default), so writing the config alone would leave saves wherever the
+    // desktop install keeps them on the first play of every game.
+    let save_directories = create_save_directories(&retro_save_root(), &rom_path).await?;
     let config_path = config_directory.join("retroarch.cfg");
     // Regenerated on every launch so the settings Hearthdeck enforces can
     // never go stale from a previous session's in-game changes (the Knulli
@@ -568,6 +577,7 @@ pub async fn launch_retro_game(
         &managed_path,
         retroarch_managed_config(
             &autoconfig_directory,
+            &save_directories,
             shader_preset.as_deref(),
             video_driver,
         ),
@@ -591,6 +601,7 @@ pub async fn launch_retro_game(
 /// without touching the filesystem.
 fn retroarch_managed_config(
     autoconfig_directory: &Path,
+    save_directories: &RetroSaveDirectories,
     shader_preset: Option<&Path>,
     video_driver: &str,
 ) -> String {
@@ -632,6 +643,29 @@ fn retroarch_managed_config(
     config.push_str(&format!(
         "joypad_autoconfig_dir = \"{}\"\n",
         autoconfig_directory.display()
+    ));
+    // One folder per game under a root the user can point a backup or cloud
+    // sync client at without knowing anything about RetroArch.
+    //
+    // The paths are pinned here rather than left to `sort_*`, because neither
+    // RetroArch sort flag produces a per-game folder: `sort_savefiles_enable`
+    // appends the *core's* library name, and `sort_savefiles_by_content_enable`
+    // appends the ROM's parent directory name, which inside RomM's library is
+    // the platform folder. All four sort flags are still written out as
+    // `false` so a value saved from RetroArch's own menu cannot file this
+    // launch's saves somewhere else. The `*_in_content_dir` flags matter more:
+    // `true` would write saves next to the ROM, i.e. into RomM's library mount.
+    config.push_str(&format!(
+        "savefile_directory = \"{}\"\n\
+         savestate_directory = \"{}\"\n\
+         savefiles_in_content_dir = \"false\"\n\
+         savestates_in_content_dir = \"false\"\n\
+         sort_savefiles_enable = \"false\"\n\
+         sort_savefiles_by_content_enable = \"false\"\n\
+         sort_savestates_enable = \"false\"\n\
+         sort_savestates_by_content_enable = \"false\"\n",
+        save_directories.saves.display(),
+        save_directories.states.display(),
     ));
     // Pinned for every launch, not just shaded ones: RetroArch's default `gl`
     // driver cannot load slang presets and mis-sizes hardware-rendered cores
@@ -679,6 +713,110 @@ fn retro_config_directory() -> PathBuf {
     config_home
         .unwrap_or_else(|| PathBuf::from(".config"))
         .join("hearthdeck/retroarch")
+}
+
+/// Root of the save/state tree Hearthdeck pins for every launch:
+/// `<root>/saves/<game>/` and `<root>/states/<game>/`.
+///
+/// Under the XDG data home by default, not the config directory above: these
+/// are user data, and backing them up should not mean backing up settings.
+/// `HEARTHDECK_RETRO_SAVE_ROOT` replaces the whole root, which is how a box
+/// points the tree straight at a Dropbox or pCloud folder instead of relying on
+/// a symlink inside the provider's directory.
+const RETRO_SAVE_ROOT_ENV: &str = "HEARTHDECK_RETRO_SAVE_ROOT";
+
+fn retro_save_root() -> PathBuf {
+    retro_save_root_from(
+        env::var_os(RETRO_SAVE_ROOT_ENV).map(PathBuf::from),
+        env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+        env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
+/// Split from the environment so the override-then-XDG chain is unit-testable
+/// without mutating process environment from a parallel test.
+fn retro_save_root_from(
+    configured: Option<PathBuf>,
+    data_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    if let Some(configured) = configured.filter(|path| !path.as_os_str().is_empty()) {
+        return configured;
+    }
+    data_home
+        .filter(|path| !path.as_os_str().is_empty())
+        .or_else(|| home.map(|path| path.join(".local/share")))
+        .unwrap_or_else(|| PathBuf::from(".local/share"))
+        .join("hearthdeck/retroarch")
+}
+
+/// Where one launch's saves and save states go.
+///
+/// One folder per content file, named after the ROM's stem, so the synced tree
+/// reads like a game list and a state and its save stay together. The folder
+/// deliberately says nothing about the core: a save follows the game, not the
+/// emulator, so changing which core runs a ROM does not orphan it.
+#[derive(Debug, PartialEq, Eq)]
+struct RetroSaveDirectories {
+    saves: PathBuf,
+    states: PathBuf,
+}
+
+impl RetroSaveDirectories {
+    fn for_rom(save_root: &Path, rom_path: &Path) -> Self {
+        let game = save_folder_name(rom_path);
+        Self {
+            saves: save_root.join("saves").join(&game),
+            states: save_root.join("states").join(game),
+        }
+    }
+}
+
+/// Creates the directories a launch pins, returning them for the managed config.
+///
+/// RetroArch validates `savefile_directory` and `savestate_directory` when it
+/// reads its config and *ignores* one that does not exist, falling back to its
+/// own default with a single warning in the journal. So the directories have to
+/// exist before the config is written, not when the first save happens.
+async fn create_save_directories(
+    save_root: &Path,
+    rom_path: &Path,
+) -> Result<RetroSaveDirectories> {
+    let directories = RetroSaveDirectories::for_rom(save_root, rom_path);
+    tokio::fs::create_dir_all(&directories.saves)
+        .await
+        .context("could not create this game's RetroArch save directory")?;
+    tokio::fs::create_dir_all(&directories.states)
+        .await
+        .context("could not create this game's RetroArch save-state directory")?;
+    Ok(directories)
+}
+
+/// The folder a ROM's saves and states go in: its file stem, with the bytes
+/// that would break a RetroArch config line replaced by `_`.
+///
+/// The name is not the bridge's to trust — it arrives from RomM's metadata, and
+/// `validate_content_filename` in the daemon accepts any single path component,
+/// including quotes, backslashes and newlines. Those are harmless as a path
+/// (the component cannot contain `/`) but not as an interpolated
+/// `savefile_directory = "…"` value, where a quote ends the value early and a
+/// newline starts a new key. Everything else - spaces, brackets, non-ASCII - is
+/// left alone, so the tree still reads like the game list.
+fn save_folder_name(rom_path: &Path) -> OsString {
+    let stem = rom_path
+        .file_stem()
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(OsStr::new("game"));
+    let sanitized: Vec<u8> = stem
+        .as_bytes()
+        .iter()
+        .map(|byte| match byte {
+            b'"' | b'\\' => b'_',
+            0x00..=0x1f | 0x7f => b'_',
+            byte => *byte,
+        })
+        .collect();
+    OsString::from_vec(sanitized)
 }
 
 /// The directory Hearthdeck caches ROMs fetched from RomM into. The bridge
@@ -1235,12 +1373,22 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        ApplicationSource, RETRO_VIDEO_DRIVER_DEFAULT, SHADER_PRESET_BY_CORE, VIDEO_DRIVER_BY_CORE,
-        desktop_entry_directories_for, is_bare_file_name, origin_of, parse_desktop_entry,
-        parse_exec, retro_profiles, retroarch_command_args, retroarch_managed_config,
+        ApplicationSource, RETRO_VIDEO_DRIVER_DEFAULT, RetroSaveDirectories, SHADER_PRESET_BY_CORE,
+        VIDEO_DRIVER_BY_CORE, create_save_directories, desktop_entry_directories_for,
+        is_bare_file_name, origin_of, parse_desktop_entry, parse_exec, retro_profiles,
+        retro_save_root_from, retroarch_command_args, retroarch_managed_config,
         shader_preset_for_core_in, valid_heroic_application_id, validate_retro_core_path_in,
         validate_retro_rom_path_in, video_driver_for_core, visible_in_desktop,
     };
+
+    /// The save/state directories a launch would get for a ROM in RomM's
+    /// library, so config tests do not restate the layout.
+    fn test_save_directories() -> RetroSaveDirectories {
+        RetroSaveDirectories::for_rom(
+            Path::new("/home/user/.local/share/hearthdeck/retroarch"),
+            Path::new("/mnt/romM/library/roms/snes/Zelda - A Link to the Past (USA).sfc"),
+        )
+    }
 
     /// A launcher's origin is read off where it was installed, not off the file
     /// itself, so the same entry name is a different answer in each directory.
@@ -1553,7 +1701,12 @@ mod tests {
     #[test]
     fn managed_retroarch_config_forces_fullscreen_and_player_one() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
-        let config = retroarch_managed_config(autoconfig_directory.path(), None, "vulkan");
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &test_save_directories(),
+            None,
+            "vulkan",
+        );
 
         assert!(config.contains("video_fullscreen = \"true\""));
         assert!(config.contains("video_windowed_fullscreen = \"true\""));
@@ -1567,12 +1720,193 @@ mod tests {
     }
 
     #[test]
+    fn managed_retroarch_config_pins_a_per_game_save_and_state_directory() {
+        let autoconfig_directory = tempfile::tempdir().unwrap();
+        let save_directories = test_save_directories();
+
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &save_directories,
+            None,
+            "vulkan",
+        );
+
+        // One folder per game, named after the ROM - not the core, and not the
+        // platform folder RomM files it in.
+        assert_eq!(
+            save_directories.saves.as_path(),
+            Path::new(
+                "/home/user/.local/share/hearthdeck/retroarch/saves/Zelda - A Link to the Past (USA)"
+            )
+        );
+        assert_eq!(
+            save_directories.states.as_path(),
+            Path::new(
+                "/home/user/.local/share/hearthdeck/retroarch/states/Zelda - A Link to the Past (USA)"
+            )
+        );
+        assert!(config.contains(&format!(
+            "savefile_directory = \"{}\"",
+            save_directories.saves.display()
+        )));
+        assert!(config.contains(&format!(
+            "savestate_directory = \"{}\"",
+            save_directories.states.display()
+        )));
+
+        // Everything that could move a save out of those directories is off:
+        // `sort_*_enable` appends a core-name folder, `sort_*_by_content_enable`
+        // appends the ROM's parent directory (a platform folder here), and the
+        // `*_in_content_dir` flags write into RomM's library mount.
+        for key in [
+            "savefiles_in_content_dir",
+            "savestates_in_content_dir",
+            "sort_savefiles_enable",
+            "sort_savefiles_by_content_enable",
+            "sort_savestates_enable",
+            "sort_savestates_by_content_enable",
+        ] {
+            assert!(
+                config.contains(&format!("{key} = \"false\"")),
+                "{key} is not pinned off"
+            );
+        }
+    }
+
+    #[test]
+    fn retro_save_root_lets_the_configured_root_win() {
+        // A box pointing the tree straight at a cloud-sync folder: the override
+        // is used as-is, with no `hearthdeck/retroarch` suffix.
+        assert_eq!(
+            retro_save_root_from(
+                Some(PathBuf::from("/home/user/pCloudDrive/Hearthdeck")),
+                Some(PathBuf::from("/home/user/.local/share")),
+                Some(PathBuf::from("/home/user")),
+            ),
+            PathBuf::from("/home/user/pCloudDrive/Hearthdeck")
+        );
+        // Otherwise the XDG data home, not the config directory.
+        assert_eq!(
+            retro_save_root_from(
+                None,
+                Some(PathBuf::from("/data/home")),
+                Some(PathBuf::from("/home/user")),
+            ),
+            PathBuf::from("/data/home/hearthdeck/retroarch")
+        );
+        // An empty variable counts as unset, and without XDG_DATA_HOME the
+        // spec's `$HOME/.local/share` fallback applies.
+        assert_eq!(
+            retro_save_root_from(
+                Some(PathBuf::new()),
+                None,
+                Some(PathBuf::from("/home/user")),
+            ),
+            PathBuf::from("/home/user/.local/share/hearthdeck/retroarch")
+        );
+    }
+
+    #[test]
+    fn a_rom_name_cannot_break_or_inject_a_config_line() {
+        // Names come from RomM, so a quote or a newline in one must not end the
+        // `savefile_directory` value early or start a key of its own.
+        let save_directories = RetroSaveDirectories::for_rom(
+            Path::new("/home/user/.local/share/hearthdeck/retroarch"),
+            Path::new("/mnt/romM/library/roms/snes/Game \"(USA)\"\nsort_savefiles_enable.sfc"),
+        );
+        let config = retroarch_managed_config(
+            Path::new("/home/user/.config/hearthdeck/retroarch/autoconfig"),
+            &save_directories,
+            None,
+            "vulkan",
+        );
+
+        assert_eq!(config.matches("savefile_directory = ").count(), 1);
+        assert_eq!(config.matches("sort_savefiles_enable = ").count(), 1);
+        assert!(config.contains("sort_savefiles_enable = \"false\""));
+        assert_eq!(
+            save_directories.saves.as_path(),
+            Path::new(
+                "/home/user/.local/share/hearthdeck/retroarch/saves/Game _(USA)__sort_savefiles_enable"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_launch_creates_its_save_directories_before_retroarch_reads_the_config() {
+        let save_root = tempfile::tempdir().unwrap();
+
+        let directories = create_save_directories(
+            save_root.path(),
+            Path::new("/mnt/romM/library/roms/snes/Zelda (USA).sfc"),
+        )
+        .await
+        .unwrap();
+
+        // RetroArch ignores a configured directory that does not exist yet, so
+        // these have to be on disk before the managed config is written rather
+        // than when the first save happens.
+        assert!(directories.saves.is_dir());
+        assert!(directories.states.is_dir());
+        assert_eq!(
+            directories.saves,
+            save_root.path().join("saves/Zelda (USA)")
+        );
+        assert_eq!(
+            directories.states,
+            save_root.path().join("states/Zelda (USA)")
+        );
+    }
+
+    /// A packaged install writes saves where the docs say with no `daemon.env`
+    /// at all, and the env file still wins (`EnvironmentFile=` overrides
+    /// `Environment=`), which is how a box moves the tree to a synced folder.
+    #[test]
+    fn every_bridge_unit_presets_the_save_root_the_code_defaults_to() {
+        let deploy_unit = include_str!("../../../../deploy/systemd/hearthdeck-bridge.service");
+        let packaged_unit = include_str!("../../../../packaging/arch/hearthdeck-bridge.service");
+        let env_example = include_str!("../../../../deploy/systemd/daemon.env.example");
+
+        let preset = |unit: &str| {
+            unit.lines()
+                .find_map(|line| line.strip_prefix("Environment=HEARTHDECK_RETRO_SAVE_ROOT="))
+                .map(str::to_owned)
+        };
+        let deployed = preset(deploy_unit).expect("the deploy unit does not preset the save root");
+        assert_eq!(
+            preset(packaged_unit).as_deref(),
+            Some(deployed.as_str()),
+            "the packaged unit and the checkout unit disagree on the save root"
+        );
+        // `%h` is systemd's home specifier; the code resolves the same place
+        // from $HOME for a dev run that has no unit at all.
+        assert_eq!(
+            PathBuf::from(deployed.replacen("%h", "/home/user", 1)),
+            retro_save_root_from(None, None, Some(PathBuf::from("/home/user"))),
+        );
+        // The documented default is the same string, so uncommenting it in
+        // daemon.env changes nothing instead of moving saves by surprise.
+        assert!(
+            env_example.contains(&format!("# HEARTHDECK_RETRO_SAVE_ROOT={deployed}")),
+            "daemon.env.example documents a different default than the unit presets"
+        );
+        // It is a default only if the user's file can override it.
+        assert!(deploy_unit.contains("EnvironmentFile=-%h/.config/hearthdeck/daemon.env"));
+        assert!(packaged_unit.contains("EnvironmentFile=-%h/.config/hearthdeck/daemon.env"));
+    }
+
+    #[test]
     fn managed_retroarch_config_applies_a_shader_preset_when_given_one() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
         let preset =
             Path::new("/usr/share/libretro/shaders/shaders_slang/crt/crt-guest-advanced.slangp");
 
-        let config = retroarch_managed_config(autoconfig_directory.path(), Some(preset), "vulkan");
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &test_save_directories(),
+            Some(preset),
+            "vulkan",
+        );
 
         assert!(config.contains("video_driver = \"vulkan\""));
         assert!(config.contains("video_shader_enable = \"true\""));
@@ -1583,7 +1917,12 @@ mod tests {
     fn managed_retroarch_config_pins_the_video_driver_without_a_shader() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
 
-        let config = retroarch_managed_config(autoconfig_directory.path(), None, "vulkan");
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &test_save_directories(),
+            None,
+            "vulkan",
+        );
 
         // The driver is pinned for every launch; only the shader lines depend on
         // a preset applying.
@@ -1717,7 +2056,12 @@ mod tests {
     fn managed_retroarch_config_moves_the_menu_off_the_guide_button() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
 
-        let config = retroarch_managed_config(autoconfig_directory.path(), None, "vulkan");
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &test_save_directories(),
+            None,
+            "vulkan",
+        );
 
         // Guide/Home opens Hearthdeck's overlay, so RetroArch must not also use
         // it as a menu button...
