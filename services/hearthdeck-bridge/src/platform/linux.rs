@@ -603,7 +603,7 @@ fn retroarch_managed_config(
     autoconfig_directory: &Path,
     save_directories: &RetroSaveDirectories,
     shader_preset: Option<&Path>,
-    video_driver: &str,
+    _video_driver: &str,
 ) -> String {
     let mut config = [
         // Start in fullscreen, never a desktop window. `video_windowed_fullscreen`
