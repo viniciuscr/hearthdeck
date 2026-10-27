@@ -25,6 +25,7 @@ use crate::style::{
     TEXT_TITLE, accent_bar, content_width, control_button_class, filter_button_height, passthrough,
     search_icon_padding, tab_button_class, tab_height, tab_underline_height, tab_width,
 };
+use crate::text_entry::Field;
 use crate::ui;
 
 static SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("search"));
@@ -160,9 +161,12 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
             text_input(SEARCH_PLACEHOLDER.as_str(), header.search_value)
                 .on_input(Message::InputChanged)
                 // The keyboard follows the caret, so a focused box means the
-                // pad belongs to the keyboard until Back dismisses it.
-                .on_focus(Message::TextFocus(true))
-                .on_unfocus(Message::TextFocus(false))
+                // pad belongs to the keyboard until it is dismissed. Enter is
+                // how the field accepts what was typed; the shell decides what
+                // that means for a search box.
+                .on_focus(Message::TextFieldFocused(Field::Search))
+                .on_unfocus(Message::TextFieldBlurred(Field::Search))
+                .on_submit(|_| Message::TextFieldSubmitted(Field::Search))
                 .style(TextInput::Search)
                 .width(Length::Fixed(SEARCH_WIDTH))
                 .size(TEXT_HEADER)

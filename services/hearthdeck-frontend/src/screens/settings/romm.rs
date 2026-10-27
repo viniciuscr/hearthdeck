@@ -1,8 +1,10 @@
+use std::sync::LazyLock;
+
 use cosmic::Element;
 use cosmic::iced::Length;
 use cosmic::theme;
 use cosmic::widget::qr_code::{self, QRCode};
-use cosmic::widget::{column, container, dialog, row, text, text_input};
+use cosmic::widget::{Id, column, container, dialog, row, text, text_input};
 
 use crate::app;
 use crate::fl;
@@ -11,9 +13,26 @@ use crate::style::{
     TEXT_BODY, TEXT_TITLE, destructive_button_class, primary_action_button_class,
     standard_button_class,
 };
+use crate::text_entry::Field;
 
 /// Side length of one QR cell; large enough to scan off a TV across a room.
 const QR_CELL_SIZE: f32 = 6.0;
+
+static USERNAME_ID: LazyLock<Id> = LazyLock::new(|| Id::new("romm-username"));
+static PASSWORD_ID: LazyLock<Id> = LazyLock::new(|| Id::new("romm-password"));
+
+/// The sign-in dialog's username field.
+///
+/// The dialog is not a place the pad can walk to, so the shell puts the caret
+/// here itself when the dialog opens - and that is what raises the keyboard.
+pub fn username_id() -> Id {
+    USERNAME_ID.clone()
+}
+
+/// The sign-in dialog's password field, which the username submits into.
+pub fn password_id() -> Id {
+    PASSWORD_ID.clone()
+}
 
 #[derive(Clone)]
 pub enum Message {
@@ -246,8 +265,11 @@ pub fn view(form: &Form) -> Element<'_, app::Message> {
     let spacing = theme::spacing();
     let mut url = text_input("http://127.0.0.1:8080", &form.base_url)
         .size(TEXT_BODY)
-        .on_focus(app::Message::TextFocus(true))
-        .on_unfocus(app::Message::TextFocus(false));
+        .on_focus(app::Message::TextFieldFocused(Field::RommUrl))
+        .on_unfocus(app::Message::TextFieldBlurred(Field::RommUrl))
+        // Accepting the URL puts the keyboard away; the value already applies
+        // as it is typed.
+        .on_submit(|_| app::Message::TextFieldSubmitted(Field::RommUrl));
     if !form.busy && !form.polling {
         url = url.on_input(|value| romm(Message::UrlChanged(value)));
     }
@@ -325,18 +347,24 @@ pub fn sign_in_dialog(form: &Form) -> Option<Element<'_, app::Message>> {
     let spacing = theme::spacing();
     let mut username = text_input(fl!("romm-username"), &sign_in.username)
         .size(TEXT_BODY)
-        .on_focus(app::Message::TextFocus(true))
-        .on_unfocus(app::Message::TextFocus(false));
+        .id(USERNAME_ID.clone())
+        .on_focus(app::Message::TextFieldFocused(Field::RommUsername))
+        .on_unfocus(app::Message::TextFieldBlurred(Field::RommUsername));
     let mut password = text_input(fl!("romm-password"), &sign_in.password)
         .password()
         .size(TEXT_BODY)
-        .on_focus(app::Message::TextFocus(true))
-        .on_unfocus(app::Message::TextFocus(false));
+        .id(PASSWORD_ID.clone())
+        .on_focus(app::Message::TextFieldFocused(Field::RommPassword))
+        .on_unfocus(app::Message::TextFieldBlurred(Field::RommPassword));
     if !form.busy {
-        username = username.on_input(|value| romm(Message::UsernameChanged(value)));
+        username = username
+            .on_input(|value| romm(Message::UsernameChanged(value)))
+            // Enter moves to the password. Nothing can walk to it, so this is
+            // how the pad gets from one half of the form to the other.
+            .on_submit(|_| app::Message::TextFieldSubmitted(Field::RommUsername));
         password = password
             .on_input(|value| romm(Message::PasswordChanged(value)))
-            .on_submit(|_| romm(Message::SignInPressed));
+            .on_submit(|_| app::Message::TextFieldSubmitted(Field::RommPassword));
     }
     let mut controls = column![username, password].spacing(spacing.space_s);
     if let Some(error) = &form.error {

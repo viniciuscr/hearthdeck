@@ -37,6 +37,11 @@ impl App {
         }
         let from = self.page;
         self.page = to;
+        // A page that is left takes its fields with it. A field that disappears
+        // with the caret in it never reports a blur, so the state has to go with
+        // the page - otherwise the pad stays handed to a keyboard nothing is
+        // typing into, and every button but Back is dropped.
+        self.text_entry.end();
         // The switch drops the grid from the tree, and the library's return
         // rebuilds it at its top: the follow is owed when the fade lands.
         if to == Page::Library {

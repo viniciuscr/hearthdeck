@@ -51,6 +51,7 @@ docs carry the *why* the code cannot.
 | [`arch-package.md`](arch-package.md) | Arch package contents and troubleshooting |
 | [`linux-acceptance.md`](linux-acceptance.md) | Manual acceptance checklist |
 | [`immich-backup.md`](immich-backup.md) | Phone photo/video backup: Podman Quadlet stack, external SSD layout, upgrades, restore |
+| [`cloudflare-tunnel.md`](cloudflare-tunnel.md) | Public HTTPS access to Immich: Cloudflare Tunnel Quadlet, token handling, boot behaviour |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md), [`../DEVELOPER_QUICKSTART.md`](../DEVELOPER_QUICKSTART.md), [`../PRE_PUSH_WORKFLOW.md`](../PRE_PUSH_WORKFLOW.md) | Build, dev, and PR flow |
 | [`../.github/copilot-instructions.md`](../.github/copilot-instructions.md) | Project map and the summary style for changes |
 | `archive/` | Superseded docs, kept for history only. Never a source of current truth. |

@@ -11,7 +11,9 @@ use crate::providers::filter::cycle;
 use crate::screens::dashboard;
 use crate::screens::library::focus::{Chrome, Confirm, Direction, Outcome};
 use crate::screens::library::{focus, grid, header, sidebar};
+use crate::screens::settings::romm;
 use crate::subscriptions::gamepad::GamepadEvent;
+use crate::text_entry::Field;
 use crate::widgets::top_bar;
 
 use super::{App, Message, Page, unfocus, widget_focus};
@@ -233,9 +235,8 @@ impl App {
         // Back dismisses the input and the keyboard first, keeps the screen
         // open, and hands the pad back to it. Nothing else can be reached
         // while the keyboard has the pad, so this is the whole dismissal.
-        if self.text_focused {
-            self.text_focused = false;
-            return unfocus();
+        if self.text_entry.is_active() {
+            return self.end_text_entry();
         }
         // A modal dialog sits over every surface, so Back closes it first.
         if self.romm.sign_in.is_some() {
@@ -304,6 +305,53 @@ impl App {
         self.focus_task()
     }
 
+    /// Gives the caret up, and takes the on-screen keyboard down with it.
+    ///
+    /// The renderer is only told when a field actually had the caret: an
+    /// unfocus the screen did not need is a walk over every widget for nothing,
+    /// and it would take the focus away from whatever the shell placed by the
+    /// time this runs.
+    pub(super) fn end_text_entry(&mut self) -> Task<Message> {
+        if self.text_entry.end() {
+            return unfocus();
+        }
+        Task::none()
+    }
+
+    /// What accepting a field means, which is the shell's decision rather than
+    /// the screen's: a screen knows what it collects, not what comes next.
+    ///
+    /// Enter arrives from the keyboard and the on-screen keyboard alike, so
+    /// this is how a pad finishes typing without reaching for a button.
+    pub(super) fn submit_text_field(&mut self, field: Field) -> Task<Message> {
+        match field {
+            // The search box and the URL are filters rather than forms: the
+            // value already applies as it is typed, so accepting it only puts
+            // the keyboard away.
+            Field::Search | Field::RommUrl => self.end_text_entry(),
+            // The credentials are one form typed in order. Username hands to
+            // password - which is also how the pad moves between the two, since
+            // nothing can walk to them - and password sends the form.
+            Field::RommUsername => {
+                if self.romm.sign_in.is_none() {
+                    return Task::none();
+                }
+                self.text_entry.focus(Field::RommPassword);
+                text_input::focus(romm::password_id())
+            }
+            Field::RommPassword => {
+                let ended = self.end_text_entry();
+                if !self.romm.can_sign_in() {
+                    return ended;
+                }
+                Task::batch([
+                    ended,
+                    self.update(Message::Romm(romm::Message::SignInPressed)),
+                ])
+            }
+        }
+    }
+
     /// Puts the caret in the search box, which is what the pad's search button
     /// and the ring's stop at it both ask for.
     ///
@@ -316,7 +364,7 @@ impl App {
         // and the pad belongs to it. `on_focus` only reports a click; a caret
         // the shell places through a task has to be recorded here, or the pad
         // would keep driving the screen under the keyboard.
-        self.text_focused = true;
+        self.text_entry.focus(Field::Search);
         text_input::focus(header::search_id())
     }
 
@@ -385,16 +433,28 @@ impl App {
         }
         if self.page == Page::Library {
             self.cursors.ring = focus::ring_step(self.cursors.ring, backwards, self.layout());
-            let focus = self.focus_task();
             let stop = self
                 .cursors
                 .ring
                 .and_then(|index| focus::ring_at(index, self.layout()));
             // Landing on the search box puts the caret in it, so the keyboard
             // comes up and takes the pad - the same state the pad's own search
-            // button leaves behind. Any other stop hands focus to a button, so
-            // there is no text field left with the caret.
-            self.text_focused = stop == Some(Chrome::Search);
+            // button leaves behind. Any other stop hands focus to a control,
+            // and that focus operation unfocuses the box on the way - so the
+            // caret cannot outlive the stop. Out of the ring with no tile to
+            // land on there is no such control, and the caret is cleared
+            // instead, or the keyboard would stay up over a pad that is back.
+            let focus = if stop == Some(Chrome::Search) {
+                self.text_entry.focus(Field::Search);
+                self.focus_task()
+            } else {
+                self.text_entry.end();
+                if stop.is_none() && self.visible.is_empty() {
+                    unfocus()
+                } else {
+                    self.focus_task()
+                }
+            };
             // A tab the ring stops on is a tab the user is looking at, so the
             // strip follows it the way it follows a selection.
             let reveal = match stop {

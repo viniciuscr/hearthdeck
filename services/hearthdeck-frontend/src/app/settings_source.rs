@@ -2,9 +2,11 @@
 //! smart-categories state, RomM connection and the Stremio link flow.
 
 use cosmic::app::Task;
+use cosmic::widget::text_input;
 
 use crate::app_group::AppLibraryConfig;
 use crate::screens::settings;
+use crate::text_entry::Field;
 
 use super::{
     App, CategorizationAction, Message, STREMIO_LINK_POLL_INTERVAL, STREMIO_PUBLISH_SETTLE,
@@ -75,6 +77,11 @@ impl App {
                 if !self.romm.busy {
                     self.romm.sign_in = Some(settings::romm::SignIn::default());
                     self.romm.error = None;
+                    // The dialog cannot be walked to, so the shell places the
+                    // caret itself: the username field and the keyboard come up
+                    // together, and the pad can type straight away.
+                    self.text_entry.focus(Field::RommUsername);
+                    return text_input::focus(settings::romm::username_id());
                 }
                 false
             }
@@ -82,7 +89,7 @@ impl App {
                 if !self.romm.busy {
                     self.romm.sign_in = None;
                 }
-                false
+                return self.end_text_entry();
             }
             Romm::UsernameChanged(value) => {
                 if let Some(sign_in) = self.romm.sign_in.as_mut().filter(|_| !self.romm.busy) {
@@ -100,19 +107,37 @@ impl App {
                 let Some((username, password)) = self.romm.take_credentials() else {
                     return Task::none();
                 };
+                // The dialog keeps the outcome; the caret goes back to the
+                // screen while the request runs, so the keyboard does not
+                // outlive the form it was typing into.
+                let ended = self.end_text_entry();
                 let client = self.daemon_client.clone();
                 let base_url = self.romm.base_url.trim().to_owned();
-                return Task::perform(
-                    async move {
-                        client
-                            .romm_login(&base_url, &username, &password)
-                            .await
-                            .map_err(|error| error.to_string())
-                    },
-                    |result| cosmic::Action::App(Message::Romm(Romm::SignedIn(result))),
-                );
+                return Task::batch([
+                    ended,
+                    Task::perform(
+                        async move {
+                            client
+                                .romm_login(&base_url, &username, &password)
+                                .await
+                                .map_err(|error| error.to_string())
+                        },
+                        |result| cosmic::Action::App(Message::Romm(Romm::SignedIn(result))),
+                    ),
+                ]);
             }
-            Romm::SignedIn(result) => self.romm.signed_in(result),
+            Romm::SignedIn(result) => {
+                let changed = self.romm.signed_in(result);
+                // A refused sign-in keeps the dialog with an empty password:
+                // put the caret back in it, so the pad has somewhere to type
+                // the retry without walking to a field it cannot reach.
+                if self.romm.sign_in.is_some() && !self.romm.busy {
+                    self.text_entry.focus(Field::RommPassword);
+                    return text_input::focus(settings::romm::password_id());
+                }
+                self.text_entry.end();
+                changed
+            }
             Romm::RemovePressed => {
                 if self.romm.busy || self.romm.polling || self.romm.connection.is_none() {
                     return Task::none();
