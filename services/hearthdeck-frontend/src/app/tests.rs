@@ -34,7 +34,7 @@ fn shell() -> App {
         collections: Vec::new(),
         facet_selection: BTreeMap::new(),
         filter_open: false,
-        text_focused: false,
+        text_entry: TextEntry::default(),
         menu: menu::State::default(),
         cur_section: Section::PcGames,
         cur_group: None,
@@ -546,8 +546,9 @@ fn the_keyboard_chord_puts_the_caret_in_the_search_box() {
     send(&mut app, GamepadEvent::Keyboard);
 
     assert_eq!(app.page, Page::Library);
-    assert!(
-        app.text_focused,
+    assert_eq!(
+        app.text_entry.active(),
+        Some(Field::Search),
         "the chord did not hand the pad to the keyboard"
     );
 }
@@ -562,7 +563,7 @@ fn the_pad_belongs_to_the_keyboard_while_a_text_field_has_the_caret() {
         .update(crate::input_ownership::Event::SessionObserved(false));
     let before = app.cursors;
 
-    app.text_focused = true;
+    let _ = app.update(Message::TextFieldFocused(Field::Search));
     for event in [
         GamepadEvent::MoveDown,
         GamepadEvent::MoveRight,
@@ -581,11 +582,17 @@ fn the_pad_belongs_to_the_keyboard_while_a_text_field_has_the_caret() {
         !app.filter_open,
         "Select opened the drawer under the keyboard"
     );
-    assert!(app.text_focused, "only Back dismisses the keyboard");
+    assert!(
+        app.text_entry.is_active(),
+        "only Back dismisses the keyboard"
+    );
 
     send(&mut app, GamepadEvent::Back);
 
-    assert!(!app.text_focused, "Back did not give the pad back");
+    assert!(
+        !app.text_entry.is_active(),
+        "Back did not give the pad back"
+    );
     assert_eq!(
         app.page,
         Page::Library,
@@ -595,6 +602,136 @@ fn the_pad_belongs_to_the_keyboard_while_a_text_field_has_the_caret() {
     // With the caret gone the pad drives the screen again.
     send(&mut app, GamepadEvent::MoveDown);
     assert_ne!(app.cursors, before);
+}
+
+/// The caret is what decides that the keyboard is up, not which window the
+/// compositor considers focused. cosmic-osk hides itself on East without
+/// telling the shell, and a focus change can land while the keyboard is still
+/// up, so ownership being anything but `Frontend` must not swallow Back.
+#[test]
+fn back_dismisses_the_keyboard_even_when_the_window_lost_focus() {
+    let mut app = showing(12);
+    app.input_ownership
+        .update(crate::input_ownership::Event::SessionObserved(false));
+    let _ = app.update(Message::TextFieldFocused(Field::RommPassword));
+    app.input_ownership
+        .update(crate::input_ownership::Event::FrontendUnfocused);
+    assert!(!app.input_ownership.frontend_has_control());
+
+    send(&mut app, GamepadEvent::Back);
+
+    assert!(
+        !app.text_entry.is_active(),
+        "Back was swallowed by the ownership gate"
+    );
+    assert_eq!(
+        app.page,
+        Page::Library,
+        "dismissing the keyboard also left the page"
+    );
+}
+
+/// A blur names its field: the one the user already left cannot take the caret
+/// away from the one they are typing in.
+#[test]
+fn a_stale_blur_does_not_hand_the_pad_back() {
+    let mut app = showing(12);
+    app.input_ownership
+        .update(crate::input_ownership::Event::SessionObserved(false));
+    let _ = app.update(Message::TextFieldFocused(Field::RommPassword));
+    let before = app.cursors;
+
+    let _ = app.update(Message::TextFieldBlurred(Field::RommUsername));
+    send(&mut app, GamepadEvent::MoveDown);
+
+    assert_eq!(
+        app.text_entry.active(),
+        Some(Field::RommPassword),
+        "a stale blur took the caret out of the field that had it"
+    );
+    assert_eq!(app.cursors, before, "the pad moved under the keyboard");
+}
+
+/// The sign-in dialog cannot be walked to, so Enter is how the pad moves from
+/// the username to the password, and how it sends the form.
+#[test]
+fn accepting_a_credential_field_moves_to_the_next_one() {
+    let mut app = shell();
+    app.romm.base_url = "http://127.0.0.1:8080".to_owned();
+    app.romm.sign_in = Some(settings::romm::SignIn {
+        username: "player".to_owned(),
+        password: "secret".to_owned(),
+    });
+
+    let _ = app.update(Message::TextFieldSubmitted(Field::RommUsername));
+    assert_eq!(app.text_entry.active(), Some(Field::RommPassword));
+
+    let _ = app.update(Message::TextFieldSubmitted(Field::RommPassword));
+
+    assert!(app.romm.busy, "the password did not send the sign-in form");
+    assert!(
+        !app.text_entry.is_active(),
+        "the keyboard stayed up over a form that was sent"
+    );
+}
+
+/// Opening the sign-in dialog puts the caret in the username itself: the pad
+/// has no cursor that could walk to the field, so the keyboard has to come up
+/// with the dialog.
+#[test]
+fn opening_the_sign_in_dialog_puts_the_caret_in_the_username() {
+    let mut app = shell();
+
+    let _ = app.update(Message::Romm(settings::romm::Message::SignInOpened));
+    assert_eq!(
+        app.text_entry.active(),
+        Some(Field::RommUsername),
+        "the dialog opened without a field to type into"
+    );
+
+    let _ = app.update(Message::Romm(settings::romm::Message::SignInClosed));
+    assert!(
+        !app.text_entry.is_active(),
+        "the caret outlived the dialog it was in"
+    );
+}
+
+/// The sign-in dialog is a surface over the settings page: Back closes it and
+/// Confirm submits it, and neither reaches the page behind.
+#[test]
+fn the_pad_answers_the_sign_in_dialog() {
+    let mut app = showing(12);
+    app.input_ownership
+        .update(crate::input_ownership::Event::SessionObserved(false));
+    app.romm.base_url = "http://127.0.0.1:8080".to_owned();
+    app.romm.sign_in = Some(settings::romm::SignIn {
+        username: "player".to_owned(),
+        password: "secret".to_owned(),
+    });
+
+    send(&mut app, GamepadEvent::Confirm);
+    assert!(app.romm.busy, "the pad could not submit the dialog");
+
+    app.romm.busy = false;
+    send(&mut app, GamepadEvent::Back);
+
+    assert!(app.romm.sign_in.is_none(), "Back did not close the dialog");
+    assert_eq!(app.page, Page::Library, "Back also left the page");
+}
+
+/// A page that is left takes its fields with it, so the pad cannot stay handed
+/// to a keyboard nothing is typing into.
+#[test]
+fn leaving_a_page_gives_the_pad_back() {
+    let mut app = showing(12);
+    let _ = app.update(Message::TextFieldFocused(Field::Search));
+
+    app.switch_page(Page::Settings);
+
+    assert!(
+        !app.text_entry.is_active(),
+        "the caret outlived the field it was in"
+    );
 }
 
 #[test]

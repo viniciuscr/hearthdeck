@@ -16,6 +16,7 @@ mod screens;
 mod style;
 mod subscriptions;
 mod system_status;
+mod text_entry;
 mod toplevel;
 mod ui;
 mod wallpaper;

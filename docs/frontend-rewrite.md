@@ -109,12 +109,21 @@ the cruft inherited from the project this started from.
   action its button does, so the two cannot drift apart.
 - **The keyboard takes the pad.** Focusing a text field raises the on-screen
   keyboard - the compositor activates the input method on focus - and from then
-  until it is dismissed every pad button belongs to the keyboard: the shell
+  until the caret is gone every pad button belongs to the keyboard: the shell
   drops navigation events, so the screen behind does not move under the keys.
-  Back is the dismissal: it takes the caret out of the field, which takes the
-  keyboard down, and stays on the screen it was typed on. Start+Select summons
-  the same thing by putting the caret in the search box, which is the text field
-  the pad can reach on its own.
+  The caret is what decides this, not which window the compositor thinks is
+  focused: cosmic-osk hides itself on East without telling the shell, and the
+  RomM dialog is drawn over the settings page. Back is the dismissal: it takes
+  the caret out of the field, which takes the keyboard down, and stays on the
+  screen it was typed on. Start+Select summons the same thing by putting the
+  caret in the search box, which is the text field the pad can reach on its own.
+- **Enter finishes typing.** A field that accepts what was typed says so, and
+  the shell decides what accepting it means: the search box and the RomM URL
+  put the keyboard away, the sign-in username hands over to the password, and
+  the password sends the form. That is the pad's whole path through the sign-in
+  dialog - A submits it, B closes it, and neither reaches the page behind.
+  Fields are named rather than tracked by one flag, so a blur from the field the
+  user just left cannot take the caret away from the one they are typing in.
 - **The pad remembers where it was.** A vertical step returns to the column the
   cursor came down, so a row that ends early - or the short last row of a console
   grid - does not drag it back to the first column. The drawer keeps a row of its
@@ -123,9 +132,10 @@ the cruft inherited from the project this started from.
   its first tile, except when the search box replaced it: that happens on every
   keystroke, and taking the caret away mid-word is not a redraw.
 - **Back is one function.** `App::back` unwinds the surfaces in the order they
-  stack - a failed launch, then the filter drawer, then the keyboard's ring, then
-  whatever took the caret - and nothing else handles Back for itself. The rung
-  still missing is the page behind the library: the Dashboard.
+  stack - the caret, the sign-in dialog, a failed launch, the menu, the filter
+  drawer, the details screen and its disc picker, the top bar, the keyboard's
+  ring, then the page itself - and nothing else handles Back for itself. The
+  rung still missing is the page behind the library: the Dashboard.
 
 ## Running
 

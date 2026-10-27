@@ -37,6 +37,11 @@ impl App {
         }
         let from = self.page;
         self.page = to;
+        // A page that is left takes its fields with it. A field that disappears
+        // with the caret in it never reports a blur, so the state has to go with
+        // the page - otherwise the pad stays handed to a keyboard nothing is
+        // typing into, and every button but Back is dropped.
+        self.text_entry.end();
         // Take the frame clock once, so the first drawn frame is at progress 0.
         self.now = Instant::now();
         self.page_fade = Some(Fade::new(from, self.now, PAGE_TRANSITION_DURATION));

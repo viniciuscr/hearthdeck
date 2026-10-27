@@ -66,6 +66,7 @@ use crate::subscriptions::config_watch::config_watch;
 use crate::subscriptions::daemon_events::{FeedEvent, daemon_events};
 use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
 use crate::system_status::SystemStatus;
+use crate::text_entry::{Field, TextEntry};
 use crate::ui;
 use crate::wallpaper::{self, Wallpaper};
 use crate::widgets::menu::{self, Menu, Row};
@@ -206,11 +207,19 @@ pub enum Message {
     ActivateConsole(i64),
     SelectGroup(Option<usize>),
     InputChanged(String),
-    /// A text field gained or lost the caret. The on-screen keyboard follows
-    /// that focus - the compositor activates the input method when the field
-    /// takes it - so this is also what tells the shell that the pad belongs to
-    /// the keyboard now instead of to the screen behind it.
-    TextFocus(bool),
+    /// A text field took the caret. The on-screen keyboard follows that focus -
+    /// the compositor activates the input method when the field takes it - so
+    /// this is also what tells the shell that the pad belongs to the keyboard
+    /// now instead of to the screen behind it.
+    TextFieldFocused(Field),
+    /// A text field gave the caret up. Only the field that has it can take it
+    /// away, because a blur from the field the user just left arrives after the
+    /// next field already has the caret.
+    TextFieldBlurred(Field),
+    /// The focused field was asked to accept what was typed: Enter on a
+    /// keyboard, including the on-screen one. The shell decides what accepting
+    /// means for each field, so no screen has to know the next step.
+    TextFieldSubmitted(Field),
     /// A filter chip was pressed: set (or clear) one facet's value.
     SelectFacet {
         facet: String,
@@ -447,12 +456,12 @@ pub struct App {
     facet_selection: BTreeMap<String, String>,
     /// Whether the filter sidebar is open.
     filter_open: bool,
-    /// Whether a text field owns the caret, which is also what says the
-    /// on-screen keyboard is up: focusing a field is what activates the input
-    /// method. While this is set the pad belongs to the keyboard - every button
-    /// but Back is dropped before it reaches the screen - so the app does not
-    /// move behind the keys the user is pressing.
-    text_focused: bool,
+    /// Which text field owns the caret, if one does, which is also what says
+    /// the on-screen keyboard is up: focusing a field is what activates the
+    /// input method. While a field has it the pad belongs to the keyboard -
+    /// every button but Back is dropped before it reaches the screen - so the
+    /// app does not move behind the keys the user is pressing.
+    text_entry: TextEntry,
     /// The tile menu: which tile it is open on, and which of its rows is
     /// highlighted. The menu owns both, so "is it open" cannot disagree with
     /// "what is it on".
@@ -570,7 +579,7 @@ impl Application for App {
             collections: Vec::new(),
             facet_selection: BTreeMap::new(),
             filter_open: false,
-            text_focused: false,
+            text_entry: TextEntry::default(),
             menu: menu::State::default(),
             cur_section: Section::PcGames,
             cur_group: None,
@@ -871,7 +880,9 @@ impl Application for App {
                 self.refilter();
                 return self.list_replaced();
             }
-            Message::TextFocus(focused) => self.text_focused = focused,
+            Message::TextFieldFocused(field) => self.text_entry.focus(field),
+            Message::TextFieldBlurred(field) => self.text_entry.blur(field),
+            Message::TextFieldSubmitted(field) => return self.submit_text_field(field),
             Message::SelectFacet { facet, value } => {
                 match value {
                     Some(value) => {
@@ -1083,18 +1094,47 @@ impl Application for App {
                 return self.focus_search();
             }
             Message::GamepadEvent(event) => {
+                // A text field owns the caret, so the on-screen keyboard is up
+                // and the pad is how its keys get pressed. Nothing else reaches
+                // the screen until the caret is gone - and Back is the one
+                // button that does it.
+                //
+                // This is checked before ownership, deliberately. The field may
+                // be in the RomM dialog, and the compositor may consider this
+                // window unfocused while the keyboard is up - cosmic-osk hides
+                // itself on East without telling anyone - so whether the
+                // keyboard is up is a fact about the caret, not about which
+                // window is focused. Dropping Back here would leave the pad
+                // dead with the keyboard gone.
+                if self.text_entry.is_active() {
+                    if event == GamepadEvent::Back {
+                        return self.end_text_entry();
+                    }
+                    return Task::none();
+                }
+                // The RomM sign-in dialog is a surface over the settings page,
+                // not a place in its rows, so the pad cannot walk into it. It
+                // is driven by the one button that means yes and the one that
+                // means no, and while it is up nothing behind it may move.
+                //
+                // Read before ownership as well: losing focus to the keyboard
+                // on the way in must not leave the dialog impossible to close.
+                if self.romm.sign_in.is_some() {
+                    return match event {
+                        GamepadEvent::Back => self.update(Message::Romm(
+                            crate::screens::settings::romm::Message::SignInClosed,
+                        )),
+                        GamepadEvent::Confirm if self.romm.can_sign_in() => self.update(
+                            Message::Romm(crate::screens::settings::romm::Message::SignInPressed),
+                        ),
+                        _ => Task::none(),
+                    };
+                }
                 // A game owns the screen, or the window is not focused: the
                 // pad's events are not ours to act on. (This is what keeps a
                 // session's controller input from driving the library behind
                 // it.)
                 if !self.input_ownership.frontend_has_control() {
-                    return Task::none();
-                }
-                // A text field owns the caret, so the on-screen keyboard is up
-                // and the pad is how its keys get pressed. Nothing else reaches
-                // the screen until the keyboard is dismissed - Back is the one
-                // button that does (see `App::back`).
-                if self.text_focused && event != GamepadEvent::Back {
                     return Task::none();
                 }
                 return self.navigate(event);
@@ -1564,7 +1604,10 @@ impl App {
         self.cursors.tile = 0;
         self.cursors.column = 0;
         let drawn = grid::scroll_to_top();
-        if self.search_value.is_empty() {
+        // A search box that replaced the list keeps the caret: this runs on
+        // every keystroke, and focusing the grid here would take the caret - and
+        // with it the keyboard - out of the box mid-word.
+        if self.search_value.is_empty() && !self.text_entry.is_active() {
             return Task::batch([drawn, self.focus_task()]);
         }
         drawn
