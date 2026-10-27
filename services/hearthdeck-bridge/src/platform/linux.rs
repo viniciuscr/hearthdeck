@@ -671,7 +671,7 @@ fn retroarch_managed_config(
     // driver cannot load slang presets and mis-sizes hardware-rendered cores
     // under Gamescope. Resolved per core because Flycast needs `glcore`; see
     // `RETRO_VIDEO_DRIVER_DEFAULT` and `VIDEO_DRIVER_BY_CORE`.
-    config.push_str(&format!("video_driver = \"{video_driver}\"\n"));
+    // config.push_str(&format!("video_driver = \"{video_driver}\"\n"));
     if let Some(preset) = shader_preset {
         config.push_str("video_shader_enable = \"true\"\n");
         config.push_str(&format!("video_shader = \"{}\"\n", preset.display()));
