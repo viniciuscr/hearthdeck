@@ -40,7 +40,7 @@ use cosmic::theme;
 use cosmic::widget::{Id, button, column, container, context_drawer, icon, row, space, text};
 use cosmic::{Application, Element};
 
-use crate::app::animation::{Scrolls, section_direction, tab_direction};
+use crate::app::animation::{ScrollTarget, Scrolls, section_direction, tab_direction};
 use crate::app_group::{AppLibraryConfig, RommFacet, Section, section_facets};
 use crate::fl;
 use crate::form_factor::{self, FormFactor};
@@ -990,8 +990,20 @@ impl Application for App {
                 previous,
                 result,
             } => return self.settle_details_flag(rom_id, flag, previous, result),
-            Message::RailScrolled { rail, offset } => self.set_rail_offset(rail, offset),
-            Message::PageScrolled(offset) => self.page_offset = offset,
+            Message::RailScrolled { rail, offset } => {
+                // A report from a scroll the shell is driving describes where
+                // the travel happens to be, not where the shell sent it; taking
+                // it would make the next follow measure from the wrong place
+                // and visibly correct.
+                if !self.scrolls.is_moving(ScrollTarget::Rail(rail)) {
+                    self.set_rail_offset(rail, offset);
+                }
+            }
+            Message::PageScrolled(offset) => {
+                if !self.scrolls.is_moving(ScrollTarget::Page) {
+                    self.page_offset = offset;
+                }
+            }
             Message::HeroTick => return self.rotate_hero(),
             Message::DashboardTick => return self.dashboard_ticked(),
             Message::TabsScrolled(offset) => self.tabs_offset = offset,

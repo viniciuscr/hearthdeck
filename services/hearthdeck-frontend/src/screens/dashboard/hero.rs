@@ -14,7 +14,7 @@ use cosmic::Element;
 use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::alignment::Vertical;
 use cosmic::iced::widget::{row, stack};
-use cosmic::iced::{Background, Border, Color, ContentFit, Length};
+use cosmic::iced::{Background, Border, Color, ContentFit, Length, Padding};
 use cosmic::theme::{self, Theme};
 use cosmic::widget::{button, column, container, text};
 
@@ -25,6 +25,7 @@ use crate::style::{
     TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, backdrop_faded, hero_height, tile_button_class,
 };
 use crate::widgets::application::Selection;
+use crate::widgets::top_bar;
 
 /// The wordmark's box on the banner: wide enough for a title in its own
 /// lettering, short enough to leave the synopsis under it.
@@ -162,10 +163,28 @@ impl Motion {
             from + (to - from) * progress
         })
     }
+
+    /// Whether the banner wears the cursor's ring. The ring says "the pad is
+    /// here", and while the art fills the window the picture says that itself:
+    /// a border around the row would frame the same art twice.
+    #[must_use]
+    pub fn wears_ring(self, selected: bool) -> bool {
+        selected && !self.at.expanded
+    }
 }
 
 fn alpha_of(expanded: bool) -> f32 {
     if expanded { 1.0 } else { 0.0 }
+}
+
+/// Where the banner's row starts down the window: the top bar above it and the
+/// page's own top padding.
+///
+/// The row draws its art at the window's geometry and clips it to itself, and
+/// this is what lines that copy of the picture up with the background's.
+fn row_top() -> f32 {
+    let Spacing { space_l, .. } = theme::spacing();
+    top_bar::height() + f32::from(space_l)
 }
 
 /// The banner: the window's full width and a third of its height, one slide at a
@@ -212,13 +231,15 @@ pub fn view(shelf: &Shelf, motion: Motion, selection: Selection) -> Element<'sta
 
     // The shared tile button, so the banner wears the same accent ring under the
     // pad as a card does, and a click on it presses exactly what Confirm does.
+    // The ring is left off while the art fills the window: see `Motion::wears_ring`.
+    let ring = motion.wears_ring(selection.is_selected());
     button::custom(content)
         .id(card.id.clone())
-        .selected(selection.is_selected())
+        .selected(ring)
         .force_enabled(selection.is_selected())
         .width(Length::Fill)
         .height(Length::Fixed(height))
-        .class(tile_button_class(selection.is_selected()))
+        .class(tile_button_class(ring))
         .padding(0)
         .on_press_maybe(card.message.clone())
         .name(card.label.clone())
@@ -242,14 +263,33 @@ fn slide(shelf: &Shelf, index: usize, art: f32, alpha: f32) -> Element<'static, 
         return container(text("")).into();
     };
 
-    // The slide's own wide art, filling the window edge to edge.
-    let artwork: Element<'static, Message> = backdrop_faded(
+    // The slide's own wide art. It is drawn at the window's own geometry and
+    // clipped to the row, so the picture sits exactly where the background
+    // copy of it sits: growing between the two is then a pure fade, with no
+    // shift in the picture's position or zoom.
+    let top = row_top();
+    let artwork: Element<'static, Message> = container(backdrop_faded(
         &card.icon,
         ContentFit::Cover,
         Length::Fill,
-        Length::Fill,
+        Length::Fixed(WINDOW_HEIGHT),
         art,
-    );
+    ))
+    .width(Length::Fill)
+    // The container is as tall as the row plus the distance from the window's
+    // top edge to the row's, and the negative top padding puts the picture back
+    // up to the window's top: what iced lays out and clips is the row's own
+    // height showing exactly the band of the picture the row covers.
+    .height(Length::Fixed(hero_height(WINDOW_HEIGHT) + top))
+    .padding(Padding {
+        top: -top,
+        right: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+    })
+    .align_y(Vertical::Top)
+    .clip(true)
+    .into();
 
     let mut title: Vec<Element<'static, Message>> = Vec::new();
     match &card.logo {
@@ -563,5 +603,29 @@ mod tests {
         assert_eq!(rest.leaving(), None);
         assert_eq!(rest.slide_alpha(), 1.0);
         assert_eq!(rest.backdrop_alpha(), 1.0);
+    }
+
+    /// The ring says "the pad is here"; while the art fills the window the
+    /// picture says that itself, so the row keeps no border of its own.
+    #[test]
+    fn the_banner_drops_its_ring_while_its_art_fills_the_window() {
+        let expanded = Motion {
+            at: At {
+                slide: 0,
+                expanded: true,
+            },
+            fading: None,
+        };
+        assert!(!expanded.wears_ring(true));
+
+        let home = Motion {
+            at: At {
+                slide: 0,
+                expanded: false,
+            },
+            fading: None,
+        };
+        assert!(home.wears_ring(true));
+        assert!(!home.wears_ring(false), "no pad on it, no ring");
     }
 }

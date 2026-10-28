@@ -295,6 +295,15 @@ impl Scrolls {
         self.in_flight.retain(|scroll| *scroll.target() != target);
     }
 
+    /// Whether `target` is easing right now. A report from a scroll the shell
+    /// is driving describes where the travel happens to be, not where the
+    /// shell sent it.
+    pub(super) fn is_moving(&self, target: ScrollTarget) -> bool {
+        self.in_flight
+            .iter()
+            .any(|scroll| *scroll.target() == target)
+    }
+
     /// Advances every scroll by one frame, emitting one `scroll_to` per list and
     /// dropping the ones that have arrived.
     pub(super) fn advance(&mut self, now: Instant) -> Task<Message> {

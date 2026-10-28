@@ -1679,6 +1679,40 @@ fn the_banners_art_grows_into_the_background_and_hands_it_back() {
     assert!(!app.is_animating());
 }
 
+/// A report from a scroll the shell is driving describes where the travel
+/// happens to be, not where the shell sent it: taking it would leave the next
+/// follow measuring from the wrong place, which reads as the screen snapping
+/// around after the pad leaves the banner.
+#[test]
+fn a_follow_scroll_is_not_overwritten_by_its_own_reports() {
+    use crate::style::SCROLL_TRANSITION_DURATION;
+
+    let mut app = shell();
+    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+        collection("favorites", None, &["hearthdeck:game-0"]),
+    ])));
+
+    // Down off the banner drives the page to the rail below the fold.
+    let _ = app.step_dashboard(Direction::Down);
+    let target = app.page_offset;
+    assert!(
+        app.scrolls.is_moving(ScrollTarget::Page),
+        "the page is travelling to the rail"
+    );
+    let _ = app.update(Message::PageScrolled(5.0));
+    assert_eq!(
+        app.page_offset, target,
+        "mid-travel reports are not the target"
+    );
+
+    // Once it has arrived a report is the truth again: a scroll the person
+    // made themselves.
+    let _ = app.update(Message::Animate(app.now + SCROLL_TRANSITION_DURATION * 2));
+    let _ = app.update(Message::PageScrolled(500.0));
+    assert_eq!(app.page_offset, 500.0);
+}
+
 /// A collection as the daemon composes one.
 fn collection(slug: &str, name: Option<&str>, ids: &[&str]) -> Collection {
     Collection {
