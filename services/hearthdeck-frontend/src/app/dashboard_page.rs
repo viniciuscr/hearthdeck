@@ -188,6 +188,7 @@ impl App {
             return Task::none();
         }
         self.hero_index = dashboard::hero::rotate(self.hero_index, hero_len);
+        self.sync_hero_motion();
         Task::none()
     }
 
@@ -245,6 +246,7 @@ impl App {
         );
         self.dashboard_cursor = cursor;
         self.hero_index = slide;
+        self.sync_hero_motion();
         if self.dashboard_cursor != before {
             return self.focus_dashboard_card();
         }
@@ -296,6 +298,7 @@ impl App {
                 );
                 self.dashboard_cursor = cursor;
                 self.hero_index = slide;
+                self.sync_hero_motion();
                 return self.focus_dashboard_card();
             }
             Direction::Up | Direction::Down => {}

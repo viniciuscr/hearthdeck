@@ -190,6 +190,7 @@ impl App {
         self.cursors.ring = None;
         self.bar_cursor = None;
         self.dashboard_cursor = Default::default();
+        self.sync_hero_motion();
         let mut reads = Vec::new();
         if !self.retries.catalog {
             reads.push(self.load_catalog(Duration::ZERO));

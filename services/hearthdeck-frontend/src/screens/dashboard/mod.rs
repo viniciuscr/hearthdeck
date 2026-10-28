@@ -133,18 +133,18 @@ impl Shelf {
     }
 }
 
-/// Where the dashboard is: the rail and card the pad is on, and the slide the
-/// banner shows.
+/// Where the dashboard is: the rail and card the pad is on, and where the
+/// banner is - its slide and how far its art has grown into the background.
 ///
 /// The slide is kept beside the cursor rather than read from it because the
 /// banner moves on by itself while the pad is elsewhere, and a rotation that
 /// dragged the cursor along would pull it off whatever row the person was
 /// reading. While the pad *is* on the banner the two agree, which is what
 /// [`hero::stepped`] keeps true.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Placement {
     pub cursor: focus::Cursor,
-    pub hero_slide: usize,
+    pub hero: hero::Motion,
 }
 
 /// The widget id of a rail, which is what a scroll to it addresses.
@@ -209,8 +209,9 @@ pub fn view<'a>(
             // a time across the window instead of as a line of cards. It wears
             // the cursor ring when the pad is on it, at the slide it is on.
             if shelf.hero {
-                let selection = card_selection(cursor, &rail_lengths, index, placement.hero_slide);
-                return hero::view(shelf, placement.hero_slide, selection);
+                let selection =
+                    card_selection(cursor, &rail_lengths, index, placement.hero.at.slide);
+                return hero::view(shelf, placement.hero, selection);
             }
             let (size, aspect, fit) = shelf_metrics(shelf, window_width);
             let scroll = on_rail_scroll.clone();

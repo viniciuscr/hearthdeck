@@ -494,6 +494,11 @@ pub struct App {
     /// banner moves on while the pad is somewhere else, and a rotation that
     /// dragged the cursor with it would pull the pad off its row.
     hero_index: usize,
+    /// The banner's motion: where it is now, and the fade in flight from where
+    /// it was. Kept beside `hero_index` rather than read from it, because a
+    /// change only moves if something records that it moved.
+    hero_at: dashboard::hero::At,
+    hero_fade: Option<Fade<dashboard::hero::At>>,
     /// Where the pad is on the top bar both sibling pages wear: the destination
     /// button at this index, or `None` when the bar does not hold the cursor.
     ///
@@ -610,6 +615,8 @@ impl Application for App {
             cursors: Cursors::default(),
             dashboard_cursor: dashboard::focus::Cursor::default(),
             hero_index: 0,
+            hero_at: dashboard::hero::At::default(),
+            hero_fade: None,
             bar_cursor: None,
             rail_offsets: Vec::new(),
             page_offset: 0.0,
@@ -662,6 +669,7 @@ impl Application for App {
         // A transition must never outlive its duration, whatever message happens
         // to arrive next.
         self.expire_page_fade();
+        self.expire_hero_fade();
         // The cursor is repaired before anything acts on it: entries load, facets
         // come and go and sections swap, so what it can point at changes under it.
         // The arms that replace what it walks repair it again themselves.
@@ -809,6 +817,9 @@ impl Application for App {
                         let rails = self.dashboard_rail_lengths();
                         self.dashboard_cursor =
                             dashboard::focus::clamp(self.dashboard_cursor, &rails);
+                        // The slides under the banner just changed: whatever
+                        // moved with them moves smoothly.
+                        self.sync_hero_motion();
                     }
                     Err(error) => {
                         log::warn!("collection fetch failed: {error}");
@@ -1509,11 +1520,12 @@ impl App {
     /// the library's sidebar never appears around it - the two are sibling
     /// destinations, and the sidebar belongs to the library.
     fn view_dashboard(&self) -> Element<'_, Message> {
+        let shelves = self.dashboard_shelves();
         let screen = dashboard::view(
-            &self.dashboard_shelves(),
+            &shelves,
             dashboard::Placement {
                 cursor: self.dashboard_cursor,
-                hero_slide: self.hero_index,
+                hero: self.hero_motion(),
             },
             &self.top_bar(top_bar::Destination::Dashboard),
             self.window_width,
@@ -1528,6 +1540,15 @@ impl App {
         } else {
             screen
         };
+        // The banner's art growing over the desktop while the pad is on it: the
+        // slide it is leaving fades out with it, so the picture reads as one
+        // thing expanding into the background and handing it back when the pad
+        // goes.
+        let screen: Element<'_, Message> =
+            match dashboard::hero::backdrop(shelves.first(), self.hero_motion()) {
+                Some(backdrop) => stack![backdrop, screen].into(),
+                None => screen,
+            };
         // The dashboard wears the desktop: whatever cosmic-bg is showing is
         // drawn full-bleed as the page, over the theme's own background - which
         // shows through where the image does not reach, and stands in for it

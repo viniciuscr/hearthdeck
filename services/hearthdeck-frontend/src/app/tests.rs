@@ -17,6 +17,8 @@ fn shell() -> App {
         page_fade: None,
         now: Instant::now(),
         hero_index: 0,
+        hero_at: dashboard::hero::At::default(),
+        hero_fade: None,
         section_slide: None,
         tab_slide: None,
         scrolls: Scrolls::default(),
@@ -1640,6 +1642,41 @@ fn the_banner_is_the_first_row_and_moves_on_only_while_the_pad_is_elsewhere() {
     let _ = app.step_dashboard(Direction::Down);
     let _ = app.update(Message::HeroTick);
     assert_eq!(app.hero_index, 0, "the last slide wraps to the first");
+}
+
+/// Landing on the banner grows its art into the window's background, and
+/// leaving hands the background back to the wallpaper - both through the fade,
+/// so neither is a jump.
+#[test]
+fn the_banners_art_grows_into_the_background_and_hands_it_back() {
+    use crate::style::HERO_TRANSITION_DURATION;
+
+    let mut app = shell();
+    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+        arrivals(&[
+            "hearthdeck:stremio-arrivals:tt1",
+            "hearthdeck:stremio-arrivals:tt2",
+        ]),
+        collection("favorites", None, &["hearthdeck:game-0"]),
+    ])));
+
+    // The pad starts on the banner, so its art blooms into the background from
+    // nothing rather than appearing there.
+    assert!(app.hero_motion().fading.is_some(), "the growth is a fade");
+    assert_eq!(app.hero_motion().backdrop_alpha(), 0.0);
+    let settle = app.now + HERO_TRANSITION_DURATION * 2;
+    let _ = app.update(Message::Animate(settle));
+    assert_eq!(app.hero_motion().backdrop_alpha(), 1.0);
+    assert!(!app.is_animating(), "the growth has run its course");
+
+    // Down on the rails hands the background back, and that is a fade too.
+    let _ = app.step_dashboard(Direction::Down);
+    assert!(!app.hero_at.expanded);
+    assert!(app.hero_motion().fading.is_some(), "the way back is a fade");
+    assert_eq!(app.hero_motion().backdrop_alpha(), 1.0);
+    let _ = app.update(Message::Animate(app.now + HERO_TRANSITION_DURATION * 2));
+    assert_eq!(app.hero_motion().backdrop_alpha(), 0.0);
+    assert!(!app.is_animating());
 }
 
 /// A collection as the daemon composes one.

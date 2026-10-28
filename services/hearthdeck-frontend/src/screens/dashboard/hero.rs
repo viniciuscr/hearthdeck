@@ -22,7 +22,7 @@ use crate::app::Message;
 use crate::screens::dashboard::Shelf;
 use crate::screens::dashboard::focus::Cursor;
 use crate::style::{
-    TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, backdrop_fit, hero_height, tile_button_class,
+    TEXT_LARGE, TEXT_TITLE, WINDOW_HEIGHT, backdrop_faded, hero_height, tile_button_class,
 };
 use crate::widgets::application::Selection;
 
@@ -103,26 +103,91 @@ pub fn rotates(hero_len: usize, cursor: Cursor) -> bool {
     hero_len > 1 && cursor.rail != 0
 }
 
+/// Where the banner is: the slide showing, and whether its art fills the
+/// window's background.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct At {
+    /// The slide showing.
+    pub slide: usize,
+    /// Its art fills the window behind the page.
+    pub expanded: bool,
+}
+
+/// The banner's motion for one frame: where it is now, and - while a fade is in
+/// flight - where it was and how far the fade out of there has come.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Motion {
+    pub at: At,
+    /// The state being left, and the eased `0.0..=1.0` progress out of it.
+    pub fading: Option<(At, f32)>,
+}
+
+/// Whether the banner's art fills the window's background: the pad is on the
+/// banner row. The same rule that pauses the rotation - a banner the pad is
+/// looking at is the banner the window is looking at.
+#[must_use]
+pub fn expanded(cursor: Cursor, hero_len: usize) -> bool {
+    hero_len > 0 && cursor.rail == 0
+}
+
+impl Motion {
+    /// The slide being left, and the alpha it draws at - `None` when no other
+    /// slide is fading out from under the one showing.
+    #[must_use]
+    pub fn leaving(self) -> Option<(usize, f32)> {
+        let (from, progress) = self.fading?;
+        (from.slide != self.at.slide).then_some((from.slide, 1.0 - progress))
+    }
+
+    /// The alpha the slide showing draws at: full when no other slide is fading
+    /// out from under it.
+    #[must_use]
+    pub fn slide_alpha(self) -> f32 {
+        self.fading.map_or(1.0, |(from, progress)| {
+            if from.slide == self.at.slide {
+                1.0
+            } else {
+                progress
+            }
+        })
+    }
+
+    /// The alpha the banner's art fills the background at: grown out of the
+    /// banner when the pad lands on it, handed back when it leaves.
+    #[must_use]
+    pub fn backdrop_alpha(self) -> f32 {
+        let to = alpha_of(self.at.expanded);
+        self.fading.map_or(to, |(from, progress)| {
+            let from = alpha_of(from.expanded);
+            from + (to - from) * progress
+        })
+    }
+}
+
+fn alpha_of(expanded: bool) -> f32 {
+    if expanded { 1.0 } else { 0.0 }
+}
+
 /// The banner: the window's full width and a third of its height, one slide at a
 /// time.
 ///
 /// The row arrives as a [`Shelf`] like every other, so the page draws it in its
 /// own place in the stack; what changes is that a slide fills the width instead
-/// of sitting in a line of cards. `shown` is clamped into the slides, because a
-/// reload can shorten the list under it.
+/// of sitting in a line of cards. [`Motion`] says which slide is showing and how
+/// far the banner is into moving: a slide on its way out is still drawn under
+/// the one replacing it, and the row's own art gives way to the picture as it
+/// grows into the window's background behind the row.
 ///
 /// Everything it draws is owned by the widgets it builds, so the element does not
 /// borrow the row: the page hands it a shelf built for this frame.
 #[must_use]
-pub fn view(shelf: &Shelf, shown: usize, selection: Selection) -> Element<'static, Message> {
-    let Spacing {
-        space_s,
-        space_m,
-        space_l,
-        ..
-    } = theme::spacing();
+pub fn view(shelf: &Shelf, motion: Motion, selection: Selection) -> Element<'static, Message> {
     let height = hero_height(WINDOW_HEIGHT);
-    let Some(card) = shelf.cards.get(shown).or_else(|| shelf.cards.first()) else {
+    let Some(card) = shelf
+        .cards
+        .get(motion.at.slide)
+        .or_else(|| shelf.cards.first())
+    else {
         // No slides is no banner: the shell does not draw the row at all, so
         // this is only the frame between a reload and the next render.
         return container(text(""))
@@ -131,49 +196,23 @@ pub fn view(shelf: &Shelf, shown: usize, selection: Selection) -> Element<'stati
             .into();
     };
 
-    // The slide's own wide art, filling the window edge to edge.
-    let artwork: Element<'static, Message> =
-        backdrop_fit(&card.icon, ContentFit::Cover, Length::Fill, Length::Fill);
-
-    let mut title: Vec<Element<'static, Message>> = Vec::new();
-    match &card.logo {
-        // The feed's own wordmark, when it has one: the title in its own
-        // lettering reads better than the same words in the UI's font.
-        Some(logo) => title.push(backdrop_fit(
-            logo,
-            ContentFit::Contain,
-            Length::Fixed(LOGO_WIDTH),
-            Length::Fixed(LOGO_HEIGHT),
-        )),
-        None => title.push(text(card.label.clone()).size(TEXT_TITLE).into()),
-    }
-    if let Some(synopsis) = card.description.as_deref().and_then(synopsis) {
-        title.push(text(synopsis).size(TEXT_LARGE).width(Length::Fill).into());
-    }
-
-    let caption: Element<'static, Message> = container(
-        container(
-            row![
-                column(title).spacing(space_s).width(Length::Fill),
-                indicators(shelf.cards.len(), shown),
-            ]
-            .spacing(space_l)
-            .align_y(Vertical::Bottom),
-        )
-        .class(theme::Container::Custom(Box::new(caption_scrim)))
-        .width(Length::Fill)
-        .padding([space_m, space_l]),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .align_y(Vertical::Bottom)
-    .into();
-
-    let slide: Element<'static, Message> = stack![artwork, caption].into();
+    // The art's share of the row: it dissolves as the same picture fills the
+    // window's background behind the row, so the two read as one picture
+    // growing rather than two.
+    let row_art = 1.0 - motion.backdrop_alpha();
+    let alpha = motion.slide_alpha();
+    let content: Element<'static, Message> = match motion.leaving() {
+        Some((from, from_alpha)) => stack![
+            slide(shelf, from, from_alpha * row_art, from_alpha),
+            slide(shelf, motion.at.slide, alpha * row_art, alpha),
+        ]
+        .into(),
+        None => slide(shelf, motion.at.slide, alpha * row_art, alpha),
+    };
 
     // The shared tile button, so the banner wears the same accent ring under the
     // pad as a card does, and a click on it presses exactly what Confirm does.
-    button::custom(slide)
+    button::custom(content)
         .id(card.id.clone())
         .selected(selection.is_selected())
         .force_enabled(selection.is_selected())
@@ -186,10 +225,112 @@ pub fn view(shelf: &Shelf, shown: usize, selection: Selection) -> Element<'stati
         .into()
 }
 
-/// Which slide of how many is showing, as dots in the caption's corner.
-fn indicators(count: usize, shown: usize) -> Element<'static, Message> {
-    let dots: Vec<Element<'static, Message>> =
-        (0..count).map(|index| indicator(index == shown)).collect();
+/// One slide: its art and its caption, at the alphas the banner's motion draws
+/// the pair at. `art` is the art's own share of the row - what is left of it as
+/// the picture fills the window's background - and `alpha` the rest of the
+/// slide's.
+fn slide(shelf: &Shelf, index: usize, art: f32, alpha: f32) -> Element<'static, Message> {
+    let Spacing {
+        space_s,
+        space_m,
+        space_l,
+        ..
+    } = theme::spacing();
+    // A slide a reload shortened the list under is on its way out anyway: it is
+    // gone rather than redrawn as some other slide's art.
+    let Some(card) = shelf.cards.get(index) else {
+        return container(text("")).into();
+    };
+
+    // The slide's own wide art, filling the window edge to edge.
+    let artwork: Element<'static, Message> = backdrop_faded(
+        &card.icon,
+        ContentFit::Cover,
+        Length::Fill,
+        Length::Fill,
+        art,
+    );
+
+    let mut title: Vec<Element<'static, Message>> = Vec::new();
+    match &card.logo {
+        // The feed's own wordmark, when it has one: the title in its own
+        // lettering reads better than the same words in the UI's font.
+        Some(logo) => title.push(backdrop_faded(
+            logo,
+            ContentFit::Contain,
+            Length::Fixed(LOGO_WIDTH),
+            Length::Fixed(LOGO_HEIGHT),
+            alpha,
+        )),
+        None => title.push(text(card.label.clone()).size(TEXT_TITLE).into()),
+    }
+    if let Some(synopsis) = card.description.as_deref().and_then(synopsis) {
+        title.push(text(synopsis).size(TEXT_LARGE).width(Length::Fill).into());
+    }
+
+    let caption: Element<'static, Message> = container(
+        container(
+            row![
+                column(title).spacing(space_s).width(Length::Fill),
+                indicators(shelf.cards.len(), index, alpha),
+            ]
+            .spacing(space_l)
+            .align_y(Vertical::Bottom),
+        )
+        .class(theme::Container::Custom(Box::new(caption_scrim(alpha))))
+        .width(Length::Fill)
+        .padding([space_m, space_l]),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_y(Vertical::Bottom)
+    .into();
+
+    stack![artwork, caption].into()
+}
+
+/// The banner's art as the window's background: the slide showing, and the one
+/// it is leaving, at the alphas of the fade between them and of the growth out
+/// of the banner itself.
+///
+/// `None` when there is no banner to grow - or when its art has not grown at
+/// all, so the wallpaper behind it is drawn alone.
+#[must_use]
+pub fn backdrop(shelf: Option<&Shelf>, motion: Motion) -> Option<Element<'static, Message>> {
+    let shelf = shelf.filter(|shelf| shelf.hero)?;
+    let alpha = motion.backdrop_alpha();
+    if alpha <= 0.0 {
+        return None;
+    }
+    let art = |index: usize, alpha: f32| {
+        shelf.cards.get(index).map(|card| {
+            backdrop_faded(
+                &card.icon,
+                ContentFit::Cover,
+                Length::Fill,
+                Length::Fill,
+                alpha,
+            )
+        })
+    };
+    let showing = art(motion.at.slide, alpha * motion.slide_alpha())?;
+    Some(
+        match motion
+            .leaving()
+            .and_then(|(from, from_alpha)| art(from, alpha * from_alpha))
+        {
+            Some(leaving) => stack![leaving, showing].into(),
+            None => showing,
+        },
+    )
+}
+
+/// Which slide of how many is showing, as dots in the caption's corner, at the
+/// alpha the slide draws at.
+fn indicators(count: usize, shown: usize, alpha: f32) -> Element<'static, Message> {
+    let dots: Vec<Element<'static, Message>> = (0..count)
+        .map(|index| indicator(index == shown, alpha))
+        .collect();
     row(dots)
         .spacing(INDICATOR_SIZE / 2.0)
         .align_y(Vertical::Bottom)
@@ -198,7 +339,7 @@ fn indicators(count: usize, shown: usize) -> Element<'static, Message> {
 
 /// One dot: the accent for the slide showing, the page's own text colour for the
 /// rest. Both are tokens, so the pair follows the palette under either theme.
-fn indicator<'a>(active: bool) -> Element<'a, Message> {
+fn indicator<'a>(active: bool, alpha: f32) -> Element<'a, Message> {
     container("")
         .width(Length::Fixed(INDICATOR_SIZE))
         .height(Length::Fixed(INDICATOR_SIZE))
@@ -212,7 +353,7 @@ fn indicator<'a>(active: bool) -> Element<'a, Message> {
                 color.a = 0.45;
             }
             container::Style {
-                background: Some(Background::Color(color)),
+                background: Some(Background::Color(faded(color, alpha))),
                 border: Border {
                     radius: (INDICATOR_SIZE / 2.0).into(),
                     width: 0.0,
@@ -224,27 +365,37 @@ fn indicator<'a>(active: bool) -> Element<'a, Message> {
         .into()
 }
 
-/// The scrim behind a slide's caption.
+/// The scrim behind a slide's caption, at the alpha the slide draws at.
 ///
 /// The caption sits on artwork, not on the page, so it needs a scrim to stay
 /// readable over a bright frame. Like the tile label's, it is the theme's own
 /// background at partial opacity with its text colour on top, so it follows the
 /// palette under both themes while the art shows through.
-fn caption_scrim(theme: &Theme) -> container::Style {
-    let t = theme.cosmic();
-    let mut background: Color = t.bg_color().into();
-    background.a = 0.6;
-    container::Style {
-        text_color: Some(t.on_bg_color().into()),
-        icon_color: Some(t.on_bg_color().into()),
-        background: Some(Background::Color(background)),
-        border: Border {
-            width: 0.0,
-            color: Color::TRANSPARENT,
-            ..Border::default()
-        },
-        shadow: cosmic::iced::Shadow::default(),
-        snap: false,
+fn caption_scrim(alpha: f32) -> impl Fn(&Theme) -> container::Style {
+    move |theme: &Theme| {
+        let t = theme.cosmic();
+        let mut background: Color = t.bg_color().into();
+        background.a = 0.6 * alpha;
+        container::Style {
+            text_color: Some(faded(t.on_bg_color().into(), alpha)),
+            icon_color: Some(faded(t.on_bg_color().into(), alpha)),
+            background: Some(Background::Color(background)),
+            border: Border {
+                width: 0.0,
+                color: Color::TRANSPARENT,
+                ..Border::default()
+            },
+            shadow: cosmic::iced::Shadow::default(),
+            snap: false,
+        }
+    }
+}
+
+/// A theme colour at a fade's alpha.
+fn faded(color: Color, alpha: f32) -> Color {
+    Color {
+        a: color.a * alpha,
+        ..color
     }
 }
 
@@ -265,7 +416,7 @@ fn synopsis(description: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{landed_from_above, rotate, rotates, stepped, synopsis};
+    use super::{At, Motion, expanded, landed_from_above, rotate, rotates, stepped, synopsis};
     use crate::screens::dashboard::focus::Cursor;
 
     fn on(rail: usize, card: usize) -> Cursor {
@@ -353,5 +504,64 @@ mod tests {
             "cut: {cut}"
         );
         assert!(!cut.trim_end_matches('…').ends_with("wor"), "cut: {cut}");
+    }
+
+    /// The banner's art fills the window's background exactly while the pad is
+    /// on the banner row - the same rule that pauses the rotation - and is
+    /// handed back to the wallpaper when the pad goes.
+    #[test]
+    fn the_banners_art_fills_the_background_while_the_pad_is_on_it() {
+        assert!(expanded(on(0, 2), 5));
+        assert!(!expanded(on(1, 0), 5), "the rails below hand it back");
+        assert!(!expanded(on(0, 0), 0), "no banner fills nothing");
+    }
+
+    /// The fade out of where the banner was: one slide cross-fading into the
+    /// next while both draw, and the art growing into the background at the
+    /// same progress that gives the row's own art up.
+    #[test]
+    fn the_banner_cross_fades_between_where_it_was_and_where_it_is() {
+        let there = At {
+            slide: 2,
+            expanded: true,
+        };
+        let moving = Motion {
+            at: there,
+            fading: Some((
+                At {
+                    slide: 1,
+                    expanded: false,
+                },
+                0.25,
+            )),
+        };
+
+        assert_eq!(moving.leaving(), Some((1, 0.75)));
+        assert_eq!(moving.slide_alpha(), 0.25);
+        assert_eq!(moving.backdrop_alpha(), 0.25);
+
+        // The same slide grown rather than replaced: only the background moves.
+        let growing = Motion {
+            at: there,
+            fading: Some((
+                At {
+                    slide: 2,
+                    expanded: false,
+                },
+                0.25,
+            )),
+        };
+        assert_eq!(growing.leaving(), None);
+        assert_eq!(growing.slide_alpha(), 1.0);
+        assert_eq!(growing.backdrop_alpha(), 0.25);
+
+        // And at rest nothing fades at all.
+        let rest = Motion {
+            at: there,
+            fading: None,
+        };
+        assert_eq!(rest.leaving(), None);
+        assert_eq!(rest.slide_alpha(), 1.0);
+        assert_eq!(rest.backdrop_alpha(), 1.0);
     }
 }

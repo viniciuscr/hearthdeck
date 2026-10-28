@@ -103,6 +103,12 @@ pub const SCROLL_TRANSITION_DURATION: Duration = Duration::from_millis(220);
 /// page's own idle motion rather than of anything the user is on.
 pub const HERO_SLIDE_INTERVAL: Duration = Duration::from_secs(8);
 
+/// How long the banner's own motion takes: its art growing into the window's
+/// background as the pad lands on it, one slide cross-fading into the next, and
+/// the way back out. A little longer than the page fade, because it is a bigger
+/// surface moving and the same smootherstep easing.
+pub const HERO_TRANSITION_DURATION: Duration = Duration::from_millis(400);
+
 // ---------------------------------------------------------------------------
 // Window & layout (proportional — sizes computed from window_width)
 // ---------------------------------------------------------------------------
@@ -479,6 +485,7 @@ fn fit_artwork<'a, M: 'a>(
     width: Length,
     height: Length,
     clip: Option<[f32; 4]>,
+    opacity: f32,
 ) -> Element<'a, M> {
     match &handle.data {
         icon::Data::Image(image) => {
@@ -486,6 +493,9 @@ fn fit_artwork<'a, M: 'a>(
                 .content_fit(fit)
                 .width(width)
                 .height(height);
+            if opacity < 1.0 {
+                artwork = artwork.opacity(opacity);
+            }
             if let Some(radius) = clip {
                 artwork = artwork.border_radius(radius);
             }
@@ -503,7 +513,14 @@ pub fn artwork_fit<'a, M: 'a>(
     width: Length,
     height: Length,
 ) -> Element<'a, M> {
-    fit_artwork(handle, fit, width, height, Some(active_surface_radius()))
+    fit_artwork(
+        handle,
+        fit,
+        width,
+        height,
+        Some(active_surface_radius()),
+        1.0,
+    )
 }
 
 /// [`artwork_fit`] without the surface clip: a full-bleed backdrop - the
@@ -515,7 +532,20 @@ pub fn backdrop_fit<'a, M: 'a>(
     width: Length,
     height: Length,
 ) -> Element<'a, M> {
-    fit_artwork(handle, fit, width, height, None)
+    fit_artwork(handle, fit, width, height, None, 1.0)
+}
+
+/// [`backdrop_fit`] at an opacity: the banner's art as it grows into the
+/// window's background, and the slide it is leaving, which draw at the alphas
+/// the banner's motion hands them.
+pub fn backdrop_faded<'a, M: 'a>(
+    handle: &icon::Handle,
+    fit: ContentFit,
+    width: Length,
+    height: Length,
+    opacity: f32,
+) -> Element<'a, M> {
+    fit_artwork(handle, fit, width, height, None, opacity)
 }
 
 // ---------------------------------------------------------------------------
