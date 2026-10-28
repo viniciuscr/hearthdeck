@@ -209,31 +209,27 @@ disagrees.
    collection; the bridge maps a core filename to one preset under
    `/usr/share/libretro/shaders/shaders_slang` (CRT mask for 2D CRT-era
    consoles, an LCD grid for handhelds, no preset for 3D-era cores). The
-   managed config pins `video_driver = "vulkan"` for **every** launch (not
-   only shaded ones), with a per-core override table `VIDEO_DRIVER_BY_CORE`
-   that pins Flycast to `glcore`.
-   Rationale: RetroArch's compiled default is `gl`, which cannot load slang
-   presets at all and mis-sizes hardware-rendered cores under the
-   Gamescope/KMS sessions Hearthdeck runs in. `vulkan` fits Gamescope (itself
-   a Vulkan compositor) and is supported by every core in `retro.rs`'s table.
-   Flycast is the exception: its libretro Vulkan renderer segfaults on the
-   resolution change an FMV-to-gameplay transition produces
-   (flyinghead/flycast#2082, #2442), so it is pinned to `glcore` — the modern
-   GL driver, which keeps hardware rendering and a slang-capable context
-   without the buggy Vulkan path.
-   Default and override are named constants (`RETRO_VIDEO_DRIVER_DEFAULT`,
-   `VIDEO_DRIVER_BY_CORE`), so each is one explicit decision, and a missing
-   preset still degrades to an unshaded launch instead of failing. Keying
+   managed config deliberately does **not** pin `video_driver`: enforcement
+   was removed after pinning `vulkan` for every launch cost too much
+   performance on the target hardware, and the fullscreen problem it masked is
+   fixed at launch level instead (decision 12).
+   Rationale: the driver is RetroArch's own setting now, and the per-core
+   override table (`VIDEO_DRIVER_BY_CORE`, Flycast → `glcore`) went with the
+   enforcement. Two hardware findings stay worth knowing when picking one:
+   Flycast's libretro Vulkan renderer segfaults on the resolution change an
+   FMV-to-gameplay transition produces (flyinghead/flycast#2082, #2442), and
+   Dolphin's GameCube black screen is not driver-related — `glcore` was tried
+   on hardware and black-screened identically (see open question 6). A missing
+   preset still degrades to an unshaded launch instead of failing, and a preset
+   that applies needs a slang-capable driver (`glcore` or `vulkan`);
+   RetroArch's compiled default `gl` cannot load slang at all, so with the
+   driver unpinned the shaded look follows whatever the persistent
+   `retroarch.cfg` chose. Keying
    presets on the core keeps the platform→core decision in one place while
    naturally covering consoles that share a core (Dolphin = GC/Wii, Genesis
    Plus GX = MD/MS/GG/Sega CD). Per-user preset and per-core core-option
    overrides are future work, alongside the core-install configurability in
    open question 2.
-   **Not the variable for GameCube:** Dolphin was tried on `glcore` here too,
-   on the theory that its Vulkan renderer was the GameCube black screen. It
-   black-screened identically on hardware, so the driver is not the cause and
-   Dolphin is deliberately left on the default rather than carrying an
-   override that was never shown to help. See open question 6.
 
 9. **Guide/Home belongs to Hearthdeck, so RetroArch's menu opens with
    Start + Select.** Every bundled joypad autoconfig profile binds the pad's
@@ -299,6 +295,26 @@ disagrees.
     default directory and has to move them once, and a save file is still named
     after the ROM stem (RetroArch's own rule), so two ROMs with the same stem
     and different extensions still collide.
+
+12. **Fullscreen is the compositor's job, and GameMode is RetroArch's.** The
+    managed config asks for fullscreen at the output's current resolution —
+    `video_fullscreen = "true"` with `video_windowed_fullscreen = "false"` and
+    `video_fullscreen_x`/`_y = "0"`, RetroArch's own "current output
+    resolution" value — and turns on `gamemode_enable`, so RetroArch registers
+    with gamemoded itself over D-Bus and the launch is never wrapped in
+    `gamemoderun`.
+    Rationale: the previous pair (`video_fullscreen` + `video_windowed_fullscreen`)
+    had RetroArch size its own borderless window to what it guessed the desktop
+    size to be, and on the GL drivers that guess came out small on this
+    hardware — a small image centered on the compositor's background instead of
+    a full screen, while `vulkan` filled it at a heavy performance cost. With
+    the compositor owning the fullscreen state and x/y pinned to `0`, no stale
+    size pair saved in the persistent `retroarch.cfg` can resize a launch
+    either. RetroArch's built-in GameMode support (`gamemode_enable`, applied
+    when it reads its config) is why neither `gamemoderun` nor a daemon-side
+    hook exists; the key is pinned on so the persistent config cannot silently
+    disable it. Trade-off: this is settled from RetroArch's source and the
+    observed symptom, not yet from a packaged run on the target box.
 
 ## Where saves and save states live
 

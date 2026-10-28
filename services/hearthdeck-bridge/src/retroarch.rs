@@ -32,33 +32,6 @@ const RETRO_CORE_DIRECTORIES: [&str; 1] = ["/usr/lib/libretro"];
 /// RetroArch setup.
 const RETRO_SHADER_DIRECTORY: &str = "/usr/share/libretro/shaders/shaders_slang";
 
-/// Video driver Hearthdeck pins for a launch unless the core overrides it.
-///
-/// RetroArch's compiled default is `gl`. That is wrong for Hearthdeck in two
-/// ways: `gl` cannot load slang shader presets at all, and it behaves
-/// differently for hardware-rendered cores under the Gamescope/KMS sessions
-/// Hearthdeck runs in. `vulkan` is the natural fit for Gamescope (itself a
-/// Vulkan compositor) and works for every core in `retro.rs`'s table except the
-/// ones named in [`VIDEO_DRIVER_BY_CORE`]. Pinned unconditionally so a launch's
-/// behaviour does not depend on whether a shader happened to apply.
-const RETRO_VIDEO_DRIVER_DEFAULT: &str = "vulkan";
-
-/// Per-core driver overrides, keyed on the core filename like
-/// `SHADER_PRESET_BY_CORE`.
-///
-/// Only Flycast is here. Its libretro Vulkan renderer has documented segfaults
-/// (flyinghead/flycast#2082 and #2442, the latter right after the
-/// resolution-change `SET_SYSTEM_AV_INFO` an FMV-to-gameplay transition
-/// produces), so it is pinned to `glcore` -- the modern GL driver, which keeps
-/// hardware rendering and a slang-capable context while avoiding the buggy
-/// Vulkan path.
-///
-/// Dolphin was tried on `glcore` too, on the theory that its Vulkan renderer
-/// was the GameCube black screen. It was not: `glcore` black-screened the same
-/// way on real hardware, so the driver is not the cause and Dolphin stays on
-/// the default rather than carrying an override that was never shown to help.
-const VIDEO_DRIVER_BY_CORE: &[(&str, &str)] = &[("flycast_libretro.so", "glcore")];
-
 /// Per-core shader preset, relative to `RETRO_SHADER_DIRECTORY`.
 ///
 /// Keyed on the core filename rather than the platform: `retro.rs` already
@@ -143,23 +116,6 @@ fn shader_preset_for_core_in(core_path: &Path, shader_directory: &Path) -> Optio
     preset_path.is_file().then_some(preset_path)
 }
 
-/// The video driver to pin for a core: its override if it has one, otherwise
-/// the Hearthdeck default. Returns `&'static str` because every driver name is
-/// a compile-time literal, so the caller can hold it for the rest of the
-/// launch without owning it.
-fn video_driver_for_core(core_path: &Path) -> &'static str {
-    core_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(|core_filename| {
-            VIDEO_DRIVER_BY_CORE
-                .iter()
-                .find(|(core, _)| *core == core_filename)
-                .map(|(_, driver)| *driver)
-        })
-        .unwrap_or(RETRO_VIDEO_DRIVER_DEFAULT)
-}
-
 /// Launches a RetroArch core against a ROM the daemon has already resolved
 /// and cached locally. Mirrors `launch_application`'s discipline: the bridge
 /// re-validates both paths itself rather than trusting the daemon's copy,
@@ -177,7 +133,6 @@ pub(crate) async fn launch_retro_game(
     // (no preset for this core, or the shaders package is not installed) is
     // the normal unshaded launch, not an error.
     let shader_preset = shader_preset_for_core(&core_path);
-    let video_driver = video_driver_for_core(&core_path);
     let config_directory = retro_config_directory();
     tokio::fs::create_dir_all(&config_directory)
         .await
@@ -219,7 +174,6 @@ pub(crate) async fn launch_retro_game(
             &autoconfig_directory,
             &save_directories,
             shader_preset.as_deref(),
-            video_driver,
         ),
     )
     .await
@@ -243,14 +197,27 @@ fn retroarch_managed_config(
     autoconfig_directory: &Path,
     save_directories: &RetroSaveDirectories,
     shader_preset: Option<&Path>,
-    _video_driver: &str,
 ) -> String {
     let mut config = [
-        // Start in fullscreen, never a desktop window. `video_windowed_fullscreen`
-        // keeps it borderless on the current output instead of switching
-        // modes, which is what compositors (Gamescope, cosmic-comp) expect.
+        // Fullscreen is the compositor's job: the launch asks for the
+        // fullscreen state and the compositor covers the output with the
+        // window. `video_windowed_fullscreen` is pinned off because that mode
+        // has RetroArch size its own borderless window to what it guesses the
+        // desktop size to be - on the GL drivers that guess came out small on
+        // this hardware, which is the centered image on the compositor's
+        // background instead of a full screen. `video_fullscreen_x`/`_y` stay
+        // at 0, RetroArch's own "current output resolution" value, so no stale
+        // pair saved in the persistent `retroarch.cfg` can resize a launch.
         "video_fullscreen = \"true\"",
-        "video_windowed_fullscreen = \"true\"",
+        "video_windowed_fullscreen = \"false\"",
+        "video_fullscreen_x = \"0\"",
+        "video_fullscreen_y = \"0\"",
+        // GameMode is RetroArch's own to drive: with `gamemode_enable` it
+        // registers with gamemoded for the session over D-Bus, so the launch is
+        // never wrapped in `gamemoderun` and the bridge never talks to gamemoded
+        // itself. Pinned on so a value saved in the persistent config cannot
+        // silently turn it off.
+        "gamemode_enable = \"true\"",
         // Bind the physical pad Hearthdeck sees to Player 1 explicitly, so a
         // second device (e.g. the input service's virtual controller) cannot
         // take RetroPad slot 1 away from it.
@@ -307,11 +274,6 @@ fn retroarch_managed_config(
         save_directories.saves.display(),
         save_directories.states.display(),
     ));
-    // Pinned for every launch, not just shaded ones: RetroArch's default `gl`
-    // driver cannot load slang presets and mis-sizes hardware-rendered cores
-    // under Gamescope. Resolved per core because Flycast needs `glcore`; see
-    // `RETRO_VIDEO_DRIVER_DEFAULT` and `VIDEO_DRIVER_BY_CORE`.
-    // config.push_str(&format!("video_driver = \"{video_driver}\"\n"));
     if let Some(preset) = shader_preset {
         config.push_str("video_shader_enable = \"true\"\n");
         config.push_str(&format!("video_shader = \"{}\"\n", preset.display()));
@@ -534,10 +496,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        RETRO_VIDEO_DRIVER_DEFAULT, RetroSaveDirectories, SHADER_PRESET_BY_CORE,
-        VIDEO_DRIVER_BY_CORE, create_save_directories, retro_save_root_from,
+        RetroSaveDirectories, SHADER_PRESET_BY_CORE, create_save_directories, retro_save_root_from,
         retroarch_command_args, retroarch_managed_config, shader_preset_for_core_in,
-        validate_retro_core_path_in, validate_retro_rom_path_in, video_driver_for_core,
+        validate_retro_core_path_in, validate_retro_rom_path_in,
     };
 
     /// The save/state directories a launch would get for a ROM in RomM's
@@ -635,18 +596,43 @@ mod tests {
         assert!(validate_retro_rom_path_in(rom_path.to_str().unwrap(), &library_root).is_err());
     }
 
+    /// Fullscreen is taken from the compositor at the output's current
+    /// resolution: the launch asks for the fullscreen state, never for a fixed
+    /// fullscreen size, and never falls back to RetroArch's self-sized
+    /// "windowed fullscreen" window - that is the launch mode that showed up on
+    /// hardware as a small image centered on the compositor's background
+    /// instead of a full screen.
     #[test]
-    fn managed_retroarch_config_forces_fullscreen_and_player_one() {
+    fn managed_retroarch_config_takes_compositor_fullscreen_at_the_current_output_resolution() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
-        let config = retroarch_managed_config(
-            autoconfig_directory.path(),
-            &test_save_directories(),
-            None,
-            "vulkan",
-        );
+        let config =
+            retroarch_managed_config(autoconfig_directory.path(), &test_save_directories(), None);
 
         assert!(config.contains("video_fullscreen = \"true\""));
-        assert!(config.contains("video_windowed_fullscreen = \"true\""));
+        assert!(config.contains("video_windowed_fullscreen = \"false\""));
+        // 0 is RetroArch's "current output resolution" value, so a stale pair
+        // saved in the persistent retroarch.cfg cannot resize the launch.
+        assert!(config.contains("video_fullscreen_x = \"0\""));
+        assert!(config.contains("video_fullscreen_y = \"0\""));
+    }
+
+    /// RetroArch owns GameMode: the managed config turns on its own GameMode
+    /// integration, so the launch is never wrapped in `gamemoderun`.
+    #[test]
+    fn managed_retroarch_config_enables_retroarchs_gamemode_integration() {
+        let autoconfig_directory = tempfile::tempdir().unwrap();
+        let config =
+            retroarch_managed_config(autoconfig_directory.path(), &test_save_directories(), None);
+
+        assert!(config.contains("gamemode_enable = \"true\""));
+    }
+
+    #[test]
+    fn managed_retroarch_config_pins_player_one_and_the_udev_autoconfig_directory() {
+        let autoconfig_directory = tempfile::tempdir().unwrap();
+        let config =
+            retroarch_managed_config(autoconfig_directory.path(), &test_save_directories(), None);
+
         assert!(config.contains("input_player1_joypad_index = \"0\""));
         assert!(config.contains("input_joypad_driver = \"udev\""));
         assert!(config.contains(&format!(
@@ -661,12 +647,7 @@ mod tests {
         let autoconfig_directory = tempfile::tempdir().unwrap();
         let save_directories = test_save_directories();
 
-        let config = retroarch_managed_config(
-            autoconfig_directory.path(),
-            &save_directories,
-            None,
-            "vulkan",
-        );
+        let config = retroarch_managed_config(autoconfig_directory.path(), &save_directories, None);
 
         // One folder per game, named after the ROM - not the core, and not the
         // platform folder RomM files it in.
@@ -755,7 +736,6 @@ mod tests {
             Path::new("/home/user/.config/hearthdeck/retroarch/autoconfig"),
             &save_directories,
             None,
-            "vulkan",
         );
 
         assert_eq!(config.matches("savefile_directory = ").count(), 1);
@@ -842,7 +822,6 @@ mod tests {
             autoconfig_directory.path(),
             &test_save_directories(),
             Some(preset),
-            "vulkan",
         );
 
         assert!(config.contains("video_shader_enable = \"true\""));
@@ -856,47 +835,11 @@ mod tests {
     fn managed_retroarch_config_leaves_the_video_driver_to_retroarch() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
 
-        let config = retroarch_managed_config(
-            autoconfig_directory.path(),
-            &test_save_directories(),
-            None,
-            "vulkan",
-        );
+        let config =
+            retroarch_managed_config(autoconfig_directory.path(), &test_save_directories(), None);
 
         assert!(!config.contains("video_driver = "));
         assert!(!config.contains("video_shader"));
-    }
-
-    #[test]
-    fn resolves_a_per_core_video_driver_override() {
-        // Flycast is the override: its libretro Vulkan renderer segfaults on the
-        // FMV-to-gameplay resolution change, so it is pinned to `glcore`.
-        assert_eq!(
-            video_driver_for_core(Path::new("/usr/lib/libretro/flycast_libretro.so")),
-            "glcore"
-        );
-        // Every other core gets the Hearthdeck default. Dolphin is deliberately
-        // not overridden: `glcore` was tried on hardware and black-screened the
-        // same as the default, so the driver is not its problem.
-        assert_eq!(
-            video_driver_for_core(Path::new("/usr/lib/libretro/dolphin_libretro.so")),
-            RETRO_VIDEO_DRIVER_DEFAULT
-        );
-        assert_eq!(
-            video_driver_for_core(Path::new("/usr/lib/libretro/snes9x_libretro.so")),
-            RETRO_VIDEO_DRIVER_DEFAULT
-        );
-        // Every override names a real core and a driver that is not the default.
-        for (core, driver) in VIDEO_DRIVER_BY_CORE {
-            assert!(
-                core.ends_with("_libretro.so"),
-                "{core} is not a core filename"
-            );
-            assert_ne!(
-                *driver, RETRO_VIDEO_DRIVER_DEFAULT,
-                "{core} overrides to the default"
-            );
-        }
     }
 
     #[test]
@@ -974,12 +917,8 @@ mod tests {
     fn managed_retroarch_config_moves_the_menu_off_the_guide_button() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
 
-        let config = retroarch_managed_config(
-            autoconfig_directory.path(),
-            &test_save_directories(),
-            None,
-            "vulkan",
-        );
+        let config =
+            retroarch_managed_config(autoconfig_directory.path(), &test_save_directories(), None);
 
         // Guide/Home opens Hearthdeck's overlay, so RetroArch must not also use
         // it as a menu button...
