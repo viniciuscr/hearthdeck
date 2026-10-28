@@ -160,6 +160,42 @@ pub enum Orientation {
 /// square - out of the rule, so nothing straight is drawn crooked.
 const LANDSCAPE_RATIO: f32 = 1.3;
 
+/// Metahub's art kinds and the sizes it serves each in, in its URL segments.
+const ART_KINDS: [&str; 3] = ["poster", "background", "logo"];
+const ART_SIZES: [&str; 3] = ["small", "medium", "large"];
+
+/// Every place one artwork is fetchable: the reference itself first, then the
+/// same art at Metahub's other sizes, largest first.
+///
+/// Metahub's edge answers 200 for the art it has cached and 307s the rest to
+/// an origin that is not reachable everywhere, so whether a fetch succeeds
+/// depends on what has been asked for before - and a poster is the hottest art
+/// there is while the banner's wide art is the coldest: it belongs to titles
+/// that have just arrived. Retrying the same picture at its other sizes is what
+/// keeps a new slide from silently drawing its poster instead of its backdrop.
+#[must_use]
+pub fn art_candidates(reference: &str) -> Vec<String> {
+    let mut candidates = vec![reference.to_owned()];
+    for kind in ART_KINDS {
+        for size in ART_SIZES {
+            let segment = format!("/{kind}/{size}/");
+            if !reference.contains(&segment) {
+                continue;
+            }
+            // The same art at its other sizes, largest first: this is a
+            // fallback, so the quality of the art is worth more than its bytes.
+            candidates.extend(
+                ["large", "medium", "small"]
+                    .into_iter()
+                    .filter(|other| *other != size)
+                    .map(|other| reference.replace(&segment, &format!("/{kind}/{other}/"))),
+            );
+            return candidates;
+        }
+    }
+    candidates
+}
+
 /// Draws one icon reference: a file the provider resolved, or a name the icon
 /// theme resolves.
 ///
@@ -354,8 +390,8 @@ fn turned_portrait(raster: &image::RgbaImage) -> Option<image::RgbaImage> {
 #[cfg(test)]
 mod tests {
     use super::{
-        GENERIC_ICON, IconReference, Orientation, classify, is_landscape, reference_handle,
-        turned_portrait,
+        GENERIC_ICON, IconReference, Orientation, art_candidates, classify, is_landscape,
+        reference_handle, turned_portrait,
     };
 
     /// A reference is the daemon's, and it means one of four things. Reading it
@@ -494,6 +530,26 @@ mod tests {
         assert!(
             turned_portrait(&image::RgbaImage::new(4, 4)).is_none(),
             "a square is drawn as it is"
+        );
+    }
+
+    /// A reference the edge will not serve is retried at the same art's other
+    /// sizes before it is given up on: it is the same picture, and one of
+    /// Metahub's sizes is usually cached when another is not. A reference that
+    /// is not Metahub's art has no other sizes to try.
+    #[test]
+    fn a_cold_art_reference_falls_back_to_the_same_art_at_its_other_sizes() {
+        assert_eq!(
+            art_candidates("https://images.metahub.space/background/medium/tt0149460/img"),
+            vec![
+                "https://images.metahub.space/background/medium/tt0149460/img",
+                "https://images.metahub.space/background/large/tt0149460/img",
+                "https://images.metahub.space/background/small/tt0149460/img",
+            ]
+        );
+        assert_eq!(
+            art_candidates("/home/user/.cache/hearthdeck/icons/1a2b3c4d.png"),
+            vec!["/home/user/.cache/hearthdeck/icons/1a2b3c4d.png".to_owned()]
         );
     }
 }

@@ -119,6 +119,15 @@ const STREMIO_LINK_POLL_INTERVAL: std::time::Duration = std::time::Duration::fro
 /// for a change whose end it cannot see.
 const STREMIO_PUBLISH_SETTLE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How often the dashboard re-reads its own rails while it is on screen.
+///
+/// The daemon re-reads the arrivals feed every half hour and says so on its
+/// change feed, which is the fast path; this is the floor under it. A kiosk can
+/// sit on the dashboard for days, and a feed that never came back would leave
+/// the banner on whatever it fetched at startup. An hour keeps the banner well
+/// inside the once-a-day it promises, for the cost of one local request.
+const DASHBOARD_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
 /// Everything the shell can react to.
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -287,6 +296,9 @@ pub enum Message {
     /// The banner's slide interval elapsed. What has arrived moves on by itself
     /// while nobody is on it; what to do about that is the update's call.
     HeroTick,
+    /// The dashboard's slow poll elapsed while it is on screen: its rails are
+    /// read again, whatever the change feed is doing.
+    DashboardTick,
     /// The library's tab strip scrolled: remembered, so the next tab the
     /// selection lands on can be told whether it would leave the view.
     TabsScrolled(f32),
@@ -970,6 +982,7 @@ impl Application for App {
             Message::RailScrolled { rail, offset } => self.set_rail_offset(rail, offset),
             Message::PageScrolled(offset) => self.page_offset = offset,
             Message::HeroTick => return self.rotate_hero(),
+            Message::DashboardTick => return self.dashboard_ticked(),
             Message::TabsScrolled(offset) => self.tabs_offset = offset,
             Message::OpenDashboard => {
                 // Landing on a page hands the cursor to its content, so neither
@@ -1331,6 +1344,11 @@ impl Application for App {
             subs.push(
                 iced::time::every(crate::style::HERO_SLIDE_INTERVAL).map(|_| Message::HeroTick),
             );
+        }
+        // The dashboard's own slow read: the page on screen keeps following the
+        // daemon at least this often, whatever the change feed is doing.
+        if refresh::dashboard_tick_runs(self.page) {
+            subs.push(iced::time::every(DASHBOARD_POLL_INTERVAL).map(|_| Message::DashboardTick));
         }
         Subscription::batch(subs)
     }

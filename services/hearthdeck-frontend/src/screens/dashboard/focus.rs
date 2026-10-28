@@ -167,7 +167,13 @@ pub fn page_scroll_target(
     let height = *rail_heights.get(index)?;
     let top = rail_top(rail_heights, index, gap);
     let bottom = top + height;
-    let target = if top < offset {
+    // A rail taller than the page can never be brought wholly into view, and
+    // "whichever edge it left through" would then flip between pinning its top
+    // and pinning its bottom on every refocus. It is pinned to its top - where
+    // the row reads from - and stays there.
+    let target = if height > viewport {
+        top
+    } else if top < offset {
         // It left through the top.
         top
     } else if bottom > offset + viewport {
@@ -177,7 +183,11 @@ pub fn page_scroll_target(
         return None;
     };
     let content = rail_top(rail_heights, rail_heights.len(), gap) - gap;
-    Some(target.clamp(0.0, (content - viewport).max(0.0)))
+    let target = target.clamp(0.0, (content - viewport).max(0.0));
+    // Already where a follow would send it - which is every refocus of a rail
+    // too tall to fit - so the page is left alone rather than sent to where it
+    // already is.
+    ((target - offset).abs() > f32::EPSILON).then_some(target)
 }
 
 /// Where rail `index` starts on the page: the rails above it, and the gaps
@@ -363,5 +373,26 @@ mod tests {
 
         // A rail there is no such thing as has nowhere to scroll to.
         assert_eq!(page_scroll_target(&rails, 3, gap, 0.0, viewport), None);
+    }
+
+    /// A rail taller than the page can never be brought wholly into view - the
+    /// banner is taller than the viewport under the top bar - and pinning
+    /// whichever edge it left through then flips between its top and its bottom
+    /// on every refocus. A rail that cannot fit is pinned to one edge and stays
+    /// there, so focusing it again leaves the page where it is.
+    #[test]
+    fn a_rail_taller_than_the_page_is_pinned_to_one_edge_and_stays() {
+        // The banner at 0.9 of the window, in the page below the top bar: its
+        // real geometry, where the row is taller than the page's viewport.
+        let rails = [621.0, 200.0, 200.0];
+        let (gap, viewport) = (48.0, 594.0);
+
+        // Focusing it pins its top, wherever the page was.
+        let target =
+            page_scroll_target(&rails, 0, gap, 27.0, viewport).expect("the page moves to it");
+        assert_eq!(target, 0.0);
+        // And from where that sends the page, focusing it again must not walk
+        // the page back down to its other edge.
+        assert_eq!(page_scroll_target(&rails, 0, gap, target, viewport), None);
     }
 }

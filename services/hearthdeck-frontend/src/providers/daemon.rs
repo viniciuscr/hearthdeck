@@ -965,8 +965,25 @@ impl DaemonClient {
                             let client = client.clone();
                             async move {
                                 item.icon = client.resolve_icon(item.icon.as_deref()).await;
-                                item.background =
-                                    client.resolve_icon(item.background.as_deref()).await;
+                                // The banner's wide art is the coldest art there
+                                // is - it belongs to titles that have just
+                                // arrived - so it is the one a fetch is most
+                                // likely to lose. Losing it silently draws the
+                                // slide as its poster, which is worth a line in
+                                // the log rather than a banner that quietly
+                                // changed shape.
+                                if item.background.is_some() {
+                                    let background =
+                                        client.resolve_icon(item.background.as_deref()).await;
+                                    if background.is_none() {
+                                        log::warn!(
+                                            "a slide's wide art for {} could not be fetched; it \
+                                             draws as its poster",
+                                            item.name
+                                        );
+                                    }
+                                    item.background = background;
+                                }
                                 item.logo = client.resolve_icon(item.logo.as_deref()).await;
                                 item
                             }
@@ -995,12 +1012,18 @@ impl DaemonClient {
         match icon_cache::classify(reference?)? {
             IconReference::Remote(url) => {
                 // Blocking, and deliberately so: this reads and writes image
-                // files, which is what a blocking HTTP client is for.
-                let url = url.to_owned();
-                tokio::task::spawn_blocking(move || cache_icon(&url))
-                    .await
-                    .ok()
-                    .flatten()
+                // files, which is what a blocking HTTP client is for. The same
+                // art is retried at Metahub's other sizes when the one the feed
+                // sent will not come down - see `icon_cache::art_candidates`.
+                let candidates = icon_cache::art_candidates(url);
+                tokio::task::spawn_blocking(move || {
+                    candidates
+                        .iter()
+                        .find_map(|candidate| cache_icon(candidate))
+                })
+                .await
+                .ok()
+                .flatten()
             }
             IconReference::RommAsset(path) => self.cache_retro_asset_path(Some(path)).await,
             IconReference::File(path) => Some(path.to_owned()),

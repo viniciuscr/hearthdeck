@@ -69,6 +69,32 @@ fn stale_after(event: FeedEvent) -> Stale {
     }
 }
 
+/// What the dashboard's own slow tick re-reads: its rails, and only while it is
+/// the page on screen.
+///
+/// The daemon's change feed is how the shell hears that something moved, and
+/// while it is up it is fast; this is the floor under it. A kiosk can sit on the
+/// dashboard for days, and a feed that never came back would leave the banner on
+/// whatever it fetched at startup - so the page on screen re-reads its rails on
+/// a timer of its own, and the banner is never staler than that interval
+/// whatever the feed is doing.
+fn stale_tick(page: Page) -> Stale {
+    if page == Page::Dashboard {
+        Stale {
+            collections: true,
+            ..Stale::default()
+        }
+    } else {
+        Stale::default()
+    }
+}
+
+/// Whether the dashboard's slow tick keeps ticking at all: [`stale_tick`] is
+/// what one then reads, and this is the same rule the subscription is gated by.
+pub(super) fn dashboard_tick_runs(page: Page) -> bool {
+    stale_tick(page).collections
+}
+
 impl App {
     /// Re-reads what `event` says changed. A read already in a retry chain is
     /// left to it.
@@ -88,6 +114,18 @@ impl App {
             reads.push(self.load_categorization());
         }
         Task::batch(reads)
+    }
+
+    /// The dashboard's own slow tick: its rails are read again, from the same
+    /// rule the subscription is gated by, so a tick that lands after the
+    /// dashboard was left reads nothing.
+    pub(super) fn dashboard_ticked(&self) -> Task<Message> {
+        let stale = stale_tick(self.page);
+        if stale.collections && !self.retries.collections {
+            self.load_collections()
+        } else {
+            Task::none()
+        }
     }
 
     /// Fetches the whole catalog after `delay`.
@@ -175,7 +213,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{DaemonEvent, FeedEvent, Stale, stale_after};
+    use super::{DaemonEvent, FeedEvent, Page, Stale, stale_after, stale_tick};
 
     #[test]
     fn a_finished_play_rereads_only_the_rails() {
@@ -215,5 +253,22 @@ mod tests {
             stale_after(FeedEvent::Changed(DaemonEvent::Unknown)),
             Stale::default()
         );
+    }
+
+    /// The floor under the change feed: whatever the feed is doing, the
+    /// dashboard's rails are read again on a timer of their own while the page
+    /// is on screen - so the banner is never left on what it fetched at
+    /// startup - and no other page spends a read on a timer.
+    #[test]
+    fn a_dashboard_left_open_rereads_its_rails_on_a_tick() {
+        assert_eq!(
+            stale_tick(Page::Dashboard),
+            Stale {
+                collections: true,
+                ..Stale::default()
+            }
+        );
+        assert_eq!(stale_tick(Page::Library), Stale::default());
+        assert_eq!(stale_tick(Page::Settings), Stale::default());
     }
 }

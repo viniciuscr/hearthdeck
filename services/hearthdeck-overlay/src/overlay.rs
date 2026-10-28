@@ -561,15 +561,15 @@ fn stop_active_application() -> io::Result<()> {
 /// session this overlay is part of so the display manager's login screen comes
 /// back.
 ///
-/// Teardown is logind's (`loginctl terminate-seat`), not a signal aimed at one
-/// process: the session script, cosmic-comp, the frontend and every direct
-/// client live in the seat's session scope, and ending the scope wholesale is
-/// what makes "back to the login screen" hold even when one of them is wedged
-/// on a dead Wayland connection (see `watch_compositor` for what that looks
-/// like). `seat0` is the single graphical session this overlay is drawn on
-/// (`packaging/arch/hearthdeck-session`). greetd then starts its greeter, and
-/// autologin only fires once per boot (`scripts/hearthdeck-autologin`), so the
-/// session is not immediately re-entered.
+/// Ending the session is "Exit Hearthdeck": the frontend is cosmic-comp's only
+/// client, and cosmic-comp exits when that client exits, which ends the greetd
+/// session and hands the display manager its greeter back - the exit path
+/// `packaging/arch/hearthdeck-session` (phase 4) is built around and
+/// `docs/linux-acceptance.md` checks. Logind cannot do this from here: the
+/// overlay is a systemd *user* service, outside the session's logind scope, and
+/// a `loginctl terminate-seat` from that position is refused - it was, on the
+/// kiosk. Ending the session through the client it runs needs neither logind
+/// nor a polkit agent.
 ///
 /// Launched applications are systemd *user* units, outside the session scope
 /// (see `stop_active_application`), so on a machine whose user manager outlives
@@ -587,14 +587,80 @@ fn log_out() -> io::Result<()> {
         );
     }
 
-    let status = Command::new("loginctl")
-        .args(["terminate-seat", "seat0"])
-        .status()?;
-    if !status.success() {
-        return Err(io::Error::other("loginctl terminate-seat seat0 failed"));
-    }
-    info!("hearthdeck-overlay: session terminated; returning to the login screen");
+    terminate_session_client()?;
+    info!("hearthdeck-overlay: session client signalled to exit; returning to the login screen");
     Ok(())
+}
+
+/// The session's client binaries, exactly as `packaging/arch/hearthdeck-session`
+/// (phase 4) names them for cosmic-comp: the frontend, with the name it had
+/// before its rename as fallback. A wiring test keeps this list in sync with the
+/// script - these paths are how this overlay identifies "Hearthdeck itself", and
+/// a renamed binary would make log-out fail with no process to signal.
+const SESSION_CLIENTS: [&str; 2] = ["/usr/bin/hearthdeck-frontend", "/usr/bin/hearthdeck_cosmic"];
+
+/// Signals the session's client to exit, which ends the session (see
+/// `log_out`). Every matching process is signalled: a wedged client of an
+/// earlier session - a client of a dead compositor spins instead of exiting
+/// (see `watch_compositor`) - is cleared out along with the live one, and one
+/// signal is all either needs.
+fn terminate_session_client() -> io::Result<()> {
+    let pids = session_client_pids()?;
+    if pids.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no running session client process found (looked for {SESSION_CLIENTS:?})"),
+        ));
+    }
+    for pid in pids {
+        // `kill(1)`, not a signal syscall: the overlay already drives session
+        // tooling as commands (see `toggle`), and this keeps the crate free of
+        // unsafe and of a libc dependency.
+        let status = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()?;
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "failed to signal session client process {pid}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The pids of running session clients, identified by exact executable path.
+fn session_client_pids() -> io::Result<Vec<u32>> {
+    let mut pids = Vec::new();
+    for entry in std::fs::read_dir("/proc")? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        // A process that exits while /proc is walked, or one this user may not
+        // inspect, has no readable `exe`; neither is a session client to signal.
+        let Ok(exe) = std::fs::read_link(entry.path().join("exe")) else {
+            continue;
+        };
+        if is_session_client(&exe) {
+            pids.push(pid);
+        }
+    }
+    Ok(pids)
+}
+
+/// Whether a `/proc/<pid>/exe` target is one of the session's client binaries.
+/// `readlink` appends ` (deleted)` when the binary was replaced under a running
+/// process (a package upgrade), which is still the same client.
+fn is_session_client(exe: &Path) -> bool {
+    let exe = exe.to_string_lossy();
+    let exe = exe.strip_suffix(" (deleted)").unwrap_or(exe.as_ref());
+    SESSION_CLIENTS.contains(&exe)
 }
 
 impl Overlay {
@@ -659,8 +725,8 @@ mod tests {
     use std::os::unix::net::{UnixDatagram, UnixListener};
 
     use super::{
-        TOGGLE_MESSAGE, is_toggle_message, send_toggle_to, stop_active_application,
-        wayland_socket_path,
+        SESSION_CLIENTS, TOGGLE_MESSAGE, is_session_client, is_toggle_message, send_toggle_to,
+        stop_active_application, wayland_socket_path,
     };
 
     #[test]
@@ -734,6 +800,37 @@ mod tests {
         assert!(package.contains(
             "install -Dm755 services/target/release/hearthdeck-overlay \"$pkgdir/usr/lib/hearthdeck/hearthdeck-overlay\""
         ));
+    }
+
+    #[test]
+    fn session_client_paths_match_what_the_session_script_launches() {
+        let session = include_str!("../../../packaging/arch/hearthdeck-session");
+
+        // The log-out path identifies "Hearthdeck itself" by executable path; a
+        // renamed client would leave it with nothing to signal and a log-out
+        // that fails instead of ending the session.
+        for client in SESSION_CLIENTS {
+            assert!(
+                session.contains(client),
+                "the session script no longer launches {client}; SESSION_CLIENTS must \
+                 name the client it does launch"
+            );
+        }
+    }
+
+    #[test]
+    fn session_client_matching_covers_replaced_binaries_and_ignores_other_processes() {
+        use std::path::Path;
+
+        assert!(is_session_client(Path::new("/usr/bin/hearthdeck-frontend")));
+        assert!(is_session_client(Path::new("/usr/bin/hearthdeck_cosmic")));
+        // A package upgrade replaces the binary under the running client, and
+        // `/proc/<pid>/exe` then reports the ` (deleted)` suffix.
+        assert!(is_session_client(Path::new(
+            "/usr/bin/hearthdeck-frontend (deleted)"
+        )));
+        assert!(!is_session_client(Path::new("/usr/bin/cosmic-comp")));
+        assert!(!is_session_client(Path::new("/usr/bin/hearthdeck-daemon")));
     }
 
     #[test]
