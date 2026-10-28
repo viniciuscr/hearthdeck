@@ -1,4 +1,9 @@
-mod platform;
+mod desktop_apps;
+mod heroic;
+mod input;
+mod retroarch;
+mod stremio;
+mod systemd;
 
 use std::{
     cmp::Ordering,
@@ -20,7 +25,7 @@ use tokio::{
 use tracing::{Instrument, error, info, info_span, warn};
 
 /// Stable session identity for Heroic launches - see
-/// `platform::linux::HEROIC_UNIT_NAME`'s own docs for why Heroic is tracked
+/// `heroic::HEROIC_UNIT_NAME`'s own docs for why Heroic is tracked
 /// as one reused resource rather than a fresh session per game launch.
 const HEROIC_SESSION_ID: &str = "heroic";
 
@@ -150,10 +155,10 @@ async fn stop_other_active_sessions(
     if !should_replace_active_session(new_source_id, &managed.session.source_id) {
         return Ok(());
     }
-    platform::stop_application(managed.unit_name.as_deref())
+    systemd::stop_application(managed.unit_name.as_deref())
         .await
         .context("could not stop previous application session before launching a new one")?;
-    platform::set_input_profile(InputProfile::Native, false).await?;
+    input::set_input_profile(InputProfile::Native, false).await?;
     sessions.lock().await.remove(&session_id);
     if let Err(error) = remove_managed_session(session_directory, &session_id).await {
         warn!(session_id, %error, "could not remove stopped application session record");
@@ -180,7 +185,7 @@ async fn handle_request(
             version: env!("CARGO_PKG_VERSION").to_owned(),
         },
         BridgeRequest::DiscoverApplications { source_id } => {
-            match platform::discover_applications(&source_id).await {
+            match desktop_apps::discover_applications(&source_id).await {
                 Ok(applications) => {
                     info!(
                         source_id,
@@ -214,14 +219,14 @@ async fn handle_request(
                     message: error.to_string(),
                 };
             }
-            if let Err(error) = platform::set_input_profile(input_profile, false).await {
+            if let Err(error) = input::set_input_profile(input_profile, false).await {
                 warn!(source_id, application_id, %error, "input compatibility profile rejected");
                 return BridgeResponse::Error {
                     code: BridgeErrorCode::LaunchFailed,
                     message: error.to_string(),
                 };
             }
-            match platform::launch_application(&source_id, &application_id, &session_id).await {
+            match desktop_apps::launch_application(&source_id, &application_id, &session_id).await {
                 Ok(launched) => {
                     register_launch(
                         sessions,
@@ -255,7 +260,7 @@ async fn handle_request(
             // A Stremio title is a desktop application launch underneath, so it occupies
             // the same single-session slot and is registered under the same source.
             if let Err(error) = stop_other_active_sessions(
-                platform::DESKTOP_APPS_SOURCE,
+                desktop_apps::DESKTOP_APPS_SOURCE,
                 sessions,
                 session_directory,
             )
@@ -267,26 +272,21 @@ async fn handle_request(
                     message: error.to_string(),
                 };
             }
-            if let Err(error) = platform::set_input_profile(input_profile, false).await {
+            if let Err(error) = input::set_input_profile(input_profile, false).await {
                 warn!(video_id, %error, "input compatibility profile rejected");
                 return BridgeResponse::Error {
                     code: BridgeErrorCode::LaunchFailed,
                     message: error.to_string(),
                 };
             }
-            match platform::launch_stremio_title(
-                &application_id,
-                &video_id,
-                media_type,
-                &session_id,
-            )
-            .await
+            match stremio::launch_stremio_title(&application_id, &video_id, media_type, &session_id)
+                .await
             {
                 Ok(launched) => {
                     register_launch(
                         sessions,
                         session_directory,
-                        platform::DESKTOP_APPS_SOURCE.to_owned(),
+                        desktop_apps::DESKTOP_APPS_SOURCE.to_owned(),
                         application_id,
                         session_id,
                         launched,
@@ -320,14 +320,14 @@ async fn handle_request(
                     message: error.to_string(),
                 };
             }
-            if let Err(error) = platform::set_input_profile(input_profile, false).await {
+            if let Err(error) = input::set_input_profile(input_profile, false).await {
                 warn!(%error, "Heroic input compatibility profile rejected");
                 return BridgeResponse::Error {
                     code: BridgeErrorCode::LaunchFailed,
                     message: error.to_string(),
                 };
             }
-            match platform::launch_heroic_game(runner, &application_id).await {
+            match heroic::launch_heroic_game(runner, &application_id).await {
                 Ok(launched) => {
                     // Heroic is a shared, reused resource (see HEROIC_UNIT_NAME's
                     // own docs), not a fresh session per launch, so this
@@ -373,14 +373,14 @@ async fn handle_request(
                     message: error.to_string(),
                 };
             }
-            if let Err(error) = platform::set_input_profile(input_profile, true).await {
+            if let Err(error) = input::set_input_profile(input_profile, true).await {
                 warn!(%error, "RetroArch input compatibility profile rejected");
                 return BridgeResponse::Error {
                     code: BridgeErrorCode::LaunchFailed,
                     message: error.to_string(),
                 };
             }
-            match platform::launch_retro_game(&core_path, &rom_path, &session_id).await {
+            match retroarch::launch_retro_game(&core_path, &rom_path, &session_id).await {
                 Ok(launched) => {
                     register_launch(
                         sessions,
@@ -431,15 +431,14 @@ async fn handle_request(
                 unit_name = managed.unit_name.as_deref().unwrap_or("<none>"),
                 "stopping application session"
             );
-            match platform::stop_application(managed.unit_name.as_deref()).await {
+            match systemd::stop_application(managed.unit_name.as_deref()).await {
                 Ok(()) => {
                     sessions.lock().await.remove(&session_id);
                     if let Err(error) = remove_managed_session(session_directory, &session_id).await
                     {
                         warn!(session_id, %error, "could not remove stopped application session record");
                     }
-                    if let Err(error) =
-                        platform::set_input_profile(InputProfile::Native, false).await
+                    if let Err(error) = input::set_input_profile(InputProfile::Native, false).await
                     {
                         warn!(%error, "could not reset input profile after application stop");
                     }
@@ -461,7 +460,7 @@ async fn register_launch(
     source_id: String,
     application_id: String,
     session_id: String,
-    launched: platform::LaunchedApplication,
+    launched: systemd::LaunchedApplication,
     input_profile: InputProfile,
 ) -> BridgeResponse {
     let session = hearthdeck_protocol::ApplicationSession {
@@ -476,8 +475,8 @@ async fn register_launch(
         input_profile,
     };
     if let Err(error) = save_managed_session(session_directory, &managed).await {
-        let _ = platform::stop_application(managed.unit_name.as_deref()).await;
-        let _ = platform::set_input_profile(InputProfile::Native, false).await;
+        let _ = systemd::stop_application(managed.unit_name.as_deref()).await;
+        let _ = input::set_input_profile(InputProfile::Native, false).await;
         warn!(source_id, application_id, %error, "could not persist managed application session");
         return BridgeResponse::Error {
             code: BridgeErrorCode::LaunchFailed,
@@ -507,7 +506,7 @@ async fn sync_managed_input(managed: Option<&ManagedSession>) -> Result<()> {
         .map(|managed| managed.input_profile)
         .unwrap_or_default();
     let retro_osk = managed.is_some_and(|managed| managed.session.source_id == "retroarch");
-    platform::set_input_profile(profile, retro_osk).await
+    input::set_input_profile(profile, retro_osk).await
 }
 
 async fn active_managed_session(
@@ -525,7 +524,7 @@ async fn active_managed_session(
     let mut running = Vec::new();
 
     for (session_id, managed) in candidates {
-        match platform::application_is_running(managed.unit_name.as_deref()).await {
+        match systemd::application_is_running(managed.unit_name.as_deref()).await {
             // Definitively gone: drop it from the map and from disk.
             Ok(false) => {
                 sessions.lock().await.remove(&session_id);

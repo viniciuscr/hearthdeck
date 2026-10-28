@@ -28,7 +28,7 @@ const MENU_TOGGLE_KEY: &str = "input_menu_toggle_btn";
 /// The bundled profiles as `(file name, file contents)`, sorted by name for
 /// deterministic builds. Contents are RetroArch config text: each file keys a
 /// mapping on `input_vendor_id` / `input_product_id` / `input_device`.
-pub fn bundled_retroarch_profiles() -> &'static [(&'static str, &'static str)] {
+pub(crate) fn bundled_retroarch_profiles() -> &'static [(&'static str, &'static str)] {
     RETROARCH_PROFILES
 }
 
@@ -42,7 +42,7 @@ pub fn bundled_retroarch_profiles() -> &'static [(&'static str, &'static str)] {
 /// overlay), so it is removed here, at the source. Only that exact key is
 /// touched - the profiles also carry an `input_menu_toggle_btn_label`, and a
 /// few have a typo'd `input_menu_toggle`, neither of which is a binding.
-pub fn without_menu_toggle_binding(contents: &str) -> String {
+pub(crate) fn without_menu_toggle_binding(contents: &str) -> String {
     if !contents.contains(MENU_TOGGLE_KEY) {
         return contents.to_owned();
     }
@@ -69,7 +69,7 @@ pub fn without_menu_toggle_binding(contents: &str) -> String {
 /// survives the next launch. The trade-off is the same as it was when seeding
 /// was strictly write-if-missing: a profile *Hearthdeck* corrects in a newer
 /// release reaches only a machine whose copy still matches a shipped version.
-pub async fn seed_retroarch_profiles(directory: &Path) -> Result<usize> {
+pub(crate) async fn seed_retroarch_profiles(directory: &Path) -> Result<usize> {
     let mut seeded = 0;
     for (name, contents) in bundled_retroarch_profiles() {
         let unbound = without_menu_toggle_binding(contents);
@@ -103,7 +103,7 @@ pub async fn seed_retroarch_profiles(directory: &Path) -> Result<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundled_retroarch_profiles, without_menu_toggle_binding};
+    use super::{bundled_retroarch_profiles, seed_retroarch_profiles, without_menu_toggle_binding};
 
     #[test]
     fn unbinds_the_menu_toggle_binding_and_nothing_else() {
@@ -186,5 +186,86 @@ mod tests {
             assert!(name.ends_with(".cfg"), "unexpected file {name}");
             assert!(!contents.is_empty(), "profile {name} is empty");
         }
+    }
+
+    #[tokio::test]
+    async fn seeding_populates_the_udev_autoconfig_directory_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let profile_count = bundled_retroarch_profiles().len();
+        assert!(profile_count > 0);
+
+        let seeded = seed_retroarch_profiles(directory.path()).await.unwrap();
+        assert_eq!(seeded, profile_count);
+        assert_eq!(directory.path().read_dir().unwrap().count(), profile_count);
+
+        // A second launch must not rewrite anything already seeded.
+        let reseeded = seed_retroarch_profiles(directory.path()).await.unwrap();
+        assert_eq!(reseeded, 0);
+    }
+
+    #[tokio::test]
+    async fn seeding_unbinds_the_guide_button_in_the_profiles_it_writes() {
+        let directory = tempfile::tempdir().unwrap();
+
+        seed_retroarch_profiles(directory.path()).await.unwrap();
+
+        // Every profile lands exactly as the rewrite produces it, which is what
+        // makes the rewrite - not the managed config - the reason no pad can
+        // autoconfigure Guide back as the menu button.
+        for (name, contents) in bundled_retroarch_profiles() {
+            assert_eq!(
+                std::fs::read_to_string(directory.path().join(name)).unwrap(),
+                without_menu_toggle_binding(contents)
+            );
+        }
+
+        // The pad this integration was built against, and its label line, which
+        // is not a binding and stays as upstream wrote it.
+        let pad =
+            std::fs::read_to_string(directory.path().join("Microsoft_X-Box_Series_XS_pad.cfg"))
+                .unwrap();
+        assert!(pad.contains("input_menu_toggle_btn = \"nul\""));
+        assert!(!pad.contains("input_menu_toggle_btn = \"8\""));
+        assert!(pad.contains("input_menu_toggle_btn_label = \"Guide\""));
+    }
+
+    #[tokio::test]
+    async fn seeding_refreshes_a_copy_that_is_still_the_vendored_profile() {
+        let directory = tempfile::tempdir().unwrap();
+        let name = "Microsoft_X-Box_Series_XS_pad.cfg";
+        let vendored = bundled_retroarch_profiles()
+            .iter()
+            .find(|(bundled, _)| *bundled == name)
+            .map(|(_, contents)| *contents)
+            .unwrap();
+        // What a release before the rewrite would have left on disk.
+        std::fs::write(directory.path().join(name), vendored).unwrap();
+
+        let seeded = seed_retroarch_profiles(directory.path()).await.unwrap();
+
+        // Everything else in the directory is being seeded for the first time,
+        // so the count is the whole set - the point is that the vendored copy is
+        // included in it rather than being left alone.
+        assert_eq!(seeded, bundled_retroarch_profiles().len());
+        let refreshed = std::fs::read_to_string(directory.path().join(name)).unwrap();
+        assert!(refreshed.contains("input_menu_toggle_btn = \"nul\""));
+        assert!(!refreshed.contains("input_menu_toggle_btn = \"8\""));
+    }
+
+    #[tokio::test]
+    async fn seeding_preserves_a_profile_the_user_resaved() {
+        let directory = tempfile::tempdir().unwrap();
+        // A shipped profile name that the pad-binding wizard would overwrite
+        // when the user picks "Save Controller Profile".
+        let name = "Microsoft_X-Box_Series_XS_pad.cfg";
+        let custom = "input_driver = \"udev\"\n# user-customised mapping\n";
+        std::fs::write(directory.path().join(name), custom).unwrap();
+
+        seed_retroarch_profiles(directory.path()).await.unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join(name)).unwrap(),
+            custom
+        );
     }
 }

@@ -30,7 +30,7 @@ use tracing::{error, info, warn};
 
 use crate::input;
 use crate::shortcut;
-use crate::state::{Effect, Event, OverlayState, Status};
+use crate::state::{Effect, Event, MENU_ITEM_COUNT, OverlayState, RETRY_ITEM_COUNT, Status};
 
 const APP_ID: &str = "io.github.viniciuscr.hearthdeck.Overlay";
 const TOGGLE_MESSAGE: &[u8] = b"toggle";
@@ -209,6 +209,11 @@ enum Message {
     /// `Clone` for iced/cosmic's event loop, and `io::Error` isn't.
     CloseFinished(Result<(), String>),
     HideAfterClose,
+    LogOut,
+    /// Reported by the background task started for `LogOut`, once `log_out`
+    /// returns. `Err` carries a display-formatted message for the same reason
+    /// as `CloseFinished`.
+    LogOutFinished(Result<(), String>),
 }
 
 /// The menu's entries, in on-screen order - also the order gamepad D-pad
@@ -216,12 +221,17 @@ enum Message {
 /// so navigation logic (index math) and rendering (map to a list row) both
 /// stay generic over "however many entries there are" instead of needing to
 /// special-case each one.
-const MENU_ITEMS: [(&str, Message); 2] = [
+const MENU_ITEMS: [(&str, Message); MENU_ITEM_COUNT] = [
     ("Resume", Message::ResumeApp),
     ("Close App", Message::CloseApp),
+    ("Log Out", Message::LogOut),
 ];
-const CLOSE_FAILED_ITEMS: [(&str, Message); 2] = [
+const CLOSE_FAILED_ITEMS: [(&str, Message); RETRY_ITEM_COUNT] = [
     ("Retry Close", Message::CloseApp),
+    ("Resume", Message::ResumeApp),
+];
+const LOG_OUT_FAILED_ITEMS: [(&str, Message); RETRY_ITEM_COUNT] = [
+    ("Retry Log Out", Message::LogOut),
     ("Resume", Message::ResumeApp),
 ];
 
@@ -314,6 +324,21 @@ impl cosmic::Application for Overlay {
                 let effect = self.state.update(Event::HideAfterClose);
                 self.apply_effect(effect)
             }
+            Message::LogOut => {
+                let effect = self.state.update(Event::LogOut);
+                self.apply_effect(effect)
+            }
+            Message::LogOutFinished(result) => match result {
+                Ok(()) => {
+                    let effect = self.state.update(Event::LogOutSucceeded);
+                    self.apply_effect(effect)
+                }
+                Err(err) => {
+                    error!(%err, "hearthdeck-overlay: failed to log out");
+                    let effect = self.state.update(Event::LogOutFailed);
+                    self.apply_effect(effect)
+                }
+            },
         }
     }
 
@@ -351,11 +376,11 @@ impl cosmic::Application for Overlay {
                 }
                 column(vec![text::title2("Hearthdeck").into(), items.into()])
             }
-            // No menu while closing: the pending stop_active_application
-            // call is already committed to whatever was active when
-            // CloseApp was pressed, and navigating/activating here
-            // wouldn't affect it either way.
+            // No menu while closing or logging out: the pending action is
+            // already committed to whatever was active when it was pressed,
+            // and navigating/activating here wouldn't affect it either way.
             Status::Closing => column(vec![text::title2("Closing app\u{2026}").into()]),
+            Status::LoggingOut => column(vec![text::title2("Logging out\u{2026}").into()]),
             Status::CloseFailed => {
                 let mut items = list_column();
                 for (index, (label, message)) in CLOSE_FAILED_ITEMS.iter().enumerate() {
@@ -368,6 +393,21 @@ impl cosmic::Application for Overlay {
                 column(vec![
                     text::title2("Could not close app").into(),
                     text::body("The app is still running.").into(),
+                    items.into(),
+                ])
+            }
+            Status::LogOutFailed => {
+                let mut items = list_column();
+                for (index, (label, message)) in LOG_OUT_FAILED_ITEMS.iter().enumerate() {
+                    items = items.add(
+                        list::button(text::body(*label))
+                            .on_press(message.clone())
+                            .selected(index == self.state.selected),
+                    );
+                }
+                column(vec![
+                    text::title2("Could not log out").into(),
+                    text::body("The session is still running.").into(),
                     items.into(),
                 ])
             }
@@ -517,6 +557,46 @@ fn stop_active_application() -> io::Result<()> {
     Ok(())
 }
 
+/// Logs the session out: stops whatever application is running, then ends the
+/// session this overlay is part of so the display manager's login screen comes
+/// back.
+///
+/// Teardown is logind's (`loginctl terminate-seat`), not a signal aimed at one
+/// process: the session script, cosmic-comp, the frontend and every direct
+/// client live in the seat's session scope, and ending the scope wholesale is
+/// what makes "back to the login screen" hold even when one of them is wedged
+/// on a dead Wayland connection (see `watch_compositor` for what that looks
+/// like). `seat0` is the single graphical session this overlay is drawn on
+/// (`packaging/arch/hearthdeck-session`). greetd then starts its greeter, and
+/// autologin only fires once per boot (`scripts/hearthdeck-autologin`), so the
+/// session is not immediately re-entered.
+///
+/// Launched applications are systemd *user* units, outside the session scope
+/// (see `stop_active_application`), so on a machine whose user manager outlives
+/// the session they would survive the log-out. The tracked active application is
+/// therefore stopped first, through the same path "Close App" uses; failing to
+/// stop it must not strand the user in the session, so that failure is logged
+/// and the log-out proceeds.
+fn log_out() -> io::Result<()> {
+    if let Err(err) = stop_active_application()
+        && err.kind() != io::ErrorKind::NotFound
+    {
+        warn!(
+            %err,
+            "hearthdeck-overlay: could not stop the active application before logging out"
+        );
+    }
+
+    let status = Command::new("loginctl")
+        .args(["terminate-seat", "seat0"])
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other("loginctl terminate-seat seat0 failed"));
+    }
+    info!("hearthdeck-overlay: session terminated; returning to the login screen");
+    Ok(())
+}
+
 impl Overlay {
     fn apply_effect(&mut self, effect: Effect) -> Task<Message> {
         match effect {
@@ -534,6 +614,14 @@ impl Overlay {
             Effect::DelayHide => cosmic::task::future(async {
                 tokio::time::sleep(INPUT_RELEASE_DELAY).await;
                 Message::HideAfterClose
+            }),
+            Effect::LogOut => cosmic::task::future(async {
+                Message::LogOutFinished(
+                    tokio::task::spawn_blocking(log_out)
+                        .await
+                        .map_err(|err| err.to_string())
+                        .and_then(|result| result.map_err(|err| err.to_string())),
+                )
             }),
         }
     }

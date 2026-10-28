@@ -1,43 +1,26 @@
+//! Supervised launching and lifecycle for the transient systemd user units
+//! every launch target runs under.
+//!
+//! The launch targets themselves live in their own modules (`desktop_apps`,
+//! `stremio`, `heroic`, `retroarch`); what is shared is the unit machinery:
+//! starting a command under `systemd-run`, and reliably stopping - or proving
+//! still running - whatever a launch left behind.
+
+use std::{collections::BTreeSet, env, ffi::OsString, path::PathBuf};
+
 use anyhow::{Context, Result};
-#[cfg(not(target_os = "linux"))]
-use hearthdeck_protocol::DiscoveredApplication;
-#[cfg(all(not(target_os = "linux"), not(test)))]
-use hearthdeck_protocol::HeroicRunner;
-#[cfg(any(target_os = "linux", test))]
-use std::collections::BTreeSet;
+use tokio::process::Command;
+use tracing::info;
 
-#[cfg(any(target_os = "linux", test))]
-pub const DESKTOP_APPS_SOURCE: &str = "desktop-apps";
+use crate::desktop_apps::current_desktops;
 
-#[cfg(any(target_os = "linux", test))]
-mod linux;
-#[cfg(any(target_os = "linux", test))]
-pub use linux::{
-    discover_applications, launch_application, launch_heroic_game, launch_retro_game,
-    launch_stremio_title, set_input_profile,
-};
-
-#[cfg(all(not(target_os = "linux"), not(test)))]
-pub async fn set_input_profile(
-    profile: hearthdeck_protocol::InputProfile,
-    retro_osk: bool,
-) -> Result<()> {
-    anyhow::ensure!(
-        profile == hearthdeck_protocol::InputProfile::Native && !retro_osk,
-        "desktop input compatibility is only supported on Linux"
-    );
-    Ok(())
-}
-
-pub struct LaunchedApplication {
-    pub unit_name: Option<String>,
-}
-
-#[cfg(any(target_os = "linux", test))]
 const TRACKED_UNIT_ENVIRONMENT_VARIABLE: &str = "HEARTHDECK_UNIT_NAME";
 
-#[cfg(any(target_os = "linux", test))]
-pub async fn stop_application(unit_name: Option<&str>) -> Result<()> {
+pub(crate) struct LaunchedApplication {
+    pub(crate) unit_name: Option<String>,
+}
+
+pub(crate) async fn stop_application(unit_name: Option<&str>) -> Result<()> {
     let Some(unit_name) = unit_name else {
         anyhow::bail!("application session cannot be stopped on this platform")
     };
@@ -55,7 +38,7 @@ pub async fn stop_application(unit_name: Option<&str>) -> Result<()> {
                 stop_unit(escaped_unit).await.with_context(|| {
                     format!("could not stop escaped application unit {escaped_unit}")
                 })?;
-                tracing::info!(
+                info!(
                     unit = %escaped_unit,
                     "stopped a unit the launched process had escaped into"
                 );
@@ -73,7 +56,6 @@ pub async fn stop_application(unit_name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(target_os = "linux", test))]
 async fn stop_unit(unit_name: &str) -> Result<()> {
     let status = tokio::process::Command::new("systemctl")
         .args(["--user", "stop", unit_name])
@@ -104,7 +86,6 @@ async fn stop_unit(unit_name: &str) -> Result<()> {
 /// has cleared the original service's `MainPID`. The `MainPID` lookup stays
 /// as a compatibility path for applications launched before that marker was
 /// added.
-#[cfg(any(target_os = "linux", test))]
 async fn find_escaped_units(unit_name: &str) -> Vec<String> {
     let mut escaped_units = BTreeSet::new();
 
@@ -139,7 +120,6 @@ async fn find_escaped_units(unit_name: &str) -> Vec<String> {
     escaped_units.into_iter().collect()
 }
 
-#[cfg(any(target_os = "linux", test))]
 async fn unit_main_pid(unit_name: &str) -> Option<u32> {
     let output = tokio::process::Command::new("systemctl")
         .args(["--user", "show", unit_name, "--property=MainPID", "--value"])
@@ -153,7 +133,6 @@ async fn unit_main_pid(unit_name: &str) -> Option<u32> {
     (pid != 0).then_some(pid)
 }
 
-#[cfg(any(target_os = "linux", test))]
 async fn escaped_unit_for_process(pid: u32, unit_name: &str) -> Option<String> {
     let cgroup = tokio::fs::read_to_string(format!("/proc/{pid}/cgroup"))
         .await
@@ -161,7 +140,6 @@ async fn escaped_unit_for_process(pid: u32, unit_name: &str) -> Option<String> {
     escaped_unit_from_cgroup(&cgroup, unit_name)
 }
 
-#[cfg(any(target_os = "linux", test))]
 fn environment_contains_entry(environment: &[u8], entry: &[u8]) -> bool {
     environment
         .split(|byte| *byte == 0)
@@ -170,7 +148,6 @@ fn environment_contains_entry(environment: &[u8], entry: &[u8]) -> bool {
 
 /// Pure cgroup parsing used by `find_escaped_units`, split out so the logic is
 /// unit-testable without needing a real systemd/proc environment.
-#[cfg(any(target_os = "linux", test))]
 fn escaped_unit_from_cgroup(cgroup: &str, unit_name: &str) -> Option<String> {
     // cgroup v2 (the only kind systemd-managed user sessions use here) has
     // exactly one line: "0::/full/cgroup/path".
@@ -183,13 +160,7 @@ fn escaped_unit_from_cgroup(cgroup: &str, unit_name: &str) -> Option<String> {
     escaped.then(|| current_unit.to_owned())
 }
 
-#[cfg(all(not(target_os = "linux"), not(test)))]
-pub async fn stop_application(_unit_name: Option<&str>) -> Result<()> {
-    anyhow::bail!("application session cannot be stopped on this platform")
-}
-
-#[cfg(any(target_os = "linux", test))]
-pub async fn application_is_running(unit_name: Option<&str>) -> Result<bool> {
+pub(crate) async fn application_is_running(unit_name: Option<&str>) -> Result<bool> {
     let Some(unit_name) = unit_name else {
         return Ok(false);
     };
@@ -212,7 +183,6 @@ pub async fn application_is_running(unit_name: Option<&str>) -> Result<bool> {
     Ok(false)
 }
 
-#[cfg(any(target_os = "linux", test))]
 async fn is_unit_active(unit_name: &str) -> Result<bool> {
     Ok(tokio::process::Command::new("systemctl")
         .args(["--user", "is-active", "--quiet", unit_name])
@@ -221,40 +191,78 @@ async fn is_unit_active(unit_name: &str) -> Result<bool> {
         .success())
 }
 
-#[cfg(all(not(target_os = "linux"), not(test)))]
-pub async fn application_is_running(_unit_name: Option<&str>) -> Result<bool> {
-    Ok(false)
-}
-
-#[cfg(all(not(target_os = "linux"), not(test)))]
-pub async fn launch_heroic_game(
-    _runner: HeroicRunner,
-    _application_id: &str,
+/// Starts `application_command` as a transient systemd user unit, so the
+/// launch is supervised - and stoppable through the unit's own cgroup - the
+/// same way every other session is.
+pub(crate) async fn launch_with_systemd(
+    unit_name: &str,
+    application_command: Vec<OsString>,
+    working_directory: Option<PathBuf>,
 ) -> Result<LaunchedApplication> {
-    anyhow::bail!("Heroic game launch is unsupported on this platform")
+    let mut command = Command::new("systemd-run");
+    command
+        .args([
+            "--user",
+            "--collect",
+            "--quiet",
+            "--service-type=exec",
+            "--unit",
+        ])
+        .arg(unit_name)
+        .arg("--working-directory")
+        .arg(working_directory.unwrap_or_else(|| PathBuf::from("/")));
+    if is_kiosk_session() {
+        command.arg("--slice=hearthdeck-kiosk.slice");
+    }
+    command
+        .arg("--setenv")
+        .arg(format!("{}={unit_name}", TRACKED_UNIT_ENVIRONMENT_VARIABLE));
+    // Forward the display/session environment the launched process needs to
+    // connect to whatever session Hearthdeck itself is running in -
+    // `systemd-run` does not inherit the caller's environment, and a
+    // `systemd --user` unit's own default environment can be stale or
+    // missing these entirely (Gamescope only ever assigns DISPLAY/
+    // WAYLAND_DISPLAY to its own direct child - Hearthdeck itself - which is
+    // why Hearthdeck's own startup imports them into systemd --user; see
+    // linux/runner/my_application.cc). Reading them from the bridge's own
+    // process environment and forwarding them explicitly is correct both
+    // inside and outside the Kiosk session, so this no longer branches on
+    // is_kiosk_session() the way it used to.
+    for name in [
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "GAMESCOPE_WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "GDK_BACKEND",
+        "SDL_VIDEODRIVER",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "XDG_SESSION_TYPE",
+        "DBUS_SESSION_BUS_ADDRESS",
+    ] {
+        if let Some(value) = env::var_os(name) {
+            command
+                .arg("--setenv")
+                .arg(format!("{name}={}", value.to_string_lossy()));
+        }
+    }
+    command.arg("--").args(application_command);
+    let status = command
+        .status()
+        .await
+        .context("could not start supervised application launch")?;
+    if !status.success() {
+        anyhow::bail!("systemd user manager rejected application launch")
+    }
+    Ok(LaunchedApplication {
+        unit_name: Some(unit_name.to_owned()),
+    })
 }
 
-#[cfg(all(not(target_os = "linux"), not(test)))]
-pub async fn launch_retro_game(
-    _core_path: &str,
-    _rom_path: &str,
-    _session_id: &str,
-) -> Result<LaunchedApplication> {
-    anyhow::bail!("RetroArch game launch is unsupported on this platform")
-}
-
-#[cfg(all(not(target_os = "linux"), not(test)))]
-pub async fn discover_applications(_source_id: &str) -> Result<Vec<DiscoveredApplication>> {
-    anyhow::bail!("application discovery is unsupported on this platform")
-}
-
-#[cfg(all(not(target_os = "linux"), not(test)))]
-pub async fn launch_application(
-    _source_id: &str,
-    _application_id: &str,
-    _session_id: &str,
-) -> Result<LaunchedApplication> {
-    anyhow::bail!("application launch is unsupported on this platform")
+fn is_kiosk_session() -> bool {
+    current_desktops()
+        .iter()
+        .any(|desktop| desktop.eq_ignore_ascii_case("hearthdeck"))
 }
 
 #[cfg(test)]
