@@ -245,9 +245,9 @@ pub const CONTINUE_WATCHING_COLLECTION: &str = "stremio:continue-watching";
 /// What has just arrived on Stremio, resolved by the daemon from the records its
 /// arrivals provider published.
 ///
-/// The dashboard draws this one as its hero banner rather than as a rail: its
-/// items carry the wide artwork and the wordmark a banner draws with, which no
-/// other collection's items have.
+/// The dashboard draws this one first, in front of the blank space at the top
+/// of the page: its items carry the wide artwork the window's background draws
+/// as the pad walks the rail, which no other collection's items have.
 pub const NEW_ARRIVALS_COLLECTION: &str = "stremio:new-arrivals";
 
 /// How many icons one rail, or one library page, resolves at a time.
@@ -352,16 +352,13 @@ pub struct CollectionItem {
     pub name: String,
     #[serde(default)]
     pub icon: Option<String>,
-    /// The art a hero banner draws with — a wide background, the title's own
-    /// wordmark, and a one-line synopsis. Only a collection that carries art
-    /// fills these (`stremio:new-arrivals`); a rail card draws `icon` and has
-    /// none of them.
+    /// The title's wide art and wordmark, when the feed gave it one
+    /// (`stremio:new-arrivals` does): what the window's background draws while
+    /// the pad is on the card. A rail card draws `icon` and has none of them.
     #[serde(default)]
     pub background: Option<String>,
     #[serde(default)]
     pub logo: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
 }
 
 /// Response of the daemon's retro favorite write.
@@ -953,8 +950,9 @@ impl DaemonClient {
     ///
     /// Bounded rather than one at a time: a rail of two dozen posters is a page
     /// the user is looking at, and an already-cached one costs nothing. The
-    /// banner's background and wordmark go through the same single place as a
-    /// card's poster, so a slide draws a file and never the URL it was sent.
+    /// window's wide art and wordmark go through the same single place as a
+    /// card's poster, so the background draws a file and never the URL it was
+    /// sent.
     async fn resolve_rail_icons(&self, collections: Vec<Collection>) -> Vec<Collection> {
         stream::iter(collections)
             .map(|mut collection| {
@@ -965,20 +963,19 @@ impl DaemonClient {
                             let client = client.clone();
                             async move {
                                 item.icon = client.resolve_icon(item.icon.as_deref()).await;
-                                // The banner's wide art is the coldest art there
-                                // is - it belongs to titles that have just
-                                // arrived - so it is the one a fetch is most
-                                // likely to lose. Losing it silently draws the
-                                // slide as its poster, which is worth a line in
-                                // the log rather than a banner that quietly
-                                // changed shape.
+                                // The window's wide art is the coldest art
+                                // there is - it belongs to titles that have
+                                // just arrived - so it is the one a fetch is
+                                // most likely to lose. Losing it is worth a
+                                // line in the log rather than a background
+                                // that quietly became the wallpaper.
                                 if item.background.is_some() {
                                     let background =
                                         client.resolve_icon(item.background.as_deref()).await;
                                     if background.is_none() {
                                         log::warn!(
-                                            "a slide's wide art for {} could not be fetched; it \
-                                             draws as its poster",
+                                            "the wide art for {} could not be fetched; the \
+                                             background falls back to the wallpaper",
                                             item.name
                                         );
                                     }
@@ -1885,11 +1882,12 @@ mod tests {
         );
     }
 
-    /// The hero banner's art travels on the item itself, and an item from a
+    /// The window's art travels on the item itself, and an item from a
     /// collection that carries none of it is still the item it always was: a
-    /// rail card's payload must not have grown a banner's worth of nulls.
+    /// plain rail card's payload must not have grown a row of nulls. A
+    /// `description` the daemon still sends is read by nobody and parses away.
     #[test]
-    fn a_banner_item_carries_its_art_and_a_rail_item_still_parses() {
+    fn an_item_carries_its_art_and_a_plain_item_still_parses() {
         let banner: CollectionItem = serde_json::from_str(
             r#"{"item_id":"hearthdeck:stremio-arrivals:tt1","name":"A series",
                 "background":"https://images.metahub.space/background/medium/tt1/img",
@@ -1905,20 +1903,18 @@ mod tests {
             banner.logo.as_deref(),
             Some("https://images.metahub.space/logo/medium/tt1/img")
         );
-        assert_eq!(banner.description.as_deref(), Some("About A series"));
 
         let rail: CollectionItem =
             serde_json::from_str(r#"{"item_id":"hearthdeck:romm:1","name":"A game"}"#).unwrap();
         assert!(rail.background.is_none());
         assert!(rail.logo.is_none());
-        assert!(rail.description.is_none());
     }
 
-    /// The banner's art is resolved the way a rail card's poster is — through
-    /// the one place a reference becomes artwork — so a slide draws the file it
-    /// resolved to rather than the reference it was sent.
+    /// The window's art is resolved the way a rail card's poster is — through
+    /// the one place a reference becomes artwork — so the background draws the
+    /// file it resolved to rather than the reference it was sent.
     #[tokio::test]
-    async fn a_banner_items_art_is_resolved_before_the_surface_sees_it() {
+    async fn an_items_art_is_resolved_before_the_surface_sees_it() {
         let client = DaemonClient::new(DaemonConfig {
             // Nothing in this test is dialled; the port only has to be a real one.
             base_url: "http://127.0.0.1:38400".to_owned(),
@@ -1935,7 +1931,6 @@ mod tests {
                     icon: Some("file:///home/user/art/poster.png".to_owned()),
                     background: Some("file:///home/user/art/background.png".to_owned()),
                     logo: Some("file:///home/user/art/logo.png".to_owned()),
-                    description: Some("About A series".to_owned()),
                 }],
             }])
             .await;
@@ -1947,8 +1942,6 @@ mod tests {
             Some("/home/user/art/background.png")
         );
         assert_eq!(item.logo.as_deref(), Some("/home/user/art/logo.png"));
-        // A synopsis is text, not artwork: it is carried as it arrived.
-        assert_eq!(item.description.as_deref(), Some("About A series"));
     }
 
     /// A film or a series is not an application. The daemon serves both from one

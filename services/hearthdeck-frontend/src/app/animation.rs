@@ -14,10 +14,10 @@ use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
 
 use crate::app_group::Section;
 use crate::motion::{Eased, Fade, Step};
-use crate::screens::dashboard::{self, hero};
+use crate::screens::dashboard::{self, backdrop};
 use crate::screens::library::{grid, header};
 use crate::style::{
-    HERO_TRANSITION_DURATION, PAGE_TRANSITION_DURATION, SCROLL_TRANSITION_DURATION,
+    BACKGROUND_TRANSITION_DURATION, PAGE_TRANSITION_DURATION, SCROLL_TRANSITION_DURATION,
 };
 
 use super::{App, Message, Page};
@@ -80,56 +80,57 @@ impl App {
             || self.tab_slide.is_some()
             || self.scrolls.is_animating()
             || self
-                .hero_fade
+                .backdrop_fade
                 .is_some_and(|fade| !fade.is_done(self.now))
             // An owed follow is not motion, but it needs its frame to run on:
             // without one it would wait forever for a redraw nothing asked for.
             || self.grid_restore_pending
     }
 
-    /// Drops the banner's fade once it has run its course, for the same reason
-    /// the page fade is dropped: an animation left in flight would keep the
-    /// frame clock subscribed for a redraw nothing needs.
-    pub(super) fn expire_hero_fade(&mut self) {
+    /// Drops the background's fade once it has run its course, for the same
+    /// reason the page fade is dropped: an animation left in flight would keep
+    /// the frame clock subscribed for a redraw nothing needs.
+    pub(super) fn expire_backdrop_fade(&mut self) {
         if self
-            .hero_fade
+            .backdrop_fade
             .is_some_and(|fade| fade.is_done(Instant::now()))
         {
-            self.hero_fade = None;
+            self.backdrop_fade = None;
         }
     }
 
-    /// Records where the banner is, fading out of where it was: its slide
-    /// cross-fading into the next, and its art growing into - or handed back
-    /// from - the window's background.
+    /// Records which card the window's background is showing, fading out of the
+    /// card it was showing: one title's art cross-fading into the next as the
+    /// pad walks, and into the wallpaper as it steps onto a card whose feed
+    /// sent no wide art.
     ///
-    /// Called from everywhere the banner can move, so the motion is one
-    /// decision in one place no matter what moved it: the pad stepping, the
-    /// rotation turning the slide over, and a reload that shortened the slides
-    /// under it.
-    pub(super) fn sync_hero_motion(&mut self) {
-        let at = hero::At {
-            slide: self.hero_index,
-            expanded: hero::expanded(self.dashboard_cursor, self.dashboard_hero_len()),
+    /// Called from everywhere the dashboard's cursor can move, so the motion is
+    /// one decision in one place no matter what moved the pad.
+    pub(super) fn sync_backdrop(&mut self) {
+        let at = backdrop::At {
+            rail: self.dashboard_cursor.rail,
+            card: self.dashboard_cursor.card,
         };
-        if at == self.hero_at {
+        if at == self.backdrop_at {
             return;
         }
-        // A change arriving mid-fade starts from where the banner was heading -
-        // the same rule the page fade follows.
-        let from = self.hero_at;
-        self.hero_at = at;
+        // A change arriving mid-fade starts from where the background was
+        // heading - the same rule the page fade follows.
+        let from = self.backdrop_at;
+        self.backdrop_at = at;
         self.now = Instant::now();
-        self.hero_fade = Some(Fade::new(from, self.now, HERO_TRANSITION_DURATION));
+        self.backdrop_fade = Some(Fade::new(from, self.now, BACKGROUND_TRANSITION_DURATION));
     }
 
-    /// The banner's motion for this frame: where it is, and how far the fade
-    /// out of where it was has come.
-    pub(super) fn hero_motion(&self) -> hero::Motion {
-        hero::Motion {
-            at: self.hero_at,
+    /// The background's motion for this frame: where the pad is, and how far
+    /// the fade out of where it was has come. A fade that has run its course is
+    /// not in flight: the background has arrived.
+    pub(super) fn backdrop_motion(&self) -> backdrop::Motion {
+        backdrop::Motion {
+            at: self.backdrop_at,
             fading: self
-                .hero_fade
+                .backdrop_fade
+                .filter(|fade| !fade.is_done(self.now))
                 .map(|fade| (*fade.origin(), fade.progress(self.now))),
         }
     }

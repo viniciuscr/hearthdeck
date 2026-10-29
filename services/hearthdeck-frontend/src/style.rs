@@ -101,13 +101,10 @@ pub const SCROLL_TRANSITION_DURATION: Duration = Duration::from_millis(220);
 /// banner nobody is looking at comes round again before anyone misses it. The
 /// banner only advances while the pad is elsewhere, so this is the pace of the
 /// page's own idle motion rather than of anything the user is on.
-pub const HERO_SLIDE_INTERVAL: Duration = Duration::from_secs(8);
-
-/// How long the banner's own motion takes: its art growing into the window's
-/// background as the pad lands on it, one slide cross-fading into the next, and
-/// the way back out. A little longer than the page fade, because it is a bigger
-/// surface moving and the same smootherstep easing.
-pub const HERO_TRANSITION_DURATION: Duration = Duration::from_millis(400);
+/// How long the window's background takes to cross-fade from one title's art to
+/// the next as the pad walks a rail. A little longer than the page fade,
+/// because it is a bigger surface moving and the same smootherstep easing.
+pub const BACKGROUND_TRANSITION_DURATION: Duration = Duration::from_millis(400);
 
 // ---------------------------------------------------------------------------
 // Window & layout (proportional — sizes computed from window_width)
@@ -282,22 +279,6 @@ pub fn dashboard_console_tile_size(
     tile_gap: u16,
 ) -> f32 {
     dashboard_tile_size(window_width, horizontal_padding, tile_gap) / 2.0
-}
-
-/// The share of the window's height the dashboard's hero banner takes.
-///
-/// Three times the third it started at: a third of the screen left the artwork
-/// too short to read as a poster wall, so the banner now fills almost the whole
-/// window. The rails below it are reached by scrolling the page - that is the
-/// trade this buys the art.
-pub const HERO_HEIGHT_RATIO: f32 = 0.9;
-
-/// The height the dashboard's hero banner takes on a window `window_height`
-/// tall. The banner spans the window's whole width, so only its height has to
-/// be proportioned.
-#[must_use]
-pub fn hero_height(window_height: f32) -> f32 {
-    window_height * HERO_HEIGHT_RATIO
 }
 
 // ---------------------------------------------------------------------------

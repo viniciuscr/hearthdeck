@@ -16,9 +16,8 @@ fn shell() -> App {
         page: Page::default(),
         page_fade: None,
         now: Instant::now(),
-        hero_index: 0,
-        hero_at: dashboard::hero::At::default(),
-        hero_fade: None,
+        backdrop_at: dashboard::backdrop::At::default(),
+        backdrop_fade: None,
         section_slide: None,
         tab_slide: None,
         scrolls: Scrolls::default(),
@@ -1570,7 +1569,6 @@ fn a_rail_card_draws_the_icon_its_own_item_carries() {
                 icon: icon.map(str::to_owned),
                 background: None,
                 logo: None,
-                description: None,
             }],
         }])));
     };
@@ -1600,56 +1598,49 @@ fn a_rail_card_draws_the_icon_its_own_item_carries() {
     );
 }
 
-/// The banner's collection as the daemon composes one: every slide carries the
-/// wide art a banner draws with, which no rail item has.
+/// The new-arrivals collection as the daemon composes it: its items carry the
+/// wide art the window's background draws with, which no other rail's items
+/// have.
 fn arrivals(ids: &[&str]) -> Collection {
     let mut collection = collection(NEW_ARRIVALS_COLLECTION, None, ids);
     for (index, item) in collection.items.iter_mut().enumerate() {
         item.background = Some(format!("/home/user/.cache/hearthdeck/backdrop-{index}.png"));
-        item.description = Some(format!("About {}", item.name));
     }
     collection
 }
 
-/// The banner is the page's first row, its cards are the slides, and it moves on
-/// by itself only while the pad is elsewhere: on it, the pad owns the slide.
+/// What has just arrived is the dashboard's first rail - the banner's old
+/// place, above the blank space - and it is a rail like every other.
 #[test]
-fn the_banner_is_the_first_row_and_moves_on_only_while_the_pad_is_elsewhere() {
+fn what_has_just_arrived_is_the_dashboards_first_rail() {
     let mut app = shell();
     let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+        collection("favorites", None, &["hearthdeck:game-0"]),
         arrivals(&[
             "hearthdeck:stremio-arrivals:tt1",
             "hearthdeck:stremio-arrivals:tt2",
         ]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
     ])));
 
     let shelves = app.dashboard_shelves();
-    assert!(shelves[0].hero, "the banner is the page's first row");
+    assert_eq!(
+        shelves[0].title,
+        fl!("new-arrivals"),
+        "the arrivals rail takes the banner's old place, whatever order they arrive in"
+    );
     assert_eq!(
         app.dashboard_rail_lengths(),
         vec![2, 1],
-        "the pad walks the slides before it walks the rails"
+        "and the pad walks it like it walks every other rail"
     );
-
-    // On the banner the pad owns the slide, and the timer changes nothing.
-    let _ = app.step_dashboard(Direction::Right);
-    assert_eq!(app.hero_index, 1, "right on the banner is the next slide");
-    let _ = app.update(Message::HeroTick);
-    assert_eq!(app.hero_index, 1, "a tick under the pad moves nothing");
-
-    // Leave it for the rails below and it moves on by itself, wrapping round.
-    let _ = app.step_dashboard(Direction::Down);
-    let _ = app.update(Message::HeroTick);
-    assert_eq!(app.hero_index, 0, "the last slide wraps to the first");
 }
 
-/// Landing on the banner grows its art into the window's background, and
-/// leaving hands the background back to the wallpaper - both through the fade,
-/// so neither is a jump.
+/// The window's background follows the pad across the rail: one title's art
+/// cross-fading into the next's, and out into the wallpaper when the pad steps
+/// onto a card whose feed sent no wide art.
 #[test]
-fn the_banners_art_grows_into_the_background_and_hands_it_back() {
-    use crate::style::HERO_TRANSITION_DURATION;
+fn the_background_follows_the_pad_across_the_rail() {
+    use crate::style::BACKGROUND_TRANSITION_DURATION;
 
     let mut app = shell();
     let _ = app.update(Message::CollectionsLoaded(Ok(vec![
@@ -1660,23 +1651,50 @@ fn the_banners_art_grows_into_the_background_and_hands_it_back() {
         collection("favorites", None, &["hearthdeck:game-0"]),
     ])));
 
-    // The pad starts on the banner, so its art blooms into the background from
-    // nothing rather than appearing there.
-    assert!(app.hero_motion().fading.is_some(), "the growth is a fade");
-    assert_eq!(app.hero_motion().backdrop_alpha(), 0.0);
-    let settle = app.now + HERO_TRANSITION_DURATION * 2;
+    // Along the arrivals rail the art cross-fades from card to card.
+    let _ = app.step_dashboard(Direction::Right);
+    let motion = app.backdrop_motion();
+    assert_eq!(
+        motion.at,
+        dashboard::backdrop::At { rail: 0, card: 1 },
+        "the background is the card the pad is on"
+    );
+    assert!(motion.fading.is_some(), "and the change is a cross-fade");
+    let settle = app.now + BACKGROUND_TRANSITION_DURATION * 2;
     let _ = app.update(Message::Animate(settle));
-    assert_eq!(app.hero_motion().backdrop_alpha(), 1.0);
-    assert!(!app.is_animating(), "the growth has run its course");
+    assert_eq!(app.backdrop_motion().fading, None);
 
-    // Down on the rails hands the background back, and that is a fade too.
+    // Down onto a rail whose cards carry no wide art hands the background back
+    // to the wallpaper: the last art fades out, it does not vanish.
     let _ = app.step_dashboard(Direction::Down);
-    assert!(!app.hero_at.expanded);
-    assert!(app.hero_motion().fading.is_some(), "the way back is a fade");
-    assert_eq!(app.hero_motion().backdrop_alpha(), 1.0);
-    let _ = app.update(Message::Animate(app.now + HERO_TRANSITION_DURATION * 2));
-    assert_eq!(app.hero_motion().backdrop_alpha(), 0.0);
-    assert!(!app.is_animating());
+    let motion = app.backdrop_motion();
+    assert_eq!(motion.at.rail, 1);
+    assert!(motion.fading.is_some(), "the art fades out under the pad");
+    let _ = app.update(Message::Animate(
+        app.now + BACKGROUND_TRANSITION_DURATION * 2,
+    ));
+    assert_eq!(app.backdrop_motion().fading, None);
+}
+
+/// The first rail snaps the page to its top: the blank space above it is kept
+/// for the art and comes with the rail into view.
+#[test]
+fn the_first_rail_snaps_the_page_to_the_top() {
+    let mut app = shell();
+    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+        collection("favorites", None, &["hearthdeck:game-0"]),
+        collection("play-later", None, &["hearthdeck:game-1"]),
+    ])));
+
+    // Down past the first rail, the page follows the pad to the rails below.
+    let _ = app.step_dashboard(Direction::Down);
+    let _ = app.step_dashboard(Direction::Down);
+    assert!(app.page_offset > 0.0, "the page followed the pad down");
+    // And back up onto the first rail snaps it to the top again.
+    let _ = app.step_dashboard(Direction::Up);
+    let _ = app.step_dashboard(Direction::Up);
+    assert_eq!(app.page_offset, 0.0, "the first rail pins the page's top");
 }
 
 /// A report from a scroll the shell is driving describes where the travel
@@ -1726,7 +1744,6 @@ fn collection(slug: &str, name: Option<&str>, ids: &[&str]) -> Collection {
                 icon: None,
                 background: None,
                 logo: None,
-                description: None,
             })
             .collect(),
     }

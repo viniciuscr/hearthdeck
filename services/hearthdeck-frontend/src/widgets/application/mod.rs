@@ -35,6 +35,10 @@ pub enum Selection {
     /// its artwork shown the way the border is - always, not only under the
     /// pointer.
     Selected,
+    /// A picked-out tile that wears no border: its own art fills the window
+    /// behind the page while the pad is on it, and the picture changing is how
+    /// the pad's place is shown - a ring around the tile would frame it twice.
+    SelectedBare,
     /// Every other tile: its label appears only while the pointer is on it,
     /// the same span the border covers when a tile is hovered.
     Unselected,
@@ -44,6 +48,14 @@ impl Selection {
     /// Whether the tile is drawn in its active style.
     #[must_use]
     pub fn is_selected(self) -> bool {
+        !matches!(self, Self::Unselected)
+    }
+
+    /// Whether the tile wears the focus ring. A bare tile is picked out all
+    /// the same - its label and its press are unchanged - it just says where
+    /// the pad is with its picture instead of with a border.
+    #[must_use]
+    pub fn wears_border(self) -> bool {
         matches!(self, Self::Selected)
     }
 }
@@ -199,6 +211,9 @@ pub fn app_tile<'a, Message: Clone + 'a>(
     }
 
     let is_selected = selection.is_selected();
+    // The ring is a separate question from being picked out: a tile whose art
+    // fills the window wears none of its own.
+    let wears_border = selection.wears_border();
 
     // The label rides on the bottom of the artwork as a translucent scrim rather
     // than taking a strip below it, so the cover still fills the whole tile. A
@@ -231,7 +246,10 @@ pub fn app_tile<'a, Message: Clone + 'a>(
 
     let tile_button = button::custom(artwork_layer)
         .id(widget_id)
-        .selected(is_selected)
+        // The button's selected state is what lights the focus ring, so a bare
+        // tile keeps it off while everything else about being picked out - its
+        // label, its press - follows `is_selected`.
+        .selected(wears_border)
         // A card with no press handler - an item the library does not hold - is
         // drawn by the button's disabled style, which never paints the focus
         // ring. Forcing it enabled *only while it is the cursor card* keeps the
@@ -241,7 +259,7 @@ pub fn app_tile<'a, Message: Clone + 'a>(
         .force_enabled(is_selected)
         .width(Length::Fixed(tile_width))
         .height(Length::Fixed(tile_height))
-        .class(tile_button_class(is_selected))
+        .class(tile_button_class(wears_border))
         .padding(0)
         .on_press_maybe(on_pressed)
         // A screen reader takes a button's name from the text nodes inside

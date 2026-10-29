@@ -293,9 +293,6 @@ pub enum Message {
     /// offset is: the follow needs to know whether the focused rail would leave
     /// the view.
     PageScrolled(f32),
-    /// The banner's slide interval elapsed. What has arrived moves on by itself
-    /// while nobody is on it; what to do about that is the update's call.
-    HeroTick,
     /// The dashboard's slow poll elapsed while it is on screen: its rails are
     /// read again, whatever the change feed is doing.
     DashboardTick,
@@ -489,16 +486,11 @@ pub struct App {
     /// Where the pad is on the dashboard, which is a different surface with a
     /// different shape: rails of cards rather than a grid of tiles.
     dashboard_cursor: dashboard::focus::Cursor,
-    /// Which slide of the dashboard's banner is showing. The banner's own card
-    /// and the banner's own art, held beside the cursor rather than in it: the
-    /// banner moves on while the pad is somewhere else, and a rotation that
-    /// dragged the cursor with it would pull the pad off its row.
-    hero_index: usize,
-    /// The banner's motion: where it is now, and the fade in flight from where
-    /// it was. Kept beside `hero_index` rather than read from it, because a
-    /// change only moves if something records that it moved.
-    hero_at: dashboard::hero::At,
-    hero_fade: Option<Fade<dashboard::hero::At>>,
+    /// Which card the window's background is showing, and the fade in flight
+    /// from the card it was showing. Kept beside the cursor rather than read
+    /// from it, because a change only moves if something records that it moved.
+    backdrop_at: dashboard::backdrop::At,
+    backdrop_fade: Option<Fade<dashboard::backdrop::At>>,
     /// Where the pad is on the top bar both sibling pages wear: the destination
     /// button at this index, or `None` when the bar does not hold the cursor.
     ///
@@ -614,9 +606,8 @@ impl Application for App {
             // at, and every read of the cursor tolerates that.
             cursors: Cursors::default(),
             dashboard_cursor: dashboard::focus::Cursor::default(),
-            hero_index: 0,
-            hero_at: dashboard::hero::At::default(),
-            hero_fade: None,
+            backdrop_at: dashboard::backdrop::At::default(),
+            backdrop_fade: None,
             bar_cursor: None,
             rail_offsets: Vec::new(),
             page_offset: 0.0,
@@ -669,7 +660,7 @@ impl Application for App {
         // A transition must never outlive its duration, whatever message happens
         // to arrive next.
         self.expire_page_fade();
-        self.expire_hero_fade();
+        self.expire_backdrop_fade();
         // The cursor is repaired before anything acts on it: entries load, facets
         // come and go and sections swap, so what it can point at changes under it.
         // The arms that replace what it walks repair it again themselves.
@@ -811,15 +802,12 @@ impl Application for App {
                         // The rails just changed under the cursor, so it may be
                         // pointing past the end of them now - and with them the
                         // banner, which may have lost slides.
-                        self.hero_index = self
-                            .hero_index
-                            .min(self.dashboard_hero_len().saturating_sub(1));
                         let rails = self.dashboard_rail_lengths();
                         self.dashboard_cursor =
                             dashboard::focus::clamp(self.dashboard_cursor, &rails);
-                        // The slides under the banner just changed: whatever
-                        // moved with them moves smoothly.
-                        self.sync_hero_motion();
+                        // The cards under the pad just changed with the reload:
+                        // whatever moved, moved smoothly.
+                        self.sync_backdrop();
                     }
                     Err(error) => {
                         log::warn!("collection fetch failed: {error}");
@@ -1004,7 +992,6 @@ impl Application for App {
                     self.page_offset = offset;
                 }
             }
-            Message::HeroTick => return self.rotate_hero(),
             Message::DashboardTick => return self.dashboard_ticked(),
             Message::TabsScrolled(offset) => self.tabs_offset = offset,
             Message::OpenDashboard => {
@@ -1358,16 +1345,6 @@ impl Application for App {
         if self.is_animating() {
             subs.push(window::frames().map(|(_window, at)| Message::Animate(at)));
         }
-        // The banner moves on by itself only while the pad is elsewhere: a slide
-        // that advanced under the pad would move what the person is reading, and
-        // an idle banner nobody is looking at is the whole point of rotating it.
-        if self.page == Page::Dashboard
-            && dashboard::hero::rotates(self.dashboard_hero_len(), self.dashboard_cursor)
-        {
-            subs.push(
-                iced::time::every(crate::style::HERO_SLIDE_INTERVAL).map(|_| Message::HeroTick),
-            );
-        }
         // The dashboard's own slow read: the page on screen keeps following the
         // daemon at least this often, whatever the change feed is doing.
         if refresh::dashboard_tick_runs(self.page) {
@@ -1535,10 +1512,7 @@ impl App {
         let shelves = self.dashboard_shelves();
         let screen = dashboard::view(
             &shelves,
-            dashboard::Placement {
-                cursor: self.dashboard_cursor,
-                hero: self.hero_motion(),
-            },
+            self.dashboard_cursor,
             &self.top_bar(top_bar::Destination::Dashboard),
             self.window_width,
             navigate,
@@ -1552,13 +1526,12 @@ impl App {
         } else {
             screen
         };
-        // The banner's art growing over the desktop while the pad is on it: the
-        // slide it is leaving fades out with it, so the picture reads as one
-        // thing expanding into the background and handing it back when the pad
-        // goes.
+        // The focused title's wide art fills the window behind the page,
+        // cross-fading as the pad walks; wherever the pad is on a card whose
+        // feed sent no art, this draws nothing and the wallpaper shows.
         let screen: Element<'_, Message> =
-            match dashboard::hero::backdrop(shelves.first(), self.hero_motion()) {
-                Some(backdrop) => stack![backdrop, screen].into(),
+            match dashboard::backdrop::view(&shelves, self.backdrop_motion()) {
+                Some(art) => stack![art, screen].into(),
                 None => screen,
             };
         // The dashboard wears the desktop: whatever cosmic-bg is showing is

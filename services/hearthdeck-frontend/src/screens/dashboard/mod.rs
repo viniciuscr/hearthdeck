@@ -9,8 +9,8 @@
 //! holds. Recently played, favourites, continue watching and provider health
 //! each add a rail here as their data lands; none of them is a page of its own.
 
+pub mod backdrop;
 pub mod focus;
-pub mod hero;
 
 use std::sync::LazyLock;
 
@@ -19,17 +19,17 @@ use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
 use cosmic::iced::{ContentFit, Length};
 use cosmic::theme;
-use cosmic::widget::{Id, column, container, icon, scrollable};
+use cosmic::widget::{Id, column, container, icon, scrollable, text};
 
 use crate::app::Message;
 use crate::fl;
 use crate::providers::daemon::{
     CONTINUE_WATCHING_COLLECTION, Collection, FAVORITES_COLLECTION, LAST_PLAYED_COLLECTION,
-    PLAY_LATER_COLLECTION,
+    NEW_ARRIVALS_COLLECTION, PLAY_LATER_COLLECTION,
 };
 use crate::style::{
     DASHBOARD_GAME_ASPECT, WINDOW_HEIGHT, content_horizontal_padding, dashboard_console_tile_size,
-    dashboard_tile_size, hero_height,
+    dashboard_tile_size,
 };
 use crate::widgets::application::{LABEL_HEIGHT, Selection, TileLabel, app_label, app_tile};
 use crate::widgets::rail::rail;
@@ -45,12 +45,15 @@ pub struct Card {
     /// The widget id, so the pad can be pointed at this card.
     pub id: Id,
     pub label: String,
-    /// The card's own art: a poster on a rail, the wide backdrop on a banner.
+    /// The card's own art on the rail: its portrait poster.
     pub icon: icon::Handle,
-    /// A banner slide's wordmark and one-line synopsis. `None` on every rail
-    /// card: a rail draws the poster and reads the name below it.
-    pub logo: Option<icon::Handle>,
-    pub description: Option<String>,
+    /// The title's wide art, when the feed gave it one: what the window's
+    /// background shows while the pad is on this card.
+    pub background: Option<icon::Handle>,
+    /// Whether the card wears no focus ring of its own. Its art fills the
+    /// window behind the page while the pad is on it - the picture is how the
+    /// pad's place is shown - so a border around the tile would frame it twice.
+    pub no_border: bool,
     /// What pressing the card does. Every rail the dashboard builds attaches a
     /// launch: the card's id goes to the daemon untouched and what that names
     /// is the daemon's answer to give - an unknown id comes back as a failed
@@ -70,29 +73,31 @@ impl Card {
             id,
             label: label.into(),
             icon,
-            logo: None,
-            description: None,
+            background: None,
+            no_border: false,
             message,
         }
     }
 
-    /// A banner slide: the wide backdrop it fills the window with, the title's
-    /// own wordmark when the feed has one, and a line about it.
-    pub fn banner(
-        id: Id,
-        label: impl Into<String>,
-        background: icon::Handle,
-        logo: Option<icon::Handle>,
-        description: Option<String>,
-        message: Option<Message>,
-    ) -> Self {
-        Self {
-            id,
-            label: label.into(),
-            icon: background,
-            logo,
-            description,
-            message,
+    /// The card's wide art: the window's background while the pad is on it.
+    ///
+    /// A card with art of that size announces the pad's place by the picture
+    /// changing, so it is the card's own flag to wear no focus ring.
+    #[must_use]
+    pub fn with_background(mut self, background: Option<icon::Handle>) -> Self {
+        self.no_border = background.is_some();
+        self.background = background;
+        self
+    }
+
+    /// The selection as the tile wears it: a card that wears no ring still is
+    /// the one the pad is on, so its label and its press are unchanged.
+    #[must_use]
+    pub fn selection(&self, selection: Selection) -> Selection {
+        if self.no_border && selection.is_selected() {
+            Selection::SelectedBare
+        } else {
+            selection
         }
     }
 }
@@ -104,9 +109,6 @@ pub struct Shelf {
     /// square, and contained so its pixel edges are not cropped. Every other
     /// shelf is a row of portrait game covers, cropped to fill.
     pub consoles: bool,
-    /// Whether this row is the hero banner rather than a rail: one slide at a
-    /// time at the window's full width, taller than anything else on the page.
-    pub hero: bool,
     pub title: String,
     pub cards: Vec<Card>,
 }
@@ -115,36 +117,10 @@ impl Shelf {
     pub fn new(consoles: bool, title: impl Into<String>, cards: Vec<Card>) -> Self {
         Self {
             consoles,
-            hero: false,
             title: title.into(),
             cards,
         }
     }
-
-    /// A row drawn as the hero banner: its cards are slides, and the page shows
-    /// one of them at a time instead of a line.
-    pub fn banner(title: impl Into<String>, cards: Vec<Card>) -> Self {
-        Self {
-            consoles: false,
-            hero: true,
-            title: title.into(),
-            cards,
-        }
-    }
-}
-
-/// Where the dashboard is: the rail and card the pad is on, and where the
-/// banner is - its slide and how far its art has grown into the background.
-///
-/// The slide is kept beside the cursor rather than read from it because the
-/// banner moves on by itself while the pad is elsewhere, and a rotation that
-/// dragged the cursor along would pull it off whatever row the person was
-/// reading. While the pad *is* on the banner the two agree, which is what
-/// [`hero::stepped`] keeps true.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Placement {
-    pub cursor: focus::Cursor,
-    pub hero: hero::Motion,
 }
 
 /// The widget id of a rail, which is what a scroll to it addresses.
@@ -167,6 +143,7 @@ pub fn rail_title(collection: &Collection) -> String {
         PLAY_LATER_COLLECTION => fl!("play-later"),
         LAST_PLAYED_COLLECTION => fl!("recently-played"),
         CONTINUE_WATCHING_COLLECTION => fl!("continue-watching"),
+        NEW_ARRIVALS_COLLECTION => fl!("new-arrivals"),
         _ => collection
             .name
             .clone()
@@ -184,7 +161,7 @@ pub fn rail_title(collection: &Collection) -> String {
 #[must_use]
 pub fn view<'a>(
     shelves: &[Shelf],
-    placement: Placement,
+    cursor: focus::Cursor,
     bar: &top_bar::TopBar<'_>,
     window_width: f32,
     on_navigate: fn(top_bar::Destination) -> Message,
@@ -195,7 +172,6 @@ pub fn view<'a>(
         space_l, space_xl, ..
     } = theme::spacing();
     let padding = content_horizontal_padding();
-    let cursor = placement.cursor;
     // The rails' card counts, which `card_selection` clamps the cursor against -
     // the same shape the pad's movement walks. Computed once so every card asks
     // the question against the same rails.
@@ -205,14 +181,6 @@ pub fn view<'a>(
         .iter()
         .enumerate()
         .map(|(index, shelf)| {
-            // The banner is a row of the page like any other, drawn one slide at
-            // a time across the window instead of as a line of cards. It wears
-            // the cursor ring when the pad is on it, at the slide it is on.
-            if shelf.hero {
-                let selection =
-                    card_selection(cursor, &rail_lengths, index, placement.hero.at.slide);
-                return hero::view(shelf, placement.hero, selection);
-            }
             let (size, aspect, fit) = shelf_metrics(shelf, window_width);
             let scroll = on_rail_scroll.clone();
             let rail_element: Element<'a, Message> =
@@ -235,7 +203,12 @@ pub fn view<'a>(
                             card.message.clone(),
                             None,
                             TileLabel::Elsewhere,
-                            card_selection(cursor, &rail_lengths, index, card_index),
+                            card.selection(card_selection(
+                                cursor,
+                                &rail_lengths,
+                                index,
+                                card_index,
+                            )),
                         )
                     }))
                     .on_scroll(move |viewport| scroll(index, viewport.absolute_offset().x))
@@ -248,8 +221,20 @@ pub fn view<'a>(
         })
         .collect();
 
+    // The blank space at the top of the page, where the banner was: kept clear
+    // so the focused title's art has a window onto the page above its rail.
+    let front = front_space(shelves.first(), window_width);
+    let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(rails.len() + 1);
+    rows.push(
+        container(text(""))
+            .width(Length::Fill)
+            .height(Length::Fixed(front))
+            .into(),
+    );
+    rows.extend(rails);
+
     let page = scrollable(
-        column(rails)
+        column(rows)
             .spacing(space_xl)
             .padding([space_l, padding, space_xl, padding]),
     )
@@ -276,11 +261,7 @@ pub fn view<'a>(
 fn shelf_metrics(shelf: &Shelf, window_width: f32) -> (f32, f32, ContentFit) {
     let Spacing { space_l, .. } = theme::spacing();
     let padding = content_horizontal_padding();
-    if shelf.hero {
-        // A slide is the window's own width: the banner is its own "card", and
-        // only its height is proportional.
-        (window_width, 1.0, ContentFit::Cover)
-    } else if shelf.consoles {
+    if shelf.consoles {
         (
             dashboard_console_tile_size(window_width, padding, space_l),
             1.0,
@@ -350,19 +331,38 @@ pub fn focused_label<'a>(
 /// focused one on screen.
 #[must_use]
 pub fn rail_heights(shelves: &[Shelf], window_width: f32) -> Vec<f32> {
-    let Spacing { space_m, .. } = theme::spacing();
-    shelves
+    let mut heights: Vec<f32> = shelves
         .iter()
-        .map(|shelf| {
-            // The banner has no title above it and no name below it: it is the
-            // slide, edge to edge, at the height the page reserves for it.
-            if shelf.hero {
-                return hero_height(WINDOW_HEIGHT);
-            }
-            let (size, _, _) = shelf_metrics(shelf, window_width);
-            RAIL_TITLE_HEIGHT + f32::from(space_m) + size + LABEL_HEIGHT
-        })
-        .collect()
+        .map(|shelf| rail_height(shelf, window_width))
+        .collect();
+    // The blank space at the top of the page belongs to the first rail: folded
+    // into its height, the page's follow pins "the first rail" into view by
+    // pinning the blank space's top - which is the page's own top. That is the
+    // snap the first rail gets, and the whole of it.
+    if let Some(first) = heights.first_mut() {
+        *first += front_space(shelves.first(), window_width) + rail_gap();
+    }
+    heights
+}
+
+/// One rail's height on the page: its title, its cards, and the name line.
+fn rail_height(shelf: &Shelf, window_width: f32) -> f32 {
+    let Spacing { space_m, .. } = theme::spacing();
+    let (size, _, _) = shelf_metrics(shelf, window_width);
+    RAIL_TITLE_HEIGHT + f32::from(space_m) + size + LABEL_HEIGHT
+}
+
+/// The blank space at the top of the dashboard, where the banner was.
+///
+/// It is whatever of the page's first screenful the first rail leaves unused,
+/// so the rail under it and the window onto the art above it are both on screen
+/// when the page sits at its top. A rail taller than that screenful leaves no
+/// space, which is right: the focused card is what has to stay visible.
+fn front_space(first: Option<&Shelf>, window_width: f32) -> f32 {
+    let Spacing { space_l, .. } = theme::spacing();
+    let first = first.map_or(0.0, |shelf| rail_height(shelf, window_width));
+    let page_viewport = WINDOW_HEIGHT - top_bar::height();
+    (page_viewport - f32::from(space_l) - rail_gap() - first).max(0.0)
 }
 
 /// The gap between two rails on the page.
@@ -468,35 +468,63 @@ mod tests {
     // rail and the scroll stops with the focused name off the bottom of the
     // screen.
     #[test]
-    fn a_banner_row_takes_the_height_of_a_banner_and_not_of_a_rail() {
-        let banner = Shelf::banner("New on Stremio", vec![card("Slide")]);
-        let rail = Shelf::new(false, "Recently Played", vec![card("Half-Life 2")]);
-
-        let heights = rail_heights(&[banner, rail], 1200.0);
-
-        assert_eq!(
-            heights[0],
-            crate::style::hero_height(crate::style::WINDOW_HEIGHT),
-            "the banner is the height the page reserves for it: {heights:?}"
-        );
-        assert!(
-            heights[0] > heights[1],
-            "the artwork gets the height of a banner, not of a rail: {heights:?}"
-        );
-    }
-
-    #[test]
     fn a_rail_reserves_room_for_the_name_line_below_its_cards() {
-        let shelves = vec![Shelf::new(true, "Consoles", vec![card("Hades")])];
+        let shelves = vec![
+            Shelf::new(true, "Consoles", vec![card("Hades")]),
+            Shelf::new(false, "Recently Played", vec![card("Half-Life 2")]),
+        ];
         let heights = rail_heights(&shelves, 1200.0);
-        let (size, _, _) = shelf_metrics(&shelves[0], 1200.0);
+        let (size, _, _) = shelf_metrics(&shelves[1], 1200.0);
 
         assert_eq!(
-            heights[0],
+            heights[1],
             RAIL_TITLE_HEIGHT + f32::from(theme::spacing().space_m) + size + LABEL_HEIGHT,
             "a rail is measured as exactly what its column stacks: the title, the gap under it, \
              its cards, and the name line below them",
         );
+    }
+
+    /// The blank space at the top of the page is kept for the art, and rides on
+    /// the first rail's measurement - so the page's follow pins the first rail
+    /// into view by pinning the page's own top, which is the snap it gets.
+    #[test]
+    fn the_first_rail_carries_the_blank_space_that_keeps_the_art_visible() {
+        let shelves = vec![
+            Shelf::new(false, "New on Stremio", vec![card("Wicker")]),
+            Shelf::new(false, "Recently Played", vec![card("Half-Life 2")]),
+        ];
+        let heights = rail_heights(&shelves, 1200.0);
+        let plain = RAIL_TITLE_HEIGHT
+            + f32::from(theme::spacing().space_m)
+            + shelf_metrics(&shelves[1], 1200.0).0
+            + LABEL_HEIGHT;
+
+        assert_eq!(
+            heights[1], plain,
+            "the other rails are measured as themselves"
+        );
+        assert!(
+            heights[0] > plain,
+            "the blank space rides on the first: {heights:?}"
+        );
+        assert_eq!(
+            heights[0] + f32::from(theme::spacing().space_l),
+            crate::style::WINDOW_HEIGHT - crate::widgets::top_bar::height(),
+            "the blank space is whatever of the first screenful the rail leaves unused: {heights:?}"
+        );
+    }
+
+    /// A card whose art fills the window behind the page wears no ring of its
+    /// own: the picture changing is how the pad's place is shown.
+    #[test]
+    fn a_card_whose_art_fills_the_window_wears_no_ring() {
+        let art =
+            card("Wicker").with_background(Some(icon::from_raster_pixels(4, 4, vec![0u8; 64])));
+        assert_eq!(art.selection(Selection::Selected), Selection::SelectedBare);
+        assert_eq!(art.selection(Selection::Unselected), Selection::Unselected);
+
+        let plain = card("Half-Life 2");
+        assert_eq!(plain.selection(Selection::Selected), Selection::Selected);
     }
 
     #[test]

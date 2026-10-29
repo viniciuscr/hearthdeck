@@ -1,6 +1,7 @@
 pc-games = PC Games
 console-games = Console Games
 continue-watching = Continue Watching
+new-arrivals = New Arrivals
 applications = Applications
 cosmic-library-home = Library Home
 cosmic-office = Office

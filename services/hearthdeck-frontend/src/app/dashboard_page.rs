@@ -6,7 +6,7 @@ use cosmic::{Application, theme};
 use crate::app::animation::ScrollTarget;
 use crate::app_group::Section;
 use crate::fl;
-use crate::providers::daemon::NEW_ARRIVALS_COLLECTION;
+use crate::providers::daemon::{Collection, NEW_ARRIVALS_COLLECTION};
 use crate::screens::dashboard;
 use crate::screens::dashboard::{Card, Shelf};
 use crate::screens::library::focus::Direction;
@@ -39,19 +39,21 @@ impl App {
         );
         let mut shelves = Vec::new();
 
-        // The banner first: what has just arrived on Stremio, drawn over the
-        // rails rather than beside them. It is a row like any other - the pad
-        // walks its slides with left and right - so it is built here with them,
-        // and the page draws it as the banner because of what kind of row it is.
-        if let Some(cards) = self.banner_cards(size) {
-            let title = self
-                .collections
+        // What has just arrived on Stremio first, in the banner's old place:
+        // the rail under the blank space at the top of the page. It is a
+        // collection rail like every other - the difference is only where it is
+        // drawn - and its cards carry the wide art that fills the window behind
+        // the page as the pad walks them.
+        let (arrivals, rest): (Vec<_>, Vec<_>) = self
+            .collections
+            .iter()
+            .partition(|collection| collection.slug == NEW_ARRIVALS_COLLECTION);
+        shelves.extend(
+            arrivals
                 .iter()
-                .find(|collection| collection.slug == NEW_ARRIVALS_COLLECTION)
-                .and_then(|collection| collection.name.clone())
-                .unwrap_or_else(|| NEW_ARRIVALS_COLLECTION.to_owned());
-            shelves.push(Shelf::banner(title, cards));
-        }
+                .filter(|collection| !collection.items.is_empty())
+                .map(|collection| Self::collection_shelf(collection, size)),
+        );
 
         // Consoles rail: shows all RomM platforms with their artwork.
         if !self.console_platforms.is_empty() {
@@ -83,36 +85,11 @@ impl App {
             shelves.push(Shelf::new(true, fl!("consoles"), cards));
         }
 
-        // Collection rails from the daemon. The banner's own collection is drawn
-        // as the banner, not again as a rail of posters beneath it.
+        // The rest of the daemon's collections, in the order it composes them.
         shelves.extend(
-            self.collections
-                .iter()
-                .filter(|collection| collection.slug != NEW_ARRIVALS_COLLECTION)
+            rest.iter()
                 .filter(|collection| !collection.items.is_empty())
-                .map(|collection| {
-                    let cards = collection
-                        .items
-                        .iter()
-                        .take(DASHBOARD_RAIL_TILES)
-                        .enumerate()
-                        .map(|(index, item)| {
-                            Card::new(
-                                dashboard_card_id(&collection.slug, index),
-                                item.name.clone(),
-                                crate::icon_cache::reference_handle(
-                                    item.icon.as_deref(),
-                                    size as u32,
-                                    // A rail card is a portrait poster: a
-                                    // horizontal box is turned to fill it.
-                                    crate::icon_cache::Orientation::Portrait,
-                                ),
-                                Some(launch_card_message(&item.item_id, &item.name)),
-                            )
-                        })
-                        .collect();
-                    Shelf::new(false, dashboard::rail_title(collection), cards)
-                }),
+                .map(|collection| Self::collection_shelf(collection, size)),
         );
 
         if shelves.is_empty() {
@@ -121,75 +98,40 @@ impl App {
         shelves
     }
 
-    /// The banner's slides: what the daemon resolved as having just arrived.
-    ///
-    /// This is the one collection the dashboard draws as a banner rather than as
-    /// a rail. Its items carry the wide artwork and the title's own wordmark,
-    /// which no other collection's items have, and the pad walks the slides as
-    /// the page's first row.
-    fn banner_cards(&self, size: f32) -> Option<Vec<Card>> {
-        let collection = self
-            .collections
-            .iter()
-            .find(|collection| collection.slug == NEW_ARRIVALS_COLLECTION)?;
-        let cards: Vec<Card> = collection
+    /// One collection as a rail: its items as cards, in the order the daemon
+    /// composes them. A card's own art is its portrait poster; its wide art
+    /// rides along for the window's background to draw while the pad is on it.
+    fn collection_shelf(collection: &Collection, size: f32) -> Shelf {
+        let cards = collection
             .items
             .iter()
-            // A banner is artwork: an arrival with no art at all would be a grey
-            // slide the size of the window, so it does not get a turn.
-            .filter(|item| item.background.is_some() || item.icon.is_some())
+            .take(DASHBOARD_RAIL_TILES)
             .enumerate()
             .map(|(index, item)| {
-                // A slide with no wide art falls back to its poster rather than
-                // to the generic mark: a banner of one still beats no banner.
-                let background = crate::icon_cache::reference_handle(
-                    item.background.as_deref().or(item.icon.as_deref()),
-                    size as u32,
-                    // The banner is a wide surface: it takes the art as it is.
-                    crate::icon_cache::Orientation::AsIs,
-                );
-                Card::banner(
-                    dashboard_card_id(NEW_ARRIVALS_COLLECTION, index),
+                Card::new(
+                    dashboard_card_id(&collection.slug, index),
                     item.name.clone(),
-                    background,
-                    item.logo.as_deref().map(|logo| {
-                        crate::icon_cache::reference_handle(
-                            Some(logo),
-                            size as u32,
-                            crate::icon_cache::Orientation::AsIs,
-                        )
-                    }),
-                    item.description.clone(),
+                    crate::icon_cache::reference_handle(
+                        item.icon.as_deref(),
+                        size as u32,
+                        // A rail card is a portrait poster: a horizontal box is
+                        // turned to fill it.
+                        crate::icon_cache::Orientation::Portrait,
+                    ),
                     Some(launch_card_message(&item.item_id, &item.name)),
                 )
+                .with_background(item.background.as_deref().map(|background| {
+                    crate::icon_cache::reference_handle(
+                        Some(background),
+                        size as u32,
+                        // The window's background is a wide surface: it takes
+                        // the art as it is.
+                        crate::icon_cache::Orientation::AsIs,
+                    )
+                }))
             })
             .collect();
-        (!cards.is_empty()).then_some(cards)
-    }
-
-    /// How many slides the banner has: none when the daemon has published no
-    /// arrivals, which is what an unlinked or offline Stremio looks like - and
-    /// then the dashboard is exactly the rails it was before.
-    pub(super) fn dashboard_hero_len(&self) -> usize {
-        self.collections
-            .iter()
-            .find(|collection| collection.slug == NEW_ARRIVALS_COLLECTION)
-            .map_or(0, |collection| collection.items.len())
-    }
-
-    /// Moves the banner on to its next slide, when the pad is not on it.
-    ///
-    /// The shell asks on a timer; whether anything happens is decided here, from
-    /// the same rule the subscription is gated by, so a tick that arrives after
-    /// the pad moved onto the banner cannot move it out from under them.
-    pub(super) fn rotate_hero(&mut self) -> Task<Message> {
-        let hero_len = self.dashboard_hero_len();
-        if !dashboard::hero::rotates(hero_len, self.dashboard_cursor) {
-            return Task::none();
-        }
-        self.hero_index = dashboard::hero::rotate(self.hero_index, hero_len);
-        self.sync_hero_motion();
-        Task::none()
+        Shelf::new(false, dashboard::rail_title(collection), cards)
     }
 
     /// The library as a single rail, for when the daemon has composed nothing yet
@@ -232,21 +174,9 @@ impl App {
     /// Steps the dashboard's cursor, and keeps the card it lands on on screen.
     pub(super) fn step_dashboard(&mut self, direction: Direction) -> Task<Message> {
         let rails = self.dashboard_rail_lengths();
-        let hero_len = self.dashboard_hero_len();
         let before = self.dashboard_cursor;
-        // The banner is the first row and its cards are slides, so the pad
-        // stepping onto it keeps the slide it was showing, and stepping along it
-        // moves the slide with the pad. The rail maths below is the same either
-        // way: a slide is a card that happens to fill the window.
-        let (cursor, slide) = dashboard::hero::stepped(
-            before,
-            dashboard::focus::step(self.dashboard_cursor, direction, &rails),
-            self.hero_index,
-            hero_len,
-        );
-        self.dashboard_cursor = cursor;
-        self.hero_index = slide;
-        self.sync_hero_motion();
+        self.dashboard_cursor = dashboard::focus::step(self.dashboard_cursor, direction, &rails);
+        self.sync_backdrop();
         if self.dashboard_cursor != before {
             return self.focus_dashboard_card();
         }
@@ -280,25 +210,17 @@ impl App {
             Direction::Down if self.page == Page::Dashboard => {
                 self.bar_cursor = None;
                 // The first rail, at the card the cursor remembers - the same
-                // rule a vertical step between rails follows. The banner is a
-                // row of slides rather than of cards, so arriving on it keeps the
-                // slide it is showing.
+                // rule a vertical step between rails follows.
                 let remembered = self.dashboard_cursor.remembered;
-                let (cursor, slide) = dashboard::hero::landed_from_above(
-                    dashboard::focus::clamp(
-                        dashboard::focus::Cursor {
-                            rail: 0,
-                            card: remembered,
-                            remembered,
-                        },
-                        &self.dashboard_rail_lengths(),
-                    ),
-                    self.hero_index,
-                    self.dashboard_hero_len(),
+                self.dashboard_cursor = dashboard::focus::clamp(
+                    dashboard::focus::Cursor {
+                        rail: 0,
+                        card: remembered,
+                        remembered,
+                    },
+                    &self.dashboard_rail_lengths(),
                 );
-                self.dashboard_cursor = cursor;
-                self.hero_index = slide;
-                self.sync_hero_motion();
+                self.sync_backdrop();
                 return self.focus_dashboard_card();
             }
             Direction::Up | Direction::Down => {}
@@ -361,27 +283,25 @@ impl App {
         };
         let mut tasks = vec![widget_focus(card.id.clone())];
 
-        // The rail follows the cursor sideways... unless the row is the banner,
-        // which shows one slide at a time and so has nothing to scroll. The page
-        // still follows it: the banner is a row of the page like any other.
-        if !shelf.hero {
-            let (card_width, gap) = dashboard::card_pitch(shelf, self.window_width);
-            let rail = self.dashboard_cursor.rail;
-            let rail_offset = self.rail_offsets.get(rail).copied().unwrap_or(0.0);
-            if let Some(offset) = dashboard::focus::rail_scroll_target(
-                self.dashboard_cursor.card,
-                shelf.cards.len(),
-                rail_offset,
-                dashboard::rail_viewport(self.window_width),
-                card_width,
-                gap,
-            ) {
-                // Remember where the rail is going now, not where the renderer last
-                // reported it: a scroll the shell drives does not come back as an
-                // `on_scroll` event, and the next step has to measure against it.
-                self.set_rail_offset(rail, offset);
-                tasks.push(self.animate_scroll_to(ScrollTarget::Rail(rail), rail_offset, offset));
-            }
+        // The rail follows the cursor sideways: it moves only when the card
+        // would leave the visible width, and then it pins that card to the
+        // nearest edge.
+        let (card_width, gap) = dashboard::card_pitch(shelf, self.window_width);
+        let rail = self.dashboard_cursor.rail;
+        let rail_offset = self.rail_offsets.get(rail).copied().unwrap_or(0.0);
+        if let Some(offset) = dashboard::focus::rail_scroll_target(
+            self.dashboard_cursor.card,
+            shelf.cards.len(),
+            rail_offset,
+            dashboard::rail_viewport(self.window_width),
+            card_width,
+            gap,
+        ) {
+            // Remember where the rail is going now, not where the renderer last
+            // reported it: a scroll the shell drives does not come back as an
+            // `on_scroll` event, and the next step has to measure against it.
+            self.set_rail_offset(rail, offset);
+            tasks.push(self.animate_scroll_to(ScrollTarget::Rail(rail), rail_offset, offset));
         }
 
         // ...and the page follows it down the stack of rails, which is the same
