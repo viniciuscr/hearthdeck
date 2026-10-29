@@ -117,6 +117,38 @@ pub enum InputProfile {
     Desktop,
 }
 
+/// A mode change the bridge sends to the `hearthdeck-input` broker as one
+/// datagram on [`paths::input_socket_path`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputMode {
+    pub profile: InputProfile,
+    pub retro_osk: bool,
+}
+
+impl InputMode {
+    #[must_use]
+    pub fn command(self) -> &'static [u8] {
+        match (self.profile, self.retro_osk) {
+            (InputProfile::Native, false) => b"native",
+            (InputProfile::Desktop, false) => b"desktop",
+            (InputProfile::Native, true) => b"retro-native",
+            (InputProfile::Desktop, true) => b"retro-desktop",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(command: &[u8]) -> Option<Self> {
+        let (profile, retro_osk) = match command {
+            b"native" => (InputProfile::Native, false),
+            b"desktop" => (InputProfile::Desktop, false),
+            b"retro-native" => (InputProfile::Native, true),
+            b"retro-desktop" => (InputProfile::Desktop, true),
+            _ => return None,
+        };
+        Some(Self { profile, retro_osk })
+    }
+}
+
 /// The Heroic runners Hearthdeck can delegate to. The bridge constructs the
 /// URI from this enum and a validated application ID; callers cannot supply a
 /// free-form URI or command line.
@@ -516,8 +548,9 @@ mod tests {
         ApplicationSession, ApplicationSessionState, ApplicationSource, BridgeRequest,
         BridgeResponse, CatalogItem, CategorizationPhase, CategorizationSnapshot,
         CategorizationStatus, Collection, CollectionItem, DiscoveredApplication, HealthResponse,
-        HeroicRunner, HostCapabilities, InputProfile, ModelStatus, ProviderHealth, ProviderKind,
-        ProviderStatus, RetroGame, RetroGameDetails, RetroRomVersion, ServerEvent, ServerEventKind,
+        HeroicRunner, HostCapabilities, InputMode, InputProfile, ModelStatus, ProviderHealth,
+        ProviderKind, ProviderStatus, RetroGame, RetroGameDetails, RetroRomVersion, ServerEvent,
+        ServerEventKind,
     };
 
     #[test]
@@ -871,5 +904,20 @@ mod tests {
         assert!(json["status"].get("last_error").is_none());
         let back: CategorizationSnapshot<()> = serde_json::from_value(json).unwrap();
         assert_eq!(back.status.model, snapshot.status.model);
+    }
+
+    #[test]
+    fn input_mode_commands_round_trip() {
+        for profile in [InputProfile::Native, InputProfile::Desktop] {
+            for retro_osk in [false, true] {
+                let mode = InputMode { profile, retro_osk };
+                assert_eq!(InputMode::parse(mode.command()), Some(mode));
+            }
+        }
+        assert_eq!(
+            InputMode::parse(b"retro-desktop").map(|m| m.profile),
+            Some(InputProfile::Desktop)
+        );
+        assert_eq!(InputMode::parse(b"bogus"), None);
     }
 }

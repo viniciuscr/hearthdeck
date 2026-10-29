@@ -4,26 +4,22 @@
 //! A launch sets the profile its target needs (a desktop app, or RetroArch
 //! with its on-screen keyboard) and every stop resets it to `native`.
 
-use std::{env, path::PathBuf};
-
 use anyhow::{Context, Result};
-use hearthdeck_protocol::InputProfile;
+use hearthdeck_protocol::{InputMode, InputProfile, paths};
 use tokio::net::UnixDatagram;
 use tokio::process::Command;
 use tracing::warn;
 
 const INPUT_SERVICE: &str = "hearthdeck-input.service";
-const INPUT_SOCKET: &str = "hearthdeck-input.sock";
 
 pub(crate) async fn set_input_profile(profile: InputProfile, retro_osk: bool) -> Result<()> {
-    let Some(runtime_directory) = env::var_os("XDG_RUNTIME_DIR") else {
+    let Some(socket_path) = paths::input_socket_path() else {
         anyhow::ensure!(
             profile == InputProfile::Native && !retro_osk,
             "XDG_RUNTIME_DIR is not set"
         );
         return Ok(());
     };
-    let socket_path = PathBuf::from(runtime_directory).join(INPUT_SOCKET);
     let input_service_required = profile == InputProfile::Desktop || retro_osk;
 
     if input_service_required && !socket_path.exists() {
@@ -52,12 +48,7 @@ pub(crate) async fn set_input_profile(profile: InputProfile, retro_osk: bool) ->
         "input compatibility service is unavailable"
     );
 
-    let command = match (profile, retro_osk) {
-        (InputProfile::Native, false) => b"native".as_slice(),
-        (InputProfile::Desktop, false) => b"desktop".as_slice(),
-        (InputProfile::Native, true) => b"retro-native".as_slice(),
-        (InputProfile::Desktop, true) => b"retro-desktop".as_slice(),
-    };
+    let command = InputMode { profile, retro_osk }.command();
     let socket = UnixDatagram::unbound()?;
     match socket.send_to(command, &socket_path).await {
         Ok(_) => Ok(()),

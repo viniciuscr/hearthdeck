@@ -29,6 +29,14 @@ pub fn bridge_socket_path() -> PathBuf {
     runtime_dir().join("hearthdeck").join("bridge.sock")
 }
 
+/// The `hearthdeck-input` broker's control socket. The broker only runs inside a
+/// session, so there is no fallback: `None` when `XDG_RUNTIME_DIR` is unset.
+pub fn input_socket_path() -> Option<PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| PathBuf::from(dir).join("hearthdeck-input.sock"))
+}
+
 /// The session runtime directory: `XDG_RUNTIME_DIR`, or the data-local `runtime/`
 /// when the session has not set one.
 fn runtime_dir() -> PathBuf {
