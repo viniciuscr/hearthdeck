@@ -715,6 +715,14 @@ paths:
       responses:
         '202':
           description: Active application session stop accepted
+  /v1/events:
+    get:
+      operationId: subscribeEvents
+      security:
+        - bearerAuth: []
+      responses:
+        '101':
+          description: WebSocket upgrade; sends JSON-serialized ServerEvent messages as they occur
   /v1/stremio/link:
     post:
       operationId: startStremioLink

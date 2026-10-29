@@ -32,6 +32,7 @@ format:
 
 # Build, test, and lint the Rust backend workspace.
 check-services:
+  python3 scripts/check-openapi-routes.py
   cargo check --manifest-path {{services_manifest}} --workspace
   cargo test --manifest-path {{services_manifest}} --workspace
   cargo clippy --manifest-path {{services_manifest}} --workspace --all-targets -- -D warnings
