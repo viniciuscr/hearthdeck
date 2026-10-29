@@ -56,6 +56,7 @@ fn shell() -> App {
         system_status: SystemStatus::default(),
         wallpaper: None,
         window_width: WINDOW_WIDTH,
+        window_height: WINDOW_HEIGHT,
         grid_scroll_offset: 0.0,
         grid_viewport_height: grid_viewport_height_fallback(),
         grid_restore_pending: false,
@@ -1677,24 +1678,37 @@ fn the_background_follows_the_pad_across_the_rail() {
 }
 
 /// The first rail snaps the page to its top: the blank space above it is kept
-/// for the art and comes with the rail into view.
+/// for the art and comes with the rail into view - the rail at the bottom of
+/// the screen and the window onto the art filling everything above it, at
+/// whatever size the display is.
 #[test]
 fn the_first_rail_snaps_the_page_to_the_top() {
-    let mut app = shell();
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-        collection("play-later", None, &["hearthdeck:game-1"]),
-    ])));
+    for window_height in [WINDOW_HEIGHT, 1080.0] {
+        let mut app = shell();
+        app.window_height = window_height;
+        let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+            collection("play-later", None, &["hearthdeck:game-1"]),
+        ])));
 
-    // Down past the first rail, the page follows the pad to the rails below.
-    let _ = app.step_dashboard(Direction::Down);
-    let _ = app.step_dashboard(Direction::Down);
-    assert!(app.page_offset > 0.0, "the page followed the pad down");
-    // And back up onto the first rail snaps it to the top again.
-    let _ = app.step_dashboard(Direction::Up);
-    let _ = app.step_dashboard(Direction::Up);
-    assert_eq!(app.page_offset, 0.0, "the first rail pins the page's top");
+        // Down past the first rail, the page follows the pad to the rails below.
+        let _ = app.step_dashboard(Direction::Down);
+        let landed = app.page_offset;
+        let _ = app.step_dashboard(Direction::Down);
+        assert!(app.page_offset > 0.0, "the page followed the pad down");
+        // Back up onto the first rail snaps it to the top again.
+        let _ = app.step_dashboard(Direction::Up);
+        let _ = app.step_dashboard(Direction::Up);
+        assert_eq!(app.page_offset, 0.0, "the first rail pins the page's top");
+        // And the rail below lands in the same place every time: one scroll,
+        // one landing, no snap that comes back around.
+        let _ = app.step_dashboard(Direction::Down);
+        assert_eq!(
+            app.page_offset, landed,
+            "the second rail lands where it landed before"
+        );
+    }
 }
 
 /// A report from a scroll the shell is driving describes where the travel

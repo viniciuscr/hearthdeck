@@ -28,7 +28,7 @@ use crate::providers::daemon::{
     NEW_ARRIVALS_COLLECTION, PLAY_LATER_COLLECTION,
 };
 use crate::style::{
-    DASHBOARD_GAME_ASPECT, WINDOW_HEIGHT, content_horizontal_padding, dashboard_console_tile_size,
+    DASHBOARD_GAME_ASPECT, content_horizontal_padding, dashboard_console_tile_size,
     dashboard_tile_size,
 };
 use crate::widgets::application::{LABEL_HEIGHT, Selection, TileLabel, app_label, app_tile};
@@ -158,12 +158,18 @@ pub fn rail_title(collection: &Collection) -> String {
 /// two scroll callbacks belong to the shell, because only it can remember an
 /// offset: a rail needs its own, and the page the focused rail's place in the
 /// stack, to know whether the cursor would leave the view.
+// The eight arguments are the page's own composition: the shelves and the
+// cursor, the bar, the window's geometry, and the three messages its chrome
+// and its scrollables send. They are all supplied inline at the one call
+// site, so a spec struct would only move the same list somewhere else.
+#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn view<'a>(
     shelves: &[Shelf],
     cursor: focus::Cursor,
     bar: &top_bar::TopBar<'_>,
     window_width: f32,
+    window_height: f32,
     on_navigate: fn(top_bar::Destination) -> Message,
     on_rail_scroll: impl Fn(usize, f32) -> Message + Clone + 'a,
     on_page_scroll: impl Fn(f32) -> Message + 'a,
@@ -223,7 +229,7 @@ pub fn view<'a>(
 
     // The blank space at the top of the page, where the banner was: kept clear
     // so the focused title's art has a window onto the page above its rail.
-    let front = front_space(shelves.first(), window_width);
+    let front = front_space(shelves.first(), window_width, window_height);
     let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(rails.len() + 1);
     rows.push(
         container(text(""))
@@ -330,7 +336,7 @@ pub fn focused_label<'a>(
 /// below them - which is what the page scroll measures against to keep the
 /// focused one on screen.
 #[must_use]
-pub fn rail_heights(shelves: &[Shelf], window_width: f32) -> Vec<f32> {
+pub fn rail_heights(shelves: &[Shelf], window_width: f32, window_height: f32) -> Vec<f32> {
     let mut heights: Vec<f32> = shelves
         .iter()
         .map(|shelf| rail_height(shelf, window_width))
@@ -338,9 +344,10 @@ pub fn rail_heights(shelves: &[Shelf], window_width: f32) -> Vec<f32> {
     // The blank space at the top of the page belongs to the first rail: folded
     // into its height, the page's follow pins "the first rail" into view by
     // pinning the blank space's top - which is the page's own top. That is the
-    // snap the first rail gets, and the whole of it.
+    // snap the first rail gets: the rail at the bottom of the screen, with the
+    // whole window onto the art above it, however the window is sized.
     if let Some(first) = heights.first_mut() {
-        *first += front_space(shelves.first(), window_width) + rail_gap();
+        *first += front_space(shelves.first(), window_width, window_height) + rail_gap();
     }
     heights
 }
@@ -358,10 +365,10 @@ fn rail_height(shelf: &Shelf, window_width: f32) -> f32 {
 /// so the rail under it and the window onto the art above it are both on screen
 /// when the page sits at its top. A rail taller than that screenful leaves no
 /// space, which is right: the focused card is what has to stay visible.
-fn front_space(first: Option<&Shelf>, window_width: f32) -> f32 {
+fn front_space(first: Option<&Shelf>, window_width: f32, window_height: f32) -> f32 {
     let Spacing { space_l, .. } = theme::spacing();
     let first = first.map_or(0.0, |shelf| rail_height(shelf, window_width));
-    let page_viewport = WINDOW_HEIGHT - top_bar::height();
+    let page_viewport = window_height - top_bar::height();
     (page_viewport - f32::from(space_l) - rail_gap() - first).max(0.0)
 }
 
@@ -473,7 +480,7 @@ mod tests {
             Shelf::new(true, "Consoles", vec![card("Hades")]),
             Shelf::new(false, "Recently Played", vec![card("Half-Life 2")]),
         ];
-        let heights = rail_heights(&shelves, 1200.0);
+        let heights = rail_heights(&shelves, 1200.0, crate::style::WINDOW_HEIGHT);
         let (size, _, _) = shelf_metrics(&shelves[1], 1200.0);
 
         assert_eq!(
@@ -493,25 +500,31 @@ mod tests {
             Shelf::new(false, "New on Stremio", vec![card("Wicker")]),
             Shelf::new(false, "Recently Played", vec![card("Half-Life 2")]),
         ];
-        let heights = rail_heights(&shelves, 1200.0);
-        let plain = RAIL_TITLE_HEIGHT
-            + f32::from(theme::spacing().space_m)
-            + shelf_metrics(&shelves[1], 1200.0).0
-            + LABEL_HEIGHT;
+        // The window is the display's own size under the kiosk's compositor,
+        // so the blank space is whatever of *that* screenful the rail leaves
+        // unused - a television is nothing like the size the app opens at.
+        for window_height in [crate::style::WINDOW_HEIGHT, 1080.0] {
+            let heights = rail_heights(&shelves, 1200.0, window_height);
+            let plain = RAIL_TITLE_HEIGHT
+                + f32::from(theme::spacing().space_m)
+                + shelf_metrics(&shelves[1], 1200.0).0
+                + LABEL_HEIGHT;
 
-        assert_eq!(
-            heights[1], plain,
-            "the other rails are measured as themselves"
-        );
-        assert!(
-            heights[0] > plain,
-            "the blank space rides on the first: {heights:?}"
-        );
-        assert_eq!(
-            heights[0] + f32::from(theme::spacing().space_l),
-            crate::style::WINDOW_HEIGHT - crate::widgets::top_bar::height(),
-            "the blank space is whatever of the first screenful the rail leaves unused: {heights:?}"
-        );
+            assert_eq!(
+                heights[1], plain,
+                "the other rails are measured as themselves"
+            );
+            assert!(
+                heights[0] > plain,
+                "the blank space rides on the first: {heights:?}"
+            );
+            assert_eq!(
+                heights[0] + f32::from(theme::spacing().space_l),
+                window_height - crate::widgets::top_bar::height(),
+                "the blank space is whatever of the first screenful the rail leaves unused: \
+                 {heights:?}"
+            );
+        }
     }
 
     /// A card whose art fills the window behind the page wears no ring of its

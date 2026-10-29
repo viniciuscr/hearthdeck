@@ -11,7 +11,7 @@ use crate::screens::dashboard;
 use crate::screens::dashboard::{Card, Shelf};
 use crate::screens::library::focus::Direction;
 use crate::style::{
-    DASHBOARD_RAIL_TILES, WINDOW_HEIGHT, content_horizontal_padding, dashboard_console_tile_size,
+    DASHBOARD_RAIL_TILES, content_horizontal_padding, dashboard_console_tile_size,
     dashboard_tile_size,
 };
 use crate::widgets::top_bar;
@@ -308,10 +308,10 @@ impl App {
         // rule a third time: rails of unequal height rather than cards of equal
         // width. The dashboard fills the content column, so the page's viewport
         // is the window's height.
-        let heights = dashboard::rail_heights(&shelves, self.window_width);
+        let heights = dashboard::rail_heights(&shelves, self.window_width, self.window_height);
         // The page sits below the top bar, so its viewport is the window's height
         // less the bar rather than the whole window.
-        let page_viewport = WINDOW_HEIGHT - top_bar::height();
+        let page_viewport = self.window_height - top_bar::height();
         if let Some(offset) = dashboard::focus::page_scroll_target(
             &heights,
             self.dashboard_cursor.rail,

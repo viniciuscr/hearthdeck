@@ -340,8 +340,13 @@ pub enum Message {
     /// The main window appeared: go fullscreen, matching the session's kiosk
     /// model.
     Opened,
-    /// The main window's width, so proportional layout follows it.
-    WindowResized(f32),
+    /// The main window's size, so proportional layout follows it: the window is
+    /// the display's own size under the kiosk's compositor, not the size it
+    /// opened at.
+    WindowResized {
+        width: f32,
+        height: f32,
+    },
     /// The main window gained or lost compositor focus.
     WindowFocusChanged(bool),
     /// A frame from `window::frames()` while a transition is in flight, carrying
@@ -524,6 +529,7 @@ pub struct App {
     /// background instead.
     wallpaper: Option<Wallpaper>,
     window_width: f32,
+    window_height: f32,
     /// Where the grid is scrolled to, and how tall its viewport is. The
     /// virtualization builds the rows between them, and the console source asks
     /// for its next page when they reach the end of the records it holds.
@@ -618,6 +624,7 @@ impl Application for App {
             system_status: SystemStatus::default(),
             wallpaper: None,
             window_width: WINDOW_WIDTH,
+            window_height: WINDOW_HEIGHT,
             grid_scroll_offset: 0.0,
             grid_viewport_height: grid_viewport_height_fallback(),
             grid_restore_pending: false,
@@ -1218,7 +1225,10 @@ impl Application for App {
             Message::Opened => {
                 return window::set_mode(SurfaceId::RESERVED, window::Mode::Fullscreen);
             }
-            Message::WindowResized(width) => self.window_width = width,
+            Message::WindowResized { width, height } => {
+                self.window_width = width;
+                self.window_height = height;
+            }
             Message::WindowFocusChanged(focused) => {
                 self.input_ownership.update(if focused {
                     InputEvent::FrontendFocused
@@ -1292,7 +1302,10 @@ impl Application for App {
             cosmic::iced::Event::Window(WindowEvent::Resized(size))
                 if id == SurfaceId::RESERVED =>
             {
-                Some(Message::WindowResized(size.width))
+                Some(Message::WindowResized {
+                    width: size.width,
+                    height: size.height,
+                })
             }
             // Keys are ours only when nothing else has claimed them: a focused
             // text input takes the arrows for its own caret, so typing in the
@@ -1515,6 +1528,7 @@ impl App {
             self.dashboard_cursor,
             &self.top_bar(top_bar::Destination::Dashboard),
             self.window_width,
+            self.window_height,
             navigate,
             |rail, offset| Message::RailScrolled { rail, offset },
             Message::PageScrolled,
