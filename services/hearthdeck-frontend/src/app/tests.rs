@@ -1954,7 +1954,6 @@ fn health(categorization: bool) -> crate::providers::daemon::HealthResponse {
         capabilities: crate::providers::daemon::HostCapabilities {
             launch: false,
             application_sessions: false,
-            install_requests: false,
             retro_launch: false,
             categorization,
         },

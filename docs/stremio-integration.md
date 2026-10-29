@@ -283,11 +283,7 @@ authoritative would drop usable fields:
    change first. Its items carry the `hearthdeck:`-prefixed ids the model's rails use.
    The new shell sends that id untouched to `/v1/launch/{item_id}`; the route strips
    the prefix and resolves the remainder against the catalog, so which source sits
-   behind the id is the daemon's decision. (The legacy client strips the prefix itself
-   for `/v1/apps/{id}/launch`, where sending the bare catalog id instead met the
-   client's own launch gate: the card drew and then did nothing when pressed — the
-   first thing that broke in testing, and the reason `activate_dashboard_app` now also
-   looks in the rail's own entry lists.)
+   behind the id is the daemon's decision.
 7. **Season and episode come from `video_id`**, never from `state.season` /
    `state.episode`.
 8. **Launch is a deep link, assembled by the bridge from a validated id** —

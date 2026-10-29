@@ -268,22 +268,15 @@ impl Database {
 /// fatal: refusing to start over a permission quirk on a mounted share would be a
 /// worse outcome than a database that is more readable than intended.
 async fn restrict_to_owner(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::PermissionsExt;
 
-        let owner_only = std::fs::Permissions::from_mode(0o600);
-        if let Err(error) = tokio::fs::set_permissions(path, owner_only).await {
-            warn!(
-                path = %path.display(),
-                %error,
-                "could not restrict the database file to its owner"
-            );
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
+    let owner_only = std::fs::Permissions::from_mode(0o600);
+    if let Err(error) = tokio::fs::set_permissions(path, owner_only).await {
+        warn!(
+            path = %path.display(),
+            %error,
+            "could not restrict the database file to its owner"
+        );
     }
 }
 

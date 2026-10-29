@@ -1,11 +1,9 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    env,
     path::{Path, PathBuf},
     time::Duration,
 };
-
-#[cfg(target_os = "linux")]
-use std::{collections::HashSet, env};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -25,7 +23,6 @@ pub struct HeroicInstalledProvider {
 }
 
 impl HeroicInstalledProvider {
-    #[cfg(target_os = "linux")]
     pub fn from_system() -> Self {
         Self {
             config_directories: heroic_config_directories(),
@@ -364,7 +361,6 @@ fn memory_bytes(value: &str) -> Option<u64> {
     None
 }
 
-#[cfg(target_os = "linux")]
 fn system_memory_bytes() -> Option<u64> {
     // Physical memory does not change while the daemon runs, and this is read once
     // per discovered game; memoize it rather than re-reading `/proc/meminfo` N
@@ -381,11 +377,6 @@ fn system_memory_bytes() -> Option<u64> {
             .ok()?;
         Some(total_kib * 1024)
     })
-}
-
-#[cfg(not(target_os = "linux"))]
-fn system_memory_bytes() -> Option<u64> {
-    None
 }
 
 async fn gog_library(path: &Path) -> anyhow::Result<HashMap<String, Value>> {
@@ -475,7 +466,6 @@ fn valid_application_id(value: &str) -> bool {
         })
 }
 
-#[cfg(target_os = "linux")]
 fn heroic_config_directories() -> Vec<PathBuf> {
     let home = env::var_os("HOME").map(PathBuf::from);
     let config_home = env::var_os("XDG_CONFIG_HOME")

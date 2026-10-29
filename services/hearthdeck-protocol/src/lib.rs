@@ -220,7 +220,6 @@ pub enum BridgeErrorCode {
 pub struct HostCapabilities {
     pub launch: bool,
     pub application_sessions: bool,
-    pub install_requests: bool,
     pub retro_launch: bool,
     /// Whether this deployment provides categorization at all. Distinct from the
     /// user's opt-in: with this false the feature does not exist for the client,
@@ -266,7 +265,6 @@ mod tests {
         let capabilities = HostCapabilities {
             launch: true,
             application_sessions: false,
-            install_requests: false,
             retro_launch: true,
             categorization: true,
         };
@@ -274,7 +272,6 @@ mod tests {
         for field in [
             "launch",
             "application_sessions",
-            "install_requests",
             "retro_launch",
             "categorization",
         ] {

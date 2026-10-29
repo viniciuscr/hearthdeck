@@ -379,36 +379,6 @@ paths:
                 $ref: '#/components/schemas/RetroGameDetails'
         '503':
           description: RomM is not configured
-  /v1/retro/roms/{id}/launch:
-    post:
-      operationId: launchRetroRom
-      description: >-
-        Launches a RomM ROM through RetroArch. Not the generic launchApp
-        path: RomM is not a catalog/DiscoveryProvider source, so this takes
-        RomM's own rom ID directly.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: RomM rom ID
-          schema: { type: integer }
-        - name: input_profile
-          in: query
-          description: Controller handling for the launched application
-          schema: { type: string, enum: [native, desktop], default: native }
-      responses:
-        '200':
-          description: RetroArch launch accepted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApplicationSession'
-        '501':
-          description: No RetroArch core is configured for the rom's platform
-        '503':
-          description: RomM is not configured, or the mapped RetroArch core is not installed
   /v1/retro/roms/{id}/favorite:
     post:
       operationId: setRetroFavorite
@@ -690,7 +660,7 @@ paths:
         catalog, where the record's own source decides the launch shape
         (desktop application, Heroic game, Stremio title); a `romm:` id
         launches that ROM through RetroArch; any other id is taken as the
-        catalog id itself, as launchApp addresses it. The client never parses
+        catalog id itself. The client never parses
         a prefix to pick a route.
       security:
         - bearerAuth: []
@@ -717,32 +687,6 @@ paths:
           description: No RetroArch core is configured for the rom's platform
         '503':
           description: RomM is not configured, or the mapped RetroArch core is not installed
-  /v1/apps/{id}/launch:
-    post:
-      operationId: launchApp
-      description: >-
-        Catalog launch by bare catalog id. Kept for the legacy frontend, which
-        picks this route or launchRetroRom itself; new clients post any item
-        id to launchItem instead.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: input_profile
-          in: query
-          description: Controller handling for the launched application
-          schema: { type: string, enum: [native, desktop], default: native }
-      responses:
-        '200':
-          description: Registered desktop app launch accepted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApplicationSession'
   /v1/sessions/active:
     get:
       operationId: getActiveApplicationSession
@@ -771,23 +715,6 @@ paths:
       responses:
         '202':
           description: Active application session stop accepted
-  /v1/install-requests:
-    post:
-      operationId: requestInstall
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [item_id]
-              properties:
-                item_id: { type: string }
-      responses:
-        '501':
-          description: Host-side install approval is not implemented
   /v1/stremio/link:
     post:
       operationId: startStremioLink
@@ -864,11 +791,10 @@ components:
           $ref: '#/components/schemas/HostCapabilities'
     HostCapabilities:
       type: object
-      required: [launch, application_sessions, install_requests, retro_launch, categorization]
+      required: [launch, application_sessions, retro_launch, categorization]
       properties:
         launch: { type: boolean }
         application_sessions: { type: boolean }
-        install_requests: { type: boolean }
         retro_launch: { type: boolean }
         categorization:
           type: boolean
