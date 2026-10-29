@@ -32,7 +32,8 @@ use chrono::Utc;
 use hearthdeck_ai::categorization::{
     AppKind, AppProfile, HeuristicCategorizer, LibraryScanner, ScanReport, Taxonomy,
 };
-use serde::{Deserialize, Serialize};
+pub use hearthdeck_protocol::{CategorizationPhase, CategorizationStatus, ModelStatus};
+use serde::Deserialize;
 use sqlx::{Row, SqlitePool};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::{Mutex, broadcast};
@@ -491,34 +492,6 @@ impl CategorizationStore {
     }
 }
 
-/// Where a running scan has got to.
-///
-/// `Downloading` is the daemon's own refinement, not something the child reports:
-/// fetching the checkpoint happens inside the engine load, and the daemon knows
-/// whether a checkpoint was already on disk when it started the job. The child
-/// only ever says "loading" or "scanning".
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CategorizationPhase {
-    Idle,
-    Downloading,
-    Loading,
-    Scanning,
-}
-
-/// Whether a checkpoint is available, and what it costs on disk.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum ModelStatus {
-    /// Nothing to run yet. The first scan will fetch one.
-    Absent,
-    /// A checkpoint in this project's own cache.
-    Downloaded { bytes: u64, path: PathBuf },
-    /// A checkpoint the deployment pointed at directly, which is how an offline
-    /// install sideloads one. Never deleted by Hearthdeck.
-    External { path: PathBuf },
-}
-
 /// What the child last said it was doing.
 #[derive(Debug, Deserialize)]
 struct PhaseFile {
@@ -613,22 +586,6 @@ struct ScanState {
     discard: bool,
     last_error: Option<String>,
     last_completed_at: Option<String>,
-}
-
-/// What a settings page needs: is a scan running, how far along, is the model
-/// installed, and how did the last one end.
-#[derive(Clone, Debug, Serialize)]
-pub struct CategorizationStatus {
-    pub running: bool,
-    pub phase: CategorizationPhase,
-    /// Applications decided so far, while `phase` is `Scanning`.
-    pub completed: usize,
-    pub total: usize,
-    pub model: ModelStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_completed_at: Option<String>,
 }
 
 /// Outcome of asking for a scan.

@@ -250,12 +250,73 @@ pub struct RetroRomVersion {
     pub is_main_sibling: bool,
 }
 
+/// The `/v1/categorization` reply: the user's opt-in, the job, and the last report.
+///
+/// Generic over the report because the client reads only a summary of it, while
+/// the daemon serves the whole thing.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CategorizationSnapshot<R> {
+    /// The user's opt-in. Everything heavy — the download, the scan, replacing
+    /// the tabs — waits on it.
+    pub enabled: bool,
+    pub status: CategorizationStatus,
+    /// `None` until the library has been categorized once.
+    pub report: Option<R>,
+}
+
+/// Is a scan running, how far along, is the model installed, and how did the last
+/// one end.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CategorizationStatus {
+    pub running: bool,
+    pub phase: CategorizationPhase,
+    /// Applications decided so far, while `phase` is `Scanning`.
+    pub completed: usize,
+    pub total: usize,
+    pub model: ModelStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_completed_at: Option<String>,
+}
+
+/// Where a running scan has got to.
+///
+/// `Downloading` is the daemon's own refinement, not something the categorizer
+/// child reports: fetching the checkpoint happens inside the engine load, and the
+/// daemon knows whether a checkpoint was already on disk when it started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CategorizationPhase {
+    Idle,
+    Downloading,
+    Loading,
+    Scanning,
+}
+
+/// Whether a checkpoint is available, and what it costs on disk.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ModelStatus {
+    /// Nothing to run yet. The first scan will fetch one.
+    Absent,
+    /// A checkpoint in the daemon's own cache.
+    Downloaded {
+        bytes: u64,
+        path: std::path::PathBuf,
+    },
+    /// A checkpoint the deployment pointed at directly, which is how an offline
+    /// install sideloads one. Never deleted by Hearthdeck.
+    External { path: std::path::PathBuf },
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ApplicationSession, ApplicationSessionState, ApplicationSource, BridgeRequest,
-        BridgeResponse, CatalogItem, DiscoveredApplication, HeroicRunner, HostCapabilities,
-        InputProfile, RetroRomVersion,
+        BridgeResponse, CatalogItem, CategorizationPhase, CategorizationSnapshot,
+        CategorizationStatus, DiscoveredApplication, HeroicRunner, HostCapabilities, InputProfile,
+        ModelStatus, RetroRomVersion,
     };
 
     #[test]
@@ -410,5 +471,33 @@ mod tests {
         );
         assert!(serialized.get("command").is_none());
         assert!(serialized.get("url").is_none());
+    }
+
+    #[test]
+    fn categorization_snapshot_keeps_its_wire_shape() {
+        let snapshot = CategorizationSnapshot::<()> {
+            enabled: true,
+            status: CategorizationStatus {
+                running: true,
+                phase: CategorizationPhase::Downloading,
+                completed: 0,
+                total: 3,
+                model: ModelStatus::Downloaded {
+                    bytes: 7,
+                    path: "/cache/model".into(),
+                },
+                last_error: None,
+                last_completed_at: None,
+            },
+            report: None,
+        };
+
+        let json = serde_json::to_value(&snapshot).unwrap();
+
+        assert_eq!(json["status"]["phase"], "downloading");
+        assert_eq!(json["status"]["model"]["state"], "downloaded");
+        assert!(json["status"].get("last_error").is_none());
+        let back: CategorizationSnapshot<()> = serde_json::from_value(json).unwrap();
+        assert_eq!(back.status.model, snapshot.status.model);
     }
 }

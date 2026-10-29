@@ -84,61 +84,12 @@ pub struct HealthResponse {
 
 // Shared with the daemon so the two sides cannot drift on the payloads the client
 // reads in full. Re-exported under their original names for the rest of the crate.
-pub use hearthdeck_protocol::{CatalogItem, HostCapabilities, RetroRomVersion};
+pub use hearthdeck_protocol::{
+    CatalogItem, CategorizationPhase, HostCapabilities, ModelStatus, RetroRomVersion,
+};
 
-/// The daemon's view of the categorization scan: whether one is running, and
-/// what the last completed one concluded.
-#[derive(Clone, Debug, Deserialize)]
-pub struct CategorizationSnapshot {
-    /// The user's opt-in. Everything heavy — the download, the scan, replacing
-    /// the tabs — waits on it.
-    pub enabled: bool,
-    pub status: CategorizationStatus,
-    /// `None` until the library has been categorized once.
-    pub report: Option<ScanReport>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct CategorizationStatus {
-    pub running: bool,
-    pub phase: CategorizationPhase,
-    /// Applications decided so far, while `phase` is `scanning`.
-    #[serde(default)]
-    pub completed: usize,
-    #[serde(default)]
-    pub total: usize,
-    pub model: ModelStatus,
-    #[serde(default)]
-    pub last_error: Option<String>,
-    #[serde(default)]
-    pub last_completed_at: Option<String>,
-}
-
-/// Where a running scan has got to. `downloading` is the daemon's reading of the
-/// engine load when no checkpoint was on disk: fetching one happens in there.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CategorizationPhase {
-    Idle,
-    Downloading,
-    Loading,
-    Scanning,
-}
-
-/// What the checkpoint costs, or that the deployment brought its own.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum ModelStatus {
-    /// Nothing to run yet; the first scan will fetch one.
-    Absent,
-    /// A checkpoint in the daemon's own cache, and what it occupies.
-    Downloaded {
-        bytes: u64,
-        path: std::path::PathBuf,
-    },
-    /// A directory the deployment pointed at, which Hearthdeck never deletes.
-    External { path: std::path::PathBuf },
-}
+/// The daemon's view of the categorization scan, with the report narrowed to [`ScanReport`].
+pub type CategorizationSnapshot = hearthdeck_protocol::CategorizationSnapshot<ScanReport>;
 
 /// What one scan concluded. This is a projection: the screen only counts the
 /// candidate tabs and the apps that fit none, so their members are not read.

@@ -12,8 +12,8 @@ use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream};
 use hearthdeck_ai::categorization::{ScanReport, Taxonomy};
 use hearthdeck_protocol::{
-    ApplicationSession, BridgeRequest, BridgeResponse, HeroicRunner, HostCapabilities,
-    InputProfile, RetroRomVersion, StremioMediaType,
+    ApplicationSession, BridgeRequest, BridgeResponse, CategorizationSnapshot, HeroicRunner,
+    HostCapabilities, InputProfile, RetroRomVersion, StremioMediaType,
 };
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::{
     activity::{ActivityEntry, RecentActivity},
-    categorizer::{CategorizationStatus, ModelStatus, ScanRequest},
+    categorizer::{ModelStatus, ScanRequest},
     collections::{self, Collection, CollectionItem},
     diagnostics::{self, RommGame, RommPlatform, RommQueryError},
     retro::RetroLaunchError,
@@ -725,21 +725,10 @@ async fn rescan_library(
     Ok(StatusCode::ACCEPTED)
 }
 
-/// The scan button's questions: does the user want this, what is the job doing,
-/// and what did the last completed one conclude.
-#[derive(Serialize)]
-struct CategorizationResponse {
-    /// The user's opt-in, which is what a settings toggle reflects. Everything
-    /// heavy — the download, the scan, replacing the tabs — waits on it.
-    enabled: bool,
-    status: CategorizationStatus,
-    report: Option<ScanReport>,
-}
-
 async fn categorization(
     State(state): State<SharedState>,
     headers: HeaderMap,
-) -> Result<Json<CategorizationResponse>, ApiError> {
+) -> Result<Json<CategorizationSnapshot<ScanReport>>, ApiError> {
     authenticate(&state, &headers).await?;
     let service = state
         .categorization
@@ -753,7 +742,7 @@ async fn categorization(
         .categorization_enabled;
     let status = service.status().await;
     let report = service.latest_report().await.map_err(ApiError::internal)?;
-    Ok(Json(CategorizationResponse {
+    Ok(Json(CategorizationSnapshot {
         enabled,
         status,
         report,

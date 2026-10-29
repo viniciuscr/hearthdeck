@@ -1943,7 +1943,7 @@ fn a_card_id_reaches_the_launch_route_exactly_as_the_rail_carried_it() {
 }
 
 use crate::providers::daemon::{
-    CategorizationPhase, CategorizationSnapshot, CategorizationStatus, CollectionItem, ModelStatus,
+    CategorizationPhase, CategorizationSnapshot, CollectionItem, ModelStatus,
     NEW_ARRIVALS_COLLECTION,
 };
 
@@ -1965,7 +1965,7 @@ fn health(categorization: bool) -> crate::providers::daemon::HealthResponse {
 fn snapshot(enabled: bool) -> CategorizationSnapshot {
     CategorizationSnapshot {
         enabled,
-        status: CategorizationStatus {
+        status: hearthdeck_protocol::CategorizationStatus {
             running: false,
             phase: CategorizationPhase::Idle,
             completed: 0,
