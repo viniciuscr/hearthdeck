@@ -7,63 +7,24 @@
 //! and [`crate::categorization::ScanReport`] aggregates the model's picks into the
 //! handful of tabs that are actually worth showing.
 
+pub use hearthdeck_protocol::Section;
 use serde::{Deserialize, Serialize};
 
 use super::error::{Error, Result};
 
-/// The fixed top-level navigation tabs. Mirrors the frontend's `Section`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Section {
-    PcGames,
-    ConsoleGames,
-    Applications,
-}
-
-impl Section {
-    /// Every section, in sidebar order.
-    pub const ALL: [Section; 3] = [
-        Section::PcGames,
-        Section::ConsoleGames,
-        Section::Applications,
-    ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::PcGames => "PC games",
-            Self::ConsoleGames => "Console games",
-            Self::Applications => "Applications",
-        }
-    }
-
-    pub fn slug(self) -> &'static str {
-        match self {
-            Self::PcGames => "pc_games",
-            Self::ConsoleGames => "console_games",
-            Self::Applications => "applications",
-        }
-    }
-
-    /// Place a record from its two boolean traits, the same way the current
-    /// frontend splits games from emulators from everything else.
-    ///
-    /// The emulator test comes first on purpose: emulator software is
-    /// game-related even when its record forgot to declare the `Game` category,
-    /// and filing it under Applications (as the frontend does) is a worse
-    /// outcome than filing a game as an emulator.
-    ///
-    /// Returns the section plus the probability that best supports it, so a
-    /// caller can reject a low-confidence placement outright.
-    pub fn from_traits(game: Option<f64>, emulator: Option<f64>, threshold: f64) -> (Section, f64) {
-        let game = game.unwrap_or(0.0);
-        let emulator = emulator.unwrap_or(0.0);
-        if emulator >= threshold {
-            (Section::ConsoleGames, emulator)
-        } else if game >= threshold {
-            (Section::PcGames, game)
-        } else {
-            (Section::Applications, (1.0 - game).clamp(0.0, 1.0))
-        }
+pub(super) fn section_from_traits(
+    game: Option<f64>,
+    emulator: Option<f64>,
+    threshold: f64,
+) -> (Section, f64) {
+    let game = game.unwrap_or(0.0);
+    let emulator = emulator.unwrap_or(0.0);
+    if emulator >= threshold {
+        (Section::ConsoleGames, emulator)
+    } else if game >= threshold {
+        (Section::PcGames, game)
+    } else {
+        (Section::Applications, (1.0 - game).clamp(0.0, 1.0))
     }
 }
 
@@ -309,7 +270,7 @@ impl Taxonomy {
 
 #[cfg(test)]
 mod tests {
-    use super::{CategoryDef, Section, Taxonomy};
+    use super::{CategoryDef, Section, Taxonomy, section_from_traits};
 
     #[test]
     fn baseline_is_valid_and_only_covers_applications() {
@@ -337,21 +298,21 @@ mod tests {
     #[test]
     fn traits_split_games_from_emulators_from_apps() {
         assert_eq!(
-            Section::from_traits(Some(0.9), Some(0.1), 0.5).0,
+            section_from_traits(Some(0.9), Some(0.1), 0.5).0,
             Section::PcGames
         );
         assert_eq!(
-            Section::from_traits(Some(0.9), Some(0.8), 0.5).0,
+            section_from_traits(Some(0.9), Some(0.8), 0.5).0,
             Section::ConsoleGames
         );
         // An emulator is a console-game app even when the record forgot to say
         // it is a game.
         assert_eq!(
-            Section::from_traits(Some(0.0), Some(0.9), 0.5).0,
+            section_from_traits(Some(0.0), Some(0.9), 0.5).0,
             Section::ConsoleGames
         );
         assert_eq!(
-            Section::from_traits(Some(0.05), Some(0.0), 0.5).0,
+            section_from_traits(Some(0.05), Some(0.0), 0.5).0,
             Section::Applications
         );
     }

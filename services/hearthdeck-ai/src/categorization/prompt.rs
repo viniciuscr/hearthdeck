@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 
 use super::decision::{AppCategorization, AppTraits, CategoryMatch, DecisionProvenance};
 use super::model::AppProfile;
-use super::taxonomy::{Section, Taxonomy};
+use super::taxonomy::{Section, Taxonomy, section_from_traits};
 
 /// Question ids. Stable because the prompt cache in Laya keys off them.
 pub const Q_GAME: &str = "is_game";
@@ -172,7 +172,7 @@ pub fn interpret(
     let (section, section_confidence) = if game.is_none() && emulator.is_none() {
         (Section::Applications, 0.0)
     } else {
-        Section::from_traits(game, emulator, threshold)
+        section_from_traits(game, emulator, threshold)
     };
 
     let answer = answers.get(Q_CATEGORY);

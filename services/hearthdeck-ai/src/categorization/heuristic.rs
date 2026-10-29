@@ -13,7 +13,7 @@ use super::decision::{
 };
 use super::error::Result;
 use super::model::AppProfile;
-use super::taxonomy::{Section, Taxonomy};
+use super::taxonomy::{Section, Taxonomy, section_from_traits};
 
 /// Probability assigned to a trait a hard rule matched.
 const HARD: f64 = 1.0;
@@ -138,7 +138,7 @@ impl Categorizer for HeuristicCategorizer {
         let game_probability = if is_game { HARD } else { 0.0 };
         let emulator_probability = if emulator { HARD } else { 0.0 };
         let (section, section_confidence) =
-            Section::from_traits(Some(game_probability), Some(emulator_probability), 0.5);
+            section_from_traits(Some(game_probability), Some(emulator_probability), 0.5);
 
         let mut categories = Vec::new();
         let mut needs_category = false;

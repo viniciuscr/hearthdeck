@@ -3462,6 +3462,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hearthdeck-observability",
+ "hearthdeck-protocol",
  "laya-rs",
  "serde",
  "serde_json",

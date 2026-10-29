@@ -18,7 +18,7 @@ use cosmic::theme::{self, TextInput};
 use cosmic::widget::{Id, button, column, container, row, scrollable, space, text, text_input};
 
 use crate::app::Message;
-use crate::app_group::{AppGroup, Section};
+use crate::app_group::{AppGroup, Section, SectionUi};
 use crate::fl;
 use crate::style::{
     FILTER_BUTTON_MIN_WIDTH, ICON_BODY, ICON_SEARCH, SEARCH_WIDTH, TEXT_BODY, TEXT_HEADER,
@@ -304,7 +304,7 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
 #[cfg(test)]
 mod tests {
     use super::{tab_scroll_target, tab_viewport, tab_widths};
-    use crate::app_group::{AppGroup, FilterType, GroupSource, Section};
+    use crate::app_group::{AppGroup, FilterType, GroupSource, Section, SectionUi};
     use crate::style::{FILTER_BUTTON_MIN_WIDTH, content_width, tab_width};
 
     /// The gap the strip's row puts between two tabs, which the follow measures

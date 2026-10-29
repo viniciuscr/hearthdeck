@@ -13,7 +13,7 @@ use cosmic::iced::alignment::Vertical;
 use cosmic::theme;
 use cosmic::widget::{Id, button, column, container, icon, row, space, text};
 
-use crate::app_group::Section;
+use crate::app_group::{Section, SectionUi};
 use crate::fl;
 use crate::style::{
     ICON_BODY, ICON_LARGE, SIDEBAR_ACCENT_BAR_WIDTH, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER,

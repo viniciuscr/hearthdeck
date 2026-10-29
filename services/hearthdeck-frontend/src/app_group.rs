@@ -7,6 +7,7 @@ use cosmic::cosmic_config::{
     CosmicConfigEntry, {self},
 };
 use cosmic::desktop::DesktopEntryData;
+pub use hearthdeck_protocol::Section;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -269,24 +270,18 @@ impl AppGroup {
     }
 }
 
-/// The fixed top-level navigation tabs shown in the sidebar.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Section {
-    PcGames,
-    ConsoleGames,
-    Applications,
-}
-
-impl Section {
-    pub const ALL: [Section; 3] = [
-        Section::PcGames,
-        Section::ConsoleGames,
-        Section::Applications,
-    ];
-
+pub(crate) trait SectionUi {
     /// Icon shown beside the section's name in the sidebar. Named rather than
     /// inlined at the view so the three sections cannot drift apart in style.
-    pub fn icon_name(self) -> &'static str {
+    fn icon_name(self) -> &'static str;
+    fn name(self) -> String;
+    fn index(self) -> usize;
+    fn all_name(self) -> String;
+    fn matches(self, entry: &DesktopEntryData) -> bool;
+}
+
+impl SectionUi for Section {
+    fn icon_name(self) -> &'static str {
         match self {
             Self::PcGames => "applications-games-symbolic",
             Self::ConsoleGames => "input-gaming-symbolic",
@@ -294,7 +289,7 @@ impl Section {
         }
     }
 
-    pub fn name(&self) -> String {
+    fn name(self) -> String {
         match self {
             Section::PcGames => fl!("pc-games"),
             Section::ConsoleGames => fl!("console-games"),
@@ -302,7 +297,7 @@ impl Section {
         }
     }
 
-    pub fn index(&self) -> usize {
+    fn index(self) -> usize {
         match self {
             Section::PcGames => 0,
             Section::ConsoleGames => 1,
@@ -311,7 +306,7 @@ impl Section {
     }
 
     /// Label of the "all" tab for this section.
-    pub fn all_name(&self) -> String {
+    fn all_name(self) -> String {
         match self {
             Section::PcGames | Section::ConsoleGames => fl!("all-games"),
             Section::Applications => fl!("couch-apps"),
@@ -321,7 +316,7 @@ impl Section {
     /// Whether an entry belongs to this section. Games are split between the
     /// PC Games and Console Games sections (console games being emulator
     /// titles), everything else lands in Applications.
-    pub fn matches(&self, entry: &DesktopEntryData) -> bool {
+    fn matches(self, entry: &DesktopEntryData) -> bool {
         let is_game = entry
             .categories
             .iter()
@@ -822,7 +817,9 @@ fn derived_groups(section: Section, entries: &[Arc<DesktopEntryData>]) -> Vec<Ap
 
 #[cfg(test)]
 mod tests {
-    use super::{AppGroup, AppLibraryConfig, FilterType, GroupSource, Section, section_facets};
+    use super::{
+        AppGroup, AppLibraryConfig, FilterType, GroupSource, Section, SectionUi, section_facets,
+    };
     use crate::form_factor::{self, FormFactor};
     use cosmic::desktop::{DesktopEntryData, fde::IconSource};
     use std::collections::BTreeMap;

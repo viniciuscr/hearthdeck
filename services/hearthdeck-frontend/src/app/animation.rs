@@ -12,7 +12,7 @@ use std::time::Instant;
 use cosmic::app::Task;
 use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
 
-use crate::app_group::Section;
+use crate::app_group::{Section, SectionUi};
 use crate::motion::{Eased, Fade, Step};
 use crate::screens::dashboard::{self, backdrop};
 use crate::screens::library::{grid, header};

@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use cosmic::desktop::{DesktopEntryData, fde};
 use serde::{Deserialize, Serialize};
 
+use crate::app_group::SectionUi;
 use crate::icon_cache::{self, IconReference};
 
 /// A provider-agnostic record representing a discovered application or game.

@@ -233,6 +233,19 @@ pub enum ApplicationSource {
     Nix,
 }
 
+/// Top-level library sections shared by categorization results and clients.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Section {
+    PcGames,
+    ConsoleGames,
+    Applications,
+}
+
+impl Section {
+    pub const ALL: [Self; 3] = [Self::PcGames, Self::ConsoleGames, Self::Applications];
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BridgeErrorCode {
@@ -549,9 +562,29 @@ mod tests {
         BridgeResponse, CatalogItem, CategorizationPhase, CategorizationSnapshot,
         CategorizationStatus, Collection, CollectionItem, DiscoveredApplication, HealthResponse,
         HeroicRunner, HostCapabilities, InputMode, InputProfile, ModelStatus, ProviderHealth,
-        ProviderKind, ProviderStatus, RetroGame, RetroGameDetails, RetroRomVersion, ServerEvent,
-        ServerEventKind,
+        ProviderKind, ProviderStatus, RetroGame, RetroGameDetails, RetroRomVersion, Section,
+        ServerEvent, ServerEventKind,
     };
+
+    #[test]
+    fn section_values_keep_their_wire_names_and_order() {
+        let cases = [
+            (Section::PcGames, "\"pc_games\""),
+            (Section::ConsoleGames, "\"console_games\""),
+            (Section::Applications, "\"applications\""),
+        ];
+        assert_eq!(
+            Section::ALL,
+            [
+                Section::PcGames,
+                Section::ConsoleGames,
+                Section::Applications
+            ]
+        );
+        for (section, json) in cases {
+            assert_eq!(serde_json::to_string(&section).unwrap(), json);
+        }
+    }
 
     #[test]
     fn shared_daemon_payloads_keep_their_wire_shape() {
