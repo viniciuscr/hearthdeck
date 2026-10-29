@@ -90,8 +90,7 @@ launchable applications.
 ## Launch
 
 Call `POST /v1/launch/{item_id}` with `hearthdeck:` prefixed onto an ID returned
-by the library endpoint (a bare ID addresses the same record); the legacy
-equivalent is `POST /v1/apps/{id}/launch` with the bare ID. Confirm the
+by the library endpoint (a bare ID addresses the same record). Confirm the
 registered desktop app opens in the active graphical session.
 
 The bridge intentionally re-discovers the desktop ID locally and creates a

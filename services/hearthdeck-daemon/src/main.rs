@@ -1,3 +1,6 @@
+#[cfg(not(target_os = "linux"))]
+compile_error!("hearthdeck-daemon targets Linux only");
+
 mod activity;
 mod api;
 mod auth;
@@ -183,17 +186,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
 fn notify_ready() -> Result<()> {
     sd_notify::notify(&[
         sd_notify::NotifyState::Status("Hearthdeck API listeners ready"),
         sd_notify::NotifyState::Ready,
     ])?;
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn notify_ready() -> Result<()> {
     Ok(())
 }
 
@@ -207,7 +204,6 @@ fn notify_ready() -> Result<()> {
 /// launch and no explanation.
 pub(crate) const DESKTOP_APPS_SOURCE: &str = "desktop-apps";
 
-#[cfg(target_os = "linux")]
 fn discovery_providers(
     config: &Config,
     stremio: stremio::StremioRepository,
@@ -239,16 +235,10 @@ fn discovery_providers(
     ]
 }
 
-#[cfg(target_os = "linux")]
 fn enrichment_providers() -> Vec<Arc<dyn enrichment::MetadataProvider>> {
     vec![Arc::new(
         enrichment::providers::appstream_local::AppStreamLocalProvider::from_system(),
     )]
-}
-
-#[cfg(not(target_os = "linux"))]
-fn enrichment_providers() -> Vec<Arc<dyn enrichment::MetadataProvider>> {
-    Vec::new()
 }
 
 fn request_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Span {

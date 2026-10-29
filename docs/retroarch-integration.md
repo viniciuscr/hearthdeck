@@ -48,8 +48,8 @@ Gamescope-per-launch was removed as it was never shown on hardware).
 ## Current state (baseline, as of this doc)
 
 - RomM: read-only settings plus live console/game browsing
-  (`/v1/retro/consoles`, `/v1/retro/roms`) and dedicated managed launch
-  (`/v1/retro/roms/{id}/launch`). Listing asks RomM to group by metadata id,
+  (`/v1/retro/consoles`, `/v1/retro/roms`) and managed launch of
+  `romm:` item ids through `/v1/launch/{item_id}`. Listing asks RomM to group by metadata id,
   so a game's regions/revisions/discs collapse into one tile whose alternatives
   are offered in the context menu. No catalog materialization or saves.
 - RetroArch: `retroarch` plus a curated set of `libretro-*` cores ship as
@@ -60,9 +60,8 @@ Gamescope-per-launch was removed as it was never shown on hardware).
 - Discovery/catalog: RomM is *not* a `DiscoveryProvider`/`CatalogRecord`
   source (only Heroic and desktop apps are). It is a separate
   direct-proxy surface.
-- Install requests: the host advertises `install_requests: false`, and
-  `POST /v1/install-requests` returns `501` until a privileged approval path
-  exists. No pacman/Flatpak call exists in the daemon or bridge.
+- Install requests: not offered. No pacman/Flatpak call exists in the daemon
+  or bridge.
 
 ## Research findings that shape the decisions below
 
@@ -169,8 +168,8 @@ disagrees.
    tracking (`ApplicationSession`, `ServerEvent`, the bridge protocol) is
    already source-agnostic and doesn't require catalog-table membership, so
    nothing about launching is actually lost by staying out of the catalog.
-   RomM keeps its own dedicated, paginated launch route
-  (`POST /v1/retro/roms/{id}/launch`), reusing the session/bridge
+   RomM ROMs launch through `romm:` item ids on `POST /v1/launch/{item_id}`,
+   reusing the session/bridge
    machinery only. "Feels unified" UX (search, dashboard) stays a
    client-side concern rather than a server-side catalog merge — no server
    storage unification required. (The removed Flutter client blended
@@ -600,10 +599,10 @@ Each phase is scoped to be doable in one sitting and independently useful.
   switch to RetroArch's network command interface for a clean quit first if
   it doesn't.
 - **Phase 4 — Daemon: dedicated retro-launch route. Route DONE,
-  `RemoteLibraryAdapter` not started.** `POST /v1/retro/roms/{id}/launch`
+  `RemoteLibraryAdapter` not started.** `romm:` ids on `POST /v1/launch/{item_id}`
   landed: resolves the launch plan via `retro::prepare_launch`, issues
   `BridgeRequest::LaunchRetroGame`, and reuses `ApplicationSession`/
-  `ServerEvent` tracking exactly like `launch_app` does. No catalog/
+  `ServerEvent` tracking exactly like catalog launches do. No catalog/
   `DiscoveryProvider` work, per decision 6. Still open: the
   `RemoteLibraryAdapter` trait (decision 7) and `RommAdapter`, which would
   replace `list_retro_roms`'s current hardcoded 4-param passthrough with

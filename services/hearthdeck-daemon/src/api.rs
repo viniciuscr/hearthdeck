@@ -55,7 +55,6 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/retro/roms/{id}", get(retro_rom_details))
         .route("/v1/retro/roms/{id}/favorite", post(set_retro_favorite))
         .route("/v1/retro/roms/{id}/backlog", post(set_retro_backlogged))
-        .route("/v1/retro/roms/{id}/launch", post(launch_retro_rom))
         .route("/v1/retro/service/restart", post(restart_romm_service))
         .route("/v1/retro/assets", get(retro_asset))
         .route(
@@ -87,14 +86,9 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/settings", get(get_settings).put(update_settings))
         .route("/v1/discovery/{source_id}/refresh", post(refresh_source))
         .route("/v1/metadata/{provider_id}/refresh", post(refresh_metadata))
-        // One route for every launch kind: the client sends an item id and this
-        // daemon decides what it names. The per-kind routes below stay for the
-        // legacy frontend, which parses the prefixes itself.
         .route("/v1/launch/{item_id}", post(launch_item))
-        .route("/v1/apps/{id}/launch", post(launch_app))
         .route("/v1/sessions/active", get(active_application_session))
         .route("/v1/sessions/{id}/stop", post(stop_application_session))
-        .route("/v1/install-requests", post(request_install))
         .route("/v1/events", get(events))
         .with_state(state)
 }
@@ -146,12 +140,10 @@ fn redact_provider_error(mut provider: ProviderHealth) -> ProviderHealth {
     provider
 }
 
-#[cfg(target_os = "linux")]
 fn host_capabilities() -> HostCapabilities {
     HostCapabilities {
         launch: true,
         application_sessions: true,
-        install_requests: false,
         retro_launch: true,
         // Per-deployment, filled in by `health`.
         categorization: false,
@@ -395,31 +387,12 @@ async fn set_retro_backlogged(
     Ok(Json(BacklogResponse { backlogged }))
 }
 
-/// Launches a RomM ROM through RetroArch. Deliberately not the generic
-/// `/v1/apps/{id}/launch` path: RomM is not a `DiscoveryProvider`/
-/// `CatalogRecord` source (see docs/retroarch-integration.md decision 6),
-/// so this takes RomM's own rom ID directly and reuses only the
-/// source-agnostic session/bridge machinery the generic route also uses.
-async fn launch_retro_rom(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    Path(rom_id): Path<i64>,
-    Query(options): Query<LaunchOptions>,
-) -> Result<Json<ApplicationSession>, ApiError> {
-    authenticate(&state, &headers).await?;
-    launch_retro(&state, rom_id, options.input_profile).await
-}
-
-/// The retro half of a launch, shared by both routes. The capability check
-/// lives here, so no caller can reach a launch this host cannot do.
+/// The retro half of a launch.
 async fn launch_retro(
     state: &SharedState,
     rom_id: i64,
     input_profile: InputProfile,
 ) -> Result<Json<ApplicationSession>, ApiError> {
-    if !host_capabilities().retro_launch {
-        return Err(ApiError::capability_unavailable("retro game launch"));
-    }
     let plan = crate::retro::prepare_launch(&state.settings, &state.config.romm, rom_id)
         .await
         .map_err(ApiError::retro_launch)?;
@@ -1038,16 +1011,6 @@ async fn refresh_metadata(
     }
 }
 
-async fn launch_app(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    Query(options): Query<LaunchOptions>,
-) -> Result<Json<ApplicationSession>, ApiError> {
-    authenticate(&state, &headers).await?;
-    launch_catalog(&state, &id, options.input_profile).await
-}
-
 /// Launches whatever an item id names — the single route a provider-agnostic
 /// client posts to. Which source sits behind the id (a catalog record's own
 /// dispatch, or RomM's launch) stays this daemon's business: the client sends
@@ -1066,18 +1029,14 @@ async fn launch_item(
     }
 }
 
-/// The catalog half of a launch, shared by both routes: resolves the record,
+/// The catalog half of a launch: resolves the record,
 /// decides which launch shape its `source_id` asks the bridge for — desktop
-/// application, Heroic game, or Stremio title — and runs it. The capability
-/// check lives here, so no caller can reach a launch this host cannot do.
+/// application, Heroic game, or Stremio title — and runs it.
 async fn launch_catalog(
     state: &SharedState,
     id: &str,
     input_profile: InputProfile,
 ) -> Result<Json<ApplicationSession>, ApiError> {
-    if !host_capabilities().launch {
-        return Err(ApiError::capability_unavailable("application launch"));
-    }
     let item = state
         .catalog
         .get(id)
@@ -1254,9 +1213,6 @@ async fn active_application_session(
     headers: HeaderMap,
 ) -> Result<Json<Option<ApplicationSession>>, ApiError> {
     authenticate(&state, &headers).await?;
-    if !host_capabilities().application_sessions {
-        return Err(ApiError::capability_unavailable("application sessions"));
-    }
     let response = crate::bridge::request(
         &state.config.bridge_socket_path,
         BridgeRequest::ActiveApplicationSession,
@@ -1277,9 +1233,6 @@ async fn stop_application_session(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     authenticate(&state, &headers).await?;
-    if !host_capabilities().application_sessions {
-        return Err(ApiError::capability_unavailable("application sessions"));
-    }
     let response = crate::bridge::request(
         &state.config.bridge_socket_path,
         BridgeRequest::StopApplicationSession {
@@ -1297,14 +1250,6 @@ async fn stop_application_session(
     // the watcher's next tick.
     crate::activity::play_finished(&state, &id).await;
     Ok(StatusCode::ACCEPTED)
-}
-
-async fn request_install(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
-    Err(ApiError::capability_unavailable("install requests"))
 }
 
 async fn events(
@@ -1925,7 +1870,7 @@ async fn last_played_items(state: &SharedState) -> Result<Vec<CollectionItem>, A
 ///
 /// The ids carry the same `hearthdeck:` prefix the model's rails use. That prefix is
 /// what makes a card launchable: the client strips it and hands the remainder to
-/// `/v1/apps/{id}/launch`, which resolves it against the catalog to find the Stremio
+/// `/v1/launch/{id}`, which resolves it against the catalog to find the Stremio
 /// desktop entry the record carries. Sending the bare catalog id instead leaves the
 /// client's own launch gate refusing it, and the card does nothing when pressed.
 ///
@@ -2243,14 +2188,6 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: error.to_string(),
-            settings: None,
-        }
-    }
-
-    fn capability_unavailable(capability: &str) -> Self {
-        Self {
-            status: StatusCode::NOT_IMPLEMENTED,
-            message: format!("{capability} are unavailable on this host"),
             settings: None,
         }
     }
@@ -2581,7 +2518,7 @@ mod tests {
 
         let (status, launched) = response_json(
             router(state.clone()),
-            Request::post("/v1/apps/stremio:tt0149460/launch?input_profile=desktop")
+            Request::post("/v1/launch/stremio:tt0149460?input_profile=desktop")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -2620,7 +2557,7 @@ mod tests {
         });
         let (status, _) = response_json(
             router(state.clone()),
-            Request::post("/v1/apps/stremio:tt0373074/launch")
+            Request::post("/v1/launch/stremio:tt0373074")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -3298,11 +3235,6 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(health["providers"][0]["id"], "test-apps");
         assert_eq!(health["providers"][0]["status"], "starting");
-        assert!(
-            !health["capabilities"]["install_requests"]
-                .as_bool()
-                .unwrap()
-        );
 
         let rescan = router(state.clone())
             .oneshot(
@@ -3340,18 +3272,6 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(library[0]["id"], "test:app");
 
-        let unsupported_install = router(state.clone())
-            .oneshot(
-                Request::post("/v1/install-requests")
-                    .header("authorization", format!("Bearer {token}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"item_id":"test:app"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(unsupported_install.status(), StatusCode::NOT_IMPLEMENTED);
-
         // Nothing exercised the actual launch endpoints before this: launch
         // dispatch (daemon -> bridge socket -> LaunchAccepted -> response)
         // had zero route-level coverage. `test:app`'s launch_id ("test.app")
@@ -3384,7 +3304,7 @@ mod tests {
         });
         let (status, launched) = response_json(
             router(state.clone()),
-            Request::post("/v1/apps/test:app/launch?input_profile=desktop")
+            Request::post("/v1/launch/test:app?input_profile=desktop")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -3415,7 +3335,7 @@ mod tests {
 
         let launch_unknown_item = router(state)
             .oneshot(
-                Request::post("/v1/apps/does-not-exist/launch")
+                Request::post("/v1/launch/does-not-exist")
                     .header("authorization", format!("Bearer {token}"))
                     .body(Body::empty())
                     .unwrap(),
