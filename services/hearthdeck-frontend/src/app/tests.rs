@@ -86,6 +86,18 @@ fn entry(id: &str, categories: &[&str]) -> Arc<LibraryItem> {
 }
 
 #[test]
+fn an_unchanged_catalog_keeps_the_grid_scroll_position() {
+    let mut app = shell();
+    let entries = vec![entry("game", &["Game"])];
+    let _ = app.update(Message::CatalogLoaded(Ok(entries.clone())));
+    app.grid_scroll_offset = 240.0;
+
+    let _ = app.update(Message::CatalogLoaded(Ok(entries)));
+
+    assert_eq!(app.grid_scroll_offset, 240.0);
+}
+
+#[test]
 fn a_romm_sign_in_reloads_consoles_and_removal_clears_the_url() {
     use crate::providers::daemon::RommSettings;
     use settings::romm::Message as Romm;

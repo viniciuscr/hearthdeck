@@ -1,7 +1,7 @@
 use cosmic::desktop::fde::IconSource;
 
 /// A library entry owned by Hearthdeck, not the desktop shell.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibraryItem {
     pub id: String,
     pub name: String,
