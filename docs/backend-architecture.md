@@ -21,6 +21,11 @@ Freedesktop desktop entries and registered host operations
 background work scheduling. `hearthdeck-bridge` is Linux-only and owns desktop-entry
 discovery plus allowlisted launches inside the active graphical session.
 
+`hearthdeck-protocol` owns the categorization report and its assignment, trait,
+category and failure payloads. The AI crate re-exports these types and keeps the
+scanner, taxonomy and `rail_app_ids` resolution logic. The daemon persists and
+serves the same report type that the frontend reads; the JSON shape is unchanged.
+
 `hearthdeck.target` is the systemd user-session root. It owns the API daemon
 and bridge socket. The bridge is socket-activated, so daemon startup depends on
 the socket existing rather than on a race-prone bridge process startup. Future

@@ -16,7 +16,12 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod categorization;
 pub mod paths;
+pub use categorization::{
+    AppCategorization, AppTraits, CategoryMatch, CategoryProposal, DecisionProvenance, ScanFailure,
+    ScanReport, UnclassifiedApp,
+};
 
 /// Whether a Stremio title is a film or a series.
 ///

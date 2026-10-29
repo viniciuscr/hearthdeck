@@ -77,22 +77,11 @@ struct PairingCompleteResponse {
 
 pub use hearthdeck_protocol::{
     CatalogItem, CategorizationPhase, Collection, CollectionItem, HealthResponse, ModelStatus,
-    RetroGame, RetroGameDetails, RetroRomVersion, ServerEventKind as DaemonEvent,
+    RetroGame, RetroGameDetails, RetroRomVersion, ScanReport, ServerEventKind as DaemonEvent,
 };
 
-/// The daemon's view of the categorization scan, with the report narrowed to [`ScanReport`].
+/// The daemon's categorization state and shared scan report.
 pub type CategorizationSnapshot = hearthdeck_protocol::CategorizationSnapshot<ScanReport>;
-
-/// What one scan concluded. This is a projection: the screen only counts the
-/// candidate tabs and the apps that fit none, so their members are not read.
-#[derive(Clone, Debug, Deserialize)]
-pub struct ScanReport {
-    pub app_count: usize,
-    /// Candidate tabs, best first.
-    pub categories: Vec<serde::de::IgnoredAny>,
-    /// Apps that fit no candidate category: the taxonomy is missing an entry.
-    pub unclassified: Vec<serde::de::IgnoredAny>,
-}
 
 /// The curated collection a details screen toggles for favorites.
 pub const FAVORITES_COLLECTION: &str = "favorites";

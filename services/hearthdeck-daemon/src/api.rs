@@ -10,7 +10,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream};
-use hearthdeck_ai::categorization::{ScanReport, Taxonomy};
+use hearthdeck_ai::categorization::{ScanReport, Taxonomy, rail_app_ids};
 use hearthdeck_protocol::{
     ApplicationSession, BridgeRequest, BridgeResponse, CategorizationSnapshot, Collection,
     CollectionItem, HealthResponse, HeroicRunner, HostCapabilities, InputProfile, ProviderHealth,
@@ -1716,7 +1716,7 @@ async fn modeled_rail_items(
     };
 
     let mut items = Vec::new();
-    for app_id in report.rail_app_ids(&Taxonomy::baseline(), rail_id) {
+    for app_id in rail_app_ids(&report, &Taxonomy::baseline(), rail_id) {
         let (name, icon) = match state.catalog.get(&app_id).await {
             Ok(Some(item)) => (item.title, item.icon),
             // Gone from the catalog since the scan: the client resolves the id

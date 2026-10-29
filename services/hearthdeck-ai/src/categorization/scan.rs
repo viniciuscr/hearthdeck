@@ -8,13 +8,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::Utc;
+pub use hearthdeck_protocol::{CategoryProposal, ScanFailure, ScanReport, UnclassifiedApp};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use super::decision::{AppCategorization, Categorizer};
 use super::error::{Error, Result};
 use super::model::AppProfile;
-use super::taxonomy::{Section, Taxonomy};
+use super::taxonomy::Taxonomy;
 
 /// Progress notification, emitted once per application.
 pub type ProgressCallback = Arc<dyn Fn(ScanProgress) + Send + Sync>;
@@ -52,91 +53,24 @@ pub struct ScanProgress {
     pub app_id: Option<String>,
 }
 
-/// One application the categorizer could not handle. The scan keeps going: a
-/// single bad record must not cost the user their whole library, the same way
-/// one failing discovery provider does not empty the catalog.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ScanFailure {
-    pub app_id: String,
-    pub error: String,
-}
-
-/// An application the model could not place: the signal that the taxonomy needs
-/// a new entry, which is what a human (or a later pass) has to act on.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct UnclassifiedApp {
-    pub app_id: String,
-    pub title: String,
-}
-
-/// A candidate tab and what the scan found for it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CategoryProposal {
-    pub slug: String,
-    pub name: String,
-    pub section: Section,
-    pub app_ids: Vec<String>,
-    pub mean_confidence: f64,
-    /// True when the category clears the membership and confidence bars, i.e.
-    /// when it is worth creating a tab for.
-    pub recommended: bool,
-}
-
-/// Everything one scan produced.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ScanReport {
-    pub generated_at: String,
-    /// Id of the engine that produced the assignments.
-    pub categorizer: String,
-    pub app_count: usize,
-    pub assignments: Vec<AppCategorization>,
-    pub failures: Vec<ScanFailure>,
-    /// Candidate tabs, best first.
-    pub categories: Vec<CategoryProposal>,
-    pub unclassified: Vec<UnclassifiedApp>,
-}
-
-impl ScanReport {
-    /// The apps this report put in the recommended categories that share a
-    /// dashboard rail.
-    ///
-    /// The one place that knows how a rail's members are worked out, so the thing
-    /// that writes the rail and the thing that resolves it cannot disagree. A
-    /// category below the confidence bar does not make a rail: one shaky guess
-    /// is not a reason to put a row on the front door.
-    pub fn rail_app_ids(&self, taxonomy: &Taxonomy, rail_id: &str) -> Vec<String> {
-        let slugs: Vec<&str> = taxonomy
-            .on_rail(rail_id)
-            .map(|category| category.slug.as_str())
-            .collect();
-        let mut app_ids: Vec<String> = Vec::new();
-        for category in &self.categories {
-            if !category.recommended || !slugs.contains(&category.slug.as_str()) {
-                continue;
-            }
-            for app_id in &category.app_ids {
-                // An app two categories of one rail both claim still belongs on
-                // that rail once.
-                if !app_ids.iter().any(|known| known == app_id) {
-                    app_ids.push(app_id.clone());
-                }
+/// Resolve recommended category members using the AI-owned rail taxonomy.
+pub fn rail_app_ids(report: &ScanReport, taxonomy: &Taxonomy, rail_id: &str) -> Vec<String> {
+    let slugs: Vec<&str> = taxonomy
+        .on_rail(rail_id)
+        .map(|category| category.slug.as_str())
+        .collect();
+    let mut app_ids: Vec<String> = Vec::new();
+    for category in &report.categories {
+        if !category.recommended || !slugs.contains(&category.slug.as_str()) {
+            continue;
+        }
+        for app_id in &category.app_ids {
+            if !app_ids.iter().any(|known| known == app_id) {
+                app_ids.push(app_id.clone());
             }
         }
-        app_ids
     }
-
-    /// The categories worth creating a tab for, in recommendation order.
-    pub fn recommended_categories(&self) -> impl Iterator<Item = &CategoryProposal> {
-        self.categories
-            .iter()
-            .filter(|category| category.recommended)
-    }
-
-    pub fn categorizations_for(&self, app_id: &str) -> Option<&AppCategorization> {
-        self.assignments
-            .iter()
-            .find(|assignment| assignment.app_id == app_id)
-    }
+    app_ids
 }
 
 /// Drives a scan over one engine and one taxonomy.
@@ -332,7 +266,7 @@ fn propose_categories(
 
 #[cfg(test)]
 mod tests {
-    use super::{LibraryScanner, ScanOptions, ScanPhase, ScanProgress};
+    use super::{LibraryScanner, ScanOptions, ScanPhase, ScanProgress, rail_app_ids};
     use crate::categorization::decision::Categorizer;
     use crate::categorization::heuristic::HeuristicCategorizer;
     use crate::categorization::model::AppProfile;
@@ -374,7 +308,7 @@ mod tests {
 
         // Netflix is Video & Streaming and VLC is Media Center: two tabs, one
         // rail, because "what is there to watch" is one question to a person.
-        let mut on_rail = report.rail_app_ids(&taxonomy, "watch");
+        let mut on_rail = rail_app_ids(&report, &taxonomy, "watch");
         on_rail.sort();
         assert_eq!(
             on_rail,
@@ -387,7 +321,7 @@ mod tests {
         // a rail is not "everything the scan decided".
         assert!(!on_rail.contains(&"org.gnome.Builder.desktop".to_owned()));
         // A rail nobody declares has no members.
-        assert!(report.rail_app_ids(&taxonomy, "listen").is_empty());
+        assert!(rail_app_ids(&report, &taxonomy, "listen").is_empty());
     }
 
     #[tokio::test]
@@ -479,7 +413,7 @@ mod tests {
         let report = scanner.scan(library()).await.unwrap();
         let taxonomy = crate::categorization::taxonomy::Taxonomy::baseline();
 
-        assert!(report.rail_app_ids(&taxonomy, "watch").is_empty());
+        assert!(rail_app_ids(&report, &taxonomy, "watch").is_empty());
     }
 
     #[tokio::test]
