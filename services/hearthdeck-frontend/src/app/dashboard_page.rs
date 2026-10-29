@@ -5,7 +5,7 @@ use cosmic::widget::Id;
 use cosmic::{Application, theme};
 
 use crate::app::animation::ScrollTarget;
-use crate::app_group::Section;
+use crate::app_group::{Section, SectionUi};
 use crate::fl;
 use crate::providers::daemon::{Collection, NEW_ARRIVALS_COLLECTION};
 use crate::screens::dashboard;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::app_group::{AppGroup, FilterType, GroupSource};
+use crate::app_group::{AppGroup, FilterType, GroupSource, SectionUi};
 use crate::providers::daemon::RetroRomVersion;
 use crate::providers::filter::FacetOption;
 use crate::style::PAGE_TRANSITION_DURATION;

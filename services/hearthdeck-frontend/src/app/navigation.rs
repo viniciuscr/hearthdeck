@@ -6,7 +6,7 @@ use cosmic::app::Task;
 use cosmic::widget::text_input;
 
 use crate::app::animation::ScrollTarget;
-use crate::app_group::Section;
+use crate::app_group::{Section, SectionUi};
 use crate::providers::filter::cycle;
 use crate::screens::dashboard;
 use crate::screens::library::focus::{Chrome, Confirm, Direction, Outcome};
