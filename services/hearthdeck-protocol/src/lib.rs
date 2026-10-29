@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod categorization;
 pub mod paths;
+pub mod sources;
 pub use categorization::{
     AppCategorization, AppTraits, CategoryMatch, CategoryProposal, DecisionProvenance, ScanFailure,
     ScanReport, UnclassifiedApp,

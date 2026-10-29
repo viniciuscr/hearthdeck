@@ -61,6 +61,10 @@ item IDs; the catalog repository atomically replaces only that provider's
 source records. A failed provider cannot delete or overwrite items owned by
 another provider.
 
+Built-in catalog and launch source IDs live in `hearthdeck-protocol::sources`,
+shared by the providers, bridge and frontend. IDs remain strings on the wire and
+in SQLite: the registry accepts additional sources without changing an enum.
+
 ```text
 Provider worker (one bounded queue per source)
   -> provider.discover()

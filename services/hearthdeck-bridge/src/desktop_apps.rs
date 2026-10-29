@@ -22,7 +22,7 @@ use tracing::{debug, info, warn};
 
 use crate::systemd::{LaunchedApplication, launch_with_systemd};
 
-pub(crate) const DESKTOP_APPS_SOURCE: &str = "desktop-apps";
+pub(crate) use hearthdeck_protocol::sources::DESKTOP_APPS as DESKTOP_APPS_SOURCE;
 
 pub(crate) async fn discover_applications(source_id: &str) -> Result<Vec<DiscoveredApplication>> {
     if source_id != DESKTOP_APPS_SOURCE {

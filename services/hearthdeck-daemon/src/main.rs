@@ -202,7 +202,7 @@ fn notify_ready() -> Result<()> {
 /// the provider a record came *from* is not what that request wants: passing it is
 /// refused with "unsupported application source", which reaches the user as a failed
 /// launch and no explanation.
-pub(crate) const DESKTOP_APPS_SOURCE: &str = "desktop-apps";
+pub(crate) use hearthdeck_protocol::sources::DESKTOP_APPS as DESKTOP_APPS_SOURCE;
 
 fn discovery_providers(
     config: &Config,

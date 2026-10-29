@@ -1160,14 +1160,14 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
 
     // Extract source-specific information
     let source = match item.source_id.as_str() {
-        "heroic" => {
+        hearthdeck_protocol::sources::HEROIC => {
             let runner = metadata.get("runner").and_then(|v| v.as_str());
             let store = metadata.get("store").and_then(|v| v.as_str());
             format!("Heroic ({})", store.unwrap_or(runner.unwrap_or("Unknown")))
         }
         "lutris" => "Lutris".to_string(),
         "flatpak" => "Flatpak".to_string(),
-        "desktop-apps" | "desktop" => "System".to_string(),
+        hearthdeck_protocol::sources::DESKTOP_APPS | "desktop" => "System".to_string(),
         _ => item.source_id.clone(),
     };
 

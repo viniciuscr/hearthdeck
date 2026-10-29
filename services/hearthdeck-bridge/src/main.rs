@@ -16,7 +16,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use hearthdeck_protocol::{BridgeErrorCode, BridgeRequest, BridgeResponse, InputProfile};
+use hearthdeck_protocol::{BridgeErrorCode, BridgeRequest, BridgeResponse, InputProfile, sources};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
@@ -171,7 +171,7 @@ async fn stop_other_active_sessions(
 /// Heroic game while Heroic is already the active session - see
 /// `stop_other_active_sessions`'s own docs for why.
 fn should_replace_active_session(new_source_id: &str, active_source_id: &str) -> bool {
-    !(new_source_id == "heroic" && active_source_id == "heroic")
+    !(new_source_id == sources::HEROIC && active_source_id == sources::HEROIC)
 }
 
 async fn handle_request(
@@ -312,7 +312,7 @@ async fn handle_request(
         } => {
             let _transition = session_transition.lock().await;
             if let Err(error) =
-                stop_other_active_sessions("heroic", sessions, session_directory).await
+                stop_other_active_sessions(sources::HEROIC, sessions, session_directory).await
             {
                 warn!(%error, "Heroic game launch rejected");
                 return BridgeResponse::Error {
@@ -339,7 +339,7 @@ async fn handle_request(
                     register_launch(
                         sessions,
                         session_directory,
-                        "heroic".to_owned(),
+                        sources::HEROIC.to_owned(),
                         application_id,
                         HEROIC_SESSION_ID.to_owned(),
                         launched,
@@ -365,7 +365,7 @@ async fn handle_request(
         } => {
             let _transition = session_transition.lock().await;
             if let Err(error) =
-                stop_other_active_sessions("retroarch", sessions, session_directory).await
+                stop_other_active_sessions(sources::RETROARCH, sessions, session_directory).await
             {
                 warn!(%error, "RetroArch game launch rejected");
                 return BridgeResponse::Error {
@@ -385,7 +385,7 @@ async fn handle_request(
                     register_launch(
                         sessions,
                         session_directory,
-                        "retroarch".to_owned(),
+                        sources::RETROARCH.to_owned(),
                         rom_path,
                         session_id,
                         launched,
@@ -505,7 +505,7 @@ async fn sync_managed_input(managed: Option<&ManagedSession>) -> Result<()> {
     let profile = managed
         .map(|managed| managed.input_profile)
         .unwrap_or_default();
-    let retro_osk = managed.is_some_and(|managed| managed.session.source_id == "retroarch");
+    let retro_osk = managed.is_some_and(|managed| managed.session.source_id == sources::RETROARCH);
     input::set_input_profile(profile, retro_osk).await
 }
 

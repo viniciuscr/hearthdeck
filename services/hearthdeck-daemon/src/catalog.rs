@@ -1,3 +1,4 @@
+use hearthdeck_protocol::sources::HEROIC as HEROIC_SOURCE;
 use serde_json::{Map, Value, json};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use tracing::info;
@@ -221,9 +222,6 @@ fn catalog_item_from_row(row: SqliteRow) -> CatalogItem {
         metadata,
     }
 }
-
-/// The provider whose records are the only ones served as games.
-const HEROIC_SOURCE: &str = "heroic";
 
 /// The kind for a record the library plays: a Heroic PC game or a RomM console
 /// game, and nothing else.
