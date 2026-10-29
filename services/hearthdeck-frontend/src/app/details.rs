@@ -290,6 +290,8 @@ fn flag_write_task(client: DaemonClient, write: FlagWrite) -> Task<Message> {
                 icon: None,
                 background: None,
                 logo: None,
+                description: None,
+                played: None,
             };
             let membership = if value {
                 client.add_collection_item(collection, &item).await
