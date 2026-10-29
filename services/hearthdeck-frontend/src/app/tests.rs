@@ -1526,14 +1526,16 @@ fn a_rail_below_the_fold_still_follows_the_cursor_sideways() {
         }
     );
 
-    for _ in 0..5 {
+    // With the smaller tiles, more cards fit the rail: walk past them until
+    // the focused one leaves the rail's view.
+    for _ in 0..8 {
         send(&mut app, GamepadEvent::MoveRight);
     }
 
     assert_eq!(
         app.scrolls.targets(),
         vec![ScrollTarget::Rail(1)],
-        "the fifth card leaves the rail's view, so the rail is the only list moving"
+        "a card past the rail's view moves the rail, and it is the only list moving"
     );
 }
 

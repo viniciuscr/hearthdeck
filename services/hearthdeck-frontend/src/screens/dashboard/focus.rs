@@ -150,7 +150,9 @@ pub fn rail_scroll_target(
 ///
 /// The page is a stack of rails of unequal height, and the rule is the rails'
 /// own: it moves only when the rail the cursor is on would otherwise leave the
-/// visible height, and then it pins that rail to the nearest edge. Clamped to the
+/// visible height. A rail half-on is pinned to the edge it left through; a rail
+/// wholly out of the view brings its top to the top of the view, so it lands in
+/// the same place whichever direction the pad came from. Clamped to the
 /// page's own extent, so the last rail stops at the end instead of scrolling past
 /// it.
 ///
@@ -173,8 +175,11 @@ pub fn page_scroll_target(
     // the row reads from - and stays there.
     let target = if height > viewport {
         top
-    } else if top < offset {
-        // It left through the top.
+    } else if top < offset || top > offset + viewport {
+        // It is wholly out of the view: its top comes up to the top of the view,
+        // whichever side it left through. Pinning the bottom of a rail below the
+        // fold leaves the row above half-on and lands somewhere else from the
+        // way back - which reads as the page snapping around.
         top
     } else if bottom > offset + viewport {
         // It is leaving through the bottom.
@@ -373,6 +378,24 @@ mod tests {
 
         // A rail there is no such thing as has nowhere to scroll to.
         assert_eq!(page_scroll_target(&rails, 3, gap, 0.0, viewport), None);
+    }
+
+    /// A rail that starts below the fold brings its top to the top of the view,
+    /// and lands in the same place whichever direction the pad came from: no
+    /// snap that reads as the page moving back up.
+    #[test]
+    fn a_rail_below_the_fold_brings_its_top_to_the_top_of_the_view() {
+        // Rails of 200 in a 400-tall page: rail 1 starts at 520, below the fold.
+        let rails = [500.0, 200.0, 200.0];
+        let (gap, viewport) = (20.0, 400.0);
+
+        let down = page_scroll_target(&rails, 1, gap, 0.0, viewport).expect("the page moves to it");
+        assert_eq!(down, 520.0);
+        assert_eq!(
+            page_scroll_target(&rails, 1, gap, 800.0, viewport),
+            Some(520.0),
+            "the way back lands in the same place"
+        );
     }
 
     /// A rail taller than the page can never be brought wholly into view - the

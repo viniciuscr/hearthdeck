@@ -263,12 +263,20 @@ pub fn grid_tile_height(tile_width: f32) -> f32 {
 }
 
 /// Square dashboard tiles fill one horizontal row without shifting on focus.
+///
+/// A tile takes only [`DASHBOARD_TILE_SCALE`] of the space a row divides into,
+/// so the rail shows more of itself - and the blank above it grows by the
+/// difference.
 pub fn dashboard_tile_size(window_width: f32, horizontal_padding: u16, tile_gap: u16) -> f32 {
     let available = window_width
         - 2.0 * f32::from(horizontal_padding)
         - (DASHBOARD_VISIBLE_TILES - 1) as f32 * f32::from(tile_gap);
-    (available / DASHBOARD_VISIBLE_TILES as f32).clamp(140.0, 360.0)
+    (available / DASHBOARD_VISIBLE_TILES as f32).clamp(140.0, 360.0) * DASHBOARD_TILE_SCALE
 }
+
+/// How much of the row's space one dashboard tile takes: the tiles are 30%
+/// smaller than the row divides into.
+const DASHBOARD_TILE_SCALE: f32 = 0.7;
 
 /// Console logo tiles are half the size of a full dashboard tile, so the
 /// console rail reads as secondary navigation below Recently Played rather
@@ -1078,18 +1086,15 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_tiles_fit_themed_spacing() {
-        let window_width = 1200.0;
-        // `space_l` horizontal padding and `space_l` gap between tiles, at
-        // libcosmic's default (Standard) density.
-        let padding = 32;
-        let gap = 32;
-        let occupied = DASHBOARD_VISIBLE_TILES as f32
-            * dashboard_tile_size(window_width, padding, gap)
-            + (DASHBOARD_VISIBLE_TILES - 1) as f32 * f32::from(gap)
-            + 2.0 * f32::from(padding);
+    fn dashboard_tiles_are_thirty_percent_smaller_than_the_row_divides() {
+        let (window_width, padding, gap) = (1200.0, 32, 32);
+        let tile = dashboard_tile_size(window_width, padding, gap);
+        let divided = (window_width
+            - 2.0 * f32::from(padding)
+            - (DASHBOARD_VISIBLE_TILES - 1) as f32 * f32::from(gap))
+            / DASHBOARD_VISIBLE_TILES as f32;
 
-        assert!((occupied - window_width).abs() < 0.01);
+        assert!((tile - divided * 0.7).abs() < 0.01, "tile was {tile}");
     }
 
     #[test]
