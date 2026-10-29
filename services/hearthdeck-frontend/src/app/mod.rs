@@ -26,9 +26,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::library_item::LibraryItem;
 use cosmic::app::{Core, Settings, Task};
 use cosmic::cosmic_config::{Config, CosmicConfigEntry};
-use cosmic::desktop::DesktopEntryData;
 use cosmic::iced::Alignment;
 use cosmic::iced::core::keyboard::{Key, key::Named};
 use cosmic::iced::core::widget::operation::focusable::focus;
@@ -134,7 +134,7 @@ pub enum Message {
     Romm(settings::romm::Message),
     /// The catalog fetched from the daemon, rendered as tiles, or why it could
     /// not be.
-    CatalogLoaded(Result<Vec<Arc<DesktopEntryData>>, String>),
+    CatalogLoaded(Result<Vec<Arc<LibraryItem>>, String>),
     /// A page of console records arrived, for the scope and load it was started
     /// for.
     ConsolePageLoaded {
@@ -427,7 +427,7 @@ pub struct App {
     config_store: Option<Config>,
     daemon_client: DaemonClient,
     /// The full catalog as the daemon reported it (PC games and applications).
-    catalog: Vec<Arc<DesktopEntryData>>,
+    catalog: Vec<Arc<LibraryItem>>,
     /// Every console scope's records, a page at a time, as the daemon reports
     /// them, cached per scope with the cursor that extends them.
     console: ConsoleScopes,
@@ -438,7 +438,7 @@ pub struct App {
     /// grid's facets and search are applied by the daemon (see
     /// `fetch_console_page`); every other section is filtered in memory. Kept
     /// in state so `view` stays pure.
-    visible: Vec<Arc<DesktopEntryData>>,
+    visible: Vec<Arc<LibraryItem>>,
     /// The facets the current source offers, and the selection keyed by facet id.
     facets: Vec<Facet>,
     /// The daemon's collections, in the order it composes them. The dashboard's

@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
-use cosmic::desktop::DesktopEntryData;
+use crate::library_item::LibraryItem;
 
 use crate::providers::daemon::RetroRomVersion;
 use crate::screens::library::grid::Metrics;
@@ -81,7 +81,7 @@ impl ConsoleScope {
 /// whole scope, and the offset the page starts at.
 #[derive(Debug, Clone)]
 pub struct Page {
-    pub entries: Vec<Arc<DesktopEntryData>>,
+    pub entries: Vec<Arc<LibraryItem>>,
     /// The version lists of the multi-file entries on this page, keyed by
     /// entry id. They ride along here because this is the last moment they
     /// exist: the record's metadata is dropped when it becomes an entry.
@@ -93,7 +93,7 @@ pub struct Page {
 /// The pages loaded for one scope.
 #[derive(Debug, Default)]
 pub struct ConsoleListing {
-    entries: Vec<Arc<DesktopEntryData>>,
+    entries: Vec<Arc<LibraryItem>>,
     /// Version lists of the multi-file entries loaded so far, keyed by entry
     /// id. The details screen reads them rather than re-deriving them from its
     /// own detail payload, so its disc picker works the moment it opens.
@@ -117,7 +117,7 @@ pub struct ConsoleListing {
 impl ConsoleListing {
     /// The records loaded so far, in the source's own order.
     #[must_use]
-    pub fn entries(&self) -> &[Arc<DesktopEntryData>] {
+    pub fn entries(&self) -> &[Arc<LibraryItem>] {
         &self.entries
     }
 
@@ -256,7 +256,7 @@ impl ConsoleScopes {
     /// The records loaded for `scope` so far, in the source's own order. Empty
     /// for a scope that has never answered.
     #[must_use]
-    pub fn entries(&self, scope: &ConsoleScope) -> &[Arc<DesktopEntryData>] {
+    pub fn entries(&self, scope: &ConsoleScope) -> &[Arc<LibraryItem>] {
         self.scopes.get(scope).map_or(&[], ConsoleListing::entries)
     }
 
@@ -431,7 +431,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use cosmic::desktop::DesktopEntryData;
+    use crate::library_item::LibraryItem;
 
     use super::{
         ConsoleListing, ConsoleScope, ConsoleScopes, Ensure, MAX_NARROWED_SCOPES,
@@ -452,11 +452,11 @@ mod tests {
         }
     }
 
-    fn entry(index: usize) -> Arc<DesktopEntryData> {
-        Arc::new(DesktopEntryData {
+    fn entry(index: usize) -> Arc<LibraryItem> {
+        Arc::new(LibraryItem {
             id: format!("romm:{index}"),
             name: format!("Game {index}"),
-            ..DesktopEntryData::default()
+            ..LibraryItem::default()
         })
     }
 

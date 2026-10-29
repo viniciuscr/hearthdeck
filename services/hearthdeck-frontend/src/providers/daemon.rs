@@ -1151,21 +1151,12 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
         categories.push(store.to_string());
     }
 
-    // Determine if this prefers dGPU based on metadata
-    let prefers_dgpu = metadata
-        .get("prefers_dgpu")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
     GameRecord {
         id: format!("{CATALOG_ENTRY_PREFIX}{}", item.id),
         name: item.title,
         exec: item.launch_id,
         icon: item.icon,
-        path: None,
         categories,
-        terminal: false,
-        prefers_dgpu,
         store: metadata
             .get("store")
             .and_then(|v| v.as_str())
@@ -1211,7 +1202,7 @@ fn retro_rom_query_params(
 }
 
 pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameRecord {
-    // The grid still filters the DesktopEntryData adapter's categories.
+    // The grid still filters the LibraryItem adapter's categories.
     let mut categories = vec!["Game".to_string(), romm_console_category(game.platform_id)];
     categories.extend(game.genres.iter().map(|genre| romm_genre_category(genre)));
     categories.extend(
@@ -1225,10 +1216,7 @@ pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameR
         name: game.title,
         exec: Some(game.id.to_string()),
         icon,
-        path: None,
         categories,
-        terminal: false,
-        prefers_dgpu: false,
         store: None,
         install_source: None,
         modeled_form: None,
@@ -1241,9 +1229,8 @@ pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameR
 /// target, and what the details screen opens on — then every sibling RomM
 /// folded into it, as the disc picker lists them.
 ///
-/// Built here, where the record still carries its metadata: the grid keeps
-/// only `DesktopEntryData`, which has no metadata field. Two files can share
-/// a name, so a repeat gets its id appended to stay distinguishable.
+/// Two files can share a name, so a repeat gets its id appended to stay
+/// distinguishable.
 pub fn retro_version_list(record: &GameRecord) -> Vec<RetroRomVersion> {
     if record.sibling_roms.is_empty() {
         return Vec::new();
@@ -1741,7 +1728,7 @@ mod tests {
             });
 
             assert_eq!(record.modeled_form, modeled_form, "verdict: {verdict}");
-            let entry = record.into_desktop_entry();
+            let entry = record.into_library_item();
             assert_eq!(of(&entry), expected, "id: {id}, verdict: {verdict}");
             assert!(
                 entry
@@ -1885,8 +1872,7 @@ mod tests {
         assert_eq!(record.id, "romm:42");
         assert_eq!(record.exec.as_deref(), Some("42"));
         assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
-        // The console facets read a record's RomM metadata off its categories,
-        // which is the only field `DesktopEntryData` keeps.
+        // Existing console filter values keep their saved category format.
         assert_eq!(
             record.categories,
             vec![
@@ -1976,10 +1962,7 @@ mod tests {
             name: "Metal Gear Solid".to_owned(),
             exec: None,
             icon: None,
-            path: None,
             categories: Vec::new(),
-            terminal: false,
-            prefers_dgpu: false,
             store: None,
             install_source: None,
             modeled_form: None,

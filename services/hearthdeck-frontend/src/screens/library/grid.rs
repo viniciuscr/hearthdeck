@@ -15,8 +15,8 @@
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 
+use crate::library_item::LibraryItem;
 use cosmic::Element;
-use cosmic::desktop::DesktopEntryData;
 use cosmic::iced::ContentFit;
 use cosmic::iced::Length;
 use cosmic::iced::alignment::Vertical;
@@ -174,7 +174,7 @@ pub fn tile_fit() -> ContentFit {
 /// Keyed on the entry rather than on its position, so a tile keeps its identity
 /// while the grid around it changes: entries load, filters narrow, sections
 /// swap.
-pub fn tile_id(entry: &DesktopEntryData) -> Id {
+pub fn tile_id(entry: &LibraryItem) -> Id {
     Id::new(format!("tile-{}", entry.id))
 }
 
@@ -200,7 +200,7 @@ pub fn scroll_to_top() -> cosmic::app::Task<Message> {
 
 /// The catalog to draw and the window to lay it out for.
 pub struct Grid<'a> {
-    pub entries: &'a [Arc<DesktopEntryData>],
+    pub entries: &'a [Arc<LibraryItem>],
     pub window_width: f32,
     /// Where the grid is scrolled to, so only the rows it shows are built.
     pub scroll_offset: f32,
