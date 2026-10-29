@@ -85,8 +85,7 @@ pub struct HealthResponse {
 // Shared with the daemon so the two sides cannot drift on the payloads the client
 // reads in full. Re-exported under their original names for the rest of the crate.
 pub use hearthdeck_protocol::{
-    CatalogItem, CategorizationPhase, CategorizationStatus, HostCapabilities, ModelStatus,
-    RetroRomVersion,
+    CatalogItem, CategorizationPhase, HostCapabilities, ModelStatus, RetroRomVersion,
 };
 
 /// The daemon's view of the categorization scan, with the report narrowed to [`ScanReport`].

@@ -104,15 +104,13 @@ pub fn pressable(action: Action, panel: &Panel<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{Action, Panel, Section, pressable, section};
-    use crate::providers::daemon::{
-        CategorizationPhase, CategorizationSnapshot, CategorizationStatus, ModelStatus,
-    };
+    use crate::providers::daemon::{CategorizationPhase, CategorizationSnapshot, ModelStatus};
 
     /// A categorization answer with nothing but the switch set.
     fn snapshot(enabled: bool) -> CategorizationSnapshot {
         CategorizationSnapshot {
             enabled,
-            status: CategorizationStatus {
+            status: hearthdeck_protocol::CategorizationStatus {
                 running: false,
                 phase: CategorizationPhase::Idle,
                 completed: 0,

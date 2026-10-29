@@ -526,14 +526,12 @@ fn model_line(model: &ModelStatus) -> String {
 mod tests {
     use super::status_line;
     use crate::fl;
-    use crate::providers::daemon::{
-        CategorizationPhase, CategorizationSnapshot, CategorizationStatus, ModelStatus,
-    };
+    use crate::providers::daemon::{CategorizationPhase, CategorizationSnapshot, ModelStatus};
 
     fn snapshot(enabled: bool) -> CategorizationSnapshot {
         CategorizationSnapshot {
             enabled,
-            status: CategorizationStatus {
+            status: hearthdeck_protocol::CategorizationStatus {
                 running: false,
                 phase: CategorizationPhase::Idle,
                 completed: 0,
