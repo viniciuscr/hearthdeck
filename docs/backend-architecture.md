@@ -139,6 +139,11 @@ records from `degraded`; an empty catalog is not a bridge health signal.
   not accept `Exec` strings from the daemon.
 - The bridge socket is created with mode `0600` under the active user's runtime
   directory.
+- Every daemon-to-bridge exchange has a 120-second deadline covering connection,
+  request writes and response reads. Responses must be newline-terminated JSON
+  and fit within 16 MiB including the newline. A timeout is not proof that a
+  launch or stop failed: the bridge may still finish it. Calls are not retried
+  automatically.
 - The API binds to loopback HTTP by default.
 - LAN access requires `HEARTHDECK_LAN_ENABLED=true` and a Rustls certificate/key. It
   serves HTTPS only. Pairing-code creation remains on a separate loopback-only
