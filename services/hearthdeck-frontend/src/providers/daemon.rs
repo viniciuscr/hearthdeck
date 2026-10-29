@@ -75,17 +75,9 @@ struct PairingCompleteResponse {
     token: String,
 }
 
-/// What the frontend reads of the /v1/health reply: what this deployment
-/// provides at all. The rest of the reply is ignored on the way in.
-#[derive(Clone, Debug, Deserialize)]
-pub struct HealthResponse {
-    pub capabilities: HostCapabilities,
-}
-
-// Shared with the daemon so the two sides cannot drift on the payloads the client
-// reads in full. Re-exported under their original names for the rest of the crate.
 pub use hearthdeck_protocol::{
-    CatalogItem, CategorizationPhase, HostCapabilities, ModelStatus, RetroRomVersion,
+    CatalogItem, CategorizationPhase, Collection, CollectionItem, HealthResponse, HostCapabilities,
+    ModelStatus, RetroGame, RetroGameDetails, RetroRomVersion, ServerEventKind as DaemonEvent,
 };
 
 /// The daemon's view of the categorization scan, with the report narrowed to [`ScanReport`].
@@ -100,81 +92,6 @@ pub struct ScanReport {
     pub categories: Vec<serde::de::IgnoredAny>,
     /// Apps that fit no candidate category: the taxonomy is missing an entry.
     pub unclassified: Vec<serde::de::IgnoredAny>,
-}
-
-/// Retro game from the daemon's /v1/retro/roms endpoint.
-#[derive(Clone, Debug, Deserialize)]
-pub struct RetroGame {
-    pub id: i64,
-    pub platform_id: i64,
-    pub title: String,
-    pub summary: Option<String>,
-    pub cover_path: Option<String>,
-    pub screenshot_paths: Vec<String>,
-    pub genres: Vec<String>,
-    pub release_year: Option<i32>,
-    /// Regions RomM matched for this game (`USA`, `Japan`), used by the console
-    /// grid's filter facets.
-    #[serde(default)]
-    pub regions: Vec<String>,
-    /// Other versions of the same game (regions, revisions, or individual
-    /// discs) already collapsed into this entry by the daemon. Empty for a
-    /// single-file game.
-    #[serde(default)]
-    pub sibling_roms: Vec<RetroRomVersion>,
-    /// File-derived label of this entry's own file (the version "Run"
-    /// launches), present only when the game has siblings.
-    #[serde(default)]
-    pub version_label: Option<String>,
-}
-
-/// Full detail for one RomM game, from the daemon's /v1/retro/roms/{id}.
-///
-/// A wider view of the same game the grid already shows: the tile only needs a
-/// cover and a title, while the details screen shows the rest of what RomM
-/// knows. Mirrors only the fields the screen renders — the daemon's response
-/// also carries the resource's own id, title and version list, which the client
-/// already holds in the record that opened the screen, and serde ignores the
-/// difference (as it does for [`RetroGame`]).
-#[derive(Clone, Debug, Deserialize)]
-pub struct RetroGameDetails {
-    /// Platform name RomM resolved, e.g. "Super Nintendo Entertainment
-    /// System".
-    pub platform_name: Option<String>,
-    pub summary: Option<String>,
-    pub cover_path: Option<String>,
-    /// Full-size cover, used as the details screen's hero image.
-    pub cover_large_path: Option<String>,
-    #[serde(default)]
-    pub screenshot_paths: Vec<String>,
-    #[serde(default)]
-    pub genres: Vec<String>,
-    pub player_count: Option<String>,
-    pub release_year: Option<i32>,
-    /// `YYYY-MM-DD` first release, already normalised by the daemon.
-    pub release_date: Option<String>,
-    #[serde(default)]
-    pub regions: Vec<String>,
-    #[serde(default)]
-    pub languages: Vec<String>,
-    /// Region/file tags such as `NA`, often populated where `regions` is not.
-    #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
-    pub companies: Vec<String>,
-    #[serde(default)]
-    pub game_modes: Vec<String>,
-    #[serde(default)]
-    pub age_ratings: Vec<String>,
-    /// Community score out of 100.
-    pub average_rating: Option<f64>,
-    pub file_size_bytes: Option<u64>,
-    /// Whether the game is in the user's RomM favorites.
-    #[serde(default)]
-    pub favorite: bool,
-    /// RomM's per-user "play later" flag.
-    #[serde(default)]
-    pub backlogged: bool,
 }
 
 /// The curated collection a details screen toggles for favorites.
@@ -208,24 +125,6 @@ pub const NEW_ARRIVALS_COLLECTION: &str = "stremio:new-arrivals";
 /// service: the daemon's asset route is loopback and RomM is the user's own.
 const RAIL_ICON_CONCURRENCY: usize = 16;
 
-/// One dashboard rail as the daemon composes it.
-///
-/// Only the fields this client reads are declared: serde ignores the rest, so the
-/// daemon's shape can grow without touching the frontend.
-#[derive(Clone, Debug, Deserialize)]
-pub struct Collection {
-    pub slug: String,
-    /// The label to show when this client does not know the slug, which a
-    /// feature's own categories need: nobody has translated a rail that did not
-    /// exist when the client shipped. The AI's collections arrive this way.
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub items: Vec<CollectionItem>,
-}
-
-/// One rail item, carrying the display name and icon stored with it so a rail can
-/// draw it without resolving the item itself.
 /// A Stremio link the user approves on another device.
 ///
 /// The daemon's answer also carries Stremio's `qr` image URL, and this client does
@@ -295,21 +194,6 @@ pub enum RommLink {
     Linked {
         settings: RommSettings,
     },
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct CollectionItem {
-    pub item_id: String,
-    pub name: String,
-    #[serde(default)]
-    pub icon: Option<String>,
-    /// The title's wide art and wordmark, when the feed gave it one
-    /// (`stremio:new-arrivals` does): what the window's background draws while
-    /// the pad is on the card. A rail card draws `icon` and has none of them.
-    #[serde(default)]
-    pub background: Option<String>,
-    #[serde(default)]
-    pub logo: Option<String>,
 }
 
 /// Response of the daemon's retro favorite write.
@@ -1498,19 +1382,6 @@ pub fn retro_version_list(record: &GameRecord) -> Vec<RetroRomVersion> {
 pub type EventStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// What the daemon says changed. Payloads are dropped: the app re-reads the
-/// affected lists instead of patching them, so only the kind matters.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum DaemonEvent {
-    LibraryChanged,
-    MetadataChanged,
-    ApplicationSessionChanged,
-    CategorizationChanged,
-    #[serde(other)]
-    Unknown,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("connection failed: {0}")]
@@ -1835,8 +1706,7 @@ mod tests {
 
     /// The window's art travels on the item itself, and an item from a
     /// collection that carries none of it is still the item it always was: a
-    /// plain rail card's payload must not have grown a row of nulls. A
-    /// `description` the daemon still sends is read by nobody and parses away.
+    /// plain rail card's payload must not have grown a row of nulls.
     #[test]
     fn an_item_carries_its_art_and_a_plain_item_still_parses() {
         let banner: CollectionItem = serde_json::from_str(
@@ -1875,6 +1745,11 @@ mod tests {
         let resolved = client
             .resolve_rail_icons(vec![Collection {
                 slug: "stremio:new-arrivals".to_owned(),
+                kind: "membership".to_owned(),
+                rule: None,
+                role: String::new(),
+                position: 0,
+                owner: String::new(),
                 name: None,
                 items: vec![CollectionItem {
                     item_id: "hearthdeck:stremio-arrivals:tt1".to_owned(),
@@ -1882,6 +1757,8 @@ mod tests {
                     icon: Some("file:///home/user/art/poster.png".to_owned()),
                     background: Some("file:///home/user/art/background.png".to_owned()),
                     logo: Some("file:///home/user/art/logo.png".to_owned()),
+                    description: None,
+                    played: None,
                 }],
             }])
             .await;
@@ -2053,8 +1930,11 @@ mod tests {
                 title: "Example ROM".to_string(),
                 summary: Some("A console game".to_string()),
                 cover_path: Some("/assets/example.jpg".to_string()),
+                cover_url: None,
                 screenshot_paths: Vec::new(),
+                has_manual: false,
                 genres: vec!["RPG".to_string()],
+                player_count: None,
                 release_year: Some(1994),
                 regions: vec!["Japan".to_string()],
                 sibling_roms: Vec::new(),
@@ -2121,8 +2001,11 @@ mod tests {
                 title: "Shenmue".to_string(),
                 summary: None,
                 cover_path: None,
+                cover_url: None,
                 screenshot_paths: Vec::new(),
+                has_manual: false,
                 genres: Vec::new(),
+                player_count: None,
                 release_year: None,
                 regions: Vec::new(),
                 sibling_roms: vec![

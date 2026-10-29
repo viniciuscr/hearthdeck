@@ -1604,6 +1604,11 @@ fn a_rail_card_draws_the_icon_its_own_item_carries() {
     let rail = |app: &mut App, icon: Option<&str>| {
         let _ = app.update(Message::CollectionsLoaded(Ok(vec![Collection {
             slug: "favorites".to_owned(),
+            kind: "membership".to_owned(),
+            rule: None,
+            role: "favorite".to_owned(),
+            position: 0,
+            owner: "system".to_owned(),
             name: None,
             items: vec![CollectionItem {
                 item_id: "hearthdeck:game-0".to_owned(),
@@ -1611,6 +1616,8 @@ fn a_rail_card_draws_the_icon_its_own_item_carries() {
                 icon: icon.map(str::to_owned),
                 background: None,
                 logo: None,
+                description: None,
+                played: None,
             }],
         }])));
     };
@@ -1790,6 +1797,11 @@ fn a_follow_scroll_is_not_overwritten_by_its_own_reports() {
 fn collection(slug: &str, name: Option<&str>, ids: &[&str]) -> Collection {
     Collection {
         slug: slug.to_owned(),
+        kind: "membership".to_owned(),
+        rule: None,
+        role: String::new(),
+        position: 0,
+        owner: String::new(),
         name: name.map(str::to_owned),
         items: ids
             .iter()
@@ -1799,6 +1811,8 @@ fn collection(slug: &str, name: Option<&str>, ids: &[&str]) -> Collection {
                 icon: None,
                 background: None,
                 logo: None,
+                description: None,
+                played: None,
             })
             .collect(),
     }
@@ -1951,6 +1965,10 @@ use crate::providers::daemon::{
 /// say what this deployment provides without building a whole host.
 fn health(categorization: bool) -> crate::providers::daemon::HealthResponse {
     crate::providers::daemon::HealthResponse {
+        version: String::new(),
+        lan_enabled: false,
+        transport: String::new(),
+        providers: Vec::new(),
         capabilities: crate::providers::daemon::HostCapabilities {
             launch: false,
             application_sessions: false,

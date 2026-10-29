@@ -493,9 +493,8 @@ mod tests {
     }
 
     fn info() -> RetroGameDetails {
-        // Every field is optional on the wire, so an empty object is a legal
-        // answer and the test fills in only what it is about.
-        serde_json::from_str("{}").expect("an empty detail payload is legal")
+        serde_json::from_str(r#"{"id":1,"platform_id":1,"title":"Game"}"#)
+            .expect("a detail payload has its identity")
     }
 
     fn loaded(info: RetroGameDetails) -> RetroDetails {

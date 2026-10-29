@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use hearthdeck_protocol::ApplicationSession;
+pub use hearthdeck_protocol::{ProviderHealth, ProviderKind, ProviderStatus, ServerEvent};
 use tokio::sync::broadcast;
 
 use crate::{
@@ -59,66 +59,37 @@ impl AppState {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderKind {
-    Discovery,
-    Metadata,
+pub fn starting_provider_health(id: &str, kind: ProviderKind) -> ProviderHealth {
+    ProviderHealth {
+        id: id.to_owned(),
+        kind,
+        status: ProviderStatus::Starting,
+        record_count: None,
+        last_attempt_at: None,
+        last_success_at: None,
+        last_error: None,
+    }
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderStatus {
-    Starting,
-    Refreshing,
-    Ready,
-    Degraded,
+pub fn record_provider_started(health: &mut ProviderHealth) {
+    health.status = ProviderStatus::Refreshing;
+    health.last_attempt_at = Some(Utc::now().to_rfc3339());
+    health.last_error = None;
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct ProviderHealth {
-    pub id: String,
-    pub kind: ProviderKind,
-    pub status: ProviderStatus,
-    pub record_count: Option<usize>,
-    pub last_attempt_at: Option<String>,
-    pub last_success_at: Option<String>,
-    pub last_error: Option<String>,
+pub fn record_provider_success(health: &mut ProviderHealth, record_count: usize) {
+    health.status = ProviderStatus::Ready;
+    health.record_count = Some(record_count);
+    let now = Utc::now().to_rfc3339();
+    health.last_attempt_at = Some(now.clone());
+    health.last_success_at = Some(now);
+    health.last_error = None;
 }
 
-impl ProviderHealth {
-    pub fn starting(id: &str, kind: ProviderKind) -> Self {
-        Self {
-            id: id.to_owned(),
-            kind,
-            status: ProviderStatus::Starting,
-            record_count: None,
-            last_attempt_at: None,
-            last_success_at: None,
-            last_error: None,
-        }
-    }
-
-    pub fn record_started(&mut self) {
-        self.status = ProviderStatus::Refreshing;
-        self.last_attempt_at = Some(Utc::now().to_rfc3339());
-        self.last_error = None;
-    }
-
-    pub fn record_success(&mut self, record_count: usize) {
-        self.status = ProviderStatus::Ready;
-        self.record_count = Some(record_count);
-        let now = Utc::now().to_rfc3339();
-        self.last_attempt_at = Some(now.clone());
-        self.last_success_at = Some(now);
-        self.last_error = None;
-    }
-
-    pub fn record_failure(&mut self, error: &anyhow::Error) {
-        self.status = ProviderStatus::Degraded;
-        self.last_attempt_at = Some(Utc::now().to_rfc3339());
-        self.last_error = Some(error.to_string());
-    }
+pub fn record_provider_failure(health: &mut ProviderHealth, error: &anyhow::Error) {
+    health.status = ProviderStatus::Degraded;
+    health.last_attempt_at = Some(Utc::now().to_rfc3339());
+    health.last_error = Some(error.to_string());
 }
 
 impl AppState {
@@ -157,26 +128,36 @@ impl AppState {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[allow(clippy::enum_variant_names)]
-pub enum ServerEvent {
-    LibraryChanged {
-        source_id: String,
-        record_count: usize,
-    },
-    MetadataChanged {
-        provider_id: String,
-        record_count: usize,
-    },
-    ApplicationSessionChanged {
-        session: Option<ApplicationSession>,
-    },
-    CategorizationChanged {
-        categorizer: String,
-        app_count: usize,
-        categories: usize,
-    },
-}
-
 pub type SharedState = Arc<AppState>;
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ProviderKind, ProviderStatus, record_provider_failure, record_provider_started,
+        record_provider_success, starting_provider_health,
+    };
+
+    #[test]
+    fn provider_failure_keeps_the_last_success_and_a_retry_clears_the_error() {
+        let mut health = starting_provider_health("desktop-apps", ProviderKind::Discovery);
+        assert!(matches!(health.status, ProviderStatus::Starting));
+        record_provider_started(&mut health);
+        assert!(matches!(health.status, ProviderStatus::Refreshing));
+        record_provider_success(&mut health, 3);
+        assert!(matches!(health.status, ProviderStatus::Ready));
+        assert_eq!(health.record_count, Some(3));
+        assert!(health.last_success_at.is_some());
+        let last_success = health.last_success_at.clone();
+
+        record_provider_failure(&mut health, &anyhow::anyhow!("provider unavailable"));
+        assert!(matches!(health.status, ProviderStatus::Degraded));
+        assert_eq!(health.last_success_at, last_success);
+        assert_eq!(health.record_count, Some(3));
+        assert_eq!(health.last_error.as_deref(), Some("provider unavailable"));
+
+        record_provider_started(&mut health);
+        assert!(matches!(health.status, ProviderStatus::Refreshing));
+        assert!(health.last_error.is_none());
+        assert_eq!(health.last_success_at, last_success);
+    }
+}

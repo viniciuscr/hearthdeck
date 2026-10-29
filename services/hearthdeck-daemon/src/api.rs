@@ -12,8 +12,9 @@ use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream};
 use hearthdeck_ai::categorization::{ScanReport, Taxonomy};
 use hearthdeck_protocol::{
-    ApplicationSession, BridgeRequest, BridgeResponse, CategorizationSnapshot, HeroicRunner,
-    HostCapabilities, InputProfile, RetroRomVersion, StremioMediaType,
+    ApplicationSession, BridgeRequest, BridgeResponse, CategorizationSnapshot, Collection,
+    CollectionItem, HealthResponse, HeroicRunner, HostCapabilities, InputProfile, ProviderHealth,
+    RetroGame, RetroGameDetails, RetroRomVersion, ServerEvent, StremioMediaType,
 };
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
@@ -24,14 +25,14 @@ use uuid::Uuid;
 use crate::{
     activity::{ActivityEntry, RecentActivity},
     categorizer::{ModelStatus, ScanRequest},
-    collections::{self, Collection, CollectionItem},
+    collections,
     diagnostics::{self, RommGame, RommPlatform, RommQueryError},
     retro::RetroLaunchError,
     romm_link::{self, DeviceOffer, DevicePoll},
     settings::{
         self, BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
     },
-    state::{ProviderHealth, ServerEvent, SharedState},
+    state::SharedState,
     stremio::{self, LinkOffer, LinkPoll, StremioConnection},
 };
 
@@ -110,12 +111,12 @@ async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
     let mut capabilities = host_capabilities();
     capabilities.categorization = state.categorization.is_some();
     Json(HealthResponse {
-        version: env!("CARGO_PKG_VERSION"),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
         lan_enabled: state.config.lan_enabled,
         transport: if state.config.lan_enabled {
-            "https"
+            "https".to_owned()
         } else {
-            "http"
+            "http".to_owned()
         },
         providers: state
             .provider_health()
@@ -1297,15 +1298,6 @@ fn hash_secret(secret: &str) -> String {
 }
 
 #[derive(Serialize)]
-struct HealthResponse {
-    version: &'static str,
-    lan_enabled: bool,
-    transport: &'static str,
-    providers: Vec<ProviderHealth>,
-    capabilities: HostCapabilities,
-}
-
-#[derive(Serialize)]
 struct PairingResponse {
     code: String,
     expires_at: DateTime<Utc>,
@@ -1395,78 +1387,6 @@ struct RetroFacet {
 struct RetroFacetOption {
     value: String,
     label: String,
-}
-
-#[derive(Serialize)]
-struct RetroGame {
-    id: i64,
-    platform_id: i64,
-    title: String,
-    summary: Option<String>,
-    cover_path: Option<String>,
-    cover_url: Option<String>,
-    screenshot_paths: Vec<String>,
-    has_manual: bool,
-    genres: Vec<String>,
-    player_count: Option<String>,
-    release_year: Option<i32>,
-    regions: Vec<String>,
-    /// Other versions of this game (regions, revisions, discs) RomM reported
-    /// in `sibling_roms`. Empty when the game has a single file. The client
-    /// converts this into a version picker and a "multiple versions" badge.
-    sibling_roms: Vec<RetroRomVersion>,
-    /// File-derived label of this entry's *own* file, the version "Run"
-    /// launches. Present only when the game has siblings, so the picker can
-    /// list the current disc alongside the others instead of leaving it
-    /// implicit. `None` for single-file games.
-    version_label: Option<String>,
-}
-
-/// Everything the console-game details screen shows for one ROM.
-///
-/// Deliberately separate from [`RetroGame`]: that struct is returned 48 games
-/// at a time by the list route, so every field added there is paid for on
-/// every tile in the grid, whether or not the game is ever opened. These
-/// fields are read one game at a time.
-#[derive(Serialize)]
-struct RetroGameDetails {
-    id: i64,
-    platform_id: i64,
-    title: String,
-    /// Platform name RomM resolved ("Super Nintendo Entertainment System"),
-    /// so the screen does not need a second lookup against the console list.
-    platform_name: Option<String>,
-    summary: Option<String>,
-    /// The same cover the grid tile shows, kept as a fallback for the hero.
-    cover_path: Option<String>,
-    /// Full-size cover, for the details screen's hero image.
-    cover_large_path: Option<String>,
-    screenshot_paths: Vec<String>,
-    genres: Vec<String>,
-    player_count: Option<String>,
-    release_year: Option<i32>,
-    /// `YYYY-MM-DD` first release, when RomM has one.
-    release_date: Option<String>,
-    regions: Vec<String>,
-    languages: Vec<String>,
-    /// Region/file tags RomM matched, e.g. `NA`. Distinct from `regions`,
-    /// which is RomM's own region metadata and is often empty where this is
-    /// not.
-    tags: Vec<String>,
-    /// Companies, play modes and age ratings as flat labels: the screen shows
-    /// them as chips and does not need RomM's per-source breakdown.
-    companies: Vec<String>,
-    game_modes: Vec<String>,
-    age_ratings: Vec<String>,
-    /// Community score out of 100, merged across sources.
-    average_rating: Option<f64>,
-    file_size_bytes: Option<u64>,
-    sibling_roms: Vec<RetroRomVersion>,
-    version_label: Option<String>,
-    /// Whether the game is in the user's RomM favorites.
-    favorite: bool,
-    /// RomM's per-user "play later" flag.
-    backlogged: bool,
 }
 
 impl From<&RommGame> for RetroGameDetails {
@@ -2273,7 +2193,8 @@ mod tests {
         );
 
         // A provider with no error is left alone.
-        let healthy = ProviderHealth::starting("desktop-apps", ProviderKind::Discovery);
+        let healthy =
+            crate::state::starting_provider_health("desktop-apps", ProviderKind::Discovery);
         assert!(redact_provider_error(healthy).last_error.is_none());
     }
 

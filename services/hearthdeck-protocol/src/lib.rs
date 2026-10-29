@@ -7,11 +7,9 @@
 //!   shell-command field, so remote API input cannot become command execution by
 //!   forwarding it through this boundary.
 //! * The paired-API payloads the daemon serves and the client reads. Only the
-//!   ones with **no projection layer** belong here: a payload the client reads in
-//!   full, or one that drives client behaviour and must never silently drift.
-//!   Response types the client deliberately narrows to the fields it draws stay
-//!   client-side; those tolerate daemon additions because serde ignores unknown
-//!   fields, and sharing them would couple the client to fields it never reads.
+//!   These own the wire shape even when a client draws only part of it. Explicit
+//!   projections, such as event kinds or the categorization report summary, let
+//!   clients ignore payloads they do not need.
 //!
 //! The dependency list stays deliberately small, so every process can link this
 //! crate without pulling in a transport or UI stack.
@@ -250,6 +248,208 @@ pub struct RetroRomVersion {
     pub is_main_sibling: bool,
 }
 
+/// A ROM as returned by the retro library endpoint.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetroGame {
+    pub id: i64,
+    pub platform_id: i64,
+    pub title: String,
+    pub summary: Option<String>,
+    pub cover_path: Option<String>,
+    #[serde(default)]
+    pub cover_url: Option<String>,
+    #[serde(default)]
+    pub screenshot_paths: Vec<String>,
+    #[serde(default)]
+    pub has_manual: bool,
+    #[serde(default)]
+    pub genres: Vec<String>,
+    pub player_count: Option<String>,
+    pub release_year: Option<i32>,
+    #[serde(default)]
+    pub regions: Vec<String>,
+    #[serde(default)]
+    pub sibling_roms: Vec<RetroRomVersion>,
+    #[serde(default)]
+    pub version_label: Option<String>,
+}
+
+/// The full per-ROM response; list-only payloads use [`RetroGame`].
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetroGameDetails {
+    pub id: i64,
+    pub platform_id: i64,
+    pub title: String,
+    pub platform_name: Option<String>,
+    pub summary: Option<String>,
+    pub cover_path: Option<String>,
+    pub cover_large_path: Option<String>,
+    #[serde(default)]
+    pub screenshot_paths: Vec<String>,
+    #[serde(default)]
+    pub genres: Vec<String>,
+    pub player_count: Option<String>,
+    pub release_year: Option<i32>,
+    pub release_date: Option<String>,
+    #[serde(default)]
+    pub regions: Vec<String>,
+    #[serde(default)]
+    pub languages: Vec<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub companies: Vec<String>,
+    #[serde(default)]
+    pub game_modes: Vec<String>,
+    #[serde(default)]
+    pub age_ratings: Vec<String>,
+    pub average_rating: Option<f64>,
+    pub file_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub sibling_roms: Vec<RetroRomVersion>,
+    pub version_label: Option<String>,
+    #[serde(default)]
+    pub favorite: bool,
+    #[serde(default)]
+    pub backlogged: bool,
+}
+
+/// The unauthenticated daemon health response.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HealthResponse {
+    pub version: String,
+    pub lan_enabled: bool,
+    pub transport: String,
+    pub providers: Vec<ProviderHealth>,
+    pub capabilities: HostCapabilities,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    Discovery,
+    Metadata,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderStatus {
+    Starting,
+    Refreshing,
+    Ready,
+    Degraded,
+}
+
+/// Health of one daemon provider, safe to expose from `/v1/health`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProviderHealth {
+    pub id: String,
+    pub kind: ProviderKind,
+    pub status: ProviderStatus,
+    pub record_count: Option<usize>,
+    pub last_attempt_at: Option<String>,
+    pub last_success_at: Option<String>,
+    pub last_error: Option<String>,
+}
+
+/// A play snapshot shared by the activity endpoint and dashboard collections.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ActivityEntry {
+    pub id: String,
+    pub title: String,
+    pub icon: Option<String>,
+    pub categories: Vec<String>,
+    /// Absent only in play snapshots saved before the catalog kind was recorded.
+    #[serde(default)]
+    pub kind: Option<String>,
+    pub source: String,
+    pub metadata: serde_json::Value,
+}
+
+/// A play and its aggregate launch counts.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RecentActivity {
+    #[serde(flatten)]
+    pub entry: ActivityEntry,
+    pub last_launched_at: String,
+    pub launch_count: i64,
+}
+
+/// A composed dashboard collection.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Collection {
+    pub slug: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub position: i64,
+    #[serde(default)]
+    pub owner: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub items: Vec<CollectionItem>,
+}
+
+/// A collection card, optionally carrying artwork and the play it represents.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CollectionItem {
+    pub item_id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub played: Option<RecentActivity>,
+}
+
+/// An event sent to paired clients when daemon state changes.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+// The variant names preserve the event names already used on the wire.
+#[allow(clippy::enum_variant_names)]
+pub enum ServerEvent {
+    LibraryChanged {
+        source_id: String,
+        record_count: usize,
+    },
+    MetadataChanged {
+        provider_id: String,
+        record_count: usize,
+    },
+    ApplicationSessionChanged {
+        session: Option<ApplicationSession>,
+    },
+    CategorizationChanged {
+        categorizer: String,
+        app_count: usize,
+        categories: usize,
+    },
+}
+
+/// Event kinds for clients that refresh state instead of applying event payloads.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+// The variant names preserve the event names already used on the wire.
+#[allow(clippy::enum_variant_names)]
+pub enum ServerEventKind {
+    LibraryChanged,
+    MetadataChanged,
+    ApplicationSessionChanged,
+    CategorizationChanged,
+    #[serde(other)]
+    Unknown,
+}
+
 /// The `/v1/categorization` reply: the user's opt-in, the job, and the last report.
 ///
 /// Generic over the report because the client reads only a summary of it, while
@@ -315,9 +515,181 @@ mod tests {
     use super::{
         ApplicationSession, ApplicationSessionState, ApplicationSource, BridgeRequest,
         BridgeResponse, CatalogItem, CategorizationPhase, CategorizationSnapshot,
-        CategorizationStatus, DiscoveredApplication, HeroicRunner, HostCapabilities, InputProfile,
-        ModelStatus, RetroRomVersion,
+        CategorizationStatus, Collection, CollectionItem, DiscoveredApplication, HealthResponse,
+        HeroicRunner, HostCapabilities, InputProfile, ModelStatus, ProviderHealth, ProviderKind,
+        ProviderStatus, RetroGame, RetroGameDetails, RetroRomVersion, ServerEvent, ServerEventKind,
     };
+
+    #[test]
+    fn shared_daemon_payloads_keep_their_wire_shape() {
+        let health = HealthResponse {
+            version: "1.0".to_owned(),
+            lan_enabled: false,
+            transport: "http".to_owned(),
+            providers: vec![ProviderHealth {
+                id: "desktop-apps".to_owned(),
+                kind: ProviderKind::Discovery,
+                status: ProviderStatus::Ready,
+                record_count: Some(2),
+                last_attempt_at: None,
+                last_success_at: None,
+                last_error: None,
+            }],
+            capabilities: HostCapabilities {
+                launch: true,
+                application_sessions: true,
+                retro_launch: true,
+                categorization: false,
+            },
+        };
+        let health_json = serde_json::to_value(health).unwrap();
+        assert_eq!(health_json["providers"][0]["kind"], "discovery");
+        assert_eq!(health_json["providers"][0]["status"], "ready");
+        assert!(health_json.get("capabilities").is_some());
+
+        let collection = Collection {
+            slug: "favorites".to_owned(),
+            kind: "membership".to_owned(),
+            rule: None,
+            role: "favorite".to_owned(),
+            position: 0,
+            owner: "system".to_owned(),
+            name: None,
+            items: vec![CollectionItem {
+                item_id: "hearthdeck:game-1".to_owned(),
+                name: "Game".to_owned(),
+                icon: None,
+                background: None,
+                logo: None,
+                description: None,
+                played: None,
+            }],
+        };
+        let collection_json = serde_json::to_value(collection).unwrap();
+        assert_eq!(collection_json["kind"], "membership");
+        assert_eq!(collection_json["items"][0]["item_id"], "hearthdeck:game-1");
+        assert!(collection_json["items"][0].get("played").is_none());
+
+        let retro_game = RetroGame {
+            id: 1,
+            platform_id: 2,
+            title: "Game".to_owned(),
+            summary: None,
+            cover_path: None,
+            cover_url: None,
+            screenshot_paths: Vec::new(),
+            has_manual: false,
+            genres: Vec::new(),
+            player_count: None,
+            release_year: None,
+            regions: Vec::new(),
+            sibling_roms: Vec::new(),
+            version_label: None,
+        };
+        let retro_json = serde_json::to_value(retro_game).unwrap();
+        assert_eq!(retro_json["platform_id"], 2);
+        assert_eq!(retro_json["has_manual"], false);
+        let decoded: RetroGame = serde_json::from_value(retro_json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), retro_json);
+    }
+
+    #[test]
+    fn event_projections_match_every_daemon_event_and_tolerate_new_kinds() {
+        let cases = [
+            (
+                ServerEvent::LibraryChanged {
+                    source_id: "romm".to_owned(),
+                    record_count: 2,
+                },
+                "library_changed",
+                ServerEventKind::LibraryChanged,
+            ),
+            (
+                ServerEvent::MetadataChanged {
+                    provider_id: "romm".to_owned(),
+                    record_count: 2,
+                },
+                "metadata_changed",
+                ServerEventKind::MetadataChanged,
+            ),
+            (
+                ServerEvent::ApplicationSessionChanged { session: None },
+                "application_session_changed",
+                ServerEventKind::ApplicationSessionChanged,
+            ),
+            (
+                ServerEvent::CategorizationChanged {
+                    categorizer: "heuristic".to_owned(),
+                    app_count: 2,
+                    categories: 1,
+                },
+                "categorization_changed",
+                ServerEventKind::CategorizationChanged,
+            ),
+        ];
+        for (event, name, kind) in cases {
+            let json = serde_json::to_value(event).unwrap();
+            assert_eq!(json["type"], name);
+            assert_eq!(
+                serde_json::from_value::<ServerEventKind>(json.clone()).unwrap(),
+                kind,
+                "event: {name}"
+            );
+            let decoded: ServerEvent = serde_json::from_value(json.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(decoded).unwrap(),
+                json,
+                "event: {name}"
+            );
+        }
+        assert_eq!(
+            serde_json::from_str::<ServerEventKind>(r#"{"type":"future_event"}"#).unwrap(),
+            ServerEventKind::Unknown
+        );
+    }
+
+    #[test]
+    fn collection_plays_keep_the_activity_endpoints_flattened_shape() {
+        let json = serde_json::json!({
+            "item_id": "desktop:game",
+            "name": "Game",
+            "played": {
+                "id": "desktop:game",
+                "title": "Game",
+                "icon": null,
+                "categories": ["Game"],
+                "source": "desktop",
+                "metadata": {},
+                "last_launched_at": "2026-10-29T12:00:00Z",
+                "launch_count": 2
+            }
+        });
+        let item: CollectionItem = serde_json::from_value(json).unwrap();
+        let played = item.played.as_ref().unwrap();
+        assert_eq!(played.entry.id, "desktop:game");
+        assert_eq!(played.launch_count, 2);
+        assert!(played.entry.kind.is_none());
+        let encoded = serde_json::to_value(item).unwrap();
+        assert_eq!(encoded["played"]["id"], "desktop:game");
+        assert!(encoded["played"].get("entry").is_none());
+        assert!(encoded.get("icon").is_none());
+    }
+
+    #[test]
+    fn retro_details_preserve_identity_and_default_optional_lists_and_flags() {
+        let detail: RetroGameDetails = serde_json::from_str(
+            r#"{"id":42,"platform_id":7,"title":"Game","average_rating":83.5}"#,
+        )
+        .unwrap();
+        assert_eq!(detail.id, 42);
+        assert_eq!(detail.platform_id, 7);
+        assert_eq!(detail.title, "Game");
+        assert_eq!(detail.average_rating, Some(83.5));
+        assert!(detail.sibling_roms.is_empty());
+        assert!(detail.screenshot_paths.is_empty());
+        assert!(!detail.favorite);
+        assert!(!detail.backlogged);
+    }
 
     #[test]
     fn shared_api_payloads_keep_their_wire_names() {

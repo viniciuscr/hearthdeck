@@ -21,7 +21,10 @@ use futures_util::FutureExt;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{error, info, warn};
 
-use crate::state::{ProviderHealth, ProviderKind};
+use crate::state::{
+    ProviderHealth, ProviderKind, record_provider_failure, record_provider_started,
+    record_provider_success, starting_provider_health,
+};
 
 /// The outcome of asking a worker to refresh. Shared by both services; each
 /// re-exports it under the name its callers already use.
@@ -89,7 +92,7 @@ impl WorkerSetBuilder {
         let label = self.label;
         let (sender, mut receiver) = mpsc::channel(1);
         let state = Arc::new(Mutex::new(RefreshState::default()));
-        let health = Arc::new(Mutex::new(ProviderHealth::starting(id, kind)));
+        let health = Arc::new(Mutex::new(starting_provider_health(id, kind)));
         self.workers.insert(
             id,
             Worker {
@@ -114,7 +117,7 @@ impl WorkerSetBuilder {
                     state.queued = false;
                     state.running = true;
                 }
-                worker_health.lock().await.record_started();
+                record_provider_started(&mut *worker_health.lock().await);
                 // A provider is third-party-ish code we do not control (a future
                 // Steam/GOG scraper can misbehave). catch_unwind keeps a panic from
                 // ending this worker task, which would close its channel and leave
@@ -122,15 +125,15 @@ impl WorkerSetBuilder {
                 // reports "already scheduled".
                 match AssertUnwindSafe((run)()).catch_unwind().await {
                     Ok(Ok(record_count)) => {
-                        worker_health.lock().await.record_success(record_count);
+                        record_provider_success(&mut *worker_health.lock().await, record_count);
                     }
                     Ok(Err(error)) => {
-                        worker_health.lock().await.record_failure(&error);
+                        record_provider_failure(&mut *worker_health.lock().await, &error);
                         error!(id, %error, "{label} provider failed");
                     }
                     Err(panic) => {
                         let error = anyhow::anyhow!(panic_message(&panic).to_owned());
-                        worker_health.lock().await.record_failure(&error);
+                        record_provider_failure(&mut *worker_health.lock().await, &error);
                         error!(id, %error, "{label} provider panicked");
                     }
                 }

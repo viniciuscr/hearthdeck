@@ -2,13 +2,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use hearthdeck_protocol::{ApplicationSession, BridgeRequest, BridgeResponse};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use crate::state::{AppState, ServerEvent, SharedState};
+
+pub use hearthdeck_protocol::{ActivityEntry, RecentActivity};
 
 /// How often the daemon looks at the bridge while something is playing.
 ///
@@ -19,32 +19,6 @@ const SESSION_WATCH_INTERVAL: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 pub struct ActivityStore {
     pool: SqlitePool,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct ActivityEntry {
-    pub id: String,
-    pub title: String,
-    pub icon: Option<String>,
-    pub categories: Vec<String>,
-    /// The kind the catalog served the record with: `game` for a PC or console
-    /// game, `application` for a program, or a Stremio media type for a film or
-    /// a series. Stored so the daemon can serve the dashboard's "Recently
-    /// Played" rail as games and only games, and so a client can still tell one
-    /// play from another without provider knowledge.
-    /// `None` only for snapshots written before this field existed.
-    #[serde(default)]
-    pub kind: Option<String>,
-    pub source: String,
-    pub metadata: Value,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct RecentActivity {
-    #[serde(flatten)]
-    pub entry: ActivityEntry,
-    pub last_launched_at: String,
-    pub launch_count: i64,
 }
 
 /// How a play ended, which is also how much is known about it.
