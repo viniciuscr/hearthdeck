@@ -1,4 +1,4 @@
-//! Full-library scan: research, decide, aggregate.
+//! Full-library scan: decide, aggregate.
 //!
 //! This is the unit a service drives. It is deliberately one-shot and owns
 //! nothing long-lived: the caller builds a [`Categorizer`] (loading a checkpoint
@@ -8,14 +8,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::Utc;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use super::decision::{AppCategorization, Categorizer};
 use super::error::{Error, Result};
 use super::model::AppProfile;
-use super::research::AppResearcher;
 use super::taxonomy::{Section, Taxonomy};
 
 /// Progress notification, emitted once per application.
@@ -23,11 +21,6 @@ pub type ProgressCallback = Arc<dyn Fn(ScanProgress) + Send + Sync>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScanOptions {
-    /// Ask the researcher about every application. Off by default: it is the
-    /// only part of a scan that touches the network.
-    pub research: bool,
-    /// How many research lookups may be in flight at once.
-    pub research_concurrency: usize,
     /// Fewest members a category needs before it is recommended as a tab.
     pub min_category_members: usize,
     /// Mean confidence a category needs before it is recommended as a tab.
@@ -37,8 +30,6 @@ pub struct ScanOptions {
 impl Default for ScanOptions {
     fn default() -> Self {
         Self {
-            research: false,
-            research_concurrency: 4,
             min_category_members: 1,
             min_category_confidence: 0.4,
         }
@@ -48,7 +39,6 @@ impl Default for ScanOptions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanPhase {
-    Researching,
     Deciding,
     Aggregating,
 }
@@ -98,9 +88,6 @@ pub struct ScanReport {
     pub generated_at: String,
     /// Id of the engine that produced the assignments.
     pub categorizer: String,
-    /// Id of the researcher, when researching was enabled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub researcher: Option<String>,
     pub app_count: usize,
     pub assignments: Vec<AppCategorization>,
     pub failures: Vec<ScanFailure>,
@@ -155,7 +142,6 @@ impl ScanReport {
 /// Drives a scan over one engine and one taxonomy.
 pub struct LibraryScanner {
     categorizer: Arc<dyn Categorizer>,
-    researcher: Option<Arc<dyn AppResearcher>>,
     taxonomy: Taxonomy,
     options: ScanOptions,
     progress: Option<ProgressCallback>,
@@ -166,7 +152,6 @@ impl LibraryScanner {
     pub fn new(categorizer: Arc<dyn Categorizer>) -> Self {
         Self {
             categorizer,
-            researcher: None,
             taxonomy: Taxonomy::baseline(),
             options: ScanOptions::default(),
             progress: None,
@@ -175,11 +160,6 @@ impl LibraryScanner {
 
     pub fn with_taxonomy(mut self, taxonomy: Taxonomy) -> Self {
         self.taxonomy = taxonomy;
-        self
-    }
-
-    pub fn with_researcher(mut self, researcher: Arc<dyn AppResearcher>) -> Self {
-        self.researcher = Some(researcher);
         self
     }
 
@@ -198,18 +178,7 @@ impl LibraryScanner {
     pub async fn scan(&self, apps: Vec<AppProfile>) -> Result<ScanReport> {
         let started = std::time::Instant::now();
         let app_count = apps.len();
-        let mut apps = apps;
         let mut failures = Vec::new();
-
-        if self.options.research
-            && let Some(researcher) = self.researcher.clone()
-        {
-            info!(
-                researcher = researcher.id(),
-                app_count, "categorizer scan: researching"
-            );
-            failures.extend(self.research_all(&researcher, &mut apps).await);
-        }
 
         let categorizer = self.categorizer.clone();
         let taxonomy = self.taxonomy.clone();
@@ -252,11 +221,6 @@ impl LibraryScanner {
         let report = ScanReport {
             generated_at: Utc::now().to_rfc3339(),
             categorizer: self.categorizer.id().to_owned(),
-            researcher: self
-                .researcher
-                .as_ref()
-                .filter(|_| self.options.research)
-                .map(|researcher| researcher.id().to_owned()),
             app_count,
             assignments,
             failures,
@@ -273,52 +237,6 @@ impl LibraryScanner {
             "categorizer scan complete"
         );
         Ok(report)
-    }
-
-    async fn research_all(
-        &self,
-        researcher: &Arc<dyn AppResearcher>,
-        apps: &mut [AppProfile],
-    ) -> Vec<ScanFailure> {
-        let total = apps.len();
-        let concurrency = self.options.research_concurrency.max(1);
-        let progress = self.progress.clone();
-        let results: Vec<(usize, Result<Option<AppProfile>>)> =
-            futures_util::stream::iter(apps.iter().enumerate().map(|(index, app)| {
-                let researcher = researcher.clone();
-                let progress = progress.clone();
-                async move {
-                    let outcome = researcher.research(app).await;
-                    if let Some(progress) = progress.as_ref() {
-                        progress(ScanProgress {
-                            phase: ScanPhase::Researching,
-                            completed: index + 1,
-                            total,
-                            app_id: Some(app.id.clone()),
-                        });
-                    }
-                    (index, outcome)
-                }
-            }))
-            .buffered(concurrency)
-            .collect()
-            .await;
-
-        let mut failures = Vec::new();
-        for (index, outcome) in results {
-            match outcome {
-                Ok(Some(researched)) => apps[index].merge_research(&researched),
-                Ok(None) => {}
-                Err(error) => {
-                    debug!(app_id = apps[index].id, %error, "research lookup failed");
-                    failures.push(ScanFailure {
-                        app_id: apps[index].id.clone(),
-                        error: error.to_string(),
-                    });
-                }
-            }
-        }
-        failures
     }
 }
 
@@ -418,8 +336,6 @@ mod tests {
     use crate::categorization::decision::Categorizer;
     use crate::categorization::heuristic::HeuristicCategorizer;
     use crate::categorization::model::AppProfile;
-    use crate::categorization::research::AppResearcher;
-    use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
 
     fn library() -> Vec<AppProfile> {
@@ -510,52 +426,6 @@ mod tests {
             phases.lock().unwrap().last().unwrap().0,
             ScanPhase::Aggregating
         );
-    }
-
-    struct FakeResearcher;
-
-    #[async_trait]
-    impl AppResearcher for FakeResearcher {
-        fn id(&self) -> &'static str {
-            "fake"
-        }
-
-        async fn research(
-            &self,
-            app: &AppProfile,
-        ) -> crate::categorization::error::Result<Option<AppProfile>> {
-            if app.id != "com.example.Untagged.desktop" {
-                return Ok(None);
-            }
-            Ok(Some(AppProfile {
-                id: app.id.clone(),
-                title: "Upstream name".to_owned(),
-                summary: Some("A note-taking app".to_owned()),
-                categories: vec!["Office".to_owned()],
-                ..AppProfile::default()
-            }))
-        }
-    }
-
-    #[tokio::test]
-    async fn research_can_rescue_an_untagged_application() {
-        let scanner = LibraryScanner::new(Arc::new(HeuristicCategorizer::new()))
-            .with_researcher(Arc::new(FakeResearcher))
-            .with_options(ScanOptions {
-                research: true,
-                ..ScanOptions::default()
-            });
-
-        let report = scanner.scan(library()).await.unwrap();
-
-        assert_eq!(report.researcher.as_deref(), Some("fake"));
-        assert!(report.unclassified.is_empty());
-        let rescued = report
-            .categorizations_for("com.example.Untagged.desktop")
-            .unwrap();
-        assert_eq!(rescued.categories[0].slug, "productivity");
-        // Research never rewrites installed truth.
-        assert_eq!(rescued.title, "Untagged");
     }
 
     struct Broken;

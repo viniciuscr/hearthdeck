@@ -22,7 +22,6 @@ scan options:
   --model <NAME>      english|multilingual (default english)
   --model-path <DIR>  a local checkpoint directory, so nothing is downloaded
   --dtype <DTYPE>     float32|float16|bfloat16 (default float16)
-  --research          look applications up online before deciding
   --phase-file <PATH> report progress to this file for the parent process";
 
 /// Dispatch to the functionality named by `argv`.

@@ -12,7 +12,7 @@ wgpu = ["libcosmic/wgpu"]
 
 [dependencies]
 # COSMIC framework
-# No `rev`: cosmic-app-list-config (a transitive dep) requires libcosmic from this
+# No `rev`: other pop-os git crates in the tree require libcosmic from this
 # same bare URL, and cargo treats "git+URL" and "git+URL?rev=..." as *different*
 # sources -- pinning a rev here compiles the whole 18-crate libcosmic workspace,
 # including its vendored iced fork, a second time. The exact commit is pinned by
@@ -23,7 +23,6 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
     "winit",
     "wayland",
     "tokio",
-    "single-instance",
     "qr_code",
 ] }
 sctk = { package = "smithay-client-toolkit", version = "0.20.0" }
@@ -56,7 +55,6 @@ clap = { version = "4.5", features = ["derive"] }
 # System integration
 gilrs = "0.11.2"
 nix = { version = "0.30", features = ["fs"] }
-cosmic-app-list-config = { git = "https://github.com/pop-os/cosmic-applets", rev = "1aa03111c5cd92051c9af28b43cb1ee9f43dbb25" }
 
 # iced decodes a cached poster through the `image` crate, and libcosmic enables
 # only its bmp/ico/jpeg/png features. Metahub serves part of the poster catalogue

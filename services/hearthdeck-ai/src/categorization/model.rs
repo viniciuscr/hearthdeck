@@ -36,8 +36,7 @@ impl AppKind {
 ///
 /// This is deliberately a superset of what any single source knows: discovery
 /// fills title, categories and exec, AppStream-style metadata fills summary and
-/// description, and an [`crate::categorization::AppResearcher`] can fill in whatever is
-/// left.
+/// description.
 /// The categorizer never assumes a field is present, because a scan has to run
 /// over a library where most entries are only partially described.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,8 +114,8 @@ impl AppProfile {
         }
     }
 
-    /// The id and exec line, lowercased, as one haystack. Both discovery
-    /// heuristics and a research provider key off this.
+    /// The id and exec line, lowercased, as one haystack. Discovery
+    /// heuristics key off this.
     pub fn signal_terms(&self) -> String {
         format!("{} {}", self.id, self.exec.as_deref().unwrap_or_default()).to_lowercase()
     }
@@ -125,38 +124,6 @@ impl AppProfile {
         self.categories
             .iter()
             .any(|category| category.eq_ignore_ascii_case(name))
-    }
-
-    /// Fold researched fields into this profile without overwriting what
-    /// discovery already established. Discovery data wins because it describes
-    /// what is installed, not what the upstream project publishes.
-    pub fn merge_research(&mut self, other: &AppProfile) {
-        fill(&mut self.summary, &other.summary);
-        fill(&mut self.description, &other.description);
-        fill(&mut self.developer, &other.developer);
-        fill(&mut self.store, &other.store);
-        fill(&mut self.platform, &other.platform);
-        extend_unique(&mut self.categories, &other.categories);
-        extend_unique(&mut self.keywords, &other.keywords);
-        for (key, value) in &other.urls {
-            self.urls
-                .entry(key.clone())
-                .or_insert_with(|| value.clone());
-        }
-    }
-}
-
-fn fill(target: &mut Option<String>, source: &Option<String>) {
-    if target.is_none() {
-        *target = source.clone();
-    }
-}
-
-fn extend_unique(target: &mut Vec<String>, source: &[String]) {
-    for value in source {
-        if !target.iter().any(|existing| existing == value) {
-            target.push(value.clone());
-        }
     }
 }
 
@@ -239,33 +206,5 @@ mod tests {
             profile.urls.get("homepage").map(String::as_str),
             Some("https://netflix.com")
         );
-    }
-
-    #[test]
-    fn research_only_fills_gaps() {
-        let mut profile = AppProfile::new("org.videolan.VLC.desktop", "VLC");
-        profile.summary = Some("Installed copy".to_owned());
-        profile.categories = vec!["AudioVideo".to_owned()];
-
-        let researched = AppProfile {
-            id: "org.videolan.VLC.desktop".to_owned(),
-            title: "VLC media player".to_owned(),
-            summary: Some("Upstream blurb".to_owned()),
-            description: Some("A free and open source media player".to_owned()),
-            developer: Some("VideoLAN".to_owned()),
-            categories: vec!["AudioVideo".to_owned(), "Player".to_owned()],
-            ..AppProfile::default()
-        };
-        profile.merge_research(&researched);
-
-        assert_eq!(profile.summary.as_deref(), Some("Installed copy"));
-        assert_eq!(
-            profile.description.as_deref(),
-            Some("A free and open source media player")
-        );
-        assert_eq!(profile.developer.as_deref(), Some("VideoLAN"));
-        assert_eq!(profile.categories, vec!["AudioVideo", "Player"]);
-        // The upstream title is not installed truth, so it is ignored.
-        assert_eq!(profile.title, "VLC");
     }
 }

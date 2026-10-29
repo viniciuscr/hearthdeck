@@ -108,7 +108,6 @@ pub struct CategorizerSettings {
     /// A local checkpoint directory, so a scan never downloads one.
     pub model_path: Option<PathBuf>,
     pub dtype: String,
-    pub research: bool,
     /// How long the child may run before the daemon kills it.
     ///
     /// A deadlock breaker, not a performance budget: the first scan on a fresh
@@ -179,7 +178,6 @@ impl CategorizerSettings {
             dtype: get("HEARTHDECK_AI_DTYPE")
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "float16".to_owned()),
-            research: flag(get("HEARTHDECK_AI_RESEARCH")),
             timeout: get("HEARTHDECK_AI_TIMEOUT_SECS")
                 .and_then(|value| value.parse::<u64>().ok())
                 .filter(|seconds| *seconds > 0)
@@ -202,10 +200,6 @@ impl CategorizerSettings {
     pub fn report_file(&self) -> PathBuf {
         self.work_dir.join("report.json")
     }
-}
-
-fn flag(value: Option<String>) -> bool {
-    value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
 /// Ceiling on one scan, in the absence of an override. An hour is far more than a
@@ -311,9 +305,6 @@ impl ProcessScanRunner {
         if let Some(path) = &self.settings.model_path {
             arguments.push("--model-path".into());
             arguments.push(path.clone().into_os_string());
-        }
-        if self.settings.research {
-            arguments.push("--research".into());
         }
         arguments
     }
@@ -1056,7 +1047,6 @@ mod tests {
         ScanReport {
             generated_at: "2026-09-23T10:00:00Z".to_owned(),
             categorizer: "fake".to_owned(),
-            researcher: None,
             app_count: 2,
             assignments: Vec::new(),
             failures: Vec::new(),
@@ -1120,7 +1110,6 @@ mod tests {
             model: ScanModel::English,
             model_path: None,
             dtype: "float16".to_owned(),
-            research: false,
             timeout: std::time::Duration::from_secs(60 * 60),
         }
     }
@@ -1234,7 +1223,6 @@ mod tests {
         assert_eq!(settings.engine, ScanEngine::Laya);
         assert_eq!(settings.model, ScanModel::Multilingual);
         assert_eq!(settings.dtype, "float16");
-        assert!(!settings.research);
         assert!(settings.model_path.is_none());
         assert_eq!(
             settings.work_dir,
@@ -1301,7 +1289,6 @@ mod tests {
             model: ScanModel::Multilingual,
             model_path: Some("/models/laya".into()),
             dtype: "float32".to_owned(),
-            research: true,
             timeout: std::time::Duration::from_secs(60 * 60),
         };
         let runner = ProcessScanRunner::new(settings);
@@ -1329,7 +1316,6 @@ mod tests {
                 "float32",
                 "--model-path",
                 "/models/laya",
-                "--research",
             ]
         );
     }

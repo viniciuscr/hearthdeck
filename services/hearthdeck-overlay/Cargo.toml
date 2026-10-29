@@ -8,13 +8,8 @@ description = """
 Quick-menu overlay for the Hearthdeck session (see
 packaging/arch/hearthdeck-session): a full-screen, semi-transparent
 wlr-layer-shell surface built with libcosmic, toggled by a gamepad's
-Guide/Mode button (evdev BTN_MODE). cosmic-comp is a real multi-surface
-Wayland compositor (the same mechanism cosmic-panel/cosmic-launcher
-themselves use), so the overlay is architecturally sound there. UNTESTED
-against a real Linux/Wayland toolchain - first build must happen on real
-hardware.
-
-PKGBUILD builds and installs it for the Hearthdeck session.
+Guide/Mode button (evdev BTN_MODE). PKGBUILD builds and installs it for the
+Hearthdeck session.
 """
 
 [target.'cfg(target_os = "linux")'.dependencies]

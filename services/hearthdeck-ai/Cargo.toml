@@ -14,9 +14,7 @@ cuda = ["laya-rs?/cuda"]
 metal = ["laya-rs?/metal"]
 
 [dependencies]
-async-trait.workspace = true
 chrono.workspace = true
-futures-util.workspace = true
 hearthdeck-observability = { path = "../hearthdeck-observability" }
 laya-rs = { version = "0.1", default-features = false, features = ["hub"], optional = true }
 serde.workspace = true

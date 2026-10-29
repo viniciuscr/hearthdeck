@@ -26,11 +26,6 @@
 # as clang and lld that CI does not install - so it stays a per-machine choice
 # rather than a project requirement.
 /.cargo/
-# hearthdeck-overlay is deliberately its own standalone Cargo workspace (see
-# services/hearthdeck-overlay/Cargo.toml), not a member of services/, so its
-# build output lands in its own nested target/ instead of /services/target/.
-/services/hearthdeck-overlay/target/
-/services/hearthdeck-cosmic-spike/target/
 
 # Arch package build output. makepkg stages the installed layout of every file
 # package() installs under pkg/, unpacks sources under src/, and writes its log
