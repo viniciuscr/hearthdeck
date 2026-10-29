@@ -30,7 +30,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
 use hearthdeck_ai::categorization::{
-    AppKind, AppProfile, HeuristicCategorizer, LibraryScanner, ScanReport, Taxonomy,
+    AppKind, AppProfile, HeuristicCategorizer, LibraryScanner, ScanReport, Taxonomy, rail_app_ids,
 };
 pub use hearthdeck_protocol::{CategorizationPhase, CategorizationStatus, ModelStatus};
 use serde::Deserialize;
@@ -251,7 +251,7 @@ fn rail_collections(report: &ScanReport) -> Vec<OwnedCollection> {
     taxonomy
         .rails()
         .into_iter()
-        .filter(|rail| !report.rail_app_ids(&taxonomy, &rail.id).is_empty())
+        .filter(|rail| !rail_app_ids(report, &taxonomy, &rail.id).is_empty())
         .map(|rail| {
             // The slug and the rule are the same string: a rail is addressed by
             // what it is, and re-creating one under a new slug would orphan the

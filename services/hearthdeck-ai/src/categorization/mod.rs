@@ -65,7 +65,7 @@ pub use heuristic::HeuristicCategorizer;
 pub use model::{AppKind, AppProfile};
 pub use scan::{
     CategoryProposal, LibraryScanner, ScanFailure, ScanOptions, ScanPhase, ScanProgress,
-    ScanReport, UnclassifiedApp,
+    ScanReport, UnclassifiedApp, rail_app_ids,
 };
 pub use taxonomy::{CategoryDef, Section, Taxonomy};
 
