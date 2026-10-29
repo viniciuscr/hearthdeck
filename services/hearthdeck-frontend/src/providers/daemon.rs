@@ -14,6 +14,7 @@ use tokio::sync::OnceCell;
 
 use super::GameRecord;
 use crate::app_group::{romm_console_category, romm_genre_category, romm_region_category};
+use crate::form_factor::FormFactor;
 use crate::icon_cache::{self, IconReference};
 use crate::providers::filter::Facet;
 
@@ -1150,71 +1151,6 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
         categories.push(store.to_string());
     }
 
-    // Extract summary/description for the comment field
-    let comment = metadata
-        .get("summary")
-        .or_else(|| metadata.get("description"))
-        .and_then(|v| v.as_str())
-        .map(String::from);
-
-    // Extract source-specific information
-    let source = match item.source_id.as_str() {
-        hearthdeck_protocol::sources::HEROIC => {
-            let runner = metadata.get("runner").and_then(|v| v.as_str());
-            let store = metadata.get("store").and_then(|v| v.as_str());
-            format!("Heroic ({})", store.unwrap_or(runner.unwrap_or("Unknown")))
-        }
-        "lutris" => "Lutris".to_string(),
-        "flatpak" => "Flatpak".to_string(),
-        hearthdeck_protocol::sources::DESKTOP_APPS | "desktop" => "System".to_string(),
-        _ => item.source_id.clone(),
-    };
-
-    // Build metadata JSON value
-    let mut game_metadata = serde_json::Map::new();
-    if let Some(comment) = comment {
-        game_metadata.insert("comment".to_string(), serde_json::Value::String(comment));
-    }
-    if let Some(developer) = metadata.get("developer").and_then(|v| v.as_str()) {
-        game_metadata.insert(
-            "developer".to_string(),
-            serde_json::Value::String(developer.to_string()),
-        );
-    }
-    if let Some(license) = metadata.get("project_license").and_then(|v| v.as_str()) {
-        game_metadata.insert(
-            "license".to_string(),
-            serde_json::Value::String(license.to_string()),
-        );
-    }
-    if let Some(version) = metadata.get("version").and_then(|v| v.as_str()) {
-        game_metadata.insert(
-            "version".to_string(),
-            serde_json::Value::String(version.to_string()),
-        );
-    }
-    if let Some(store) = metadata.get("store").and_then(|v| v.as_str()) {
-        game_metadata.insert(
-            "store".to_string(),
-            serde_json::Value::String(store.to_string()),
-        );
-    }
-    // Where the application was installed. It travels beside the store and the
-    // license because the entry it becomes drops the metadata that carried it.
-    if let Some(source) = metadata.get("source").and_then(|v| v.as_str()) {
-        game_metadata.insert(
-            "source".to_string(),
-            serde_json::Value::String(source.to_string()),
-        );
-    }
-    // What the categorization model decided, for the form-factor tag.
-    if let Some(form) = metadata.get("form_factor").and_then(|v| v.as_str()) {
-        game_metadata.insert(
-            "form_factor".to_string(),
-            serde_json::Value::String(form.to_string()),
-        );
-    }
-
     // Determine if this prefers dGPU based on metadata
     let prefers_dgpu = metadata
         .get("prefers_dgpu")
@@ -1230,8 +1166,21 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
         categories,
         terminal: false,
         prefers_dgpu,
-        source,
-        metadata: serde_json::Value::Object(game_metadata),
+        store: metadata
+            .get("store")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
+        install_source: metadata
+            .get("source")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
+        modeled_form: match metadata.get("form_factor").and_then(|v| v.as_str()) {
+            Some("couch") => Some(FormFactor::Couch),
+            Some("desktop") => Some(FormFactor::Desktop),
+            _ => None,
+        },
+        sibling_roms: Vec::new(),
+        version_label: None,
     }
 }
 
@@ -1262,10 +1211,7 @@ fn retro_rom_query_params(
 }
 
 pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameRecord {
-    // The filterable metadata a record carries has to travel as categories:
-    // `DesktopEntryData` has no metadata field, and the grid filters on the
-    // converted entry. Built before the metadata map below, which moves the
-    // fields it copies.
+    // The grid still filters the DesktopEntryData adapter's categories.
     let mut categories = vec!["Game".to_string(), romm_console_category(game.platform_id)];
     categories.extend(game.genres.iter().map(|genre| romm_genre_category(genre)));
     categories.extend(
@@ -1273,33 +1219,6 @@ pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameR
             .iter()
             .map(|region| romm_region_category(region)),
     );
-
-    let mut metadata = serde_json::Map::new();
-    if let Some(summary) = game.summary {
-        metadata.insert("comment".to_string(), serde_json::Value::String(summary));
-    }
-    metadata.insert("genres".to_string(), serde_json::json!(game.genres));
-    metadata.insert(
-        "screenshot_paths".to_string(),
-        serde_json::json!(game.screenshot_paths),
-    );
-    if let Some(release_year) = game.release_year {
-        metadata.insert("release_year".to_string(), release_year.into());
-    }
-    // Carried on the record so the context menu can offer each version without
-    // another daemon round-trip. Absent for single-file games.
-    if !game.sibling_roms.is_empty() {
-        metadata.insert(
-            "sibling_roms".to_string(),
-            serde_json::json!(game.sibling_roms),
-        );
-        if let Some(label) = game.version_label {
-            metadata.insert(
-                "version_label".to_string(),
-                serde_json::Value::String(label),
-            );
-        }
-    }
 
     GameRecord {
         id: format!("romm:{}", game.id),
@@ -1310,27 +1229,12 @@ pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameR
         categories,
         terminal: false,
         prefers_dgpu: false,
-        source: "RomM".to_string(),
-        metadata: serde_json::Value::Object(metadata),
+        store: None,
+        install_source: None,
+        modeled_form: None,
+        sibling_roms: game.sibling_roms,
+        version_label: game.version_label,
     }
-}
-
-/// Reads the sibling versions stored in a RomM [`GameRecord`]'s metadata by
-/// [`retro_game_to_game_record`]. Empty for records with no variants.
-pub fn retro_rom_versions(metadata: &serde_json::Value) -> Vec<RetroRomVersion> {
-    metadata
-        .get("sibling_roms")
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default()
-}
-
-/// The current version's file-derived label, stored alongside `sibling_roms`
-/// by [`retro_game_to_game_record`]. `None` for single-file games.
-pub fn retro_version_label(metadata: &serde_json::Value) -> Option<String> {
-    metadata
-        .get("version_label")
-        .and_then(|value| value.as_str())
-        .map(str::to_owned)
 }
 
 /// The files a console record collapsed: the entry's own first — Play's
@@ -1341,11 +1245,10 @@ pub fn retro_version_label(metadata: &serde_json::Value) -> Option<String> {
 /// only `DesktopEntryData`, which has no metadata field. Two files can share
 /// a name, so a repeat gets its id appended to stay distinguishable.
 pub fn retro_version_list(record: &GameRecord) -> Vec<RetroRomVersion> {
-    let siblings = retro_rom_versions(&record.metadata);
-    if siblings.is_empty() {
+    if record.sibling_roms.is_empty() {
         return Vec::new();
     }
-    let mut versions = Vec::with_capacity(siblings.len() + 1);
+    let mut versions = Vec::with_capacity(record.sibling_roms.len() + 1);
     if let Some(current_id) = record
         .id
         .strip_prefix("romm:")
@@ -1353,11 +1256,15 @@ pub fn retro_version_list(record: &GameRecord) -> Vec<RetroRomVersion> {
     {
         versions.push(RetroRomVersion {
             id: current_id,
-            title: retro_version_label(&record.metadata).unwrap_or_else(|| record.name.clone()),
+            title: record
+                .version_label
+                .as_ref()
+                .unwrap_or(&record.name)
+                .clone(),
             is_main_sibling: true,
         });
     }
-    versions.extend(siblings);
+    versions.extend(record.sibling_roms.iter().cloned());
     let mut seen = std::collections::HashSet::new();
     for version in &mut versions {
         if !seen.insert(version.title.clone()) {
@@ -1582,11 +1489,13 @@ pub struct RetroRecordPage {
 
 #[cfg(test)]
 mod tests {
+    use crate::form_factor::{FormFactor, of};
+
     use super::{
         CatalogItem, Collection, CollectionItem, DaemonClient, DaemonConfig, DaemonError,
         DaemonEvent, GameRecord, RetroGame, RetroRomVersion, belongs_in_the_app_library,
         cache_file_name, catalog_item_to_game_record, daemon_error_from_body, image_extension,
-        retro_game_to_game_record, retro_rom_query_params, retro_rom_versions, retro_version_label,
+        retro_game_to_game_record, retro_rom_query_params,
     };
 
     #[tokio::test]
@@ -1787,10 +1696,6 @@ mod tests {
         assert!(belongs_in_the_app_library(&item("")));
     }
 
-    /// Where an application was installed reaches the converted record. The
-    /// entry the record becomes drops the catalog's metadata, so the origin has
-    /// to be copied onto it the way the store and the license are - otherwise
-    /// the library has nothing to filter applications by.
     #[test]
     fn an_applications_source_reaches_the_record() {
         let item = CatalogItem {
@@ -1805,7 +1710,67 @@ mod tests {
 
         let record = catalog_item_to_game_record(item);
 
-        assert_eq!(record.metadata["source"], "flatpak");
+        assert_eq!(record.install_source.as_deref(), Some("flatpak"));
+    }
+
+    #[test]
+    fn catalog_form_verdicts_keep_the_promotion_only_rule() {
+        for (id, verdict, modeled_form, expected) in [
+            (
+                "org.gimp.GIMP",
+                "couch",
+                Some(FormFactor::Couch),
+                FormFactor::Couch,
+            ),
+            (
+                "net.stremio.Stremio",
+                "desktop",
+                Some(FormFactor::Desktop),
+                FormFactor::Couch,
+            ),
+            ("org.gimp.GIMP", "unknown", None, FormFactor::Desktop),
+        ] {
+            let record = catalog_item_to_game_record(CatalogItem {
+                id: id.to_owned(),
+                source_id: hearthdeck_protocol::sources::DESKTOP_APPS.to_owned(),
+                title: id.to_owned(),
+                kind: "application".to_owned(),
+                launch_id: None,
+                icon: None,
+                metadata: serde_json::json!({"source": "flatpak", "form_factor": verdict}),
+            });
+
+            assert_eq!(record.modeled_form, modeled_form, "verdict: {verdict}");
+            let entry = record.into_desktop_entry();
+            assert_eq!(of(&entry), expected, "id: {id}, verdict: {verdict}");
+            assert!(
+                entry
+                    .categories
+                    .contains(&"hearthdeck-source:flatpak".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn optional_catalog_fields_keep_their_tolerant_defaults() {
+        for metadata in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"store": [], "source": false, "form_factor": 42}),
+        ] {
+            let record = catalog_item_to_game_record(CatalogItem {
+                id: "example".to_owned(),
+                source_id: "custom".to_owned(),
+                title: "Example".to_owned(),
+                kind: "application".to_owned(),
+                launch_id: None,
+                icon: None,
+                metadata: metadata.clone(),
+            });
+            assert_eq!(record.store, None, "metadata: {metadata}");
+            assert_eq!(record.install_source, None, "metadata: {metadata}");
+            assert_eq!(record.modeled_form, None, "metadata: {metadata}");
+        }
     }
 
     #[test]
@@ -1855,15 +1820,10 @@ mod tests {
         assert_eq!(record.name, "Test App");
         assert_eq!(record.exec, Some("test.app".to_string()));
         assert_eq!(record.categories, vec!["Utility"]);
-        assert_eq!(record.source, "System");
-        assert_eq!(
-            record.metadata["comment"],
-            serde_json::Value::String("A test application".to_string())
-        );
     }
 
     #[test]
-    fn heroic_items_show_runner_and_store() {
+    fn heroic_items_keep_the_store_for_filtering() {
         let item = CatalogItem {
             id: "heroic:epic:Fortnite".to_string(),
             source_id: "heroic".to_string(),
@@ -1879,9 +1839,8 @@ mod tests {
 
         let record = catalog_item_to_game_record(item);
 
-        assert_eq!(record.source, "Heroic (Epic)");
         assert_eq!(record.categories, vec!["Game", "Epic"]);
-        assert_eq!(record.metadata["store"], "Epic");
+        assert_eq!(record.store.as_deref(), Some("Epic"));
     }
 
     #[test]
@@ -1899,7 +1858,6 @@ mod tests {
         let record = catalog_item_to_game_record(item);
 
         assert!(record.exec.is_none());
-        assert_eq!(record.source, "Flatpak");
     }
 
     #[test]
@@ -1927,8 +1885,6 @@ mod tests {
         assert_eq!(record.id, "romm:42");
         assert_eq!(record.exec.as_deref(), Some("42"));
         assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
-        assert_eq!(record.metadata["genres"], serde_json::json!(["RPG"]));
-        assert_eq!(record.metadata["release_year"], serde_json::json!(1994));
         // The console facets read a record's RomM metadata off its categories,
         // which is the only field `DesktopEntryData` keeps.
         assert_eq!(
@@ -1974,7 +1930,7 @@ mod tests {
     }
 
     #[test]
-    fn romm_sibling_versions_round_trip_through_record_metadata() {
+    fn romm_sibling_versions_reach_the_record_without_json_conversion() {
         let record = retro_game_to_game_record(
             RetroGame {
                 id: 42,
@@ -2006,18 +1962,15 @@ mod tests {
             None,
         );
 
-        let versions = retro_rom_versions(&record.metadata);
+        let versions = &record.sibling_roms;
         assert_eq!(versions.len(), 2);
         assert_eq!(versions[0].id, 43);
         assert!(versions[0].is_main_sibling);
         assert_eq!(versions[1].title, "Shenmue (Disc 3)");
-        assert_eq!(
-            retro_version_label(&record.metadata).as_deref(),
-            Some("Shenmue (Disc 1)")
-        );
+        assert_eq!(record.version_label.as_deref(), Some("Shenmue (Disc 1)"));
     }
 
-    fn record_with_siblings(metadata: serde_json::Value) -> GameRecord {
+    fn record_with_siblings(label: Option<&str>, sibling_roms: Vec<RetroRomVersion>) -> GameRecord {
         GameRecord {
             id: "romm:42".to_owned(),
             name: "Metal Gear Solid".to_owned(),
@@ -2027,19 +1980,24 @@ mod tests {
             categories: Vec::new(),
             terminal: false,
             prefers_dgpu: false,
-            source: "RomM".to_owned(),
-            metadata,
+            store: None,
+            install_source: None,
+            modeled_form: None,
+            sibling_roms,
+            version_label: label.map(str::to_owned),
         }
     }
 
     #[test]
     fn the_version_list_puts_the_records_own_file_first() {
-        let record = record_with_siblings(serde_json::json!({
-            "version_label": "Disc 1",
-            "sibling_roms": [
-                {"id": 43, "title": "Disc 2", "is_main_sibling": false}
-            ],
-        }));
+        let record = record_with_siblings(
+            Some("Disc 1"),
+            vec![RetroRomVersion {
+                id: 43,
+                title: "Disc 2".to_owned(),
+                is_main_sibling: false,
+            }],
+        );
         let versions = super::retro_version_list(&record);
         let listed: Vec<(i64, &str, bool)> = versions
             .iter()
@@ -2054,7 +2012,7 @@ mod tests {
 
     #[test]
     fn a_single_file_game_has_no_version_list() {
-        let record = record_with_siblings(serde_json::json!({}));
+        let record = record_with_siblings(None, Vec::new());
         assert!(
             super::retro_version_list(&record).is_empty(),
             "nothing to pick between means no picker either",
@@ -2063,13 +2021,21 @@ mod tests {
 
     #[test]
     fn two_files_sharing_a_name_stay_distinguishable() {
-        let record = record_with_siblings(serde_json::json!({
-            "version_label": "Game",
-            "sibling_roms": [
-                {"id": 43, "title": "Game", "is_main_sibling": false},
-                {"id": 44, "title": "Game", "is_main_sibling": false}
+        let record = record_with_siblings(
+            Some("Game"),
+            vec![
+                RetroRomVersion {
+                    id: 43,
+                    title: "Game".to_owned(),
+                    is_main_sibling: false,
+                },
+                RetroRomVersion {
+                    id: 44,
+                    title: "Game".to_owned(),
+                    is_main_sibling: false,
+                },
             ],
-        }));
+        );
         let titles: Vec<String> = super::retro_version_list(&record)
             .into_iter()
             .map(|version| version.title)

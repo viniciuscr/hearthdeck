@@ -3,17 +3,17 @@ pub mod filter;
 
 use std::path::PathBuf;
 
-use cosmic::desktop::{DesktopEntryData, fde};
-use serde::{Deserialize, Serialize};
-
 use crate::app_group::SectionUi;
+use crate::form_factor::FormFactor;
 use crate::icon_cache::{self, IconReference};
+use cosmic::desktop::{DesktopEntryData, fde};
+use hearthdeck_protocol::RetroRomVersion;
 
 /// A provider-agnostic record representing a discovered application or game.
 ///
-/// Providers produce `Vec<GameRecord>`. The app converts these into
-/// `DesktopEntryData` for display alongside XDG `.desktop` entries.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The daemon adapter builds these before the app converts them into
+/// `DesktopEntryData` for display.
+#[derive(Debug, Clone)]
 pub struct GameRecord {
     /// Unique identifier, prefixed by source (e.g. `"heroic:epic:Fortnite"`).
     pub id: String,
@@ -24,10 +24,11 @@ pub struct GameRecord {
     pub categories: Vec<String>,
     pub terminal: bool,
     pub prefers_dgpu: bool,
-    /// Which provider discovered this record.
-    pub source: String,
-    /// Provider-specific metadata (store name, runner, version, etc.).
-    pub metadata: serde_json::Value,
+    pub store: Option<String>,
+    pub install_source: Option<String>,
+    pub modeled_form: Option<FormFactor>,
+    pub sibling_roms: Vec<RetroRomVersion>,
+    pub version_label: Option<String>,
 }
 
 impl GameRecord {
@@ -37,12 +38,7 @@ impl GameRecord {
             .categories
             .iter()
             .any(|category| category.eq_ignore_ascii_case("game"));
-        if is_game
-            && let Some(store) = self
-                .metadata
-                .get("store")
-                .and_then(serde_json::Value::as_str)
-        {
+        if is_game && let Some(store) = &self.store {
             self.categories
                 .retain(|category| !category.eq_ignore_ascii_case(store));
             self.categories.push(format!("hearthdeck-store:{store}"));
@@ -79,26 +75,13 @@ impl GameRecord {
             prefers_dgpu: self.prefers_dgpu,
             terminal: self.terminal,
         };
-        let modeled_couch = self
-            .metadata
-            .get("form_factor")
-            .and_then(serde_json::Value::as_str)
-            == Some("couch");
-        // Where the library got this record, for the section that filters by it.
-        // Read here rather than inside the tag, because the streaming tag is
-        // derived from the finished entry.
-        let source = self
-            .metadata
-            .get("source")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned);
-        crate::app_group::tag_source(&mut entry, source.as_deref());
+        crate::app_group::tag_source(&mut entry, self.install_source.as_deref());
         if crate::app_group::Section::Applications.matches(&entry) {
             crate::form_factor::tag(&mut entry);
             // A model can only promote: what it calls desktop-only is what the
             // rules already said, and its doubt must not demote a streaming client.
-            if modeled_couch {
-                crate::form_factor::set(&mut entry, crate::form_factor::FormFactor::Couch);
+            if self.modeled_form == Some(FormFactor::Couch) {
+                crate::form_factor::set(&mut entry, FormFactor::Couch);
             }
         }
         entry
@@ -107,7 +90,7 @@ impl GameRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::GameRecord;
+    use super::{FormFactor, GameRecord};
     use cosmic::desktop::fde::IconSource;
 
     fn record(icon: Option<&str>) -> GameRecord {
@@ -120,8 +103,11 @@ mod tests {
             categories: vec!["Utility".into()],
             terminal: false,
             prefers_dgpu: false,
-            source: "test".into(),
-            metadata: serde_json::Value::Null,
+            store: None,
+            install_source: None,
+            modeled_form: None,
+            sibling_roms: Vec::new(),
+            version_label: None,
         }
     }
 
@@ -182,7 +168,7 @@ mod tests {
     fn game_store_becomes_a_tab_category() {
         let mut game = record(None);
         game.categories = vec!["Game".into(), "Epic Games".into()];
-        game.metadata = serde_json::json!({"store": "Epic Games"});
+        game.store = Some("Epic Games".into());
 
         assert_eq!(
             game.into_desktop_entry().categories,
@@ -193,7 +179,7 @@ mod tests {
     #[test]
     fn an_application_carries_where_it_was_installed() {
         let mut application = record(None);
-        application.metadata = serde_json::json!({"source": "flatpak"});
+        application.install_source = Some("flatpak".into());
 
         assert_eq!(
             application.into_desktop_entry().categories,
@@ -209,26 +195,20 @@ mod tests {
     /// doubt about one the rules already know is no reason to demote it.
     #[test]
     fn a_model_verdict_can_promote_an_application_but_never_demote_one() {
-        let categories = |metadata: serde_json::Value, id: &str| {
+        let categories = |form: FormFactor, id: &str| {
             let mut application = record(None);
             application.id = id.into();
-            application.metadata = metadata;
+            application.modeled_form = Some(form);
             application.into_desktop_entry().categories
         };
 
         assert!(
-            categories(
-                serde_json::json!({"form_factor": "couch"}),
-                "org.gimp.GIMP.desktop"
-            )
-            .contains(&"hearthdeck-form:couch".to_owned())
+            categories(FormFactor::Couch, "org.gimp.GIMP.desktop")
+                .contains(&"hearthdeck-form:couch".to_owned())
         );
         assert!(
-            categories(
-                serde_json::json!({"form_factor": "desktop"}),
-                "net.stremio.Stremio.desktop"
-            )
-            .contains(&"hearthdeck-form:couch".to_owned())
+            categories(FormFactor::Desktop, "net.stremio.Stremio.desktop")
+                .contains(&"hearthdeck-form:couch".to_owned())
         );
     }
 
@@ -239,7 +219,7 @@ mod tests {
         let mut client = record(None);
         client.id = "hearthdeck:desktop:net.stremio.Stremio.desktop".into();
         client.categories = vec!["Video".into()];
-        client.metadata = serde_json::json!({"source": "flatpak"});
+        client.install_source = Some("flatpak".into());
 
         assert_eq!(
             client.into_desktop_entry().categories,
