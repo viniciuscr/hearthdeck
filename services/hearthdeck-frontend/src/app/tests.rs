@@ -1969,7 +1969,7 @@ fn health(categorization: bool) -> crate::providers::daemon::HealthResponse {
         lan_enabled: false,
         transport: String::new(),
         providers: Vec::new(),
-        capabilities: crate::providers::daemon::HostCapabilities {
+        capabilities: hearthdeck_protocol::HostCapabilities {
             launch: false,
             application_sessions: false,
             retro_launch: false,

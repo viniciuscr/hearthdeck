@@ -76,8 +76,8 @@ struct PairingCompleteResponse {
 }
 
 pub use hearthdeck_protocol::{
-    CatalogItem, CategorizationPhase, Collection, CollectionItem, HealthResponse, HostCapabilities,
-    ModelStatus, RetroGame, RetroGameDetails, RetroRomVersion, ServerEventKind as DaemonEvent,
+    CatalogItem, CategorizationPhase, Collection, CollectionItem, HealthResponse, ModelStatus,
+    RetroGame, RetroGameDetails, RetroRomVersion, ServerEventKind as DaemonEvent,
 };
 
 /// The daemon's view of the categorization scan, with the report narrowed to [`ScanReport`].
