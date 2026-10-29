@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use futures::{StreamExt, future::join_all, stream};
 use hearthdeck_protocol::{ApplicationSession, InputProfile};
 use serde::{Deserialize, Serialize};
@@ -13,7 +12,7 @@ use std::{
 };
 use tokio::sync::OnceCell;
 
-use super::{GameProvider, GameRecord};
+use super::GameRecord;
 use crate::app_group::{romm_console_category, romm_genre_category, romm_region_category};
 use crate::icon_cache::{self, IconReference};
 use crate::providers::filter::Facet;
@@ -1419,39 +1418,19 @@ fn daemon_error_from_body(status: reqwest::StatusCode, body: &[u8]) -> DaemonErr
     }
 }
 
-/// A provider that fetches games/apps from the HearthDeck daemon.
-pub struct DaemonProvider {
-    client: DaemonClient,
-}
-
-impl DaemonProvider {
-    /// Creates a new daemon provider with an existing client.
-    pub fn with_client(client: DaemonClient) -> Self {
-        Self { client }
-    }
-}
-
-#[async_trait]
-impl GameProvider for DaemonProvider {
-    async fn discover(&self) -> anyhow::Result<Vec<GameRecord>> {
-        let items = self
-            .client
-            .fetch_library()
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to fetch library: {}", e))?;
+impl DaemonClient {
+    /// Fetch library entries with their icons resolved before display.
+    ///
+    /// # Errors
+    /// Returns the original [`DaemonError`] if fetching the catalog fails.
+    pub async fn fetch_library_records(&self) -> Result<Vec<GameRecord>, DaemonError> {
+        let items = self.fetch_library().await?;
 
         log::info!("fetched {} catalog items from daemon", items.len());
 
-        let items = join_all(items.into_iter().map(|mut item| {
-            let client = self.client.clone();
-            async move {
-                // Every icon is resolved here, once, before a record is built:
-                // a poster becomes the file on disk the renderer can read, and
-                // what cannot be fetched stops being a reference no view could
-                // have drawn anyway.
-                item.icon = client.resolve_icon(item.icon.as_deref()).await;
-                item
-            }
+        let items = join_all(items.into_iter().map(|mut item| async move {
+            item.icon = self.resolve_icon(item.icon.as_deref()).await;
+            item
         }))
         .await;
 
@@ -1609,6 +1588,19 @@ mod tests {
         cache_file_name, catalog_item_to_game_record, daemon_error_from_body, image_extension,
         retro_game_to_game_record, retro_rom_query_params, retro_rom_versions, retro_version_label,
     };
+
+    #[tokio::test]
+    async fn library_loading_preserves_invalid_token_errors() {
+        let client = DaemonClient::new(DaemonConfig {
+            base_url: "http://127.0.0.1:0".to_owned(),
+            token: "invalid\nheader".to_owned(),
+        });
+
+        assert!(matches!(
+            client.fetch_library_records().await,
+            Err(DaemonError::InvalidToken(_))
+        ));
+    }
 
     #[test]
     fn daemon_events_are_read_by_kind_and_unknown_kinds_are_tolerated() {

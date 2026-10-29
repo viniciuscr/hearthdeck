@@ -143,6 +143,12 @@ the cruft inherited from the project this started from.
 
 ## Status
 
+Catalog loading goes directly through `DaemonClient::fetch_library_records`,
+which resolves artwork and returns typed `DaemonError` failures. There is no
+frontend discovery-provider registry: discovery belongs to the daemon.
+`GameRecord` and the `DesktopEntryData` view adapter remain pending replacement
+by the typed library model.
+
 | Slice | Where | Status |
 | --- | --- | --- |
 | Sidebar (section nav) | `screens/library/sidebar.rs` | done |

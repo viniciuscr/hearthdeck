@@ -3,7 +3,6 @@ pub mod filter;
 
 use std::path::PathBuf;
 
-use async_trait::async_trait;
 use cosmic::desktop::{DesktopEntryData, fde};
 use serde::{Deserialize, Serialize};
 
@@ -106,19 +105,6 @@ impl GameRecord {
     }
 }
 
-/// A game provider discovers installed games or applications from a specific
-/// source (Heroic Games Launcher, Steam, Lutris, etc.).
-///
-/// # Implementation notes
-///
-/// - `discover` should be idempotent and return the full current state.
-#[async_trait]
-pub trait GameProvider: Send + Sync {
-    /// Discover all items from this provider.
-    async fn discover(&self) -> anyhow::Result<Vec<GameRecord>>;
-}
-
-/// A game provider discovers installed games or applications from a specific
 #[cfg(test)]
 mod tests {
     use super::GameRecord;
