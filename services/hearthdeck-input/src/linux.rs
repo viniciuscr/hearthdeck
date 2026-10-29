@@ -10,6 +10,7 @@ use evdev::{
     AbsoluteAxisCode, AttributeSet, Device, EventSummary, EventType, InputEvent, KeyCode,
     RelativeAxisCode,
 };
+use hearthdeck_protocol::{InputMode, InputProfile, paths};
 use tokio::net::UnixDatagram;
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -19,15 +20,8 @@ use tracing_subscriber::EnvFilter;
 use crate::mapping::{Control, Mapper, OutputEvent, OutputKey};
 
 const DEVICE_NAME: &str = "Hearthdeck Compatibility Input";
-const SOCKET_NAME: &str = "hearthdeck-input.sock";
 const SCAN_INTERVAL: Duration = Duration::from_secs(2);
 const MOUSE_INTERVAL: Duration = Duration::from_millis(16);
-
-#[derive(Clone, Copy)]
-struct InputMode {
-    compatibility: bool,
-    retro_osk: bool,
-}
 
 #[derive(Clone, Copy)]
 struct AxisRange {
@@ -58,13 +52,12 @@ pub async fn run() -> Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let socket_path = socket_path()?;
+    let socket_path = paths::input_socket_path().context("XDG_RUNTIME_DIR is not set")?;
     let socket = bind_control_socket(&socket_path)?;
     let mut output = create_virtual_device().context("could not create virtual input device")?;
     let (device_tx, mut device_rx) = mpsc::channel(128);
     let mut mapper = Mapper::default();
-    let mut retro_osk = false;
-    let mut compatibility = false;
+    let mut mode = InputMode::default();
     let mut guide_devices = HashSet::new();
     let mut active_paths = HashSet::new();
     let mut path_devices = HashMap::new();
@@ -91,7 +84,7 @@ pub async fn run() -> Result<()> {
             Some(message) = device_rx.recv() => {
                 let events = match message {
                     DeviceMessage::Key { device, code, value } => {
-                        if osk_chord(&mut guide_devices, retro_osk, device, code, value) {
+                        if osk_chord(&mut guide_devices, mode.retro_osk, device, code, value) {
                             tokio::spawn(toggle_virtual_keyboard());
                             Vec::new()
                         } else {
@@ -114,7 +107,7 @@ pub async fn run() -> Result<()> {
             }
             received = socket.recv(&mut command) => {
                 let length = received.context("input control socket read failed")?;
-                let Some(mode) = parse_input_mode(&command[..length]) else {
+                let Some(next) = InputMode::parse(&command[..length]) else {
                     warn!("ignored invalid input profile command");
                     continue;
                 };
@@ -122,16 +115,17 @@ pub async fn run() -> Result<()> {
                 // not an event: only a real change is worth an `info`, and the
                 // unchanged case stays at `debug` rather than filling the session
                 // log with the same line once a second.
-                let changed = mode.compatibility != compatibility || mode.retro_osk != retro_osk;
-                compatibility = mode.compatibility;
-                retro_osk = mode.retro_osk;
+                let changed = next != mode;
+                mode = next;
+                let compatibility = mode.profile == InputProfile::Desktop;
+                let retro_osk = mode.retro_osk;
                 guide_devices.clear();
                 if changed {
                     info!(compatibility, retro_osk, "input mode updated");
                 } else {
                     debug!(compatibility, retro_osk, "input mode unchanged");
                 }
-                let events = mapper.set_active(mode.compatibility);
+                let events = mapper.set_active(compatibility);
                 emit(&mut output, events)?;
             }
             _ = mouse.tick() => {
@@ -146,28 +140,6 @@ pub async fn run() -> Result<()> {
     emit(&mut output, mapper.set_active(false))?;
     let _ = std::fs::remove_file(socket_path);
     Ok(())
-}
-
-fn parse_input_mode(command: &[u8]) -> Option<InputMode> {
-    Some(match command {
-        b"native" => InputMode {
-            compatibility: false,
-            retro_osk: false,
-        },
-        b"desktop" => InputMode {
-            compatibility: true,
-            retro_osk: false,
-        },
-        b"retro-native" => InputMode {
-            compatibility: false,
-            retro_osk: true,
-        },
-        b"retro-desktop" => InputMode {
-            compatibility: true,
-            retro_osk: true,
-        },
-        _ => return None,
-    })
 }
 
 fn osk_chord(
@@ -198,11 +170,6 @@ async fn toggle_virtual_keyboard() {
         Ok(status) => warn!(?status, "gamepad-osk rejected virtual keyboard toggle"),
         Err(error) => warn!(%error, "could not toggle virtual keyboard"),
     }
-}
-
-fn socket_path() -> Result<PathBuf> {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR is not set")?;
-    Ok(PathBuf::from(runtime).join(SOCKET_NAME))
 }
 
 fn bind_control_socket(path: &Path) -> Result<UnixDatagram> {
@@ -472,17 +439,7 @@ mod tests {
 
     use evdev::KeyCode;
 
-    use super::{AxisRange, normalize_centered, normalize_trigger, osk_chord, parse_input_mode};
-
-    #[test]
-    fn retro_input_modes_enable_the_osk_chord() {
-        let native = parse_input_mode(b"native").unwrap();
-        let retro = parse_input_mode(b"retro-native").unwrap();
-
-        assert!(!native.retro_osk);
-        assert!(retro.retro_osk);
-        assert!(!retro.compatibility);
-    }
+    use super::{AxisRange, normalize_centered, normalize_trigger, osk_chord};
 
     #[test]
     fn guide_and_x_toggle_the_osk_only_when_enabled() {
