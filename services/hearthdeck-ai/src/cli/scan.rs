@@ -23,8 +23,8 @@ use hearthdeck_ai::ai::{LayaConfig, LayaModel};
 #[cfg(feature = "laya")]
 use hearthdeck_ai::categorization::LayaCategorizer;
 use hearthdeck_ai::categorization::{
-    AppProfile, Categorizer, HeuristicCategorizer, LibraryScanner, NoopResearcher, ScanOptions,
-    ScanPhase, ScanProgress, ScanReport,
+    AppProfile, Categorizer, HeuristicCategorizer, LibraryScanner, ScanPhase, ScanProgress,
+    ScanReport,
 };
 use serde::Serialize;
 use tracing::{debug, info, warn};
@@ -77,7 +77,6 @@ struct Request {
     model: ModelChoice,
     model_path: Option<PathBuf>,
     dtype: String,
-    research: bool,
     /// Where to publish scan progress for the parent process. Absent when a
     /// human runs the CLI by hand, in which case nothing is written.
     phase_file: Option<PathBuf>,
@@ -96,7 +95,6 @@ impl Request {
         let mut model = ModelChoice::English;
         let mut model_path = None;
         let mut dtype = DEFAULT_DTYPE.to_owned();
-        let mut research = false;
         let mut phase_file = None;
 
         while index < args.len() {
@@ -116,7 +114,6 @@ impl Request {
                     model_path = Some(PathBuf::from(value(&args, &mut index, flag)?));
                 }
                 "--dtype" => dtype = value_text(&args, &mut index, flag)?,
-                "--research" => research = true,
                 "--phase-file" => {
                     phase_file = Some(PathBuf::from(value(&args, &mut index, flag)?));
                 }
@@ -131,7 +128,6 @@ impl Request {
             model,
             model_path,
             dtype,
-            research,
             phase_file,
         })
     }
@@ -183,7 +179,6 @@ async fn execute(request: Request) -> Result<(), String> {
         model = request.model.as_str(),
         dtype = %request.dtype,
         model_path = ?request.model_path,
-        research = request.research,
         phase_file = ?request.phase_file,
         "categorizer scan requested"
     );
@@ -200,18 +195,10 @@ async fn execute(request: Request) -> Result<(), String> {
 
     let apps = load_library(&request.library)?;
     let categorizer = build_categorizer(&request)?;
-    let options = ScanOptions {
-        research: request.research,
-        ..ScanOptions::default()
-    };
-
-    let mut scanner = LibraryScanner::new(categorizer).with_options(options);
-    if request.research {
-        scanner = scanner.with_researcher(Arc::new(NoopResearcher));
-    }
+    let mut scanner = LibraryScanner::new(categorizer);
     if let Some(phase) = phase {
         scanner = scanner.with_progress(Arc::new(move |progress: ScanProgress| {
-            // `Researching` and `Aggregating` are not progress the daemon has a
+            // `Aggregating` is not progress the daemon has a
             // place for; only per-application decisions are reported.
             if progress.phase == ScanPhase::Deciding {
                 phase.scanning(progress.completed, progress.total);

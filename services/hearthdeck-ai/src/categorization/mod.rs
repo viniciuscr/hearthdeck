@@ -10,7 +10,7 @@
 //! # Shape of a run
 //!
 //! 1. [`AppProfile`] — flatten a catalog record into the fields a decision may
-//!    use, plus whatever an [`AppResearcher`] can find online.
+//!    use.
 //! 2. [`Categorizer`] — one engine answers "is this a game, an emulator, a
 //!    streaming client, and which category does it belong in". Two ship here:
 //!    [`HeuristicCategorizer`], which reproduces the old behavior, and
@@ -51,7 +51,6 @@ pub mod error;
 pub mod heuristic;
 pub mod model;
 pub mod prompt;
-pub mod research;
 pub mod scan;
 pub mod taxonomy;
 
@@ -64,7 +63,6 @@ pub use decision::{
 pub use error::{Error, Result};
 pub use heuristic::HeuristicCategorizer;
 pub use model::{AppKind, AppProfile};
-pub use research::{AppResearcher, NoopResearcher};
 pub use scan::{
     CategoryProposal, LibraryScanner, ScanFailure, ScanOptions, ScanPhase, ScanProgress,
     ScanReport, UnclassifiedApp,

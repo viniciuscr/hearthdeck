@@ -182,7 +182,6 @@ pub struct AppGroup {
     /// [`GroupSource::Local`] and nothing is mistaken for a scan's work.
     #[serde(default)]
     pub source: GroupSource,
-    // pub popup: bool,
 }
 
 impl PartialOrd for AppGroup {
@@ -251,15 +250,7 @@ impl AppGroup {
     }
 
     pub fn name(&self) -> String {
-        if &self.name == "cosmic-library-home" {
-            fl!("cosmic-library-home")
-        } else if &self.name == "cosmic-office" {
-            fl!("cosmic-office")
-        } else if &self.name == "cosmic-system" {
-            fl!("cosmic-system")
-        } else if &self.name == "cosmic-utilities" {
-            fl!("cosmic-utilities")
-        } else if self.name == DESKTOP_TAB_NAME {
+        if self.name == DESKTOP_TAB_NAME {
             fl!("desktop-apps")
         } else {
             self.name.clone()

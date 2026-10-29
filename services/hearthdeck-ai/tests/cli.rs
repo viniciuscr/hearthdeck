@@ -79,7 +79,6 @@ fn a_heuristic_scan_writes_a_report() {
     let report: ScanReport = serde_json::from_str(&text(&output)).expect("report is valid JSON");
 
     assert_eq!(report.categorizer, "heuristic");
-    assert_eq!(report.researcher, None);
     assert_eq!(report.app_count, 4);
     assert_eq!(report.assignments.len(), 4);
 
@@ -135,39 +134,6 @@ fn a_command_without_the_scan_subcommand_is_a_usage_error() {
     assert!(!result.status.success());
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("usage:"), "stderr: {stderr}");
-}
-
-#[test]
-fn research_installs_the_noop_researcher() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let library = write(dir.path(), "library.json", LIBRARY);
-    let output = dir.path().join("report.json");
-
-    let result = run(&[
-        "scan",
-        "--library",
-        library.to_str().unwrap(),
-        "--output",
-        output.to_str().unwrap(),
-        "--engine",
-        "heuristic",
-        "--research",
-    ]);
-
-    assert!(
-        result.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-
-    let json: serde_json::Value =
-        serde_json::from_str(&text(&output)).expect("report is valid JSON");
-    // `NoopResearcher::id` is "none" — research is wired up but answers nothing.
-    assert_eq!(json["researcher"], "none");
-
-    let report: ScanReport = serde_json::from_value(json).expect("report is a ScanReport");
-    assert_eq!(report.researcher.as_deref(), Some("none"));
-    assert_eq!(report.assignments.len(), 4);
 }
 
 /// The scan runs to completion before the process exits, so the last write to

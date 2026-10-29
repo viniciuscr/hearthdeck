@@ -15,10 +15,6 @@ pub enum Error {
     #[error(transparent)]
     Ai(#[from] ai::Error),
 
-    /// A research provider could not reach its source.
-    #[error("research provider {provider} failed: {message}")]
-    Research { provider: String, message: String },
-
     /// The caller handed in something the categorizer cannot work with, such as
     /// a taxonomy whose labels are not unique.
     #[error("invalid input: {0}")]
