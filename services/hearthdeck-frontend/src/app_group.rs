@@ -817,7 +817,9 @@ fn derived_groups(section: Section, entries: &[Arc<DesktopEntryData>]) -> Vec<Ap
 
 #[cfg(test)]
 mod tests {
-    use super::{AppGroup, AppLibraryConfig, FilterType, GroupSource, Section, section_facets};
+    use super::{
+        AppGroup, AppLibraryConfig, FilterType, GroupSource, Section, SectionUi, section_facets,
+    };
     use crate::form_factor::{self, FormFactor};
     use cosmic::desktop::{DesktopEntryData, fde::IconSource};
     use std::collections::BTreeMap;
