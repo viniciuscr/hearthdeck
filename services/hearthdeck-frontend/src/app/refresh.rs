@@ -10,8 +10,7 @@ use std::time::Duration;
 
 use cosmic::app::Task;
 
-use crate::providers::GameProvider;
-use crate::providers::daemon::{DaemonEvent, DaemonProvider};
+use crate::providers::daemon::DaemonEvent;
 use crate::subscriptions::daemon_events::FeedEvent;
 
 use super::{App, Message, Page};
@@ -134,8 +133,8 @@ impl App {
         Task::perform(
             async move {
                 tokio::time::sleep(delay).await;
-                let provider = DaemonProvider::with_client(client);
-                GameProvider::discover(&provider)
+                client
+                    .fetch_library_records()
                     .await
                     .map(|records| {
                         records
@@ -143,7 +142,7 @@ impl App {
                             .map(|record| Arc::new(record.into_desktop_entry()))
                             .collect()
                     })
-                    .map_err(|error| format!("{error:?}"))
+                    .map_err(|error| error.to_string())
             },
             |result| cosmic::Action::App(Message::CatalogLoaded(result)),
         )

@@ -79,8 +79,6 @@ cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "
 ] }
 
 # Utilities
-anyhow.workspace = true
-async-trait.workspace = true
 itertools = "0.14"
 url = "2.5"
 urlencoding = "2.1"
