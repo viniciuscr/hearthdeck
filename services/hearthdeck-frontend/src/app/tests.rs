@@ -1539,6 +1539,45 @@ fn a_rail_below_the_fold_still_follows_the_cursor_sideways() {
     );
 }
 
+/// A rail that arrives late - the RomM consoles, whose server is still loading -
+/// is inserted under the cursor's feet. The pad stays on the rail it chose and
+/// the page stays under it: no snap back to the top.
+#[test]
+fn a_rail_that_arrives_late_does_not_snap_the_page_back_to_the_top() {
+    let mut app = shell();
+    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+        collection("favorites", None, &["hearthdeck:game-0"]),
+        collection("play-later", None, &["hearthdeck:game-1"]),
+    ])));
+
+    // Down onto the rail below the arrivals: the page moves down to it.
+    let _ = app.step_dashboard(Direction::Down);
+    let landed = app.page_offset;
+    assert!(landed > 0.0, "the page moved down to the rail: {landed}");
+    assert_eq!(app.dashboard_cursor.rail, 1);
+
+    // The consoles arrive: a rail is inserted right below the arrivals, under
+    // the cursor's feet.
+    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
+        crate::providers::daemon::RetroConsole {
+            id: 1,
+            label: "Mega Drive".to_owned(),
+            artwork: None,
+        },
+    ])));
+
+    assert_eq!(
+        app.dashboard_cursor.rail, 2,
+        "the cursor stays on the rail it chose"
+    );
+    assert!(
+        app.page_offset >= landed,
+        "the page does not snap back to the top: {}",
+        app.page_offset
+    );
+}
+
 /// A rail card draws the icon its own item carries, resolved by the provider,
 /// and never one looked up in this client's library by item id.
 ///

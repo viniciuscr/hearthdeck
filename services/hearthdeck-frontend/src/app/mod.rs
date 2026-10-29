@@ -716,11 +716,15 @@ impl Application for App {
                 if platforms.is_empty() {
                     return Task::none();
                 }
-                // Store the consoles for the dashboard rail.
+                // Store the consoles for the dashboard rail. The rail inserts
+                // itself below the arrivals and renumbers the rails under the
+                // pad, so the pad is named by the card it was on and put back
+                // on it once the list is rebuilt.
+                let was = self.dashboard_cursor_card();
                 self.console_platforms = platforms.clone();
                 let platform_tuples: Vec<(i64, String)> =
                     platforms.into_iter().map(|c| (c.id, c.label)).collect();
-                let mut tasks = vec![self.queue_console_prefetch()];
+                let mut tasks = vec![self.queue_console_prefetch(), self.reland_dashboard(was)];
                 if self.config.sync_console_groups(&platform_tuples) {
                     self.persist_config();
                     // The chrome the ring walks changed, so its stop may no
@@ -805,23 +809,19 @@ impl Application for App {
             Message::CollectionsLoaded(result) => {
                 match result {
                     Ok(collections) => {
+                        // Rails can appear and drop out between reads, which
+                        // renumbers every rail: the pad is named by the card it
+                        // was on and put back on it.
+                        let was = self.dashboard_cursor_card();
                         self.collections = collections;
-                        // The rails just changed under the cursor, so it may be
-                        // pointing past the end of them now - and with them the
-                        // banner, which may have lost slides.
-                        let rails = self.dashboard_rail_lengths();
-                        self.dashboard_cursor =
-                            dashboard::focus::clamp(self.dashboard_cursor, &rails);
-                        // The cards under the pad just changed with the reload:
-                        // whatever moved, moved smoothly.
-                        self.sync_backdrop();
+                        self.retries.collections = false;
+                        return self.reland_dashboard(was);
                     }
                     Err(error) => {
                         log::warn!("collection fetch failed: {error}");
                         return self.collections_failed();
                     }
                 }
-                self.retries.collections = false;
             }
             Message::FacetsLoaded(result) => {
                 let facets = result.unwrap_or_else(|error| {

@@ -1,6 +1,7 @@
 //! The dashboard's rails and the cursor that walks them and the top bar.
 
 use cosmic::app::Task;
+use cosmic::widget::Id;
 use cosmic::{Application, theme};
 
 use crate::app::animation::ScrollTarget;
@@ -338,6 +339,43 @@ impl App {
             self.rail_offsets.resize(rail + 1, 0.0);
         }
         self.rail_offsets[rail] = offset;
+    }
+
+    /// The card the pad is on, named by its own widget id: the one identity a
+    /// reload cannot renumber.
+    pub(super) fn dashboard_cursor_card(&self) -> Option<Id> {
+        let shelves = self.dashboard_shelves();
+        let shelf = shelves.get(self.dashboard_cursor.rail)?;
+        Some(shelf.cards.get(self.dashboard_cursor.card)?.id.clone())
+    }
+
+    /// Puts the pad back on the card it was on after the rails changed under
+    /// it, and lands the page under it.
+    ///
+    /// Rails arrive late - the RomM consoles insert themselves below the
+    /// arrivals once the server answers - and empty ones drop out, so a rail's
+    /// number is not its identity: an insert above the pad renumbers every rail
+    /// below it. The card's own id names its collection and its place in it, so
+    /// the pad goes back to the card it chose; a card that is gone leaves the
+    /// cursor clamped to the new rails.
+    pub(super) fn reland_dashboard(&mut self, was: Option<Id>) -> Task<Message> {
+        if let Some(was) = was {
+            for (rail, shelf) in self.dashboard_shelves().iter().enumerate() {
+                if let Some(card) = shelf.cards.iter().position(|card| card.id == was) {
+                    self.dashboard_cursor = dashboard::focus::Cursor {
+                        rail,
+                        card,
+                        remembered: card,
+                    };
+                    self.sync_backdrop();
+                    return self.focus_dashboard_card();
+                }
+            }
+        }
+        let rails = self.dashboard_rail_lengths();
+        self.dashboard_cursor = dashboard::focus::clamp(self.dashboard_cursor, &rails);
+        self.sync_backdrop();
+        self.focus_dashboard_card()
     }
 
     /// Fetches the dashboard's collections, which are what its rails are made of.
