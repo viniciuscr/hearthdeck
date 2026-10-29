@@ -146,6 +146,9 @@ the cruft inherited from the project this started from.
 Catalog loading goes directly through `DaemonClient::fetch_library_records`,
 which resolves artwork and returns typed `DaemonError` failures. There is no
 frontend discovery-provider registry: discovery belongs to the daemon.
+`GameRecord` carries store, install source, model form-factor and ROM variants
+as typed fields; it does not rebuild or reparse a JSON metadata bag. Descriptive
+details stay in their daemon detail responses, not in unused record fields.
 `GameRecord` and the `DesktopEntryData` view adapter remain pending replacement
 by the typed library model.
 
