@@ -19,7 +19,7 @@ impl DesktopAppsProvider {
 #[async_trait]
 impl DiscoveryProvider for DesktopAppsProvider {
     fn source_id(&self) -> &'static str {
-        "desktop-apps"
+        hearthdeck_protocol::sources::DESKTOP_APPS
     }
 
     fn refresh_interval(&self) -> Option<Duration> {

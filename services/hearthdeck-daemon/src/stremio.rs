@@ -25,9 +25,8 @@ const LINK_URL: &str = "https://link.stremio.com/api";
 
 /// The catalog source this integration owns.
 ///
-/// Named here rather than in the provider that will publish under it, so the
-/// unlink path and the provider cannot drift apart.
-pub const SOURCE_ID: &str = "stremio";
+/// Shared with the provider and frontend refresh path.
+pub use hearthdeck_protocol::sources::STREMIO as SOURCE_ID;
 
 /// How long a link is offered before this daemon stops waiting on it.
 ///

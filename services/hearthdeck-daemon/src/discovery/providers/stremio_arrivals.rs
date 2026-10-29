@@ -34,7 +34,7 @@ use crate::{
 };
 
 /// The catalog source this provider owns.
-pub const SOURCE_ID: &str = "stremio-arrivals";
+pub use hearthdeck_protocol::sources::STREMIO_ARRIVALS as SOURCE_ID;
 
 /// Cinemeta's base URL. `v3-cinemeta.stremio.com` is the host everybody quotes
 /// and it does not resolve at all; the addon lives on `v3-cinemeta.strem.io`, the

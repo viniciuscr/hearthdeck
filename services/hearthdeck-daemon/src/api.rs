@@ -1042,7 +1042,7 @@ async fn launch_catalog(
         || item.source_id == stremio_arrivals::SOURCE_ID)
         .then(|| stremio_title_target(&item))
         .flatten();
-    let request = if item.source_id == "heroic" {
+    let request = if item.source_id == hearthdeck_protocol::sources::HEROIC {
         let (runner, application_id) =
             heroic_launch_target(launch_id).ok_or_else(ApiError::not_found)?;
         BridgeRequest::LaunchHeroicGame {

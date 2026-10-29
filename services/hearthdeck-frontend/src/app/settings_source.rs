@@ -297,7 +297,7 @@ impl App {
         Task::perform(
             async move {
                 client
-                    .refresh_source("stremio")
+                    .refresh_source(hearthdeck_protocol::sources::STREMIO)
                     .await
                     .map_err(|error| error.to_string())
             },

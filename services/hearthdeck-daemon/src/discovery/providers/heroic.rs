@@ -7,13 +7,12 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::Utc;
+use hearthdeck_protocol::sources::HEROIC as HEROIC_SOURCE;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use tracing::info;
 
 use crate::{catalog::CatalogRecord, discovery::DiscoveryProvider};
-
-const HEROIC_SOURCE: &str = "heroic";
 
 /// Discovers games installed through Heroic without reading any account or
 /// authentication data. Heroic remains responsible for runner configuration
