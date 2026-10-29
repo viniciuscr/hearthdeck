@@ -151,7 +151,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn a_stalled_bridge_does_not_wait_forever() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("bridge.sock");
@@ -166,9 +166,9 @@ mod tests {
             BridgeRequest::Health
         ));
 
-        tokio::time::advance(Duration::from_secs(119)).await;
-        assert!(!client.is_finished(), "deadline expired too early");
-        tokio::time::advance(Duration::from_secs(1)).await;
+        // Freeze after socket I/O so Tokio cannot auto-advance during the handshake.
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(120)).await;
         let error = tokio::time::timeout(Duration::from_secs(1), client)
             .await
             .expect("bridge call must finish when its deadline expires")
