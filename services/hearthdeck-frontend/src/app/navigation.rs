@@ -382,7 +382,7 @@ impl App {
     /// Switches tab within the section on screen, wrapping over that section's
     /// "all" tab and its groups.
     pub(super) fn switch_tab(&mut self, delta: i32) -> Task<Message> {
-        let tabs = self.config.sections.get(self.cur_section).len() as i32 + 1;
+        let tabs = self.tabs.get(self.cur_section).len() as i32 + 1;
         let current = self.cur_group.map_or(0, |group| group as i32 + 1);
         let next = (current + delta).rem_euclid(tabs);
         self.update(Message::SelectGroup(
@@ -399,8 +399,7 @@ impl App {
     /// drives does not come back as an `on_scroll` event - the same reason the
     /// dashboard remembers each rail's offset.
     pub(super) fn reveal_tab(&mut self, index: usize) -> Task<Message> {
-        let widths =
-            header::tab_widths(self.cur_section, self.config.sections.get(self.cur_section));
+        let widths = header::tab_widths(self.cur_section, self.tabs.get(self.cur_section));
         let viewport = header::tab_viewport(self.window_width, !self.facets.is_empty());
         let from = self.tabs_offset;
         let Some(offset) = header::tab_scroll_target(&widths, index, from, viewport) else {

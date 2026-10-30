@@ -304,7 +304,7 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
 #[cfg(test)]
 mod tests {
     use super::{tab_scroll_target, tab_viewport, tab_widths};
-    use crate::app_group::{AppGroup, FilterType, GroupSource, Section, SectionUi};
+    use crate::app_group::{AppGroup, FilterType, Section, SectionUi};
     use crate::style::{FILTER_BUTTON_MIN_WIDTH, content_width, tab_width};
 
     /// The gap the strip's row puts between two tabs, which the follow measures
@@ -329,7 +329,6 @@ mod tests {
             name: name.to_owned(),
             icon: "folder-symbolic".to_owned(),
             filter: FilterType::AppIds(Vec::new()),
-            source: GroupSource::Local,
         }
     }
 

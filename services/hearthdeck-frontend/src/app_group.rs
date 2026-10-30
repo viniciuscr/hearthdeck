@@ -124,34 +124,12 @@ impl PartialOrd for FilterType {
     }
 }
 
-/// Who owns a tab, which decides who is allowed to replace it.
-///
-/// The distinction exists so a tab an older build's library scan left in the
-/// config can be told from the user's own folders, and dropped without touching
-/// them.
-#[derive(Default, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum GroupSource {
-    /// Made here: by the user, or derived from the entries by
-    /// [`AppLibraryConfig::sync_category_groups`] and
-    /// [`AppLibraryConfig::sync_console_groups`].
-    #[default]
-    Local,
-    /// Left behind by an older build's library scan. Nothing makes these any
-    /// more, and every rebuild drops the ones it finds.
-    Categorization,
-}
-
 // Object holding the state
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AppGroup {
     pub name: String,
     pub icon: String,
     pub filter: FilterType,
-    /// Defaulted, so a config written before scans existed loads every tab as
-    /// [`GroupSource::Local`] and nothing is mistaken for a scan's work.
-    #[serde(default)]
-    pub source: GroupSource,
 }
 
 impl PartialOrd for AppGroup {
@@ -350,13 +328,13 @@ fn source_label(source: &str) -> String {
 }
 
 /// Sub-tabs (filter chips) shown in the top bar, one set per section.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+///
+/// Derived from the catalog and the console platforms every time they load, so
+/// never persisted: a saved copy could only go stale.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Sections {
-    #[serde(default)]
     pub pc_games: Vec<AppGroup>,
-    #[serde(default)]
     pub console_games: Vec<AppGroup>,
-    #[serde(default)]
     pub applications: Vec<AppGroup>,
 }
 
@@ -376,12 +354,89 @@ impl Sections {
             Section::Applications => &mut self.applications,
         }
     }
+
+    /// Rebuilds the local sections' tabs from the entries currently present.
+    ///
+    /// PC Games gets a tab per store that installed something. Applications gets
+    /// one Desktop tab when anything wants a desktop; the Couch view is the
+    /// section's "all" tab.
+    pub fn sync_category_groups(&mut self, entries: &[Arc<LibraryItem>]) {
+        self.pc_games = derived_groups(Section::PcGames, entries);
+        self.applications = derived_groups(Section::Applications, entries);
+    }
+
+    /// Rebuilds the console tabs from the platforms RomM reported, and says
+    /// whether they changed.
+    pub fn sync_console_groups(&mut self, platforms: &[(i64, String)]) -> bool {
+        let groups: Vec<AppGroup> = platforms
+            .iter()
+            .map(|(id, name)| AppGroup {
+                name: name.clone(),
+                icon: "folder-symbolic".to_string(),
+                filter: FilterType::Categories {
+                    categories: vec![romm_console_category(*id)],
+                    include: Vec::new(),
+                    exclude: Vec::new(),
+                },
+            })
+            .collect();
+        if self.console_games == groups {
+            return false;
+        }
+        self.console_games = groups;
+        true
+    }
+
+    /// The entries one tab of one section shows: the section's records, the
+    /// tab's group, the search box and the facet selection, all applied.
+    ///
+    /// Every selected value must match the item's metadata or categories using
+    /// the compatible values offered by [`section_facets`].
+    pub fn filtered_by_facets(
+        &self,
+        section: Section,
+        tab: Option<usize>,
+        input_value: &str,
+        entries: &[Arc<LibraryItem>],
+        facets: &BTreeMap<String, String>,
+    ) -> Vec<Arc<LibraryItem>> {
+        let tab_group = tab.and_then(|i| self.get(section).get(i));
+        // The Applications section opens on what suits the couch; a search looks
+        // through both, because the app being looked for may be the other kind.
+        let couch_only =
+            section == Section::Applications && tab.is_none() && input_value.is_empty();
+        entries
+            .iter()
+            .filter(|de| {
+                if !section.matches(de) {
+                    return false;
+                }
+                if couch_only && form_factor::of(de) != FormFactor::Couch {
+                    return false;
+                }
+                if let Some(group) = tab_group
+                    && !group.matches(de)
+                {
+                    return false;
+                }
+                if !facets.values().all(|value| de.matches_facet(value)) {
+                    return false;
+                }
+                if !input_value.is_empty()
+                    && !de.name.to_lowercase().contains(&input_value.to_lowercase())
+                    && !de.matches_category(input_value)
+                {
+                    return false;
+                }
+                true
+            })
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, CosmicConfigEntry)]
 pub struct AppLibraryConfig {
-    #[serde(default)]
-    pub sections: Sections,
     #[serde(default)]
     pub desktop_input_apps: Vec<String>,
     /// Applications the user moved between Couch and Desktop. What they chose
@@ -456,141 +511,9 @@ impl AppLibraryConfig {
             self.desktop_input_apps.push(id.to_owned());
         }
     }
-
-    /// The entries one tab of one section shows: the section's records, the
-    /// tab's group, the search box and the facet selection, all applied.
-    ///
-    /// Every selected value must match the item's metadata or categories using
-    /// the compatible values offered by [`section_facets`].
-    pub fn filtered_by_facets(
-        &self,
-        section: Section,
-        tab: Option<usize>,
-        input_value: &str,
-        entries: &[Arc<LibraryItem>],
-        facets: &BTreeMap<String, String>,
-    ) -> Vec<Arc<LibraryItem>> {
-        let tab_group = tab.and_then(|i| self.sections.get(section).get(i));
-        // The Applications section opens on what suits the couch; a search looks
-        // through both, because the app being looked for may be the other kind.
-        let couch_only =
-            section == Section::Applications && tab.is_none() && input_value.is_empty();
-        entries
-            .iter()
-            .filter(|de| {
-                if !section.matches(de) {
-                    return false;
-                }
-                if couch_only && form_factor::of(de) != FormFactor::Couch {
-                    return false;
-                }
-                if let Some(group) = tab_group
-                    && !group.matches(de)
-                {
-                    return false;
-                }
-                if !facets.values().all(|value| de.matches_facet(value)) {
-                    return false;
-                }
-                if !input_value.is_empty()
-                    && !de.name.to_lowercase().contains(&input_value.to_lowercase())
-                    && !de.matches_category(input_value)
-                {
-                    return false;
-                }
-                true
-            })
-            .cloned()
-            .collect()
-    }
-
-    /// Rebuild the derived tabs from the entries currently present while keeping
-    /// user-created groups, which use explicit application IDs.
-    ///
-    /// PC Games gets a tab per store that installed something. Applications gets
-    /// one Desktop tab when anything wants a desktop; the Couch view is the
-    /// section's "all" tab. Tabs an older scan left behind are dropped: they used
-    /// to hide every derived tab, and a config stuck that way had no way back.
-    pub fn sync_category_groups(&mut self, entries: &[Arc<LibraryItem>]) -> bool {
-        let mut changed = false;
-        for section in [Section::PcGames, Section::Applications] {
-            let existing = self.sections.get(section);
-            // Explicit app ids are what make a user's folder survive a rebuild.
-            let kept_groups = existing
-                .iter()
-                .filter(|group| {
-                    matches!(group.filter, FilterType::AppIds(_))
-                        && group.source != GroupSource::Categorization
-                })
-                .cloned();
-            let mut groups = derived_groups(section, entries);
-            groups.extend(kept_groups);
-
-            if existing != &groups {
-                *self.sections.get_mut(section) = groups;
-                changed = true;
-            }
-        }
-        changed
-    }
-
-    pub fn sync_console_groups(&mut self, platforms: &[(i64, String)]) -> bool {
-        let existing = &self.sections.console_games;
-        let custom_groups = existing
-            .iter()
-            .filter(|group| matches!(group.filter, FilterType::AppIds(_)))
-            .cloned();
-        let mut groups = platforms
-            .iter()
-            .map(|(id, name)| AppGroup {
-                name: name.clone(),
-                icon: "folder-symbolic".to_string(),
-                filter: FilterType::Categories {
-                    categories: vec![romm_console_category(*id)],
-                    include: Vec::new(),
-                    exclude: Vec::new(),
-                },
-                source: GroupSource::Local,
-            })
-            .collect::<Vec<_>>();
-        groups.extend(custom_groups);
-
-        if existing == &groups {
-            return false;
-        }
-        self.sections.console_games = groups;
-        true
-    }
-
-    /// Puts every section's derived tabs back, which is the way out of a config
-    /// that has gone wrong: stale or missing tabs, or a scan's leftovers.
-    ///
-    /// The user's own folders are kept; everything else is rebuilt from the
-    /// catalog and the console platforms. A source that reported nothing is left
-    /// as it was rather than rebuilt into an empty strip. Reports whether
-    /// anything changed.
-    pub fn restore_default_groups(
-        &mut self,
-        entries: &[Arc<LibraryItem>],
-        platforms: &[(i64, String)],
-    ) -> bool {
-        let before = self.sections.clone();
-        for section in Section::ALL {
-            self.sections
-                .get_mut(section)
-                .retain(|group| group.source != GroupSource::Categorization);
-        }
-        if !entries.is_empty() {
-            self.sync_category_groups(entries);
-        }
-        if !platforms.is_empty() {
-            self.sync_console_groups(platforms);
-        }
-        self.sections != before
-    }
 }
 
-/// The tabs `section` derives from `entries`, before any folder of the user's.
+/// The tabs `section` derives from `entries`.
 fn derived_groups(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<AppGroup> {
     let mut shown = entries.iter().filter(|entry| section.matches(entry));
     match section {
@@ -611,7 +534,6 @@ fn derived_groups(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<AppGrou
                         include: Vec::new(),
                         exclude: Vec::new(),
                     },
-                    source: GroupSource::Local,
                 })
                 .collect()
         }
@@ -627,7 +549,6 @@ fn derived_groups(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<AppGrou
                     include: Vec::new(),
                     exclude: Vec::new(),
                 },
-                source: GroupSource::Local,
             }]
         }
         Section::ConsoleGames => Vec::new(),
@@ -637,7 +558,7 @@ fn derived_groups(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<AppGrou
 #[cfg(test)]
 mod tests {
     use super::{
-        AppGroup, AppLibraryConfig, FilterType, GroupSource, Section, SectionUi, section_facets,
+        AppGroup, AppLibraryConfig, FilterType, Section, SectionUi, Sections, section_facets,
     };
     use crate::form_factor::{self, FormFactor};
     use crate::library_item::LibraryItem;
@@ -730,13 +651,13 @@ mod tests {
     #[test]
     fn the_desktop_tab_exists_only_while_something_wants_it() {
         let stremio = entry("com.stremio.Stremio.desktop", &["AudioVideo"]);
-        let mut config = AppLibraryConfig::default();
+        let mut tabs = Sections::default();
 
-        config.sync_category_groups(std::slice::from_ref(&stremio));
-        assert!(config.sections.applications.is_empty());
+        tabs.sync_category_groups(std::slice::from_ref(&stremio));
+        assert!(tabs.applications.is_empty());
 
-        config.sync_category_groups(&[stremio, entry("writer", &["Office"])]);
-        assert_eq!(tab_names(&config), vec!["hearthdeck-desktop"]);
+        tabs.sync_category_groups(&[stremio, entry("writer", &["Office"])]);
+        assert_eq!(tab_names(&tabs), vec!["hearthdeck-desktop"]);
     }
 
     #[test]
@@ -744,8 +665,8 @@ mod tests {
         let stremio = entry("com.stremio.Stremio.desktop", &["AudioVideo"]);
         let writer = entry("writer", &["Office"]);
         let entries = [stremio, writer];
-        let mut config = AppLibraryConfig::default();
-        config.sync_category_groups(&entries);
+        let mut tabs = Sections::default();
+        tabs.sync_category_groups(&entries);
         let names = |found: Vec<Arc<LibraryItem>>| {
             found
                 .iter()
@@ -753,7 +674,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let show = |tab, search: &str| {
-            names(config.filtered_by_facets(
+            names(tabs.filtered_by_facets(
                 Section::Applications,
                 tab,
                 search,
@@ -799,10 +720,9 @@ mod tests {
         form_factor::set(Arc::make_mut(&mut writer), FormFactor::Couch);
         assert!(!group.matches(&writer));
 
-        let config = AppLibraryConfig::default();
         let facets = BTreeMap::from([("form".to_owned(), "hearthdeck-form:couch".to_owned())]);
         assert_eq!(
-            config
+            Sections::default()
                 .filtered_by_facets(Section::Applications, None, "", &[writer], &facets)
                 .len(),
             1
@@ -845,8 +765,8 @@ mod tests {
 
     #[test]
     fn pc_game_tabs_only_show_stores_with_installed_games() {
-        let mut config = AppLibraryConfig::default();
-        config.sync_category_groups(&[
+        let mut tabs = Sections::default();
+        tabs.sync_category_groups(&[
             entry(
                 "epic-game",
                 &[
@@ -863,24 +783,20 @@ mod tests {
         ]);
 
         assert_eq!(
-            config
-                .sections
-                .get(Section::PcGames)
+            tabs.get(Section::PcGames)
                 .iter()
                 .map(|group| group.name())
                 .collect::<Vec<_>>(),
             vec!["Epic Games", "GOG"]
         );
 
-        config.sync_category_groups(&[entry(
+        tabs.sync_category_groups(&[entry(
             "gog-game",
             &["Game", "FileTransfer", "Shooter", "hearthdeck-store:GOG"],
         )]);
 
         assert_eq!(
-            config
-                .sections
-                .get(Section::PcGames)
+            tabs.get(Section::PcGames)
                 .iter()
                 .map(|group| group.name())
                 .collect::<Vec<_>>(),
@@ -890,27 +806,23 @@ mod tests {
 
     #[test]
     fn console_tabs_follow_live_romm_platforms_not_game_genres() {
-        let mut config = AppLibraryConfig::default();
-        config.sync_category_groups(&[entry("romm:42", &["Game", "RPG", "hearthdeck-console:7"])]);
-        assert!(config.sections.console_games.is_empty());
+        let mut tabs = Sections::default();
+        tabs.sync_category_groups(&[entry("romm:42", &["Game", "RPG", "hearthdeck-console:7"])]);
+        assert!(tabs.console_games.is_empty());
 
-        config.sync_console_groups(&[(7, "SNES".into()), (9, "PlayStation".into())]);
+        tabs.sync_console_groups(&[(7, "SNES".into()), (9, "PlayStation".into())]);
         assert_eq!(
-            config
-                .sections
-                .get(Section::ConsoleGames)
+            tabs.get(Section::ConsoleGames)
                 .iter()
                 .map(|group| group.name())
                 .collect::<Vec<_>>(),
             vec!["SNES", "PlayStation"]
         );
-        assert_eq!(config.sections.console_games[0].romm_platform_id(), Some(7));
+        assert_eq!(tabs.console_games[0].romm_platform_id(), Some(7));
 
-        config.sync_console_groups(&[(9, "PlayStation".into())]);
+        tabs.sync_console_groups(&[(9, "PlayStation".into())]);
         assert_eq!(
-            config
-                .sections
-                .get(Section::ConsoleGames)
+            tabs.get(Section::ConsoleGames)
                 .iter()
                 .map(|group| group.name())
                 .collect::<Vec<_>>(),
@@ -927,101 +839,11 @@ mod tests {
         assert_eq!(Section::ALL.len(), 3);
     }
 
-    #[test]
-    fn category_sync_preserves_custom_groups() {
-        let mut config = AppLibraryConfig::default();
-        config.sections.applications.push(AppGroup {
-            name: "Favorites".into(),
-            icon: "folder-symbolic".into(),
-            filter: FilterType::AppIds(vec!["writer".into()]),
-            source: GroupSource::Local,
-        });
-
-        config.sync_category_groups(&[entry("writer", &["Office"])]);
-
-        assert!(config.sections.applications.iter().any(|group| {
-            group.name == "Favorites"
-                && matches!(&group.filter, FilterType::AppIds(ids) if ids == &["writer"])
-        }));
-    }
-
-    fn tab_names(config: &AppLibraryConfig) -> Vec<String> {
-        config
-            .sections
-            .applications
+    fn tab_names(tabs: &Sections) -> Vec<String> {
+        tabs.applications
             .iter()
             .map(|group| group.name.clone())
             .collect()
-    }
-
-    fn group(name: &str, source: GroupSource) -> AppGroup {
-        AppGroup {
-            name: name.to_owned(),
-            icon: "folder-symbolic".to_string(),
-            filter: FilterType::AppIds(vec!["vlc".into()]),
-            source,
-        }
-    }
-
-    /// A tab an older scan left in the config used to hide every derived tab,
-    /// for good.
-    #[test]
-    fn a_leftover_scan_tab_no_longer_hides_the_derived_tabs() {
-        let mut config = AppLibraryConfig::default();
-        config
-            .sections
-            .applications
-            .push(group("Media Center", GroupSource::Categorization));
-
-        assert!(config.sync_category_groups(&[entry("writer", &["Office"])]));
-
-        assert_eq!(tab_names(&config), vec!["hearthdeck-desktop"]);
-    }
-
-    #[test]
-    fn restoring_rebuilds_every_section_and_keeps_the_users_folders() {
-        let mut config = AppLibraryConfig::default();
-        config
-            .sections
-            .applications
-            .push(group("Media Center", GroupSource::Categorization));
-        config
-            .sections
-            .applications
-            .push(group("Mine", GroupSource::Local));
-        let entries = [
-            entry("writer", &["Office"]),
-            entry("half-life", &["Game", "hearthdeck-store:Steam"]),
-        ];
-        let platforms = [(7, "SNES".to_owned())];
-
-        assert!(config.restore_default_groups(&entries, &platforms));
-
-        assert_eq!(tab_names(&config), vec!["hearthdeck-desktop", "Mine"]);
-        assert_eq!(config.sections.pc_games[0].name, "Steam");
-        assert_eq!(config.sections.console_games[0].romm_platform_id(), Some(7));
-    }
-
-    /// The catalog failing to load is not a library with nothing in it.
-    #[test]
-    fn restoring_without_a_catalog_does_not_empty_the_tabs() {
-        let mut config = AppLibraryConfig::default();
-        config.sync_category_groups(&[entry("writer", &["Office"])]);
-        let before = tab_names(&config);
-
-        assert!(!config.restore_default_groups(&[], &[]));
-
-        assert_eq!(tab_names(&config), before);
-    }
-
-    #[test]
-    fn restoring_twice_changes_nothing_the_second_time() {
-        let mut config = AppLibraryConfig::default();
-        let entries = [entry("writer", &["Office"])];
-
-        config.restore_default_groups(&entries, &[]);
-
-        assert!(!config.restore_default_groups(&entries, &[]));
     }
 
     #[test]
@@ -1103,13 +925,13 @@ mod tests {
             entry("b", &["Game", "hearthdeck-store:Heroic"]),
             entry("c", &["Network"]),
         ];
-        let config = AppLibraryConfig::default();
+        let tabs = Sections::default();
         let facets = std::collections::BTreeMap::from([(
             "store".to_owned(),
             "hearthdeck-store:Steam".to_owned(),
         )]);
 
-        let visible = config.filtered_by_facets(Section::PcGames, None, "", &entries, &facets);
+        let visible = tabs.filtered_by_facets(Section::PcGames, None, "", &entries, &facets);
         assert_eq!(
             visible
                 .iter()
@@ -1134,8 +956,8 @@ mod tests {
         let game = entry("a", &["Game", "hearthdeck-store:Steam"]);
         assert_eq!(game.categories, ["Game"]);
         assert!(group.matches(&game));
-        let config = AppLibraryConfig::default();
-        let found = config.filtered_by_facets(
+        let tabs = Sections::default();
+        let found = tabs.filtered_by_facets(
             Section::PcGames,
             None,
             "hearthdeck-store:steam",
@@ -1168,12 +990,12 @@ mod tests {
         );
         assert_eq!(app.categories, ["Utility"]);
         assert!(group.matches(&app));
-        let config = AppLibraryConfig::default();
+        let tabs = Sections::default();
         let facets = BTreeMap::from([(
             "source".to_owned(),
             "hearthdeck-source:streaming".to_owned(),
         )]);
-        let found = config.filtered_by_facets(
+        let found = tabs.filtered_by_facets(
             Section::Applications,
             None,
             "hearthdeck-source:CUSTOM",
@@ -1211,8 +1033,8 @@ mod tests {
         assert!(!Section::PcGames.matches(&game));
         assert!(group.matches(&game));
         assert_eq!(group.romm_platform_id(), Some(7));
-        let config = AppLibraryConfig::default();
-        let found = config.filtered_by_facets(
+        let tabs = Sections::default();
+        let found = tabs.filtered_by_facets(
             Section::ConsoleGames,
             None,
             "HEARTHDECK-GENRE:rpg",

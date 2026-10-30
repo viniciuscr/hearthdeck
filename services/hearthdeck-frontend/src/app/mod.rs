@@ -41,7 +41,7 @@ use cosmic::widget::{Id, button, column, container, context_drawer, icon, row, s
 use cosmic::{Application, Element};
 
 use crate::app::animation::{ScrollTarget, Scrolls, section_direction, tab_direction};
-use crate::app_group::{AppLibraryConfig, RommFacet, Section, section_facets};
+use crate::app_group::{AppLibraryConfig, RommFacet, Section, Sections, section_facets};
 use crate::fl;
 use crate::form_factor::{self, FormFactor};
 use crate::input_ownership::{Event as InputEvent, InputOwnership};
@@ -179,7 +179,6 @@ pub enum Message {
     HealthLoaded(Result<crate::providers::daemon::HealthResponse, String>),
     /// Restore default categories was pressed: every section's tabs go back to
     /// the ones derived from the library and the console platforms.
-    RestoreDefaultCategories,
     /// The Stremio section's link button: ask the daemon for a code.
     StartStremioLink,
     /// The daemon answered the request for a code: the one to approve, or why
@@ -431,6 +430,8 @@ pub struct App {
     /// The eased focus-follow scrolls in flight, one per list.
     scrolls: Scrolls,
     config: AppLibraryConfig,
+    /// The library's tab strips, derived from the catalog and the consoles.
+    tabs: Sections,
     /// The config file the shell writes through, resolved once at startup so the
     /// shell has exactly one write target. `None` when there is no store to
     /// write to, which is also what keeps a test off the real config file.
@@ -601,6 +602,7 @@ impl Application for App {
             tab_slide: None,
             scrolls: Scrolls::default(),
             config,
+            tabs: Sections::default(),
             config_store,
             daemon_client,
             catalog: Vec::new(),
@@ -709,9 +711,7 @@ impl Application for App {
                 // catalog the grid draws is therefore what the strip is built
                 // from. Console Games is the exception - its tabs are the
                 // platforms the daemon reported (see `ConsolesLoaded`).
-                if self.config.sync_category_groups(&self.catalog) {
-                    self.persist_config();
-                }
+                self.tabs.sync_category_groups(&self.catalog);
                 self.rebuild_local_facets();
                 self.refilter();
                 return self.list_replaced();
@@ -725,7 +725,7 @@ impl Application for App {
                     }
                 };
                 self.retries.consoles = false;
-                // None reported: keep the persisted tabs rather than wiping them.
+                // None reported: keep the tabs the last answer built.
                 if platforms.is_empty() {
                     return Task::none();
                 }
@@ -738,8 +738,7 @@ impl Application for App {
                 let platform_tuples: Vec<(i64, String)> =
                     platforms.into_iter().map(|c| (c.id, c.label)).collect();
                 let mut tasks = vec![self.queue_console_prefetch(), self.reland_dashboard(was)];
-                if self.config.sync_console_groups(&platform_tuples) {
-                    self.persist_config();
+                if self.tabs.sync_console_groups(&platform_tuples) {
                     // The chrome the ring walks changed, so its stop may no
                     // longer be one that exists.
                     self.cursors = focus::clamp(self.cursors, self.layout());
@@ -1054,13 +1053,7 @@ impl Application for App {
                 return Task::batch(reads);
             }
             Message::SetCategorization(on) => {
-                let action = self.categorization_action(CategorizationAction::SetEnabled(on));
-                if on {
-                    return action;
-                }
-                // Turning it off hands back everything the model changed, which
-                // includes tabs an older scan left in the config.
-                return Task::batch([action, self.restore_default_categories()]);
+                return self.categorization_action(CategorizationAction::SetEnabled(on));
             }
             Message::ScanCategorization => {
                 return self.categorization_action(CategorizationAction::Scan);
@@ -1146,7 +1139,6 @@ impl Application for App {
                 // deployment lost the feature.
                 Err(error) => log::warn!("health read failed: {error}"),
             },
-            Message::RestoreDefaultCategories => return self.restore_default_categories(),
             Message::Romm(message) => return self.update_romm(message),
             // The Stremio section: the flow decides what an answer means and
             // what must happen next, and the shell only runs that. Nothing here
@@ -1483,7 +1475,7 @@ impl App {
             let header = header::view(header::Header {
                 section: self.cur_section,
                 selected_group: self.cur_group,
-                groups: self.config.sections.get(self.cur_section),
+                groups: self.tabs.get(self.cur_section),
                 search_value: &self.search_value,
                 filter_active: self.facet_selection.len(),
                 show_filter: !self.facets.is_empty(),
@@ -1683,7 +1675,7 @@ impl App {
             // never another scope's list.
             self.visible = self.console.entries(&self.console_scope()).to_vec();
         } else {
-            self.visible = self.config.filtered_by_facets(
+            self.visible = self.tabs.filtered_by_facets(
                 self.cur_section,
                 self.cur_group,
                 &self.search_value,
@@ -1731,7 +1723,7 @@ impl App {
     fn layout(&self) -> Layout {
         Layout {
             sections: Section::ALL.len(),
-            tabs: self.config.sections.get(self.cur_section).len() + 1,
+            tabs: self.tabs.get(self.cur_section).len() + 1,
             filter_button: !self.facets.is_empty(),
             facets: self.facets.len(),
             drawer_open: self.filter_open && !self.facets.is_empty(),
@@ -1842,9 +1834,9 @@ impl App {
         if let Some(entry) = self.catalog.iter_mut().find(|entry| entry.id == id) {
             form_factor::set(Arc::make_mut(entry), form);
         }
-        self.config.sync_category_groups(&self.catalog);
+        self.tabs.sync_category_groups(&self.catalog);
         self.persist_config();
-        let tabs = self.config.sections.get(self.cur_section).len();
+        let tabs = self.tabs.get(self.cur_section).len();
         if self.cur_group.is_some_and(|group| group >= tabs) {
             self.cur_group = None;
         }
@@ -1853,12 +1845,12 @@ impl App {
         self.focus_task()
     }
 
-    /// Writes the config back to disk, so a derived tab set survives a restart.
+    /// Writes the config back to disk, so the user's choices survive a restart.
     fn persist_config(&self) {
         if let Some(store) = self.config_store.as_ref()
             && let Err(error) = self.config.write_entry(store)
         {
-            // A failed write does not undo the change - the in-memory tabs are
+            // A failed write does not undo the change - the in-memory state is
             // still what the user asked for - but it must not be silent, or a
             // restart looks like it lost their work.
             log::warn!("config write failed: {error}");
