@@ -212,12 +212,6 @@ impl App {
         )
     }
 
-    /// Fetches the daemon's health, which is where the deployment says what it
-    /// provides at all.
-    ///
-    /// Read whenever the settings screen is opened, for the same reason the state
-    /// beside it is: the categorization program may have been installed or
-    /// removed since the shell started.
     /// Reads the emulator readiness report the settings card draws. Read
     /// whenever the screen is opened, for the same reason the state beside it
     /// is: a core may have been installed since the shell started.
@@ -265,6 +259,12 @@ impl App {
         )
     }
 
+    /// Fetches the daemon's health, which is where the deployment says what it
+    /// provides at all.
+    ///
+    /// Read whenever the settings screen is opened, for the same reason the state
+    /// beside it is: the categorization program may have been installed or
+    /// removed since the shell started.
     pub(super) fn load_health(&self) -> Task<Message> {
         let client = self.daemon_client.clone();
         Task::perform(

@@ -256,73 +256,48 @@ async fn list_retro_consoles(
 async fn retro_readiness(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<RetroSystemReadiness>>, ApiError> {
-    let platforms = diagnostics::romm_platforms(&state.settings)
-        .await
-        .map_err(ApiError::romm_query)?;
+    let platforms = romm_platforms(&state).await?;
     Ok(Json(
         readiness::readiness(&platforms, &readiness::ReadinessPaths::discover()).await,
     ))
 }
 
-/// Places the BIOS files the active platforms need, fetching only those from
-/// the user's own BIOS source (see `readiness`). Refused outright when no
-/// source is configured: Hearthdeck never picks one for the user.
+/// Places the BIOS files (and source-only cores) the active platforms need,
+/// fetched only from the user's own source. Refused outright when no source is
+/// configured: Hearthdeck never picks one for the user.
 async fn sync_retro_bios(
     State(state): State<SharedState>,
 ) -> Result<Json<RetroBiosSyncReport>, ApiError> {
-    let platforms = diagnostics::romm_platforms(&state.settings)
-        .await
-        .map_err(ApiError::romm_query)?;
-    let source = match readiness::BiosSource::from_env() {
-        Some(source) => source.map_err(|error| ApiError {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            message: error.to_string(),
-            settings: None,
-        })?,
-        None => {
-            return Err(ApiError {
-                status: StatusCode::SERVICE_UNAVAILABLE,
-                message: "no BIOS source is configured (HEARTHDECK_BIOS_SOURCE_URL)".to_owned(),
-                settings: None,
-            });
-        }
-    };
-    let report = readiness::sync_bios(&platforms, &readiness::ReadinessPaths::discover(), &source)
-        .await
-        .map_err(ApiError::bad_gateway)?;
-    Ok(Json(report))
+    let platforms = romm_platforms(&state).await?;
+    let source = readiness::BiosSource::from_env().map_err(|error| ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        message: error.to_string(),
+        settings: None,
+    })?;
+    Ok(Json(
+        readiness::sync_bios(&platforms, &readiness::ReadinessPaths::discover(), &source).await,
+    ))
 }
 
-/// Installs the libretro core packages the active platforms are missing,
-/// through the polkit-scoped helper the bridge invokes. The package names
-/// come from the readiness report's own core table — never from the client —
-/// and the bridge re-validates each one before the helper sees it.
+/// Installs the libretro core packages the active platforms are missing.
 async fn install_retro_cores(
     State(state): State<SharedState>,
 ) -> Result<Json<RetroCoreInstallReport>, ApiError> {
-    let platforms = diagnostics::romm_platforms(&state.settings)
-        .await
-        .map_err(ApiError::romm_query)?;
-    let readiness = readiness::readiness(&platforms, &readiness::ReadinessPaths::discover()).await;
-    let packages = readiness::missing_core_packages(&readiness);
-    if packages.is_empty() {
-        return Ok(Json(RetroCoreInstallReport {
-            installed: Vec::new(),
-            failed: Vec::new(),
-        }));
-    }
-    let response = crate::bridge::request(
+    let platforms = romm_platforms(&state).await?;
+    let report = readiness::install_missing_cores(
         &state.config.bridge_socket_path,
-        BridgeRequest::InstallRetroCores { packages },
+        &platforms,
+        &readiness::ReadinessPaths::discover(),
     )
     .await
     .map_err(ApiError::bad_gateway)?;
-    let BridgeResponse::RetroCoresInstalled { report } = response else {
-        return Err(ApiError::bad_gateway(
-            "bridge rejected the core install request",
-        ));
-    };
     Ok(Json(report))
+}
+
+async fn romm_platforms(state: &SharedState) -> Result<Vec<RommPlatform>, ApiError> {
+    diagnostics::romm_platforms(&state.settings)
+        .await
+        .map_err(ApiError::romm_query)
 }
 
 async fn list_retro_roms(

@@ -9,6 +9,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use hearthdeck_protocol::paths;
 use tokio::fs;
 
 use crate::{
@@ -360,25 +361,35 @@ pub(crate) fn core_package_for(core_filename: &str) -> Option<&'static str> {
     })
 }
 
-/// Where a core file lives: the distro cores directory first, then the
-/// user's own cores directory (`readiness::retro_cores_directory`), which is
-/// where the readiness sync places cores no distro package provides.
+/// Where a launch finds a core: the distro cores directory first, then the
+/// user's own cores directory, where the readiness sync places cores no distro
+/// package provides. The bridge allowlists the same two directories.
 async fn core_path_for(core_filename: &str) -> Result<PathBuf, RetroLaunchError> {
-    for directory in [
-        PathBuf::from(CORE_DIRECTORY),
-        crate::readiness::retro_cores_directory(),
-    ] {
+    let distro = PathBuf::from(CORE_DIRECTORY);
+    let user = paths::retro_cores_dir(&paths::retro_save_root());
+    find_core(core_filename, [distro.as_path(), user.as_path()])
+        .await
+        .ok_or_else(|| RetroLaunchError::CoreNotInstalled {
+            core_path: distro.join(core_filename),
+        })
+}
+
+/// The first of `directories` holding `core_filename` as a regular file. Shared
+/// by launch and readiness, so a green readiness row is the core a launch loads.
+pub(crate) async fn find_core<'a>(
+    core_filename: &str,
+    directories: impl IntoIterator<Item = &'a Path>,
+) -> Option<PathBuf> {
+    for directory in directories {
         let core_path = directory.join(core_filename);
         if fs::metadata(&core_path)
             .await
             .is_ok_and(|metadata| metadata.is_file())
         {
-            return Ok(core_path);
+            return Some(core_path);
         }
     }
-    Err(RetroLaunchError::CoreNotInstalled {
-        core_path: Path::new(CORE_DIRECTORY).join(core_filename),
-    })
+    None
 }
 
 fn validate_content_filename(fs_name: &str) -> Result<(), RetroLaunchError> {

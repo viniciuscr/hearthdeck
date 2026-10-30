@@ -12,6 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use hearthdeck_protocol::paths;
 use tracing::info;
 
 use crate::systemd::{LaunchedApplication, launch_with_systemd};
@@ -142,13 +143,13 @@ pub(crate) async fn launch_retro_game(
     // *ignored* (RetroArch logs one warning and silently falls back to its own
     // default), so writing the config alone would leave saves wherever the
     // desktop install keeps them on the first play of every game.
-    let save_root = retro_save_root();
+    let save_root = paths::retro_save_root();
     let save_directories = create_save_directories(&save_root, &rom_path).await?;
     // The system directory holds the BIOS files the daemon's readiness check
     // verifies; like the save directories it must exist before RetroArch reads
     // the config, or RetroArch ignores the pin and cores fall back to its own
     // default location.
-    let system_directory = save_root.join("system");
+    let system_directory = paths::retro_system_dir(&save_root);
     tokio::fs::create_dir_all(&system_directory)
         .await
         .context("could not create the RetroArch system directory")?;
@@ -266,7 +267,7 @@ fn retroarch_managed_config(
     // sync client at without knowing anything about RetroArch. The system
     // directory is pinned to the `system` sibling under that same root: it is
     // where the daemon's readiness check verifies BIOS files
-    // (`readiness::retro_system_directory`), and where this launch's cores
+    // (`hearthdeck_protocol::paths::retro_system_dir`), and where this launch's cores
     // look for them.
     //
     // The paths are pinned here rather than left to `sort_*`, because neither
@@ -331,41 +332,6 @@ fn retro_config_directory() -> PathBuf {
         .or_else(|| env::var_os("HOME").map(|path| PathBuf::from(path).join(".config")));
     config_home
         .unwrap_or_else(|| PathBuf::from(".config"))
-        .join("hearthdeck/retroarch")
-}
-
-/// Root of the save/state tree Hearthdeck pins for every launch:
-/// `<root>/saves/<game>/` and `<root>/states/<game>/`.
-///
-/// Under the XDG data home by default, not the config directory above: these
-/// are user data, and backing them up should not mean backing up settings.
-/// `HEARTHDECK_RETRO_SAVE_ROOT` replaces the whole root, which is how a box
-/// points the tree straight at a Dropbox or pCloud folder instead of relying on
-/// a symlink inside the provider's directory.
-const RETRO_SAVE_ROOT_ENV: &str = "HEARTHDECK_RETRO_SAVE_ROOT";
-
-fn retro_save_root() -> PathBuf {
-    retro_save_root_from(
-        env::var_os(RETRO_SAVE_ROOT_ENV).map(PathBuf::from),
-        env::var_os("XDG_DATA_HOME").map(PathBuf::from),
-        env::var_os("HOME").map(PathBuf::from),
-    )
-}
-
-/// Split from the environment so the override-then-XDG chain is unit-testable
-/// without mutating process environment from a parallel test.
-fn retro_save_root_from(
-    configured: Option<PathBuf>,
-    data_home: Option<PathBuf>,
-    home: Option<PathBuf>,
-) -> PathBuf {
-    if let Some(configured) = configured.filter(|path| !path.as_os_str().is_empty()) {
-        return configured;
-    }
-    data_home
-        .filter(|path| !path.as_os_str().is_empty())
-        .or_else(|| home.map(|path| path.join(".local/share")))
-        .unwrap_or_else(|| PathBuf::from(".local/share"))
         .join("hearthdeck/retroarch")
 }
 
@@ -461,14 +427,14 @@ fn retro_rom_library_root() -> PathBuf {
     let compose_file = env::var_os("ROMM_COMPOSE_FILE")
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(hearthdeck_protocol::paths::DEFAULT_ROMM_COMPOSE_FILE));
-    hearthdeck_protocol::paths::romm_data_root(Some(&compose_file)).join("library")
+        .unwrap_or_else(|| PathBuf::from(paths::DEFAULT_ROMM_COMPOSE_FILE));
+    paths::romm_data_root(Some(&compose_file)).join("library")
 }
 
 fn validate_retro_core_path(core_path: &str) -> Result<PathBuf> {
     // The user's own cores directory joins the distro's: that is where the
     // readiness sync places cores no distro package provides.
-    let user_cores_directory = retro_save_root().join("cores");
+    let user_cores_directory = paths::retro_cores_dir(&paths::retro_save_root());
     let allowed_directories: Vec<&Path> = RETRO_CORE_DIRECTORIES
         .iter()
         .map(Path::new)
@@ -519,8 +485,10 @@ mod tests {
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
+    use hearthdeck_protocol::paths::retro_save_root_from;
+
     use super::{
-        RetroSaveDirectories, SHADER_PRESET_BY_CORE, create_save_directories, retro_save_root_from,
+        RetroSaveDirectories, SHADER_PRESET_BY_CORE, create_save_directories,
         retroarch_command_args, retroarch_managed_config, shader_preset_for_core_in,
         validate_retro_core_path_in, validate_retro_rom_path_in,
     };
@@ -755,39 +723,6 @@ mod tests {
                 "{key} is not pinned off"
             );
         }
-    }
-
-    #[test]
-    fn retro_save_root_lets_the_configured_root_win() {
-        // A box pointing the tree straight at a cloud-sync folder: the override
-        // is used as-is, with no `hearthdeck/retroarch` suffix.
-        assert_eq!(
-            retro_save_root_from(
-                Some(PathBuf::from("/home/user/pCloudDrive/Hearthdeck")),
-                Some(PathBuf::from("/home/user/.local/share")),
-                Some(PathBuf::from("/home/user")),
-            ),
-            PathBuf::from("/home/user/pCloudDrive/Hearthdeck")
-        );
-        // Otherwise the XDG data home, not the config directory.
-        assert_eq!(
-            retro_save_root_from(
-                None,
-                Some(PathBuf::from("/data/home")),
-                Some(PathBuf::from("/home/user")),
-            ),
-            PathBuf::from("/data/home/hearthdeck/retroarch")
-        );
-        // An empty variable counts as unset, and without XDG_DATA_HOME the
-        // spec's `$HOME/.local/share` fallback applies.
-        assert_eq!(
-            retro_save_root_from(
-                Some(PathBuf::new()),
-                None,
-                Some(PathBuf::from("/home/user")),
-            ),
-            PathBuf::from("/home/user/.local/share/hearthdeck/retroarch")
-        );
     }
 
     #[test]

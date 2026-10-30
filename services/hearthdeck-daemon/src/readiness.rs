@@ -18,10 +18,11 @@ use serde::Deserialize;
 use sha1::{Digest, Sha1};
 
 use hearthdeck_protocol::{
-    RetroBiosFile, RetroBiosSyncFailure, RetroBiosSyncReport, RetroCoreReadiness,
-    RetroSystemReadiness,
+    BridgeRequest, BridgeResponse, RetroBiosFile, RetroBiosSyncFailure, RetroBiosSyncReport,
+    RetroCoreInstallReport, RetroCoreReadiness, RetroSystemReadiness, paths,
 };
 
+use crate::bridge;
 use crate::diagnostics::RommPlatform;
 use crate::retro;
 
@@ -299,46 +300,13 @@ pub(crate) struct ReadinessPaths {
 
 impl ReadinessPaths {
     pub(crate) fn discover() -> Self {
+        let save_root = paths::retro_save_root();
         Self {
             cores_dir: PathBuf::from(retro::CORE_DIRECTORY),
-            system_dir: retro_system_directory(),
-            user_cores_dir: retro_cores_directory(),
+            system_dir: paths::retro_system_dir(&save_root),
+            user_cores_dir: paths::retro_cores_dir(&save_root),
         }
     }
-}
-
-/// The RetroArch system directory Hearthdeck owns: the `system` folder under
-/// the save root (docs/retroarch-integration.md decision 11), so BIOS, saves
-/// and states live under one backup-able tree. The bridge pins
-/// `system_directory` to this same path at launch.
-pub(crate) fn retro_system_directory() -> PathBuf {
-    retro_save_root().join("system")
-}
-
-/// The user's own cores directory, the `cores` sibling of the system
-/// directory: where the readiness sync places core files no distro package
-/// provides. The bridge allowlists it beside `/usr/lib/libretro`.
-pub(crate) fn retro_cores_directory() -> PathBuf {
-    retro_save_root().join("cores")
-}
-
-fn retro_save_root() -> PathBuf {
-    if let Some(overridden) =
-        std::env::var_os("HEARTHDECK_RETRO_SAVE_ROOT").filter(|p| !p.is_empty())
-    {
-        return PathBuf::from(overridden);
-    }
-    data_home().join("hearthdeck/retroarch")
-}
-
-fn data_home() -> PathBuf {
-    if let Some(overridden) = std::env::var_os("XDG_DATA_HOME").filter(|p| !p.is_empty()) {
-        return PathBuf::from(overridden);
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default()
-        .join(".local/share")
 }
 
 /// The BIOS slots a platform's emulators read.
@@ -362,7 +330,12 @@ pub(crate) async fn readiness(
         let Some(core_filename) = retro::core_filename_for(fs_slug, "") else {
             continue;
         };
-        let installed = core_is_installed(core_filename, paths).await;
+        let installed = retro::find_core(
+            core_filename,
+            [paths.cores_dir.as_path(), paths.user_cores_dir.as_path()],
+        )
+        .await
+        .is_some();
         let mut bios = Vec::new();
         for slot in bios_slots_for(fs_slug) {
             bios.push(bios_file_status(slot, &paths.system_dir).await);
@@ -403,18 +376,29 @@ pub(crate) fn missing_core_packages(report: &[RetroSystemReadiness]) -> Vec<Stri
     packages
 }
 
-/// A core counts as installed when it is in the distro cores directory or in
-/// the user's own cores directory.
-async fn core_is_installed(core_filename: &str, paths: &ReadinessPaths) -> bool {
-    for directory in [&paths.cores_dir, &paths.user_cores_dir] {
-        if tokio::fs::metadata(directory.join(core_filename))
-            .await
-            .is_ok_and(|metadata| metadata.is_file())
-        {
-            return true;
-        }
+/// Installs the distro packages for the cores the active platforms are
+/// missing, through the bridge's polkit-scoped helper. The package names come
+/// from [`missing_core_packages`], never from a client, and the bridge
+/// re-validates each one before the helper sees it.
+pub(crate) async fn install_missing_cores(
+    bridge_socket: &Path,
+    platforms: &[RommPlatform],
+    paths: &ReadinessPaths,
+) -> anyhow::Result<RetroCoreInstallReport> {
+    let packages = missing_core_packages(&readiness(platforms, paths).await);
+    if packages.is_empty() {
+        return Ok(RetroCoreInstallReport {
+            installed: Vec::new(),
+            failed: Vec::new(),
+        });
     }
-    false
+    match bridge::request(bridge_socket, BridgeRequest::InstallRetroCores { packages }).await? {
+        BridgeResponse::RetroCoresInstalled { report } => Ok(report),
+        BridgeResponse::Error { message, .. } => {
+            anyhow::bail!("bridge rejected the core install: {message}")
+        }
+        _ => anyhow::bail!("bridge answered the core install with an unexpected response"),
+    }
 }
 
 /// Core files the active platforms are missing that no distro package
@@ -451,17 +435,17 @@ pub(crate) struct BiosSource {
 
 impl BiosSource {
     /// From `HEARTHDECK_BIOS_SOURCE_URL` plus the optional
-    /// `HEARTHDECK_BIOS_SOURCE_TOKEN` for a private project. `Ok(None)` means
-    /// no source is configured, which the caller reports as "not ready to
-    /// sync", not as an error.
-    pub(crate) fn from_env() -> Option<Result<Self, ReadinessError>> {
+    /// `HEARTHDECK_BIOS_SOURCE_TOKEN` for a private project. Unset is
+    /// [`ReadinessError::NoSource`]: Hearthdeck never picks a source itself.
+    pub(crate) fn from_env() -> Result<Self, ReadinessError> {
         let url = std::env::var("HEARTHDECK_BIOS_SOURCE_URL")
             .ok()
-            .filter(|value| !value.trim().is_empty())?;
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(ReadinessError::NoSource)?;
         let token = std::env::var("HEARTHDECK_BIOS_SOURCE_TOKEN")
             .ok()
             .filter(|value| !value.is_empty());
-        Some(Self::parse(&url, token))
+        Self::parse(&url, token)
     }
 
     /// Accepts `https://github.com/<owner>/<repo>` with an optional
@@ -517,16 +501,16 @@ impl BiosSource {
     }
 }
 
-/// What one BIOS sync run did, and the readiness that holds afterwards.
+/// What one BIOS sync run did, and the readiness that holds afterwards. Every
+/// file fails on its own: one missing dump never stops the rest of the sync.
 pub(crate) async fn sync_bios(
     platforms: &[RommPlatform],
     paths: &ReadinessPaths,
     source: &BiosSource,
-) -> Result<RetroBiosSyncReport, ReadinessError> {
-    let client = reqwest::Client::new();
+) -> RetroBiosSyncReport {
+    let mut fetcher = SourceFetcher::new(source);
     let mut fetched = Vec::new();
     let mut failed = Vec::new();
-    let mut listings: HashMap<String, Result<Vec<SourceEntry>, String>> = HashMap::new();
 
     for slot in active_slots(platforms) {
         if matches!(
@@ -535,149 +519,147 @@ pub(crate) async fn sync_bios(
         ) {
             continue;
         }
-        let folder = format!("bios/{}", slot.system);
-        let listing = match listings.get(&folder) {
-            Some(existing) => existing.clone(),
-            None => {
-                let fresh = list_folder(&client, source, &folder).await;
-                listings.insert(folder.clone(), fresh.clone());
-                fresh
-            }
-        };
-        let entries = match listing {
-            Ok(entries) => entries,
-            Err(reason) => {
-                failed.push(RetroBiosSyncFailure {
-                    filename: slot_display_name(slot),
-                    reason,
-                });
-                continue;
-            }
-        };
-        let Some(candidate) = pick_candidate(&entries, &slot.accept) else {
-            failed.push(RetroBiosSyncFailure {
-                filename: slot_display_name(slot),
-                reason: format!("no matching file in the source's bios/{}", slot.system),
-            });
-            continue;
-        };
-        let name = canonical_name(slot, &candidate.name);
-        let Some(url) = candidate.download_url.as_deref() else {
-            failed.push(RetroBiosSyncFailure {
-                filename: name.to_owned(),
-                reason: "the source offers no download URL for this file".to_owned(),
-            });
-            continue;
-        };
-        match download(&client, source, url).await {
-            Err(reason) => failed.push(RetroBiosSyncFailure {
-                filename: name.to_owned(),
-                reason,
-            }),
-            Ok(bytes) => {
-                if !file_is_verified(&candidate.name, &bytes, &slot.accept) {
-                    failed.push(RetroBiosSyncFailure {
-                        filename: name.to_owned(),
-                        reason: "the downloaded file failed verification".to_owned(),
-                    });
-                    continue;
-                }
-                let target = target_path(slot, name, &paths.system_dir);
-                match write_bios(&target, &bytes).await {
-                    Ok(()) => fetched.push(name.to_owned()),
-                    Err(error) => failed.push(RetroBiosSyncFailure {
-                        filename: name.to_owned(),
-                        reason: format!("could not write {}: {error}", target.display()),
-                    }),
-                }
-            }
+        match place_bios(&mut fetcher, slot, &paths.system_dir).await {
+            Ok(name) => fetched.push(name),
+            Err(failure) => failed.push(failure),
         }
     }
-
     // Cores no distro package provides come from the same source, one folder
     // over: `cores/<file name>`.
-    let before = readiness(platforms, paths).await;
-    for core_file in missing_source_cores(&before) {
-        let listing = match listings.get("cores") {
-            Some(existing) => existing.clone(),
-            None => {
-                let fresh = list_folder(&client, source, "cores").await;
-                listings.insert("cores".to_owned(), fresh.clone());
-                fresh
-            }
-        };
-        let entries = match listing {
-            Ok(entries) => entries,
-            Err(reason) => {
-                failed.push(RetroBiosSyncFailure {
-                    filename: core_file.clone(),
-                    reason,
-                });
-                continue;
-            }
-        };
-        let Some(candidate) = entries.iter().find(|entry| entry.name == core_file) else {
-            failed.push(RetroBiosSyncFailure {
-                filename: core_file.clone(),
-                reason: format!("no {core_file} in the source's cores/ folder"),
-            });
-            continue;
-        };
-        let Some(url) = candidate.download_url.as_deref() else {
-            failed.push(RetroBiosSyncFailure {
-                filename: core_file.clone(),
-                reason: "the source offers no download URL for this file".to_owned(),
-            });
-            continue;
-        };
-        match download(&client, source, url).await {
+    for core_file in missing_source_cores(&readiness(platforms, paths).await) {
+        match place_core(&mut fetcher, &core_file, &paths.user_cores_dir).await {
+            Ok(()) => fetched.push(core_file),
             Err(reason) => failed.push(RetroBiosSyncFailure {
-                filename: core_file.clone(),
+                filename: core_file,
                 reason,
             }),
-            Ok(bytes) => {
-                if !is_elf(&bytes) {
-                    failed.push(RetroBiosSyncFailure {
-                        filename: core_file.clone(),
-                        reason: "the downloaded core is not a shared library".to_owned(),
-                    });
-                    continue;
-                }
-                let target = paths.user_cores_dir.join(&core_file);
-                match write_bios(&target, &bytes).await {
-                    Ok(()) => fetched.push(core_file.clone()),
-                    Err(error) => failed.push(RetroBiosSyncFailure {
-                        filename: core_file.clone(),
-                        reason: format!("could not write {}: {error}", target.display()),
-                    }),
-                }
-            }
         }
     }
 
-    Ok(RetroBiosSyncReport {
+    RetroBiosSyncReport {
         fetched,
         failed,
         readiness: readiness(platforms, paths).await,
-    })
+    }
+}
+
+/// Fetches, verifies and places one slot's file; the placed name on success.
+async fn place_bios(
+    fetcher: &mut SourceFetcher<'_>,
+    slot: &BiosSlot,
+    system_dir: &Path,
+) -> Result<String, RetroBiosSyncFailure> {
+    let failure = |filename: &str, reason: String| RetroBiosSyncFailure {
+        filename: filename.to_owned(),
+        reason,
+    };
+    let display_name = slot_display_name(slot);
+    let folder = format!("bios/{}", slot.system);
+    let entries = fetcher
+        .listing(&folder)
+        .await
+        .map_err(|reason| failure(&display_name, reason))?;
+    let candidate = pick_candidate(entries, &slot.accept)
+        .cloned()
+        .ok_or_else(|| {
+            failure(
+                &display_name,
+                format!("no matching file in the source's {folder}"),
+            )
+        })?;
+    let name = canonical_name(slot, &candidate.name);
+    let bytes = fetcher
+        .download(&candidate)
+        .await
+        .map_err(|reason| failure(name, reason))?;
+    if !file_is_verified(&candidate.name, &bytes, &slot.accept) {
+        return Err(failure(
+            name,
+            "the downloaded file failed verification".to_owned(),
+        ));
+    }
+    write_file(&target_path(slot, name, system_dir), &bytes)
+        .await
+        .map_err(|reason| failure(name, reason))?;
+    Ok(name.to_owned())
+}
+
+/// Fetches one source-only core into the user's cores directory.
+async fn place_core(
+    fetcher: &mut SourceFetcher<'_>,
+    core_file: &str,
+    user_cores_dir: &Path,
+) -> Result<(), String> {
+    let candidate = fetcher
+        .listing("cores")
+        .await?
+        .iter()
+        .find(|entry| entry.name == core_file)
+        .cloned()
+        .ok_or_else(|| format!("no {core_file} in the source's cores/ folder"))?;
+    let bytes = fetcher.download(&candidate).await?;
+    if !is_elf(&bytes) {
+        return Err("the downloaded core is not a shared library".to_owned());
+    }
+    write_file(&user_cores_dir.join(core_file), &bytes).await
+}
+
+/// The user's source plus the folder listings one sync has already read, so a
+/// folder serving several slots is listed once.
+struct SourceFetcher<'a> {
+    client: reqwest::Client,
+    source: &'a BiosSource,
+    listings: HashMap<String, Result<Vec<SourceEntry>, String>>,
+}
+
+impl<'a> SourceFetcher<'a> {
+    fn new(source: &'a BiosSource) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            source,
+            listings: HashMap::new(),
+        }
+    }
+
+    async fn listing(&mut self, folder: &str) -> Result<&[SourceEntry], String> {
+        if !self.listings.contains_key(folder) {
+            let fresh = list_folder(&self.client, self.source, folder).await;
+            self.listings.insert(folder.to_owned(), fresh);
+        }
+        match &self.listings[folder] {
+            Ok(entries) => Ok(entries),
+            Err(reason) => Err(reason.clone()),
+        }
+    }
+
+    async fn download(&self, entry: &SourceEntry) -> Result<Vec<u8>, String> {
+        let url = entry
+            .download_url
+            .as_deref()
+            .ok_or_else(|| "the source offers no download URL for this file".to_owned())?;
+        download(&self.client, self.source, url).await
+    }
 }
 
 #[derive(Debug)]
 pub(crate) enum ReadinessError {
+    NoSource,
     InvalidSourceUrl,
-    Io(std::io::Error),
 }
 
 impl std::fmt::Display for ReadinessError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NoSource => write!(
+                formatter,
+                "no BIOS source is configured (HEARTHDECK_BIOS_SOURCE_URL)"
+            ),
             Self::InvalidSourceUrl => {
                 write!(
                     formatter,
                     "HEARTHDECK_BIOS_SOURCE_URL is not a GitHub project link"
                 )
             }
-            Self::Io(error) => write!(formatter, "could not write BIOS file: {error}"),
         }
     }
 }
@@ -982,15 +964,16 @@ async fn download(
     Ok(bytes.to_vec())
 }
 
-async fn write_bios(target: &Path, bytes: &[u8]) -> Result<(), ReadinessError> {
+/// Writes through a sibling temp file and a rename, so an interrupted sync
+/// never leaves a truncated BIOS or core where a launch would load it.
+async fn write_file(target: &Path, bytes: &[u8]) -> Result<(), String> {
+    let failed = |error: std::io::Error| format!("could not write {}: {error}", target.display());
     if let Some(parent) = target.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(ReadinessError::Io)?;
+        tokio::fs::create_dir_all(parent).await.map_err(failed)?;
     }
-    tokio::fs::write(target, bytes)
-        .await
-        .map_err(ReadinessError::Io)
+    let partial = target.with_extension("partial");
+    tokio::fs::write(&partial, bytes).await.map_err(failed)?;
+    tokio::fs::rename(&partial, target).await.map_err(failed)
 }
 
 /// Path segments only need their spaces escaped for the GitHub API; every
@@ -1315,5 +1298,40 @@ mod tests {
             size,
             download_url: Some(format!("https://example.invalid/{name}")),
         }
+    }
+
+    /// Readiness and launch share one core lookup, so a core the sync placed in
+    /// the user's cores directory reads as installed.
+    #[tokio::test]
+    async fn a_core_in_the_user_cores_directory_counts_as_installed() {
+        let user_cores = tempfile::tempdir().unwrap();
+        tokio::fs::write(user_cores.path().join("pcsx2_libretro.so"), b"\x7fELF")
+            .await
+            .unwrap();
+        let paths = super::ReadinessPaths {
+            cores_dir: Path::new("/nonexistent").to_path_buf(),
+            system_dir: Path::new("/nonexistent").to_path_buf(),
+            user_cores_dir: user_cores.path().to_path_buf(),
+        };
+
+        let ready = readiness(&[platform("ps2", 1)], &paths).await;
+
+        assert!(ready[0].core.installed);
+    }
+
+    #[tokio::test]
+    async fn a_placed_file_lands_whole_with_no_partial_left_behind() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("pcsx2/bios/SCPH-70004.BIN");
+
+        super::write_file(&target, b"first").await.unwrap();
+        super::write_file(&target, b"second").await.unwrap();
+
+        assert_eq!(tokio::fs::read(&target).await.unwrap(), b"second");
+        let names: Vec<_> = std::fs::read_dir(target.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("SCPH-70004.BIN")]);
     }
 }
