@@ -115,6 +115,7 @@ mod tests {
             icon: IconSource::Name(String::new()),
             categories: Vec::new(),
             form_factor: None,
+            store: None,
         }
     }
 

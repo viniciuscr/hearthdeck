@@ -156,8 +156,10 @@ process-launch flags are not part of it. Launches still go through the daemon.
 `GameRecord` remains the loading adapter. Form factor is a typed optional field
 on `LibraryItem`; rules supply the default, model verdicts can promote to Couch,
 and user overrides win. Existing saved `hearthdeck-form:*` filters are matched
-against that field, not tags on each item. Other category-encoded facets remain
-pending migration.
+against that field, not tags on each item. PC-game stores also live in a typed
+`store` field; tabs and facets derive from it. Saved `hearthdeck-store:*` values
+remain compatible, including case-insensitive group/search matching and exact
+facet matching. Install-source and console facets remain category-encoded.
 
 | Slice | Where | Status |
 | --- | --- | --- |

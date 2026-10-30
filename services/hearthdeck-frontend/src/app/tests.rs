@@ -75,8 +75,13 @@ fn entry(id: &str, categories: &[&str]) -> Arc<LibraryItem> {
         name: id.to_owned(),
         categories: categories
             .iter()
+            .filter(|value| !value.starts_with("hearthdeck-store:"))
             .map(|category| (*category).to_owned())
             .collect(),
+        store: categories
+            .iter()
+            .find_map(|value| value.strip_prefix("hearthdeck-store:"))
+            .map(str::to_owned),
         ..LibraryItem::default()
     };
     if Section::Applications.matches(&entry) {

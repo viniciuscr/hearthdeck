@@ -39,7 +39,6 @@ impl GameRecord {
         if is_game && let Some(store) = &self.store {
             self.categories
                 .retain(|category| !category.eq_ignore_ascii_case(store));
-            self.categories.push(format!("hearthdeck-store:{store}"));
         }
 
         let fallback_icon = if is_game {
@@ -68,6 +67,7 @@ impl GameRecord {
             icon: icon_source,
             categories: self.categories,
             form_factor: None,
+            store: if is_game { self.store } else { None },
         };
         crate::app_group::tag_source(&mut entry, self.install_source.as_deref());
         if crate::app_group::Section::Applications.matches(&entry) {
@@ -116,7 +116,9 @@ mod tests {
         assert_eq!(item.id, "hearthdeck:heroic:example");
         assert_eq!(item.name, "Example");
         assert_eq!(item.exec.as_deref(), Some("legendary:example"));
-        assert_eq!(item.categories, ["Game", "hearthdeck-store:Epic"]);
+        assert_eq!(item.categories, ["Game"]);
+        assert_eq!(item.store.as_deref(), Some("Epic"));
+        assert!(item.matches_category("hearthdeck-store:Epic"));
         assert!(item.wm_class.is_none());
         assert!(matches!(
             item.icon,
@@ -178,15 +180,14 @@ mod tests {
     }
 
     #[test]
-    fn game_store_becomes_a_tab_category() {
+    fn game_store_is_typed_without_a_category_tag() {
         let mut game = record(None);
         game.categories = vec!["Game".into(), "Epic Games".into()];
         game.store = Some("Epic Games".into());
 
-        assert_eq!(
-            game.into_library_item().categories,
-            vec!["Game", "hearthdeck-store:Epic Games"]
-        );
+        let item = game.into_library_item();
+        assert_eq!(item.categories, ["Game"]);
+        assert_eq!(item.store.as_deref(), Some("Epic Games"));
     }
 
     #[test]
