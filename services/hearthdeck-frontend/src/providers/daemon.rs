@@ -384,20 +384,25 @@ impl DaemonClient {
 
     /// A POST that carries nothing and answers nothing.
     async fn post_empty(&self, path: &str) -> Result<(), DaemonError> {
-        let response = self
-            .transport
-            .http()
-            .post(self.api_url(path))
+        let request = self.transport.http().post(self.api_url(path));
+        self.send(request).await.map(drop)
+    }
+
+    /// Sends an authenticated request; a non-success status becomes the
+    /// daemon's own error.
+    async fn send(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, DaemonError> {
+        let response = request
             .headers(self.auth_headers().await?)
             .send()
             .await
             .map_err(DaemonError::Connection)?;
-
         if !response.status().is_success() {
             return Err(Self::http_error(response).await);
         }
-
-        Ok(())
+        Ok(response)
     }
 
     /// Launches whatever an item id names - the one route a provider-agnostic
@@ -487,65 +492,50 @@ impl DaemonClient {
         Ok(consoles)
     }
 
-    /// Lists retro ROMs, optionally narrowed by platform, a search term, and
-    /// facet selections (facet id -> value, e.g. `genre` -> `Action`).
     /// Whether each platform with roms can play: its core installed and its
     /// BIOS files in place. Read whenever the settings screen opens.
     pub async fn retro_readiness(&self) -> Result<Vec<RetroSystemReadiness>, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .get(self.api_url("/v1/retro/readiness"))
-            .headers(self.auth_headers().await?)
-            .send()
+            .get(self.api_url("/v1/retro/readiness"));
+        self.send(request)
+            .await?
+            .json()
             .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
-        response.json().await.map_err(DaemonError::Deserialization)
+            .map_err(DaemonError::Deserialization)
     }
 
     /// Places the BIOS files the active platforms are missing, fetching only
     /// those from the user's own BIOS source.
     pub async fn sync_retro_bios(&self) -> Result<RetroBiosSyncReport, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .post(self.api_url("/v1/retro/readiness/bios-sync"))
-            .headers(self.auth_headers().await?)
-            .send()
+            .post(self.api_url("/v1/retro/readiness/bios-sync"));
+        self.send(request)
+            .await?
+            .json()
             .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
-        response.json().await.map_err(DaemonError::Deserialization)
+            .map_err(DaemonError::Deserialization)
     }
 
     /// Installs the missing libretro core packages through the daemon's
     /// polkit-scoped helper. The daemon names the packages itself.
     pub async fn install_retro_cores(&self) -> Result<RetroCoreInstallReport, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .post(self.api_url("/v1/retro/cores/install"))
-            .headers(self.auth_headers().await?)
-            .send()
+            .post(self.api_url("/v1/retro/cores/install"));
+        self.send(request)
+            .await?
+            .json()
             .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
-        response.json().await.map_err(DaemonError::Deserialization)
+            .map_err(DaemonError::Deserialization)
     }
 
+    /// Lists retro ROMs, optionally narrowed by platform, a search term, and
+    /// facet selections (facet id -> value, e.g. `genre` -> `Action`).
     pub async fn list_retro_roms(
         &self,
         platform_id: Option<i64>,

@@ -68,11 +68,58 @@ pub fn romm_data_root(compose_file: Option<&Path>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_ROMM_DATA_ROOT))
 }
 
+/// Replaces the whole RetroArch tree root, which is how a box points saves at a
+/// synced folder instead of relying on a symlink inside the provider's directory.
+pub const RETRO_SAVE_ROOT_ENV: &str = "HEARTHDECK_RETRO_SAVE_ROOT";
+
+/// Root of the RetroArch tree Hearthdeck owns: per-game `saves/` and `states/`,
+/// the `system/` BIOS directory and the user's own `cores/`.
+///
+/// Under the XDG data home by default, not the config directory: these are user
+/// data, and backing them up should not mean backing up settings. The bridge pins
+/// RetroArch to this tree at launch and the daemon's readiness check verifies the
+/// same files, so both resolve it here.
+pub fn retro_save_root() -> PathBuf {
+    retro_save_root_from(
+        std::env::var_os(RETRO_SAVE_ROOT_ENV).map(PathBuf::from),
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
+/// [`retro_save_root`] split from the environment so the override-then-XDG chain
+/// is unit-testable without mutating process environment from a parallel test.
+pub fn retro_save_root_from(
+    configured: Option<PathBuf>,
+    data_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    if let Some(configured) = configured.filter(|path| !path.as_os_str().is_empty()) {
+        return configured;
+    }
+    data_home
+        .filter(|path| !path.as_os_str().is_empty())
+        .or_else(|| home.map(|path| path.join(".local/share")))
+        .unwrap_or_else(|| PathBuf::from(".local/share"))
+        .join("hearthdeck/retroarch")
+}
+
+/// RetroArch's `system_directory`: where BIOS files live.
+pub fn retro_system_dir(save_root: &Path) -> PathBuf {
+    save_root.join("system")
+}
+
+/// The user's own cores directory: cores no distro package provides. The bridge
+/// allowlists it beside the distro cores directory.
+pub fn retro_cores_dir(save_root: &Path) -> PathBuf {
+    save_root.join("cores")
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{DEFAULT_ROMM_DATA_ROOT, romm_data_root};
+    use super::{DEFAULT_ROMM_DATA_ROOT, retro_save_root_from, romm_data_root};
 
     #[test]
     fn romm_data_root_follows_the_compose_file() {
@@ -86,6 +133,39 @@ mod tests {
         assert_eq!(
             romm_data_root(Some(Path::new("podman-compose.yaml"))),
             PathBuf::from(DEFAULT_ROMM_DATA_ROOT)
+        );
+    }
+
+    #[test]
+    fn retro_save_root_lets_the_configured_root_win() {
+        // A box pointing the tree straight at a cloud-sync folder: the override
+        // is used as-is, with no `hearthdeck/retroarch` suffix.
+        assert_eq!(
+            retro_save_root_from(
+                Some(PathBuf::from("/home/user/pCloudDrive/Hearthdeck")),
+                Some(PathBuf::from("/home/user/.local/share")),
+                Some(PathBuf::from("/home/user")),
+            ),
+            PathBuf::from("/home/user/pCloudDrive/Hearthdeck")
+        );
+        // Otherwise the XDG data home, not the config directory.
+        assert_eq!(
+            retro_save_root_from(
+                None,
+                Some(PathBuf::from("/data/home")),
+                Some(PathBuf::from("/home/user")),
+            ),
+            PathBuf::from("/data/home/hearthdeck/retroarch")
+        );
+        // An empty variable counts as unset, and without XDG_DATA_HOME the
+        // spec's `$HOME/.local/share` fallback applies.
+        assert_eq!(
+            retro_save_root_from(
+                Some(PathBuf::new()),
+                None,
+                Some(PathBuf::from("/home/user")),
+            ),
+            PathBuf::from("/home/user/.local/share/hearthdeck/retroarch")
         );
     }
 }
