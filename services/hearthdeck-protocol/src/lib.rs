@@ -120,6 +120,9 @@ pub enum BridgeRequest {
     InstallRetroCores {
         packages: Vec<String>,
     },
+    /// Restarts the optional `romm.service` user unit. Carries no unit name:
+    /// the bridge restarts that one fixed unit and nothing else.
+    RestartRommService,
     ActiveApplicationSession,
     StopActiveApplicationSession,
     StopApplicationSession {
@@ -201,6 +204,7 @@ pub enum BridgeResponse {
     RetroCoresInstalled {
         report: RetroCoreInstallReport,
     },
+    RommServiceRestarted,
     Error {
         code: BridgeErrorCode,
         message: String,

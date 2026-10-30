@@ -426,6 +426,16 @@ async fn handle_request(
                 }
             }
         }
+        BridgeRequest::RestartRommService => match systemd::restart_romm_service().await {
+            Ok(()) => BridgeResponse::RommServiceRestarted,
+            Err(error) => {
+                warn!(%error, "romm.service restart failed");
+                BridgeResponse::Error {
+                    code: BridgeErrorCode::Internal,
+                    message: error.to_string(),
+                }
+            }
+        },
         BridgeRequest::ActiveApplicationSession => {
             let _transition = session_transition.lock().await;
             let active = active_managed_session(sessions, session_directory).await;

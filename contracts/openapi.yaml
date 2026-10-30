@@ -536,7 +536,7 @@ paths:
         '202':
           description: Restart requested
         '502':
-          description: systemd rejected the restart, or the unit is not installed
+          description: The bridge is unavailable, or systemd rejected the restart (for example, the unit is not installed)
   /v1/retro/assets:
     get:
       operationId: getRetroAsset
