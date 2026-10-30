@@ -1085,11 +1085,13 @@ impl Application for App {
                 Err(error) => log::warn!("readiness read failed: {error}"),
             },
             Message::SyncRetroBios => {
+                log::info!("readiness sync requested");
                 self.retro_readiness.syncing = true;
                 self.retro_readiness.notice = None;
                 return self.sync_retro_bios();
             }
             Message::InstallRetroCores => {
+                log::info!("core install requested");
                 self.retro_readiness.installing = true;
                 self.retro_readiness.notice = None;
                 return self.install_retro_cores();
@@ -1098,8 +1100,13 @@ impl Application for App {
                 self.retro_readiness.installing = false;
                 match result {
                     Ok(report) => {
-                        self.retro_readiness.notice =
-                            Some(settings::readiness::install_notice(&report));
+                        let notice = settings::readiness::install_notice(&report);
+                        if report.failed.is_empty() {
+                            log::info!("core install finished: {notice}");
+                        } else {
+                            log::warn!("core install finished: {notice}");
+                        }
+                        self.retro_readiness.notice = Some(notice);
                     }
                     Err(error) => {
                         log::warn!("core install failed: {error}");
@@ -1115,6 +1122,11 @@ impl Application for App {
                 match result {
                     Ok(report) => {
                         let notice = settings::readiness::sync_notice(&report);
+                        if report.failed.is_empty() {
+                            log::info!("readiness sync finished: {notice}");
+                        } else {
+                            log::warn!("readiness sync finished: {notice}");
+                        }
                         self.retro_readiness.readiness = Some(report.readiness);
                         self.retro_readiness.notice = Some(notice);
                     }

@@ -94,15 +94,36 @@ pub fn platform_status(entry: &RetroSystemReadiness) -> String {
 }
 
 /// What a sync did: which files it placed, and how many it could not.
+/// The tail every notice gets when files failed: the count, and the first
+/// failure's name and reason. A bare "1 failed" leaves the user as much in
+/// the dark as no message at all.
+fn failure_tail(what: &str, failures: &[(&str, &str)]) -> String {
+    let Some(((name, reason), rest)) = failures.split_first() else {
+        return String::new();
+    };
+    if rest.is_empty() {
+        format!(" · 1 {what}: {name} — {reason}")
+    } else {
+        format!(
+            " · {} {what}: {name} — {reason}, and {} more",
+            failures.len(),
+            rest.len()
+        )
+    }
+}
+
 pub fn sync_notice(report: &RetroBiosSyncReport) -> String {
     let mut line = if report.fetched.is_empty() {
         "nothing to fetch".to_owned()
     } else {
         format!("placed {}", report.fetched.join(", "))
     };
-    if !report.failed.is_empty() {
-        line.push_str(&format!(" · {} could not be placed", report.failed.len()));
-    }
+    let failures: Vec<(&str, &str)> = report
+        .failed
+        .iter()
+        .map(|failure| (failure.filename.as_str(), failure.reason.as_str()))
+        .collect();
+    line.push_str(&failure_tail("could not be placed", &failures));
     line
 }
 
@@ -127,13 +148,24 @@ pub fn install_notice(report: &RetroCoreInstallReport) -> String {
     } else {
         format!("installed {}", report.installed.join(", "))
     };
-    if !report.failed.is_empty() {
-        line.push_str(&format!(
-            " · {} could not be installed",
-            report.failed.len()
-        ));
-    }
+    let failures: Vec<(&str, &str)> = report
+        .failed
+        .iter()
+        .map(|failure| (failure.package.as_str(), failure.reason.as_str()))
+        .collect();
+    line.push_str(&failure_tail("could not be installed", &failures));
     line
+}
+
+/// What the card says while a request is in flight. The press must always
+/// leave something on screen: a slow or dead network behind a silent row of
+/// disabled buttons reads as a broken button.
+pub fn progress_line(syncing: bool, installing: bool) -> Option<String> {
+    match (syncing, installing) {
+        (true, _) => Some("Fetching from your source…".to_owned()),
+        (_, true) => Some("Installing cores…".to_owned()),
+        (false, false) => None,
+    }
 }
 
 /// The card: the summary, one line per platform, and the check/fetch buttons.
@@ -155,7 +187,9 @@ pub fn view<'a>(state: &Flow) -> Element<'a, Message> {
             platform_status(entry)
         )));
     }
-    if let Some(notice) = &state.notice {
+    if let Some(progress) = progress_line(state.syncing, state.installing) {
+        section = section.add(caption_line(progress));
+    } else if let Some(notice) = &state.notice {
         section = section.add(caption_line(notice.clone()));
     }
     let missing_packages = missing_core_packages(readiness);
@@ -186,8 +220,8 @@ pub fn view<'a>(state: &Flow) -> Element<'a, Message> {
 #[cfg(test)]
 mod tests {
     use super::{
-        install_notice, missing_core_packages, platform_missing, platform_status, summary_line,
-        sync_notice,
+        install_notice, missing_core_packages, platform_missing, platform_status, progress_line,
+        summary_line, sync_notice,
     };
     use hearthdeck_protocol::{
         RetroBiosFile, RetroBiosSyncFailure, RetroBiosSyncReport, RetroCoreInstallFailure,
@@ -272,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn the_install_notice_names_what_landed_and_how_many_failed() {
+    fn the_install_notice_names_what_landed_and_why_the_rest_failed() {
         let report = RetroCoreInstallReport {
             installed: vec!["libretro-snes9x".to_owned()],
             failed: vec![RetroCoreInstallFailure {
@@ -282,7 +316,7 @@ mod tests {
         };
         assert_eq!(
             install_notice(&report),
-            "installed libretro-snes9x · 1 could not be installed"
+            "installed libretro-snes9x · 1 could not be installed: libretro-mame — pacman-failed"
         );
 
         let empty = RetroCoreInstallReport {
@@ -309,7 +343,20 @@ mod tests {
     }
 
     #[test]
-    fn the_sync_notice_names_what_was_placed_and_how_many_failed() {
+    fn the_card_says_it_is_working_while_a_request_is_in_flight() {
+        assert_eq!(
+            progress_line(true, false).as_deref(),
+            Some("Fetching from your source…")
+        );
+        assert_eq!(
+            progress_line(false, true).as_deref(),
+            Some("Installing cores…")
+        );
+        assert_eq!(progress_line(false, false), None);
+    }
+
+    #[test]
+    fn the_sync_notice_names_what_was_placed_and_why_the_rest_failed() {
         let report = RetroBiosSyncReport {
             fetched: vec!["syscard3.pce".to_owned()],
             failed: vec![RetroBiosSyncFailure {
@@ -320,7 +367,27 @@ mod tests {
         };
         assert_eq!(
             sync_notice(&report),
-            "placed syscard3.pce · 1 could not be placed"
+            "placed syscard3.pce · 1 could not be placed: neogeo.zip — no matching file in the source"
+        );
+
+        // Several failures still name the first one and count the rest.
+        let two = RetroBiosSyncReport {
+            fetched: Vec::new(),
+            failed: vec![
+                RetroBiosSyncFailure {
+                    filename: "neogeo.zip".to_owned(),
+                    reason: "no matching file in the source".to_owned(),
+                },
+                RetroBiosSyncFailure {
+                    filename: "pcsx2_libretro.so".to_owned(),
+                    reason: "no file in the source's cores/ folder".to_owned(),
+                },
+            ],
+            readiness: Vec::new(),
+        };
+        assert_eq!(
+            sync_notice(&two),
+            "nothing to fetch · 2 could not be placed: neogeo.zip — no matching file in the source, and 1 more"
         );
 
         let empty = RetroBiosSyncReport {

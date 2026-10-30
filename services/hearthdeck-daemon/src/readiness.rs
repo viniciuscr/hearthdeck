@@ -528,6 +528,11 @@ pub(crate) async fn sync_bios(
     let mut fetcher = SourceFetcher::new(source);
     let mut fetched = Vec::new();
     let mut failed = Vec::new();
+    tracing::info!(
+        owner = %source.owner,
+        repo = %source.repo,
+        "readiness sync starting"
+    );
 
     for slot in active_slots(platforms) {
         if matches!(
@@ -552,6 +557,22 @@ pub(crate) async fn sync_bios(
             }),
         }
     }
+
+    for file in &fetched {
+        tracing::info!(file = %file, "placed source file");
+    }
+    for failure in &failed {
+        tracing::warn!(
+            file = %failure.filename,
+            reason = %failure.reason,
+            "could not place source file"
+        );
+    }
+    tracing::info!(
+        placed = fetched.len(),
+        failed = failed.len(),
+        "readiness sync finished"
+    );
 
     RetroBiosSyncReport {
         fetched,
@@ -632,7 +653,14 @@ struct SourceFetcher<'a> {
 impl<'a> SourceFetcher<'a> {
     fn new(source: &'a BiosSource) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            // Bounded like every other network call: a dead route must come
+            // back as a failed file the report can name, not a request the
+            // settings button waits on forever.
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .unwrap_or_default(),
             source,
             listings: HashMap::new(),
         }
