@@ -2639,6 +2639,48 @@ fn back_closes_the_disc_picker_before_leaving_the_details_screen() {
     assert_eq!(app.page, Page::Library, "a second Back leaves the screen");
 }
 
+#[test]
+fn gamepad_and_pointer_disc_selection_change_the_file_that_play_targets() {
+    for pointer in [false, true] {
+        let mut app = showing_a_console_game(vec![
+            RetroRomVersion {
+                id: 42,
+                title: "Disc 1".to_owned(),
+                is_main_sibling: true,
+            },
+            RetroRomVersion {
+                id: 43,
+                title: "Disc 2".to_owned(),
+                is_main_sibling: false,
+            },
+        ]);
+        send(&mut app, GamepadEvent::ContextMenu);
+        let _ = app.update(Message::DetailsToggleDiscPicker);
+        if pointer {
+            let _ = app.update(Message::DetailsSelectDisc(43));
+        } else {
+            send(&mut app, GamepadEvent::MoveDown);
+            assert_eq!(
+                app.details.as_ref().unwrap().cursor(),
+                crate::screens::details::focus::Focus::DiscChoice(1)
+            );
+            send(&mut app, GamepadEvent::Confirm);
+        }
+        let details = app.details.as_ref().unwrap();
+        assert_eq!(details.rom_id, 43, "pointer: {pointer}");
+        assert!(!details.disc_picker, "pointer: {pointer}");
+        assert_eq!(
+            details.cursor(),
+            crate::screens::details::focus::Focus::Play
+        );
+        let _ = app.update(Message::DetailsToggleDiscPicker);
+        assert_eq!(
+            app.details.as_ref().unwrap().cursor(),
+            crate::screens::details::focus::Focus::DiscChoice(1)
+        );
+    }
+}
+
 /// The shoulder buttons are chords of the library behind the details screen:
 /// on the details screen they do nothing, because switching section there
 /// would change what the screen describes.
