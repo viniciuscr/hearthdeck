@@ -6,116 +6,112 @@ use std::path::PathBuf;
 use crate::app_group::SectionUi;
 use crate::form_factor::FormFactor;
 use crate::icon_cache::{self, IconReference};
-use crate::library_item::{ConsoleMetadata, LibraryItem};
+use crate::library_item::LibraryItem;
 use cosmic::desktop::fde;
-use hearthdeck_protocol::RetroRomVersion;
+use hearthdeck_protocol::CatalogItem;
 
-/// A provider-agnostic record representing a discovered application or game.
-///
-/// The daemon adapter builds these before the app converts them into
-/// `LibraryItem` for display.
-#[derive(Debug, Clone)]
-pub struct GameRecord {
-    /// Unique identifier, prefixed by source (e.g. `"heroic:epic:Fortnite"`).
-    pub id: String,
-    pub name: String,
-    pub exec: Option<String>,
-    pub icon: Option<String>,
-    pub categories: Vec<String>,
-    pub store: Option<String>,
-    pub install_source: Option<String>,
-    pub modeled_form: Option<FormFactor>,
-    pub console: Option<ConsoleMetadata>,
-    pub sibling_roms: Vec<RetroRomVersion>,
-    pub version_label: Option<String>,
+pub(super) fn library_icon(icon: Option<&str>, fallback: &str) -> fde::IconSource {
+    match icon.and_then(icon_cache::classify) {
+        Some(IconReference::File(path)) => fde::IconSource::Path(PathBuf::from(path)),
+        Some(IconReference::Name(name)) => fde::IconSource::Name(name.to_owned()),
+        Some(IconReference::Remote(_) | IconReference::RommAsset(_)) | None => {
+            fde::IconSource::Name(fallback.to_owned())
+        }
+    }
 }
 
-impl GameRecord {
-    /// Convert into a `LibraryItem` for integration with the existing UI.
-    pub fn into_library_item(mut self) -> LibraryItem {
-        let is_game = self
-            .categories
-            .iter()
-            .any(|category| category.eq_ignore_ascii_case("game"));
-        if is_game && let Some(store) = &self.store {
-            self.categories
-                .retain(|category| !category.eq_ignore_ascii_case(store));
-        }
-
-        let fallback_icon = if is_game {
-            "applications-games"
-        } else {
-            "application-x-executable"
-        };
-        // Read through the same rule the provider fetches by, so a reference
-        // means one thing here and there. A poster URL or a RomM path is the
-        // provider's to turn into a file *before* a record is built; one that got
-        // here un-fetched is not art, and a name the theme cannot read draws
-        // nothing at all, so the record wears the mark for its kind instead.
-        let icon_source = match self.icon.as_deref().and_then(icon_cache::classify) {
-            Some(IconReference::File(path)) => fde::IconSource::Path(PathBuf::from(path)),
-            Some(IconReference::Name(name)) => fde::IconSource::Name(name.to_owned()),
-            Some(IconReference::Remote(_) | IconReference::RommAsset(_)) | None => {
-                fde::IconSource::Name(fallback_icon.to_owned())
-            }
-        };
-
-        let mut entry = LibraryItem {
-            id: self.id,
-            name: self.name,
-            wm_class: None,
-            exec: self.exec,
-            icon: icon_source,
-            categories: self.categories,
-            form_factor: None,
-            store: if is_game { self.store } else { None },
-            sources: Vec::new(),
-            console: self.console,
-        };
-        crate::app_group::set_sources(&mut entry, self.install_source.as_deref());
-        if crate::app_group::Section::Applications.matches(&entry) {
-            crate::form_factor::tag(&mut entry);
-            // A model can only promote: what it calls desktop-only is what the
-            // rules already said, and its doubt must not demote a streaming client.
-            if self.modeled_form == Some(FormFactor::Couch) {
-                crate::form_factor::set(&mut entry, FormFactor::Couch);
-            }
-        }
-        entry
+pub(super) fn catalog_item_to_library_item(item: CatalogItem) -> LibraryItem {
+    let metadata = &item.metadata;
+    let mut categories: Vec<String> = metadata
+        .get("categories")
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    categories.retain(|category| !category.eq_ignore_ascii_case("game"));
+    if item.kind.eq_ignore_ascii_case("game") {
+        categories.push("Game".to_owned());
     }
+    let store = metadata.get("store").and_then(|value| value.as_str());
+    if let Some(store) = store
+        && !categories
+            .iter()
+            .any(|category| category.eq_ignore_ascii_case(store))
+    {
+        categories.push(store.to_owned());
+    }
+    let is_game = categories
+        .iter()
+        .any(|category| category.eq_ignore_ascii_case("game"));
+    if is_game && let Some(store) = store {
+        categories.retain(|category| !category.eq_ignore_ascii_case(store));
+    }
+
+    let fallback_icon = if is_game {
+        "applications-games"
+    } else {
+        "application-x-executable"
+    };
+
+    let mut entry = LibraryItem {
+        id: format!("{}{}", daemon::CATALOG_ENTRY_PREFIX, item.id),
+        name: item.title,
+        exec: item.launch_id,
+        icon: library_icon(item.icon.as_deref(), fallback_icon),
+        categories,
+        store: if is_game {
+            store.map(str::to_owned)
+        } else {
+            None
+        },
+        ..LibraryItem::default()
+    };
+    crate::app_group::set_sources(
+        &mut entry,
+        metadata.get("source").and_then(|value| value.as_str()),
+    );
+    if crate::app_group::Section::Applications.matches(&entry) {
+        crate::form_factor::tag(&mut entry);
+        // Model verdicts may promote an app but cannot demote a known couch app.
+        if metadata.get("form_factor").and_then(|value| value.as_str()) == Some("couch") {
+            crate::form_factor::set(&mut entry, FormFactor::Couch);
+        }
+    }
+    entry
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FormFactor, GameRecord};
+    use super::{FormFactor, catalog_item_to_library_item};
     use cosmic::desktop::fde::IconSource;
+    use hearthdeck_protocol::CatalogItem;
 
-    fn record(icon: Option<&str>) -> GameRecord {
-        GameRecord {
+    fn record(icon: Option<&str>) -> CatalogItem {
+        CatalogItem {
             id: "test".into(),
-            name: "Test".into(),
-            exec: None,
+            source_id: "custom".into(),
+            title: "Test".into(),
+            kind: "application".into(),
+            launch_id: None,
             icon: icon.map(str::to_owned),
-            categories: vec!["Utility".into()],
-            store: None,
-            install_source: None,
-            modeled_form: None,
-            console: None,
-            sibling_roms: Vec::new(),
-            version_label: None,
+            metadata: serde_json::json!({"categories": ["Utility"]}),
         }
     }
 
     #[test]
     fn library_item_preserves_identity_launch_target_and_filter_values() {
         let mut game = record(Some("/usr/share/icons/game.png"));
-        game.id = "hearthdeck:heroic:example".to_owned();
-        game.name = "Example".to_owned();
-        game.exec = Some("legendary:example".to_owned());
-        game.categories = vec!["Game".to_owned(), "Epic".to_owned()];
-        game.store = Some("Epic".to_owned());
+        game.id = "heroic:example".to_owned();
+        game.title = "Example".to_owned();
+        game.launch_id = Some("legendary:example".to_owned());
+        game.kind = "game".to_owned();
+        game.metadata = serde_json::json!({"categories": ["Game", "Epic"], "store": "Epic"});
 
-        let item = game.into_library_item();
+        let item = catalog_item_to_library_item(game);
 
         assert_eq!(item.id, "hearthdeck:heroic:example");
         assert_eq!(item.name, "Example");
@@ -133,13 +129,11 @@ mod tests {
     #[test]
     fn resolves_icon_names_and_absolute_paths() {
         assert!(matches!(
-            record(Some("org.example.App")).into_library_item().icon,
+            catalog_item_to_library_item(record(Some("org.example.App"))).icon,
             IconSource::Name(name) if name == "org.example.App"
         ));
         assert!(matches!(
-            record(Some("/usr/share/icons/example.png"))
-                .into_library_item()
-                .icon,
+            catalog_item_to_library_item(record(Some("/usr/share/icons/example.png"))).icon,
             IconSource::Path(path) if path == std::path::Path::new("/usr/share/icons/example.png")
         ));
     }
@@ -147,7 +141,7 @@ mod tests {
     #[test]
     fn missing_application_icon_uses_fallback() {
         assert!(matches!(
-            record(None).into_library_item().icon,
+            catalog_item_to_library_item(record(None)).icon,
             IconSource::Name(name) if name == "application-x-executable"
         ));
     }
@@ -157,9 +151,7 @@ mod tests {
     #[test]
     fn a_file_url_is_read_as_the_file_it_names() {
         assert!(matches!(
-            record(Some("file:///home/user/.local/share/art/cover.png"))
-                .into_library_item()
-                .icon,
+            catalog_item_to_library_item(record(Some("file:///home/user/.local/share/art/cover.png"))).icon,
             IconSource::Path(path) if path == std::path::Path::new("/home/user/.local/share/art/cover.png")
         ));
     }
@@ -171,14 +163,14 @@ mod tests {
     fn romm_artwork_that_was_never_fetched_is_not_a_path() {
         let romm = "/assets/romm/resources/roms/9/4014/cover/small.png";
         assert!(matches!(
-            record(Some(romm)).into_library_item().icon,
+            catalog_item_to_library_item(record(Some(romm))).icon,
             IconSource::Name(name) if name == "application-x-executable"
         ));
 
         let mut game = record(Some(romm));
-        game.categories = vec!["Game".into()];
+        game.kind = "game".to_owned();
         assert!(matches!(
-            game.into_library_item().icon,
+            catalog_item_to_library_item(game).icon,
             IconSource::Name(name) if name == "applications-games"
         ));
     }
@@ -186,10 +178,11 @@ mod tests {
     #[test]
     fn game_store_is_typed_without_a_category_tag() {
         let mut game = record(None);
-        game.categories = vec!["Game".into(), "Epic Games".into()];
-        game.store = Some("Epic Games".into());
+        game.kind = "game".to_owned();
+        game.metadata =
+            serde_json::json!({"categories": ["Game", "Epic Games"], "store": "Epic Games"});
 
-        let item = game.into_library_item();
+        let item = catalog_item_to_library_item(game);
         assert_eq!(item.categories, ["Game"]);
         assert_eq!(item.store.as_deref(), Some("Epic Games"));
     }
@@ -197,9 +190,9 @@ mod tests {
     #[test]
     fn an_application_carries_where_it_was_installed() {
         let mut application = record(None);
-        application.install_source = Some("flatpak".into());
+        application.metadata["source"] = serde_json::json!("flatpak");
 
-        let item = application.into_library_item();
+        let item = catalog_item_to_library_item(application);
         assert_eq!(item.categories, ["Utility"]);
         assert_eq!(item.sources, ["flatpak"]);
     }
@@ -211,8 +204,11 @@ mod tests {
         let resolved_form = |form: FormFactor, id: &str| {
             let mut application = record(None);
             application.id = id.into();
-            application.modeled_form = Some(form);
-            application.into_library_item().form_factor
+            application.metadata["form_factor"] = serde_json::json!(match form {
+                FormFactor::Couch => "couch",
+                FormFactor::Desktop => "desktop",
+            });
+            catalog_item_to_library_item(application).form_factor
         };
 
         assert_eq!(
@@ -230,11 +226,10 @@ mod tests {
     #[test]
     fn a_streaming_client_is_tagged_beside_its_origin() {
         let mut client = record(None);
-        client.id = "hearthdeck:desktop:net.stremio.Stremio.desktop".into();
-        client.categories = vec!["Video".into()];
-        client.install_source = Some("flatpak".into());
+        client.id = "desktop:net.stremio.Stremio.desktop".into();
+        client.metadata = serde_json::json!({"categories": ["Video"], "source": "flatpak"});
 
-        let item = client.into_library_item();
+        let item = catalog_item_to_library_item(client);
         assert_eq!(item.categories, ["Video"]);
         assert_eq!(item.sources, ["flatpak", "streaming"]);
     }
@@ -243,8 +238,8 @@ mod tests {
     fn missing_or_empty_origin_does_not_add_a_source() {
         for origin in [None, Some(String::new())] {
             let mut application = record(None);
-            application.install_source = origin;
-            let item = application.into_library_item();
+            application.metadata["source"] = serde_json::json!(origin);
+            let item = catalog_item_to_library_item(application);
             assert!(item.sources.is_empty());
             assert_eq!(item.categories, ["Utility"]);
         }

@@ -4,7 +4,6 @@
 use cosmic::app::Task;
 use std::sync::Arc;
 
-use crate::providers::daemon::retro_version_list;
 use crate::screens::library::console;
 use crate::screens::library::console::ConsoleScope;
 
@@ -77,7 +76,7 @@ impl App {
         Task::perform(
             async move {
                 client
-                    .list_retro_records(
+                    .list_retro_items(
                         platform_id,
                         (!search.is_empty()).then_some(search.as_str()),
                         &filters,
@@ -85,25 +84,11 @@ impl App {
                         offset,
                     )
                     .await
-                    .map(|page| {
-                        // The version lists are kept while the records still
-                        // carry their metadata: the entry the grid draws has
-                        // nowhere to put them.
-                        let versions = page
-                            .items
-                            .iter()
-                            .map(|record| (record.id.clone(), retro_version_list(record)))
-                            .collect();
-                        console::Page {
-                            entries: page
-                                .items
-                                .into_iter()
-                                .map(|record| Arc::new(record.into_library_item()))
-                                .collect(),
-                            versions,
-                            total: page.total,
-                            offset: page.offset,
-                        }
+                    .map(|page| console::Page {
+                        entries: page.items.into_iter().map(Arc::new).collect(),
+                        versions: page.versions,
+                        total: page.total,
+                        offset: page.offset,
                     })
                     .map_err(|error| error.to_string())
             },

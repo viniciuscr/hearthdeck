@@ -143,18 +143,19 @@ the cruft inherited from the project this started from.
 
 ## Status
 
-Catalog loading goes directly through `DaemonClient::fetch_library_records`,
+Catalog loading goes directly through `DaemonClient::fetch_library_items`,
 which resolves artwork and returns typed `DaemonError` failures. There is no
 frontend discovery-provider registry: discovery belongs to the daemon.
-`GameRecord` carries store, install source, model form-factor and ROM variants
-as typed fields; it does not rebuild or reparse a JSON metadata bag. Descriptive
-details stay in their daemon detail responses, not in unused record fields.
+Catalog and retro responses map directly into `LibraryItem`; there is no second
+loading-record model. ROM version lists travel separately on the retro page,
+keyed by library item ID. Descriptive details stay in their daemon detail
+responses, not in unused item fields.
 The library, filters, grid and console cache use Hearthdeck's `LibraryItem`,
 not COSMIC's `DesktopEntryData`. The model keeps the fields those consumers
 actually read; desktop actions, MIME types, working directories and local
 process-launch flags are not part of it. Launches still go through the daemon.
-`GameRecord` remains the loading adapter. Form factor is a typed optional field
-on `LibraryItem`; rules supply the default, model verdicts can promote to Couch,
+Form factor is a typed optional field on `LibraryItem`; rules supply the default,
+model verdicts can promote to Couch,
 and user overrides win. Existing saved `hearthdeck-form:*` filters are matched
 against that field, not tags on each item. PC-game stores also live in a typed
 `store` field; tabs and facets derive from it. Saved `hearthdeck-store:*` values

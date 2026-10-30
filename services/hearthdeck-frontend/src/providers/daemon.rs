@@ -12,10 +12,9 @@ use std::{
 };
 use tokio::sync::OnceCell;
 
-use super::GameRecord;
-use crate::form_factor::FormFactor;
+use super::{catalog_item_to_library_item, library_icon};
 use crate::icon_cache::{self, IconReference};
-use crate::library_item::ConsoleMetadata;
+use crate::library_item::{ConsoleMetadata, LibraryItem};
 use crate::providers::filter::Facet;
 
 /// Prefix a catalog item's id carries on its way into the library.
@@ -623,24 +622,30 @@ impl DaemonClient {
     /// `search` is the source's own search, not a filter over the page that
     /// comes back: a grid that searched only what it had loaded would find
     /// nothing past the first page.
-    pub async fn list_retro_records(
+    pub async fn list_retro_items(
         &self,
         platform_id: Option<i64>,
         search: Option<&str>,
         filters: &BTreeMap<String, String>,
         limit: u32,
         offset: u32,
-    ) -> Result<RetroRecordPage, DaemonError> {
+    ) -> Result<RetroLibraryPage, DaemonError> {
         let page = self
             .list_retro_roms(platform_id, search, filters, limit, offset)
             .await?;
-        let records = stream::iter(page.items.into_iter().map(|game| {
+        Ok(self.resolve_retro_page(page).await)
+    }
+
+    async fn resolve_retro_page(&self, page: RetroGamesResponse) -> RetroLibraryPage {
+        let mut versions = BTreeMap::new();
+        let items = stream::iter(page.items.into_iter().map(|game| {
+            versions.insert(format!("romm:{}", game.id), retro_version_list(&game));
             let client = self.clone();
             async move {
                 // The cover is a RomM path, which the same resolver every other
                 // record's icon goes through turns into a cached file.
                 let icon = client.resolve_icon(game.cover_path.as_deref()).await;
-                retro_game_to_game_record(game, icon)
+                retro_game_to_library_item(game, icon)
             }
         }))
         // A page is only returned once every cover in it is cached, so this
@@ -649,11 +654,12 @@ impl DaemonClient {
         .buffered(RAIL_ICON_CONCURRENCY)
         .collect()
         .await;
-        Ok(RetroRecordPage {
-            items: records,
+        RetroLibraryPage {
+            items,
+            versions,
             total: page.total,
             offset: page.offset,
-        })
+        }
     }
 
     /// Downloads one RomM asset (cover, screenshot, console artwork) through
@@ -724,7 +730,7 @@ impl DaemonClient {
             )
             .await;
         let screenshot_paths = info.screenshot_paths.clone();
-        // Bounded concurrency, as in `list_retro_records`: the daemon asset
+        // Bounded concurrency, as in `list_retro_items`: the daemon asset
         // endpoint is loopback (or the user's own RomM), so a handful of
         // parallel image fetches is cheaper than a serial wait.
         let screenshots: Vec<String> = stream::iter(screenshot_paths)
@@ -1126,56 +1132,6 @@ impl DaemonClient {
     }
 }
 
-/// Converts a daemon CatalogItem into a GameRecord for display in the UI.
-pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
-    let metadata = &item.metadata;
-
-    let mut categories: Vec<String> = metadata
-        .get("categories")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    categories.retain(|category| !category.eq_ignore_ascii_case("game"));
-    if item.kind.eq_ignore_ascii_case("game") {
-        categories.push("Game".to_string());
-    }
-    if let Some(store) = metadata.get("store").and_then(|v| v.as_str())
-        && !categories
-            .iter()
-            .any(|category| category.eq_ignore_ascii_case(store))
-    {
-        categories.push(store.to_string());
-    }
-
-    GameRecord {
-        id: format!("{CATALOG_ENTRY_PREFIX}{}", item.id),
-        name: item.title,
-        exec: item.launch_id,
-        icon: item.icon,
-        categories,
-        store: metadata
-            .get("store")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned),
-        install_source: metadata
-            .get("source")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned),
-        modeled_form: match metadata.get("form_factor").and_then(|v| v.as_str()) {
-            Some("couch") => Some(FormFactor::Couch),
-            Some("desktop") => Some(FormFactor::Desktop),
-            _ => None,
-        },
-        sibling_roms: Vec::new(),
-        version_label: None,
-        console: None,
-    }
-}
-
 /// The query parameters for `/v1/retro/roms`, in the order the daemon receives
 /// them. A facet selection's key is already the daemon route's own parameter
 /// name (`genre`, `region`), so it passes through unchanged; an unknown id is
@@ -1202,23 +1158,19 @@ fn retro_rom_query_params(
     params
 }
 
-pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameRecord {
-    GameRecord {
+fn retro_game_to_library_item(game: RetroGame, icon: Option<String>) -> LibraryItem {
+    LibraryItem {
         id: format!("romm:{}", game.id),
         name: game.title,
         exec: Some(game.id.to_string()),
-        icon,
+        icon: library_icon(icon.as_deref(), "applications-games"),
         categories: vec!["Game".to_owned()],
-        store: None,
-        install_source: None,
-        modeled_form: None,
-        sibling_roms: game.sibling_roms,
-        version_label: game.version_label,
         console: Some(ConsoleMetadata {
             platform_id: game.platform_id,
             genres: game.genres,
             regions: game.regions,
         }),
+        ..LibraryItem::default()
     }
 }
 
@@ -1228,27 +1180,17 @@ pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameR
 ///
 /// Two files can share a name, so a repeat gets its id appended to stay
 /// distinguishable.
-pub fn retro_version_list(record: &GameRecord) -> Vec<RetroRomVersion> {
-    if record.sibling_roms.is_empty() {
+fn retro_version_list(game: &RetroGame) -> Vec<RetroRomVersion> {
+    if game.sibling_roms.is_empty() {
         return Vec::new();
     }
-    let mut versions = Vec::with_capacity(record.sibling_roms.len() + 1);
-    if let Some(current_id) = record
-        .id
-        .strip_prefix("romm:")
-        .and_then(|id| id.parse::<i64>().ok())
-    {
-        versions.push(RetroRomVersion {
-            id: current_id,
-            title: record
-                .version_label
-                .as_ref()
-                .unwrap_or(&record.name)
-                .clone(),
-            is_main_sibling: true,
-        });
-    }
-    versions.extend(record.sibling_roms.iter().cloned());
+    let mut versions = Vec::with_capacity(game.sibling_roms.len() + 1);
+    versions.push(RetroRomVersion {
+        id: game.id,
+        title: game.version_label.as_ref().unwrap_or(&game.title).clone(),
+        is_main_sibling: true,
+    });
+    versions.extend(game.sibling_roms.iter().cloned());
     let mut seen = std::collections::HashSet::new();
     for version in &mut versions {
         if !seen.insert(version.title.clone()) {
@@ -1314,7 +1256,7 @@ impl DaemonClient {
     ///
     /// # Errors
     /// Returns the original [`DaemonError`] if fetching the catalog fails.
-    pub async fn fetch_library_records(&self) -> Result<Vec<GameRecord>, DaemonError> {
+    pub async fn fetch_library_items(&self) -> Result<Vec<LibraryItem>, DaemonError> {
         let items = self.fetch_library().await?;
 
         log::info!("fetched {} catalog items from daemon", items.len());
@@ -1331,7 +1273,7 @@ impl DaemonClient {
         Ok(items
             .into_iter()
             .filter(belongs_in_the_app_library)
-            .map(catalog_item_to_game_record)
+            .map(catalog_item_to_library_item)
             .collect())
     }
 }
@@ -1465,8 +1407,9 @@ pub struct RetroGamesResponse {
 }
 
 #[derive(Clone, Debug)]
-pub struct RetroRecordPage {
-    pub items: Vec<GameRecord>,
+pub struct RetroLibraryPage {
+    pub items: Vec<LibraryItem>,
+    pub versions: BTreeMap<String, Vec<RetroRomVersion>>,
     pub total: u64,
     pub offset: u32,
 }
@@ -1477,9 +1420,9 @@ mod tests {
 
     use super::{
         CatalogItem, Collection, CollectionItem, DaemonClient, DaemonConfig, DaemonError,
-        DaemonEvent, GameRecord, RetroGame, RetroRomVersion, belongs_in_the_app_library,
-        cache_file_name, catalog_item_to_game_record, daemon_error_from_body, image_extension,
-        retro_game_to_game_record, retro_rom_query_params,
+        DaemonEvent, RetroGame, RetroRomVersion, belongs_in_the_app_library, cache_file_name,
+        catalog_item_to_library_item, daemon_error_from_body, image_extension,
+        retro_game_to_library_item, retro_rom_query_params,
     };
 
     #[tokio::test]
@@ -1490,7 +1433,7 @@ mod tests {
         });
 
         assert!(matches!(
-            client.fetch_library_records().await,
+            client.fetch_library_items().await,
             Err(DaemonError::InvalidToken(_))
         ));
     }
@@ -1692,29 +1635,19 @@ mod tests {
             metadata: serde_json::json!({ "categories": ["Utility"], "source": "flatpak" }),
         };
 
-        let record = catalog_item_to_game_record(item);
+        let record = catalog_item_to_library_item(item);
 
-        assert_eq!(record.install_source.as_deref(), Some("flatpak"));
+        assert_eq!(record.sources, ["flatpak"]);
     }
 
     #[test]
     fn catalog_form_verdicts_keep_the_promotion_only_rule() {
-        for (id, verdict, modeled_form, expected) in [
-            (
-                "org.gimp.GIMP",
-                "couch",
-                Some(FormFactor::Couch),
-                FormFactor::Couch,
-            ),
-            (
-                "net.stremio.Stremio",
-                "desktop",
-                Some(FormFactor::Desktop),
-                FormFactor::Couch,
-            ),
-            ("org.gimp.GIMP", "unknown", None, FormFactor::Desktop),
+        for (id, verdict, expected) in [
+            ("org.gimp.GIMP", "couch", FormFactor::Couch),
+            ("net.stremio.Stremio", "desktop", FormFactor::Couch),
+            ("org.gimp.GIMP", "unknown", FormFactor::Desktop),
         ] {
-            let record = catalog_item_to_game_record(CatalogItem {
+            let record = catalog_item_to_library_item(CatalogItem {
                 id: id.to_owned(),
                 source_id: hearthdeck_protocol::sources::DESKTOP_APPS.to_owned(),
                 title: id.to_owned(),
@@ -1724,10 +1657,8 @@ mod tests {
                 metadata: serde_json::json!({"source": "flatpak", "form_factor": verdict}),
             });
 
-            assert_eq!(record.modeled_form, modeled_form, "verdict: {verdict}");
-            let entry = record.into_library_item();
-            assert_eq!(of(&entry), expected, "id: {id}, verdict: {verdict}");
-            assert!(entry.sources.contains(&"flatpak".to_owned()));
+            assert_eq!(of(&record), expected, "id: {id}, verdict: {verdict}");
+            assert!(record.sources.contains(&"flatpak".to_owned()));
         }
     }
 
@@ -1738,7 +1669,7 @@ mod tests {
             serde_json::json!({}),
             serde_json::json!({"store": [], "source": false, "form_factor": 42}),
         ] {
-            let record = catalog_item_to_game_record(CatalogItem {
+            let record = catalog_item_to_library_item(CatalogItem {
                 id: "example".to_owned(),
                 source_id: "custom".to_owned(),
                 title: "Example".to_owned(),
@@ -1748,8 +1679,12 @@ mod tests {
                 metadata: metadata.clone(),
             });
             assert_eq!(record.store, None, "metadata: {metadata}");
-            assert_eq!(record.install_source, None, "metadata: {metadata}");
-            assert_eq!(record.modeled_form, None, "metadata: {metadata}");
+            assert!(record.sources.is_empty(), "metadata: {metadata}");
+            assert_eq!(
+                record.form_factor,
+                Some(FormFactor::Desktop),
+                "metadata: {metadata}"
+            );
         }
     }
 
@@ -1779,7 +1714,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_item_maps_to_game_record_with_prefix() {
+    fn catalog_item_maps_directly_to_library_item_with_prefix() {
         let item = CatalogItem {
             id: "test:app".to_string(),
             source_id: "desktop-apps".to_string(),
@@ -1793,7 +1728,7 @@ mod tests {
             }),
         };
 
-        let record = catalog_item_to_game_record(item);
+        let record = catalog_item_to_library_item(item);
 
         assert!(record.id.starts_with("hearthdeck:"));
         assert_eq!(record.id, "hearthdeck:test:app");
@@ -1817,9 +1752,9 @@ mod tests {
             }),
         };
 
-        let record = catalog_item_to_game_record(item);
+        let record = catalog_item_to_library_item(item);
 
-        assert_eq!(record.categories, vec!["Game", "Epic"]);
+        assert_eq!(record.categories, vec!["Game"]);
         assert_eq!(record.store.as_deref(), Some("Epic"));
     }
 
@@ -1835,14 +1770,14 @@ mod tests {
             metadata: serde_json::json!({}),
         };
 
-        let record = catalog_item_to_game_record(item);
+        let record = catalog_item_to_library_item(item);
 
         assert!(record.exec.is_none());
     }
 
     #[test]
     fn romm_game_maps_to_a_console_record_with_dedicated_id() {
-        let record = retro_game_to_game_record(
+        let record = retro_game_to_library_item(
             RetroGame {
                 id: 42,
                 platform_id: 7,
@@ -1864,9 +1799,12 @@ mod tests {
 
         assert_eq!(record.id, "romm:42");
         assert_eq!(record.exec.as_deref(), Some("42"));
-        assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
+        assert!(matches!(
+            &record.icon,
+            cosmic::desktop::fde::IconSource::Path(path) if path == std::path::Path::new("/tmp/example.jpg")
+        ));
         assert_eq!(record.categories, ["Game"]);
-        let item = record.into_library_item();
+        let item = record;
         let console = item.console.as_ref().expect("console metadata");
         assert_eq!(console.platform_id, 7);
         assert_eq!(console.genres, ["RPG"]);
@@ -1909,59 +1847,111 @@ mod tests {
 
     #[test]
     fn romm_sibling_versions_reach_the_record_without_json_conversion() {
-        let record = retro_game_to_game_record(
-            RetroGame {
-                id: 42,
-                platform_id: 7,
-                title: "Shenmue".to_string(),
-                summary: None,
-                cover_path: None,
-                cover_url: None,
-                screenshot_paths: Vec::new(),
-                has_manual: false,
-                genres: Vec::new(),
-                player_count: None,
-                release_year: None,
-                regions: Vec::new(),
-                sibling_roms: vec![
-                    RetroRomVersion {
-                        id: 43,
-                        title: "Shenmue (Disc 2)".to_string(),
-                        is_main_sibling: true,
-                    },
-                    RetroRomVersion {
-                        id: 44,
-                        title: "Shenmue (Disc 3)".to_string(),
-                        is_main_sibling: false,
-                    },
-                ],
-                version_label: Some("Shenmue (Disc 1)".to_string()),
-            },
-            None,
-        );
-
-        let versions = &record.sibling_roms;
-        assert_eq!(versions.len(), 2);
-        assert_eq!(versions[0].id, 43);
-        assert!(versions[0].is_main_sibling);
-        assert_eq!(versions[1].title, "Shenmue (Disc 3)");
-        assert_eq!(record.version_label.as_deref(), Some("Shenmue (Disc 1)"));
+        let game = RetroGame {
+            id: 42,
+            platform_id: 7,
+            title: "Shenmue".to_string(),
+            summary: None,
+            cover_path: None,
+            cover_url: None,
+            screenshot_paths: Vec::new(),
+            has_manual: false,
+            genres: Vec::new(),
+            player_count: None,
+            release_year: None,
+            regions: Vec::new(),
+            sibling_roms: vec![
+                RetroRomVersion {
+                    id: 43,
+                    title: "Shenmue (Disc 2)".to_string(),
+                    is_main_sibling: true,
+                },
+                RetroRomVersion {
+                    id: 44,
+                    title: "Shenmue (Disc 3)".to_string(),
+                    is_main_sibling: false,
+                },
+            ],
+            version_label: Some("Shenmue (Disc 1)".to_string()),
+        };
+        let versions = super::retro_version_list(&game);
+        assert_eq!(versions.len(), 3);
+        assert_eq!(versions[0].id, 42);
+        assert_eq!(versions[0].title, "Shenmue (Disc 1)");
+        assert_eq!(versions[1].id, 43);
+        assert!(versions[1].is_main_sibling);
+        assert_eq!(versions[2].title, "Shenmue (Disc 3)");
     }
 
-    fn record_with_siblings(label: Option<&str>, sibling_roms: Vec<RetroRomVersion>) -> GameRecord {
-        GameRecord {
-            id: "romm:42".to_owned(),
-            name: "Metal Gear Solid".to_owned(),
-            exec: None,
-            icon: None,
-            categories: Vec::new(),
-            store: None,
-            install_source: None,
-            modeled_form: None,
+    fn record_with_siblings(label: Option<&str>, sibling_roms: Vec<RetroRomVersion>) -> RetroGame {
+        RetroGame {
+            id: 42,
+            platform_id: 7,
+            title: "Metal Gear Solid".to_owned(),
+            summary: None,
+            cover_path: None,
+            cover_url: None,
+            screenshot_paths: Vec::new(),
+            has_manual: false,
+            genres: Vec::new(),
+            player_count: None,
+            release_year: None,
+            regions: Vec::new(),
             sibling_roms,
             version_label: label.map(str::to_owned),
-            console: None,
         }
+    }
+
+    #[tokio::test]
+    async fn retro_pages_return_display_items_and_matching_version_lists() {
+        let client = DaemonClient::new(DaemonConfig {
+            base_url: "http://127.0.0.1:38400".to_owned(),
+            token: String::new(),
+        });
+        let mut game = record_with_siblings(
+            Some("Disc 1"),
+            vec![RetroRomVersion {
+                id: 43,
+                title: "Disc 2".to_owned(),
+                is_main_sibling: false,
+            }],
+        );
+        game.cover_path = Some("file:///tmp/hearthdeck-test-cover.png".to_owned());
+        game.genres = vec!["Action".to_owned()];
+        let mut single = record_with_siblings(None, Vec::new());
+        single.id = 99;
+        let page = client
+            .resolve_retro_page(super::RetroGamesResponse {
+                items: vec![game, single],
+                total: 120,
+                offset: 60,
+            })
+            .await;
+
+        assert_eq!(page.total, 120);
+        assert_eq!(page.offset, 60);
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["romm:42", "romm:99"]
+        );
+        assert!(matches!(
+            &page.items[0].icon,
+            cosmic::desktop::fde::IconSource::Path(path) if path == std::path::Path::new("/tmp/hearthdeck-test-cover.png")
+        ));
+        assert!(page.items[0].matches_category("hearthdeck-genre:Action"));
+        let versions = &page.versions[&page.items[0].id];
+        assert_eq!(
+            versions
+                .iter()
+                .map(|version| (version.id, version.title.as_str()))
+                .collect::<Vec<_>>(),
+            [(42, "Disc 1"), (43, "Disc 2")]
+        );
+        assert!(page.versions[&page.items[1].id].is_empty());
+        assert_eq!(page.versions.len(), page.items.len());
     }
 
     #[test]

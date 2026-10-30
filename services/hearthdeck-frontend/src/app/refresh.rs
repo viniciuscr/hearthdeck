@@ -134,14 +134,9 @@ impl App {
             async move {
                 tokio::time::sleep(delay).await;
                 client
-                    .fetch_library_records()
+                    .fetch_library_items()
                     .await
-                    .map(|records| {
-                        records
-                            .into_iter()
-                            .map(|record| Arc::new(record.into_library_item()))
-                            .collect()
-                    })
+                    .map(|items| items.into_iter().map(Arc::new).collect())
                     .map_err(|error| error.to_string())
             },
             |result| cosmic::Action::App(Message::CatalogLoaded(result)),
