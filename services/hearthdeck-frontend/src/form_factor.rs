@@ -116,6 +116,7 @@ mod tests {
             categories: Vec::new(),
             form_factor: None,
             store: None,
+            sources: Vec::new(),
         }
     }
 

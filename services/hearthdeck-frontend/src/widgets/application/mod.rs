@@ -91,9 +91,8 @@ impl TileLabel {
 /// A label and an icon rather than a source *type*, because the tile is shared
 /// between the two apps and they do not answer "where did this come from" the
 /// same way: the legacy app guesses it from the launcher's path, while the
-/// library grid is handed the origin the bridge resolved, carried as a
-/// `hearthdeck-source:` category. Taking the rendered pieces keeps the shared
-/// widget from having to know which of those it is talking to.
+/// library grid is handed the origin the bridge resolved. Taking the rendered
+/// pieces keeps the shared widget from knowing which model it is talking to.
 pub struct SourceBadge<'a> {
     /// How the source reads in the tile label, e.g. "Flatpak".
     pub label: &'a str,

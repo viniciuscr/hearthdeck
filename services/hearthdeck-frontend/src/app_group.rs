@@ -1,7 +1,7 @@
 use crate::config::APP_ID;
 use crate::fl;
 use crate::form_factor::{self, FormFactor};
-use crate::library_item::{LibraryItem, STORE_FILTER_PREFIX};
+use crate::library_item::{LibraryItem, SOURCE_FILTER_PREFIX, STORE_FILTER_PREFIX};
 use crate::providers::filter::{Facet, FacetOption};
 use cosmic::cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use cosmic::cosmic_config::{
@@ -38,15 +38,9 @@ pub fn romm_region_category(region: &str) -> String {
     format!("{REGION_FACET_PREFIX}{region}")
 }
 
-/// The record-category prefix carrying where an application was installed from:
-/// a flatpak, the distribution's packages, the user's own data home, and so on.
-/// Like a store tag, the tag *is* the filter value, so a selection is a plain
-/// category match.
-pub const SOURCE_CATEGORY_PREFIX: &str = "hearthdeck-source:";
-
-/// The source tag a streaming client carries on top of its origin. What kind of
+/// The source label a streaming client carries on top of its origin. What kind of
 /// application it is matters at least as much as where it was installed, and an
-/// entry may carry both tags, so filtering by either finds it.
+/// entry may carry both labels, so filtering by either finds it.
 pub const STREAMING_SOURCE: &str = "streaming";
 
 /// A RomM metadata field the Console Games grid can be filtered by. Each
@@ -339,13 +333,7 @@ pub fn section_facets(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<Fac
     for entry in entries.iter().filter(|entry| section.matches(entry)) {
         match section {
             Section::PcGames => values.extend(entry.store_filter_value()),
-            Section::Applications => values.extend(
-                entry
-                    .categories
-                    .iter()
-                    .filter(|category| category.starts_with(SOURCE_CATEGORY_PREFIX))
-                    .cloned(),
-            ),
+            Section::Applications => values.extend(entry.source_filter_values()),
             Section::ConsoleGames => {}
         }
     }
@@ -369,7 +357,7 @@ pub fn section_facets(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<Fac
 /// How a local facet value reads on a chip: a store drops its tag prefix, and a
 /// source drops its own and reads as the place it names.
 fn facet_value_label(value: &str) -> String {
-    if let Some(source) = value.strip_prefix(SOURCE_CATEGORY_PREFIX) {
+    if let Some(source) = value.strip_prefix(SOURCE_FILTER_PREFIX) {
         return source_label(source);
     }
     value
@@ -478,22 +466,19 @@ pub(crate) fn is_watch_entry(entry: &LibraryItem) -> bool {
     SERVICES.iter().any(|service| haystack.contains(service))
 }
 
-/// Tags an entry with where the library got it, for the Applications filter.
+/// Records the origin and streaming classification for the Applications filter.
 ///
 /// `origin` is the resolved origin a discovery provider reported. A streaming
-/// client also gets the [`STREAMING_SOURCE`] tag, because what it is matters at
+/// client also gets the [`STREAMING_SOURCE`] value, because what it is matters at
 /// least as much as where it came from; carrying both means a selection on
 /// either value finds it, which is how one facet can answer both questions.
-pub(crate) fn tag_source(entry: &mut LibraryItem, origin: Option<&str>) {
+pub(crate) fn set_sources(entry: &mut LibraryItem, origin: Option<&str>) {
+    entry.sources.clear();
     if let Some(origin) = origin.filter(|origin| !origin.is_empty()) {
-        entry
-            .categories
-            .push(format!("{SOURCE_CATEGORY_PREFIX}{origin}"));
+        entry.sources.push(origin.to_owned());
     }
     if is_watch_entry(entry) {
-        entry
-            .categories
-            .push(format!("{SOURCE_CATEGORY_PREFIX}{STREAMING_SOURCE}"));
+        entry.sources.push(STREAMING_SOURCE.to_owned());
     }
 }
 
@@ -847,9 +832,15 @@ mod tests {
                 .iter()
                 .find_map(|value| value.strip_prefix("hearthdeck-store:"))
                 .map(str::to_owned),
+            sources: categories
+                .iter()
+                .filter_map(|value| value.strip_prefix("hearthdeck-source:"))
+                .map(str::to_owned)
+                .collect(),
             categories: categories
                 .iter()
                 .filter(|value| !value.starts_with("hearthdeck-store:"))
+                .filter(|value| !value.starts_with("hearthdeck-source:"))
                 .map(|category| (*category).into())
                 .collect(),
         };
@@ -1241,6 +1232,8 @@ mod tests {
         // freedesktop category: "Utility" is a bucket an entry lands in, not
         // something anyone browses a launcher by.
         let apps = section_facets(Section::Applications, &entries);
+        assert_eq!(entries[2].categories, ["Development"]);
+        assert_eq!(entries[2].sources, ["flatpak"]);
         assert_eq!(apps.len(), 1, "applications should offer one facet");
         assert_eq!(apps[0].id, "source");
         assert_eq!(
@@ -1316,6 +1309,44 @@ mod tests {
             "hearthdeck-store:steam",
             &[game],
             &BTreeMap::new(),
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "a");
+    }
+
+    #[test]
+    fn saved_source_groups_search_and_facets_match_without_source_tags() {
+        let group: AppGroup = serde_json::from_value(serde_json::json!({
+            "name": "Custom origin",
+            "icon": "folder-symbolic",
+            "filter": {"Categories": {
+                "categories": ["HEARTHDECK-SOURCE:CUSTOM"],
+                "include": [],
+                "exclude": []
+            }}
+        }))
+        .expect("existing group format");
+        let app = entry(
+            "a",
+            &[
+                "Utility",
+                "hearthdeck-source:custom",
+                "hearthdeck-source:streaming",
+            ],
+        );
+        assert_eq!(app.categories, ["Utility"]);
+        assert!(group.matches(&app));
+        let config = AppLibraryConfig::default();
+        let facets = BTreeMap::from([(
+            "source".to_owned(),
+            "hearthdeck-source:streaming".to_owned(),
+        )]);
+        let found = config.filtered_by_facets(
+            Section::Applications,
+            None,
+            "hearthdeck-source:CUSTOM",
+            &[app],
+            &facets,
         );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, "a");

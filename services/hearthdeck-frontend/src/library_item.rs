@@ -3,6 +3,7 @@ use cosmic::desktop::fde::IconSource;
 
 /// Compatibility encoding for saved store filters, not an item category.
 pub const STORE_FILTER_PREFIX: &str = "hearthdeck-store:";
+pub const SOURCE_FILTER_PREFIX: &str = "hearthdeck-source:";
 
 /// A library entry owned by Hearthdeck, not the desktop shell.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -15,6 +16,7 @@ pub struct LibraryItem {
     pub wm_class: Option<String>,
     pub form_factor: Option<FormFactor>,
     pub store: Option<String>,
+    pub sources: Vec<String>,
 }
 
 impl LibraryItem {
@@ -27,6 +29,14 @@ impl LibraryItem {
         {
             return self.store.as_ref().is_some_and(|store| {
                 store.to_lowercase() == category[STORE_FILTER_PREFIX.len()..].to_lowercase()
+            });
+        }
+        if category
+            .get(..SOURCE_FILTER_PREFIX.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(SOURCE_FILTER_PREFIX))
+        {
+            return self.sources.iter().any(|source| {
+                source.to_lowercase() == category[SOURCE_FILTER_PREFIX.len()..].to_lowercase()
             });
         }
         match FormFactor::from_category(category) {
@@ -45,10 +55,18 @@ impl LibraryItem {
             .map(|store| format!("{STORE_FILTER_PREFIX}{store}"))
     }
 
+    pub fn source_filter_values(&self) -> impl Iterator<Item = String> + '_ {
+        self.sources
+            .iter()
+            .map(|source| format!("{SOURCE_FILTER_PREFIX}{source}"))
+    }
+
     #[must_use]
     pub fn matches_facet(&self, value: &str) -> bool {
         if let Some(store) = value.strip_prefix(STORE_FILTER_PREFIX) {
             self.store.as_deref() == Some(store)
+        } else if let Some(source) = value.strip_prefix(SOURCE_FILTER_PREFIX) {
+            self.sources.iter().any(|value| value == source)
         } else if FormFactor::from_category(value).is_some() {
             self.matches_category(value)
         } else {
@@ -68,6 +86,7 @@ impl Default for LibraryItem {
             wm_class: None,
             form_factor: None,
             store: None,
+            sources: Vec::new(),
         }
     }
 }
@@ -102,5 +121,28 @@ mod tests {
             ..LibraryItem::default()
         };
         assert!(item.matches_category("hearthdeck-store:"));
+    }
+
+    #[test]
+    fn source_filters_match_each_typed_value_not_category_text() {
+        let item = LibraryItem {
+            sources: vec!["custom-origin".to_owned(), "streaming".to_owned()],
+            categories: vec!["hearthdeck-source:flatpak".to_owned()],
+            ..LibraryItem::default()
+        };
+        assert!(item.matches_category("HEARTHDECK-SOURCE:CUSTOM-ORIGIN"));
+        assert!(item.matches_category("hearthdeck-source:streaming"));
+        assert!(!item.matches_category("hearthdeck-source:flatpak"));
+        assert!(item.matches_facet("hearthdeck-source:custom-origin"));
+        assert!(!item.matches_facet("hearthdeck-source:CUSTOM-ORIGIN"));
+        assert!(!item.matches_facet("hearthdeck-source:flatpak"));
+        assert_eq!(
+            item.source_filter_values().collect::<Vec<_>>(),
+            [
+                "hearthdeck-source:custom-origin",
+                "hearthdeck-source:streaming",
+            ]
+        );
+        assert!(!LibraryItem::default().matches_category("hearthdeck-source:"));
     }
 }
