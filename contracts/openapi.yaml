@@ -296,9 +296,9 @@ paths:
                   $ref: '#/components/schemas/RetroSystemReadiness'
         '503':
           description: RomM is not configured
-  /v1/retro/readiness/bios-sync:
+  /v1/retro/readiness/sync:
     post:
-      operationId: syncRetroBios
+      operationId: syncRetroReadiness
       description: >-
         Places missing BIOS files and source-only cores for platforms that
         have roms, fetching only those from the user's own source

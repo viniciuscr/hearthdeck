@@ -14,6 +14,9 @@ EnvironmentFile=-%h/.config/hearthdeck/daemon.env
 EnvironmentFile=-%h/.config/hearthdeck/romm.env
 Environment=HEARTHDECK_LOG_FORMAT=json
 Environment=RUST_LOG=hearthdeck_daemon=info,tower_http=info
+# Same save-root preset as hearthdeck-bridge.service, so the daemon's readiness
+# checks and the bridge's launches look at one tree.
+Environment=HEARTHDECK_RETRO_SAVE_ROOT=%h/.local/share/hearthdeck/retroarch
 ExecStart=%h/.local/bin/hearthdeck-daemon
 Restart=on-failure
 RestartSec=2
