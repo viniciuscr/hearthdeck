@@ -268,7 +268,10 @@ host desktop entries, transient systemd user services, direct-connect or (Heroic
 ```
 
 The daemon owns the public contract, persistent state, and background work. It
-must not contain host-specific command construction. The bridge owns Linux
+must not act on the host: anything that changes host state goes to the bridge as a
+typed request. Diagnostics may still read its own units' state and journal
+through fixed, read-only `systemctl show` and `journalctl` calls, so it can
+report a broken bridge. The bridge owns Linux
 integration and re-discovers an item before launch; it receives typed IDs, not
 shell commands or `Exec` strings. The frontend depends on the daemon's typed
 API, not on a provider, transport, Linux API, or database schema.

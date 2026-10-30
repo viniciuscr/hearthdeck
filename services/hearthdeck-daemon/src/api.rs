@@ -474,14 +474,25 @@ async fn launch_retro(
     Ok(Json(session))
 }
 
-/// Restarts the fixed `romm.service` systemd unit
+/// Asks the bridge to restart the fixed `romm.service` systemd unit
 /// (`deploy/systemd/romm.service`), if the user has configured it.
-/// Not a generic "restart any unit" endpoint: the unit name is hardcoded in
-/// `diagnostics::restart_romm_service`, never taken from the request.
-async fn restart_romm_service() -> Result<StatusCode, ApiError> {
-    diagnostics::restart_romm_service()
-        .await
-        .map_err(ApiError::bad_gateway)?;
+/// Not a generic "restart any unit" endpoint: the request carries no unit name.
+async fn restart_romm_service(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
+    match crate::bridge::request(
+        &state.config.bridge_socket_path,
+        BridgeRequest::RestartRommService,
+    )
+    .await
+    .map_err(ApiError::bad_gateway)?
+    {
+        BridgeResponse::RommServiceRestarted => {}
+        BridgeResponse::Error { message, .. } => return Err(ApiError::bad_gateway(message)),
+        _ => {
+            return Err(ApiError::bad_gateway(
+                "bridge answered the RomM restart with an unexpected response",
+            ));
+        }
+    }
     info!("romm.service restart requested");
     Ok(StatusCode::ACCEPTED)
 }
@@ -2408,6 +2419,78 @@ mod tests {
                 let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
                 assert_eq!(json["error"], message);
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn romm_restart_is_forwarded_to_the_bridge_and_its_refusal_surfaces() {
+        use hearthdeck_protocol::BridgeErrorCode;
+
+        for (reply, expected_status) in [
+            (BridgeResponse::RommServiceRestarted, StatusCode::ACCEPTED),
+            (
+                BridgeResponse::Error {
+                    code: BridgeErrorCode::Internal,
+                    message: "Unit romm.service not found".to_owned(),
+                },
+                StatusCode::BAD_GATEWAY,
+            ),
+        ] {
+            let temporary = tempfile::tempdir().unwrap();
+            let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+                .await
+                .unwrap();
+            database.migrate().await.unwrap();
+            let state = Arc::new(AppState::new(
+                Config {
+                    bind_address: "127.0.0.1:38400".parse().unwrap(),
+                    local_admin_address: "127.0.0.1:38401".parse().unwrap(),
+                    database_path: temporary.path().join("hearthdeck.db"),
+                    bridge_socket_path: temporary.path().join("bridge.sock"),
+                    lan_enabled: false,
+                    tls: None,
+                    romm: crate::config::RommPaths::resolve(None, None, None),
+                },
+                database,
+            ));
+            let (_, pairing) = response_json(
+                local_router(state.clone()),
+                Request::post("/v1/pairing").body(Body::empty()).unwrap(),
+            )
+            .await;
+            let (_, paired) = response_json(
+                router(state.clone()),
+                Request::post("/v1/pairing/complete")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "code": pairing["code"], "client_name": "romm-restart-test"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await;
+            let token = paired["token"].as_str().unwrap();
+            let bridge =
+                spawn_fake_bridge(state.config.bridge_socket_path.clone(), move |request| {
+                    assert!(matches!(request, BridgeRequest::RestartRommService));
+                    reply
+                });
+            let response = router(state.clone())
+                .oneshot(
+                    Request::post("/v1/retro/service/restart")
+                        .header("authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected_status);
+            timeout(Duration::from_secs(5), bridge)
+                .await
+                .unwrap()
+                .unwrap();
         }
     }
 

@@ -6,7 +6,7 @@
 //! starting a command under `systemd-run`, and reliably stopping - or proving
 //! still running - whatever a launch left behind.
 
-use std::{collections::BTreeSet, env, ffi::OsString, path::PathBuf};
+use std::{collections::BTreeSet, env, ffi::OsString, path::PathBuf, process::Stdio};
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
@@ -265,9 +265,84 @@ fn is_kiosk_session() -> bool {
         .any(|desktop| desktop.eq_ignore_ascii_case("hearthdeck"))
 }
 
+/// The `systemd --user` unit [`restart_romm_service`] acts on. A named constant,
+/// never built from request data: this is a narrowly scoped action on one
+/// specific unit, not a generic "restart any unit" capability.
+const ROMM_SERVICE_UNIT: &str = "romm.service";
+
+/// The fixed argv that restarts it, kept as data so its scope is assertable in a
+/// test without a systemd user session present - and without restarting a real
+/// RomM stack as a side effect of running the test suite.
+const ROMM_RESTART_ARGS: [&str; 3] = ["--user", "restart", ROMM_SERVICE_UNIT];
+
+/// Maps a finished `systemctl restart` onto the caller's result. A missing unit
+/// fails the same way `systemctl` itself reports it, surfaced to the caller
+/// rather than silently ignored. `systemd` can also fail with nothing on stderr,
+/// so that case still yields a message naming the unit that was rejected.
+fn romm_restart_result(success: bool, stderr: &[u8]) -> Result<()> {
+    if success {
+        return Ok(());
+    }
+    let message = String::from_utf8_lossy(stderr).trim().to_owned();
+    Err(if message.is_empty() {
+        anyhow::anyhow!("systemd rejected the {ROMM_SERVICE_UNIT} restart")
+    } else {
+        anyhow::anyhow!("systemd rejected the {ROMM_SERVICE_UNIT} restart: {message}")
+    })
+}
+
+/// Restarts the optional RomM systemd unit
+/// (`deploy/systemd/romm.service`). The unit name is a fixed
+/// constant, never caller-supplied: this is a narrowly scoped action on one
+/// specific service, not a generic "restart any unit" capability. A missing
+/// unit fails the same way `systemctl` itself reports it, surfaced to the
+/// caller rather than silently ignored.
+pub(crate) async fn restart_romm_service() -> Result<()> {
+    let output = Command::new("systemctl")
+        .args(ROMM_RESTART_ARGS)
+        .stdin(Stdio::null())
+        .output()
+        .await?;
+    romm_restart_result(output.status.success(), &output.stderr)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{environment_contains_entry, escaped_unit_from_cgroup};
+
+    #[test]
+    fn romm_restart_targets_the_one_fixed_unit() {
+        // Locks in scope: this may only ever restart the single fixed unit, and
+        // its name may not become a request parameter (the same discipline the
+        // install-request boundary uses).
+        assert_eq!(
+            super::ROMM_RESTART_ARGS,
+            ["--user", "restart", "romm.service"]
+        );
+    }
+
+    #[test]
+    fn romm_restart_surfaces_systemd_failures_instead_of_swallowing_them() {
+        assert!(super::romm_restart_result(true, b"").is_ok());
+
+        let reported = super::romm_restart_result(
+            false,
+            b"Failed to restart romm.service: Unit romm.service not found.\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            reported.contains("Unit romm.service not found"),
+            "{reported}"
+        );
+
+        // systemd can fail with nothing useful on stderr; the message must still
+        // name the unit that was rejected.
+        let bare = super::romm_restart_result(false, b"  \n")
+            .unwrap_err()
+            .to_string();
+        assert!(bare.contains("romm.service"), "{bare}");
+    }
 
     #[test]
     fn matches_only_the_exact_nul_delimited_launch_marker() {
