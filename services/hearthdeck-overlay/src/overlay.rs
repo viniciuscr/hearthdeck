@@ -1,6 +1,5 @@
 use std::error::Error;
 use std::io;
-use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixDatagram as StdUnixDatagram, UnixStream as StdUnixStream};
 use std::path::{Path, PathBuf};
@@ -24,7 +23,6 @@ use cosmic::iced::{Alignment, Color, Length, Subscription, window};
 use cosmic::surface::action::{LiveSettings, app_layer_shell};
 use cosmic::widget::{column, container, list, list_column, text};
 use futures_util::SinkExt;
-use hearthdeck_protocol::{BridgeErrorCode, BridgeRequest, BridgeResponse};
 use tokio::net::UnixDatagram;
 use tracing::{error, info, warn};
 
@@ -45,24 +43,34 @@ const COMPOSITOR_CHECK_MISSES: u32 = 3;
 
 pub fn main() -> Result<(), Box<dyn Error>> {
     match std::env::args().nth(1).as_deref() {
-        None => run().map_err(Into::into),
+        None => run(),
         Some("--toggle") => toggle().map_err(Into::into),
         Some("--install-shortcut") => shortcut::install(),
         Some(argument) => Err(format!("unknown argument: {argument}").into()),
     }
 }
 
-fn run() -> cosmic::iced::Result {
+fn run() -> Result<(), Box<dyn Error>> {
     init_logging();
     info!("hearthdeck-overlay ({APP_ID})");
     watch_compositor();
 
+    let client = hearthdeck_client::Client::new(
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(130))
+            .build()?,
+        std::env::var("HEARTHDECK_BACKEND_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:38400".to_owned()),
+        std::env::var("HEARTHDECK_PAIRING_TOKEN").unwrap_or_default(),
+        "hearthdeck-overlay",
+    );
     cosmic::app::run::<Overlay>(
         Settings::default()
             .no_main_window(true)
             .exit_on_close(false),
-        (),
+        client,
     )
+    .map_err(Into::into)
 }
 
 /// Ends this process once the compositor it is drawn on is gone.
@@ -203,10 +211,7 @@ enum Message {
     Activate,
     ResumeApp,
     CloseApp,
-    /// Reported by the background task started for `CloseApp`, once
-    /// `stop_active_application` returns. `Err` carries a display-formatted
-    /// message (not the original `io::Error`) since `Message` must be
-    /// `Clone` for iced/cosmic's event loop, and `io::Error` isn't.
+    /// The daemon stop result, formatted because messages must be cloneable.
     CloseFinished(Result<(), String>),
     HideAfterClose,
     LogOut,
@@ -245,11 +250,12 @@ struct Overlay {
     core: Core,
     window_id: window::Id,
     state: OverlayState,
+    client: hearthdeck_client::Client,
 }
 
 impl cosmic::Application for Overlay {
     type Executor = cosmic::executor::single::Executor;
-    type Flags = ();
+    type Flags = hearthdeck_client::Client;
     type Message = Message;
     const APP_ID: &'static str = APP_ID;
 
@@ -261,11 +267,12 @@ impl cosmic::Application for Overlay {
         &mut self.core
     }
 
-    fn init(core: Core, _flags: ()) -> (Self, Task<Message>) {
+    fn init(core: Core, client: Self::Flags) -> (Self, Task<Message>) {
         let app = Overlay {
             core,
             window_id: window::Id::unique(),
             state: OverlayState::default(),
+            client,
         };
         (app, Task::none())
     }
@@ -495,49 +502,6 @@ fn toggle_subscription() -> Subscription<()> {
     })
 }
 
-/// Sends one JSON-lines request to the bridge and reads its response.
-/// Mirrors `hearthdeck-daemon::bridge::request`, using a blocking
-/// `UnixStream` instead of tokio's since this runs on a plain spawned
-/// thread, not inside an async runtime.
-fn bridge_request(socket_path: &Path, request: &BridgeRequest) -> io::Result<BridgeResponse> {
-    let mut stream = StdUnixStream::connect(socket_path)?;
-    let payload = serde_json::to_string(request).map_err(io::Error::other)?;
-    stream.write_all(payload.as_bytes())?;
-    stream.write_all(b"\n")?;
-    stream.flush()?;
-
-    let mut line = String::new();
-    BufReader::new(&stream).read_line(&mut line)?;
-    if line.is_empty() {
-        return Err(io::Error::other(
-            "bridge closed connection without a response",
-        ));
-    }
-    serde_json::from_str(&line).map_err(io::Error::other)
-}
-
-fn stop_active_application() -> io::Result<()> {
-    stop_active_application_at(&hearthdeck_protocol::paths::bridge_socket_path())
-}
-
-fn stop_active_application_at(socket_path: &Path) -> io::Result<()> {
-    match bridge_request(socket_path, &BridgeRequest::StopActiveApplicationSession)? {
-        BridgeResponse::StopAccepted { session_id } => {
-            info!(
-                session_id,
-                "hearthdeck-overlay: stopped active application session"
-            );
-            Ok(())
-        }
-        BridgeResponse::Error {
-            code: BridgeErrorCode::NotFound,
-            message,
-        } => Err(io::Error::new(io::ErrorKind::NotFound, message)),
-        BridgeResponse::Error { message, .. } => Err(io::Error::other(message)),
-        _ => Err(io::Error::other("bridge rejected application-session stop")),
-    }
-}
-
 /// Logs the session out: stops whatever application is running, then ends the
 /// session this overlay is part of so the display manager's login screen comes
 /// back.
@@ -552,15 +516,16 @@ fn stop_active_application_at(socket_path: &Path) -> io::Result<()> {
 /// kiosk. Ending the session through the client it runs needs neither logind
 /// nor a polkit agent.
 ///
-/// Launched applications are systemd *user* units, outside the session scope
-/// (see `stop_active_application`), so on a machine whose user manager outlives
+/// Launched applications are systemd *user* units, outside the session scope,
+/// so on a machine whose user manager outlives
 /// the session they would survive the log-out. The tracked active application is
 /// therefore stopped first, through the same path "Close App" uses; failing to
 /// stop it must not strand the user in the session, so that failure is logged
 /// and the log-out proceeds.
-fn log_out() -> io::Result<()> {
-    if let Err(err) = stop_active_application()
-        && err.kind() != io::ErrorKind::NotFound
+async fn log_out(client: &hearthdeck_client::Client) -> Result<(), String> {
+    if let Err(err) = client.stop_active_session().await
+        && !matches!(&err, hearthdeck_client::Error::Api { status, .. }
+            | hearthdeck_client::Error::UnexpectedStatus(status) if *status == reqwest::StatusCode::NOT_FOUND)
     {
         warn!(
             %err,
@@ -568,7 +533,10 @@ fn log_out() -> io::Result<()> {
         );
     }
 
-    terminate_session_client()?;
+    tokio::task::spawn_blocking(terminate_session_client)
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
     info!("hearthdeck-overlay: session client signalled to exit; returning to the login screen");
     Ok(())
 }
@@ -650,26 +618,25 @@ impl Overlay {
             Effect::None => Task::none(),
             Effect::Show => self.show(),
             Effect::Hide => self.hide(),
-            Effect::StopApplication => cosmic::task::future(async {
-                Message::CloseFinished(
-                    tokio::task::spawn_blocking(stop_active_application)
-                        .await
-                        .map_err(|err| err.to_string())
-                        .and_then(|result| result.map_err(|err| err.to_string())),
-                )
-            }),
+            Effect::StopApplication => {
+                let client = self.client.clone();
+                cosmic::task::future(async move {
+                    Message::CloseFinished(
+                        client
+                            .stop_active_session()
+                            .await
+                            .map_err(|error| error.to_string()),
+                    )
+                })
+            }
             Effect::DelayHide => cosmic::task::future(async {
                 tokio::time::sleep(INPUT_RELEASE_DELAY).await;
                 Message::HideAfterClose
             }),
-            Effect::LogOut => cosmic::task::future(async {
-                Message::LogOutFinished(
-                    tokio::task::spawn_blocking(log_out)
-                        .await
-                        .map_err(|err| err.to_string())
-                        .and_then(|result| result.map_err(|err| err.to_string())),
-                )
-            }),
+            Effect::LogOut => {
+                let client = self.client.clone();
+                cosmic::task::future(async move { Message::LogOutFinished(log_out(&client).await) })
+            }
         }
     }
 
@@ -702,12 +669,11 @@ impl Overlay {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::{UnixDatagram, UnixListener};
+    use std::os::unix::net::UnixDatagram;
 
     use super::{
         SESSION_CLIENTS, TOGGLE_MESSAGE, is_session_client, is_toggle_message, send_toggle_to,
-        stop_active_application_at, wayland_socket_path,
+        wayland_socket_path,
     };
 
     #[test]
@@ -832,62 +798,5 @@ mod tests {
             wayland_socket_path(OsStr::new("/run/user/1000"), OsStr::new("/tmp/wayland-9")),
             Path::new("/tmp/wayland-9")
         );
-    }
-
-    #[test]
-    fn close_app_sends_one_atomic_request_and_preserves_bridge_errors() {
-        let cases = [
-            (r#"{"type":"stop_accepted","session_id":"abc"}"#, None),
-            (
-                r#"{"type":"error","code":"not_found","message":"no active session"}"#,
-                Some((std::io::ErrorKind::NotFound, "no active session")),
-            ),
-            (
-                r#"{"type":"error","code":"launch_failed","message":"systemd stop failed"}"#,
-                Some((std::io::ErrorKind::Other, "systemd stop failed")),
-            ),
-            (
-                r#"{"type":"health","version":"1"}"#,
-                Some((
-                    std::io::ErrorKind::Other,
-                    "bridge rejected application-session stop",
-                )),
-            ),
-        ];
-        for (response, expected_error) in cases {
-            let temporary = tempfile::tempdir().unwrap();
-            let socket_path = temporary.path().join("bridge.sock");
-            let listener = UnixListener::bind(&socket_path).expect("bind test socket");
-            let server = std::thread::spawn(move || {
-                let (stream, _) = listener.accept().expect("accept test connection");
-                stream
-                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                    .unwrap();
-                let mut line = String::new();
-                BufReader::new(&stream)
-                    .read_line(&mut line)
-                    .expect("read test request");
-                assert_eq!(
-                    serde_json::from_str::<serde_json::Value>(&line).unwrap(),
-                    serde_json::json!({"type": "stop_active_application_session"})
-                );
-                drop(listener);
-                let mut stream = &stream;
-                stream
-                    .write_all(response.as_bytes())
-                    .expect("write test response");
-                stream.write_all(b"\n").expect("write test response");
-            });
-            let result = stop_active_application_at(&socket_path);
-            server.join().expect("test bridge thread should not panic");
-            match expected_error {
-                None => result.expect("atomic close should succeed"),
-                Some((kind, message)) => {
-                    let error = result.expect_err("rejected close must fail");
-                    assert_eq!(error.kind(), kind, "response: {response}");
-                    assert_eq!(error.to_string(), message, "response: {response}");
-                }
-            }
-        }
     }
 }

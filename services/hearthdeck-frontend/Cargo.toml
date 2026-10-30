@@ -11,6 +11,7 @@ default = ["wgpu"]
 wgpu = ["libcosmic/wgpu"]
 
 [dependencies]
+hearthdeck-client = { path = "../hearthdeck-client" }
 # COSMIC framework
 # No `rev`: other pop-os git crates in the tree require libcosmic from this
 # same bare URL, and cargo treats "git+URL" and "git+URL?rev=..." as *different*

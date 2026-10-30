@@ -701,6 +701,24 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/ApplicationSession'
                   - type: 'null'
+  /v1/sessions/active/stop:
+    post:
+      operationId: stopActiveApplicationSession
+      description: >-
+        Atomically selects and stops the active bridge session, then closes that
+        session's play record before returning. Not retried automatically.
+        A timeout does not prove that the application failed to stop.
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: Active session stopped and activity completion processed
+        '401':
+          description: Pairing token missing or invalid
+        '404':
+          description: No active application session
+        '502':
+          description: Bridge unavailable or stop rejected
   /v1/sessions/{id}/stop:
     post:
       operationId: stopApplicationSession
