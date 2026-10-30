@@ -23,8 +23,8 @@ use hearthdeck_protocol::{
 };
 
 use crate::bridge;
-use crate::diagnostics::RommPlatform;
 use crate::retro;
+use crate::romm::RommPlatform;
 
 /// One known-good BIOS dump a slot accepts.
 pub(crate) struct KnownBios {
@@ -988,8 +988,8 @@ mod tests {
         BiosAccept, BiosSlot, BiosSource, KnownBios, ReadinessError, SourceEntry, bios_slots_for,
         file_is_verified, name_satisfies, pick_candidate, readiness, sha1_hex, slot_target_display,
     };
-    use crate::diagnostics::RommPlatform;
     use crate::retro;
+    use crate::romm::RommPlatform;
     use std::path::Path;
 
     fn platform(fs_slug: &str, rom_count: u64) -> RommPlatform {

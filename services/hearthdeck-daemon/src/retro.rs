@@ -14,7 +14,7 @@ use tokio::fs;
 
 use crate::{
     config::RommPaths,
-    diagnostics::{self, RommQueryError},
+    romm::{self, RommQueryError},
     settings::SettingsRepository,
 };
 
@@ -206,7 +206,7 @@ impl std::error::Error for RetroLaunchError {}
 pub struct RetroLaunchPlan {
     pub core_path: PathBuf,
     pub rom_path: PathBuf,
-    pub game: diagnostics::RommGame,
+    pub game: romm::RommGame,
 }
 
 /// Resolves the core and the ROM's own path for a RomM rom ID.
@@ -221,12 +221,12 @@ pub async fn prepare_launch(
     paths: &RommPaths,
     rom_id: i64,
 ) -> Result<RetroLaunchPlan, RetroLaunchError> {
-    let rom = diagnostics::romm_rom(settings, rom_id)
+    let rom = romm::rom(settings, rom_id)
         .await
         .map_err(RetroLaunchError::Romm)?;
     let rom_path = library_rom_path(paths, &rom).await?;
 
-    let platforms = diagnostics::romm_platforms(settings)
+    let platforms = romm::platforms(settings)
         .await
         .map_err(RetroLaunchError::Romm)?;
     let platform = platforms
@@ -275,7 +275,7 @@ pub async fn prepare_launch(
 /// obscurely inside RetroArch.
 async fn library_rom_path(
     paths: &RommPaths,
-    rom: &diagnostics::RommGame,
+    rom: &romm::RommGame,
 ) -> Result<PathBuf, RetroLaunchError> {
     let fs_name = rom
         .fs_name

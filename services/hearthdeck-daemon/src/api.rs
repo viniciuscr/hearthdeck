@@ -27,10 +27,9 @@ use uuid::Uuid;
 use crate::{
     activity::{ActivityEntry, RecentActivity},
     categorizer::{ModelStatus, ScanRequest},
-    collections,
-    diagnostics::{self, RommGame, RommPlatform, RommQueryError},
-    readiness,
+    collections, diagnostics, readiness,
     retro::RetroLaunchError,
+    romm::{self, RommGame, RommPlatform, RommQueryError},
     romm_link::{self, DeviceOffer, DevicePoll},
     sessions::LaunchError,
     settings::{
@@ -238,7 +237,7 @@ async fn list_recent_activity(
 async fn list_retro_consoles(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<RommPlatform>>, ApiError> {
-    let mut platforms = diagnostics::romm_platforms(&state.settings)
+    let mut platforms = romm::platforms(&state.settings)
         .await
         .map_err(ApiError::romm_query)?;
     platforms.sort_by(|left, right| {
@@ -295,7 +294,7 @@ async fn install_retro_cores(
 }
 
 async fn romm_platforms(state: &SharedState) -> Result<Vec<RommPlatform>, ApiError> {
-    diagnostics::romm_platforms(&state.settings)
+    romm::platforms(&state.settings)
         .await
         .map_err(ApiError::romm_query)
 }
@@ -307,11 +306,11 @@ async fn list_retro_roms(
     let limit = query.limit.unwrap_or(48).clamp(1, 100);
     let offset = query.offset.unwrap_or(0);
     let search_term = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
-    let filters = diagnostics::RommGameFilters {
+    let filters = romm::RommGameFilters {
         genres: query.genre.into_iter().collect(),
         regions: query.region.into_iter().collect(),
     };
-    let games = diagnostics::romm_games(
+    let games = romm::games(
         &state.settings,
         query.platform_id,
         search_term,
@@ -338,7 +337,7 @@ async fn list_retro_facets(
     State(state): State<SharedState>,
     axum::extract::Query(query): axum::extract::Query<RommFacetsQuery>,
 ) -> Result<Json<Vec<RetroFacet>>, ApiError> {
-    let values = diagnostics::romm_filter_values(&state.settings, query.platform_id)
+    let values = romm::filter_values(&state.settings, query.platform_id)
         .await
         .map_err(ApiError::romm_query)?;
     Ok(Json(retro_facets(values)))
@@ -347,7 +346,7 @@ async fn list_retro_facets(
 /// Maps RomM's library-wide filter values onto the facets the grid shows. Only
 /// the fields Hearthdeck offers a chip row for become facets; the rest of
 /// RomM's filter dictionary stays unused until a screen asks for it.
-fn retro_facets(values: diagnostics::RommFilterValues) -> Vec<RetroFacet> {
+fn retro_facets(values: romm::RommFilterValues) -> Vec<RetroFacet> {
     [
         ("genre", "Genre", values.genres),
         ("region", "Region", values.regions),
@@ -371,13 +370,13 @@ fn retro_facets(values: diagnostics::RommFilterValues) -> Vec<RetroFacet> {
 /// Full detail for one ROM, backing the frontend's console-game details
 /// screen. A separate route rather than more fields on `list_retro_roms`
 /// because the list is paged, while this metadata is only worth fetching for
-/// the single game the user opened. Reuses `romm_rom`, the same single-ROM
+/// the single game the user opened. Reuses `romm::rom`, the same single-ROM
 /// read the RetroArch launch path makes.
 async fn retro_rom_details(
     State(state): State<SharedState>,
     Path(rom_id): Path<i64>,
 ) -> Result<Json<RetroGameDetails>, ApiError> {
-    let game = diagnostics::romm_rom(&state.settings, rom_id)
+    let game = romm::rom(&state.settings, rom_id)
         .await
         .map_err(ApiError::romm_query)?;
     let mut details = RetroGameDetails::from(&game);
@@ -385,7 +384,7 @@ async fn retro_rom_details(
     // favorites are a collection rather than a field on the rom. A failure here
     // only costs the button its initial label: the screen still opens, and
     // toggling still writes.
-    match diagnostics::romm_favorite(&state.settings, &game).await {
+    match romm::favorite(&state.settings, &game).await {
         Ok(favorite) => details.favorite = favorite,
         Err(error) => warn!(?error, rom_id, "could not read RomM favorite state"),
     }
@@ -412,7 +411,7 @@ async fn set_retro_favorite(
     Path(rom_id): Path<i64>,
     Json(request): Json<FavoriteRequest>,
 ) -> Result<Json<FavoriteResponse>, ApiError> {
-    let favorite = diagnostics::romm_set_favorite(&state.settings, rom_id, request.favorite)
+    let favorite = romm::set_favorite(&state.settings, rom_id, request.favorite)
         .await
         .map_err(ApiError::romm_query)?;
     info!(rom_id, favorite, "RomM favorite updated");
@@ -436,7 +435,7 @@ async fn set_retro_backlogged(
     Path(rom_id): Path<i64>,
     Json(request): Json<BacklogRequest>,
 ) -> Result<Json<BacklogResponse>, ApiError> {
-    let backlogged = diagnostics::romm_set_backlogged(&state.settings, rom_id, request.backlogged)
+    let backlogged = romm::set_backlogged(&state.settings, rom_id, request.backlogged)
         .await
         .map_err(ApiError::romm_query)?;
     info!(rom_id, backlogged, "RomM backlog flag updated");
@@ -491,7 +490,7 @@ async fn retro_asset(
     State(state): State<SharedState>,
     axum::extract::Query(query): axum::extract::Query<RommAssetQuery>,
 ) -> Result<Response, ApiError> {
-    let asset = diagnostics::romm_asset(&state.settings, &state.config.romm, &query.path)
+    let asset = romm::asset(&state.settings, &state.config.romm, &query.path)
         .await
         .map_err(ApiError::romm_query)?;
     let content_type = HeaderValue::from_str(&asset.content_type)
@@ -1521,7 +1520,7 @@ async fn with_item_icons(state: &SharedState, items: Vec<CollectionItem>) -> Vec
 /// mark, and the rest of the rail is worth having either way.
 async fn stored_item_icon(state: &SharedState, item_id: &str) -> Option<String> {
     if let Some(rom_id) = rom_id_from_item(item_id) {
-        return match diagnostics::romm_rom(&state.settings, rom_id).await {
+        return match romm::rom(&state.settings, rom_id).await {
             Ok(game) => RetroGame::from(&game).cover_path,
             Err(error) => {
                 debug!(?error, rom_id, "could not resolve a rail item's RomM cover");
@@ -3487,7 +3486,7 @@ mod tests {
     /// populated dimension, and no row for a dimension RomM reported empty.
     #[test]
     fn retro_facets_offer_populated_dimensions_only() {
-        let facets = super::retro_facets(crate::diagnostics::RommFilterValues {
+        let facets = super::retro_facets(crate::romm::RommFilterValues {
             genres: vec!["Action".to_owned(), "RPG".to_owned()],
             regions: Vec::new(),
         });
@@ -3505,10 +3504,8 @@ mod tests {
         );
     }
 
-    fn romm_game_with_siblings(
-        siblings: Vec<crate::diagnostics::RommSiblingRom>,
-    ) -> super::RetroGame {
-        use crate::diagnostics::{RommGame, RommGameMetadata};
+    fn romm_game_with_siblings(siblings: Vec<crate::romm::RommSiblingRom>) -> super::RetroGame {
+        use crate::romm::{RommGame, RommGameMetadata};
 
         super::RetroGame::from(&RommGame {
             id: 1,
@@ -3532,13 +3529,13 @@ mod tests {
             fs_size_bytes: None,
             fs_path: None,
             is_favorite: None,
-            rom_user: crate::diagnostics::RommRomUser::default(),
+            rom_user: crate::romm::RommRomUser::default(),
         })
     }
 
     #[test]
     fn details_projection_carries_the_fields_the_grid_omits() {
-        use crate::diagnostics::{RommGame, RommGameMetadata};
+        use crate::romm::{RommGame, RommGameMetadata};
 
         let game = RommGame {
             id: 4014,
@@ -3572,7 +3569,7 @@ mod tests {
             fs_size_bytes: Some(524_288),
             fs_path: None,
             is_favorite: Some(true),
-            rom_user: crate::diagnostics::RommRomUser { backlogged: true },
+            rom_user: crate::romm::RommRomUser { backlogged: true },
         };
 
         let details = super::RetroGameDetails::from(&game);
@@ -3609,7 +3606,7 @@ mod tests {
 
     #[test]
     fn sibling_versions_are_labelled_by_file_name_not_the_shared_title() {
-        use crate::diagnostics::RommSiblingRom;
+        use crate::romm::RommSiblingRom;
 
         // RomM's `name` is the same game title on every rival, so labelling
         // from it makes the discs indistinguishable; `fs_name_no_ext` keeps
@@ -3644,7 +3641,7 @@ mod tests {
 
     #[test]
     fn duplicate_sibling_labels_get_the_rom_id_appended() {
-        use crate::diagnostics::RommSiblingRom;
+        use crate::romm::RommSiblingRom;
 
         let game = romm_game_with_siblings(vec![
             RommSiblingRom {

@@ -17,6 +17,7 @@ mod launch;
 mod provider_worker;
 mod readiness;
 mod retro;
+mod romm;
 mod romm_link;
 mod sessions;
 mod settings;
