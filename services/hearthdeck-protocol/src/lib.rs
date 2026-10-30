@@ -112,6 +112,7 @@ pub enum BridgeRequest {
         input_profile: InputProfile,
     },
     ActiveApplicationSession,
+    StopActiveApplicationSession,
     StopApplicationSession {
         session_id: String,
     },
@@ -574,6 +575,19 @@ mod tests {
         ProviderKind, ProviderStatus, RetroGame, RetroGameDetails, RetroRomVersion, Section,
         ServerEvent, ServerEventKind,
     };
+
+    #[test]
+    fn stop_active_session_is_a_single_wire_command() {
+        let json = r#"{"type":"stop_active_application_session"}"#;
+        assert_eq!(
+            serde_json::to_string(&BridgeRequest::StopActiveApplicationSession).unwrap(),
+            json
+        );
+        assert!(matches!(
+            serde_json::from_str::<BridgeRequest>(json).unwrap(),
+            BridgeRequest::StopActiveApplicationSession
+        ));
+    }
 
     #[test]
     fn section_values_keep_their_wire_names_and_order() {

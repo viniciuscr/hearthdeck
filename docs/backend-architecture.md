@@ -143,6 +143,11 @@ records from `degraded`; an empty catalog is not a bridge health signal.
 - The client API receives typed resource and action IDs, never shell commands.
 - The bridge protocol has typed health, discovery, launch, active-session, and
   stop-session requests. It has no command or argument field.
+- `stop_active_application_session` selects and stops the active session under
+  the launch-transition lock. Overlay Close App and logout send this single
+  command, rather than a lookup followed by a stop that can race a new launch.
+  The overlay still talks directly to the bridge; daemon-mediated session
+  control is a separate remaining boundary change.
 - The bridge re-discovers the requested desktop ID locally and validates its
   launch specification before creating a transient systemd user service; it does
   not accept `Exec` strings from the daemon.

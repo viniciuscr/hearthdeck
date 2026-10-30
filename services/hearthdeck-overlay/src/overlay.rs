@@ -24,7 +24,7 @@ use cosmic::iced::{Alignment, Color, Length, Subscription, window};
 use cosmic::surface::action::{LiveSettings, app_layer_shell};
 use cosmic::widget::{column, container, list, list_column, text};
 use futures_util::SinkExt;
-use hearthdeck_protocol::{BridgeRequest, BridgeResponse};
+use hearthdeck_protocol::{BridgeErrorCode, BridgeRequest, BridgeResponse};
 use tokio::net::UnixDatagram;
 use tracing::{error, info, warn};
 
@@ -499,8 +499,8 @@ fn toggle_subscription() -> Subscription<()> {
 /// Mirrors `hearthdeck-daemon::bridge::request`, using a blocking
 /// `UnixStream` instead of tokio's since this runs on a plain spawned
 /// thread, not inside an async runtime.
-fn bridge_request(request: &BridgeRequest) -> io::Result<BridgeResponse> {
-    let mut stream = StdUnixStream::connect(hearthdeck_protocol::paths::bridge_socket_path())?;
+fn bridge_request(socket_path: &Path, request: &BridgeRequest) -> io::Result<BridgeResponse> {
+    let mut stream = StdUnixStream::connect(socket_path)?;
     let payload = serde_json::to_string(request).map_err(io::Error::other)?;
     stream.write_all(payload.as_bytes())?;
     stream.write_all(b"\n")?;
@@ -516,45 +516,26 @@ fn bridge_request(request: &BridgeRequest) -> io::Result<BridgeResponse> {
     serde_json::from_str(&line).map_err(io::Error::other)
 }
 
-/// Asks the bridge which application session it is currently tracking as
-/// active, then asks it to stop that session.
-///
-/// ponytail: this reuses the daemon's own session-stop path (see
-/// hearthdeck-bridge/src/platform.rs::stop_application) instead of
-/// reinventing app-liveness/focus detection here. The bridge already tracks
-/// exactly one thing as "the active session" - the most recent launch that's
-/// still running, no window-matching heuristics involved - and stops it via
-/// `systemctl --user stop`, which is cgroup-based and tears down the whole
-/// process tree regardless of whether the app implements any Wayland close
-/// protocol, is nested in Gamescope, or ignores synthetic key presses.
-/// Earlier attempts here (COSMIC toplevel-manager close, then synthetic
-/// Alt+F4) both depended on details Hearthdeck doesn't control; this doesn't.
 fn stop_active_application() -> io::Result<()> {
-    let BridgeResponse::ApplicationSession { session } =
-        bridge_request(&BridgeRequest::ActiveApplicationSession)?
-    else {
-        return Err(io::Error::other("bridge rejected active-session lookup"));
-    };
-    let Some(session) = session else {
-        warn!("hearthdeck-overlay: no application session is active");
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "no application session is active",
-        ));
-    };
+    stop_active_application_at(&hearthdeck_protocol::paths::bridge_socket_path())
+}
 
-    let response = bridge_request(&BridgeRequest::StopApplicationSession {
-        session_id: session.id.clone(),
-    })?;
-    if !matches!(response, BridgeResponse::StopAccepted { .. }) {
-        return Err(io::Error::other("bridge rejected application-session stop"));
+fn stop_active_application_at(socket_path: &Path) -> io::Result<()> {
+    match bridge_request(socket_path, &BridgeRequest::StopActiveApplicationSession)? {
+        BridgeResponse::StopAccepted { session_id } => {
+            info!(
+                session_id,
+                "hearthdeck-overlay: stopped active application session"
+            );
+            Ok(())
+        }
+        BridgeResponse::Error {
+            code: BridgeErrorCode::NotFound,
+            message,
+        } => Err(io::Error::new(io::ErrorKind::NotFound, message)),
+        BridgeResponse::Error { message, .. } => Err(io::Error::other(message)),
+        _ => Err(io::Error::other("bridge rejected application-session stop")),
     }
-    info!(
-        session_id = %session.id,
-        application_id = %session.application_id,
-        "hearthdeck-overlay: stopped active application session"
-    );
-    Ok(())
 }
 
 /// Logs the session out: stops whatever application is running, then ends the
@@ -726,7 +707,7 @@ mod tests {
 
     use super::{
         SESSION_CLIENTS, TOGGLE_MESSAGE, is_session_client, is_toggle_message, send_toggle_to,
-        stop_active_application, wayland_socket_path,
+        stop_active_application_at, wayland_socket_path,
     };
 
     #[test]
@@ -854,66 +835,59 @@ mod tests {
     }
 
     #[test]
-    fn stops_the_session_the_bridge_reports_as_active_and_rejects_missing_sessions() {
-        let socket_path = std::env::temp_dir().join(format!(
-            "hearthdeck-overlay-test-{}.sock",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&socket_path);
-        let listener = UnixListener::bind(&socket_path).expect("bind test socket");
-        // SAFETY: no other test in this crate touches this env var.
-        unsafe {
-            std::env::set_var("HEARTHDECK_BRIDGE_SOCKET", &socket_path);
-        }
-
-        let server = std::thread::spawn(move || {
-            for _ in 0..2 {
+    fn close_app_sends_one_atomic_request_and_preserves_bridge_errors() {
+        let cases = [
+            (r#"{"type":"stop_accepted","session_id":"abc"}"#, None),
+            (
+                r#"{"type":"error","code":"not_found","message":"no active session"}"#,
+                Some((std::io::ErrorKind::NotFound, "no active session")),
+            ),
+            (
+                r#"{"type":"error","code":"launch_failed","message":"systemd stop failed"}"#,
+                Some((std::io::ErrorKind::Other, "systemd stop failed")),
+            ),
+            (
+                r#"{"type":"health","version":"1"}"#,
+                Some((
+                    std::io::ErrorKind::Other,
+                    "bridge rejected application-session stop",
+                )),
+            ),
+        ];
+        for (response, expected_error) in cases {
+            let temporary = tempfile::tempdir().unwrap();
+            let socket_path = temporary.path().join("bridge.sock");
+            let listener = UnixListener::bind(&socket_path).expect("bind test socket");
+            let server = std::thread::spawn(move || {
                 let (stream, _) = listener.accept().expect("accept test connection");
-                let mut reader = BufReader::new(&stream);
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
                 let mut line = String::new();
-                reader.read_line(&mut line).expect("read test request");
-
-                let response = if line.contains("active_application_session") {
-                    r#"{"type":"application_session","session":{"id":"abc","source_id":"desktop-apps","application_id":"foo","state":"running"}}"#
-                } else {
-                    assert!(
-                        line.contains(r#""session_id":"abc""#),
-                        "expected a stop request for the reported session, got: {line}"
-                    );
-                    r#"{"type":"stop_accepted","session_id":"abc"}"#
-                };
+                BufReader::new(&stream)
+                    .read_line(&mut line)
+                    .expect("read test request");
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&line).unwrap(),
+                    serde_json::json!({"type": "stop_active_application_session"})
+                );
+                drop(listener);
                 let mut stream = &stream;
                 stream
                     .write_all(response.as_bytes())
                     .expect("write test response");
                 stream.write_all(b"\n").expect("write test response");
+            });
+            let result = stop_active_application_at(&socket_path);
+            server.join().expect("test bridge thread should not panic");
+            match expected_error {
+                None => result.expect("atomic close should succeed"),
+                Some((kind, message)) => {
+                    let error = result.expect_err("rejected close must fail");
+                    assert_eq!(error.kind(), kind, "response: {response}");
+                    assert_eq!(error.to_string(), message, "response: {response}");
+                }
             }
-        });
-
-        stop_active_application().expect("stop_active_application should succeed");
-        server.join().expect("test bridge thread should not panic");
-        let _ = std::fs::remove_file(&socket_path);
-
-        let listener = UnixListener::bind(&socket_path).expect("bind test socket");
-        let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().expect("accept test connection");
-            let mut reader = BufReader::new(&stream);
-            let mut line = String::new();
-            reader.read_line(&mut line).expect("read test request");
-            assert!(line.contains("active_application_session"));
-            let mut stream = &stream;
-            stream
-                .write_all(b"{\"type\":\"application_session\",\"session\":null}\n")
-                .expect("write test response");
-        });
-
-        let error = stop_active_application().expect_err("missing session must fail close");
-        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
-        server.join().expect("test bridge thread should not panic");
-        // SAFETY: no other test in this crate touches this env var.
-        unsafe {
-            std::env::remove_var("HEARTHDECK_BRIDGE_SOCKET");
         }
-        let _ = std::fs::remove_file(&socket_path);
     }
 }
