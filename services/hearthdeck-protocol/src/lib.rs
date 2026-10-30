@@ -288,7 +288,7 @@ impl Section {
     pub const ALL: [Self; 3] = [Self::PcGames, Self::ConsoleGames, Self::Applications];
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BridgeErrorCode {
     InvalidRequest,

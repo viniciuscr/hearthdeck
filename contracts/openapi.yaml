@@ -749,7 +749,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationSession'
         '404':
-          description: The item id names no launch this daemon knows
+          description: The item id names no launch this daemon knows, or the bridge found nothing to launch
         '501':
           description: No RetroArch core is configured for the rom's platform
         '503':
@@ -800,6 +800,10 @@ paths:
       responses:
         '202':
           description: Active application session stop accepted
+        '404':
+          description: The bridge has no session with this id
+        '502':
+          description: Bridge unavailable or stop rejected
   /v1/events:
     get:
       operationId: subscribeEvents

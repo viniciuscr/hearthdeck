@@ -125,6 +125,12 @@ async fn main() -> Result<()> {
     let _session_watcher = tokio::spawn(async move {
         session_state.sessions().watch().await;
     });
+    let bridge_socket = state.config.bridge_socket_path.clone();
+    tokio::spawn(async move {
+        if let Err(error) = bridge::check_version(&bridge_socket).await {
+            warn!(error = format!("{error:#}"), "bridge health check failed");
+        }
+    });
     // Nothing runs at boot, on purpose: the model is fetched when the user turns
     // smart categorization on, and nothing is classified until a button asks.
     // Until then, the ordinary category tabs stand and no checkpoint is fetched.
