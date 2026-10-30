@@ -1,7 +1,7 @@
 use crate::config::APP_ID;
 use crate::fl;
 use crate::form_factor::{self, FormFactor};
-use crate::library_item::LibraryItem;
+use crate::library_item::{LibraryItem, STORE_FILTER_PREFIX};
 use crate::providers::filter::{Facet, FacetOption};
 use cosmic::cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use cosmic::cosmic_config::{
@@ -37,9 +37,6 @@ pub fn romm_genre_category(genre: &str) -> String {
 pub fn romm_region_category(region: &str) -> String {
     format!("{REGION_FACET_PREFIX}{region}")
 }
-
-/// Tag a PC game carries for the store it came from (`hearthdeck-store:Steam`).
-pub const STORE_CATEGORY_PREFIX: &str = "hearthdeck-store:";
 
 /// The record-category prefix carrying where an application was installed from:
 /// a flatpak, the distribution's packages, the user's own data home, and so on.
@@ -329,9 +326,8 @@ impl SectionUi for Section {
 /// it shows.
 ///
 /// This is the local counterpart to the console grid's daemon-supplied facets,
-/// so every section filters the same way. A facet's value is the record
-/// category it matches, which makes the selection a plain category check in
-/// [`AppLibraryConfig::filtered_by_facets`]. A dimension with fewer than two
+/// so every section filters the same way. Store values keep their saved filter
+/// encoding but come from typed metadata. A dimension with fewer than two
 /// options is dropped: a filter with one choice is not a choice.
 pub fn section_facets(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<Facet> {
     let (id, label) = match section {
@@ -339,13 +335,21 @@ pub fn section_facets(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<Fac
         Section::Applications => ("source", fl!("filter-source")),
         Section::ConsoleGames => return Vec::new(),
     };
-    let options = entries
-        .iter()
-        .filter(|entry| section.matches(entry))
-        .flat_map(|entry| entry.categories.iter())
-        .filter(|category| is_section_facet(section, category.as_str()))
-        .cloned()
-        .collect::<BTreeSet<String>>()
+    let mut values = BTreeSet::new();
+    for entry in entries.iter().filter(|entry| section.matches(entry)) {
+        match section {
+            Section::PcGames => values.extend(entry.store_filter_value()),
+            Section::Applications => values.extend(
+                entry
+                    .categories
+                    .iter()
+                    .filter(|category| category.starts_with(SOURCE_CATEGORY_PREFIX))
+                    .cloned(),
+            ),
+            Section::ConsoleGames => {}
+        }
+    }
+    let options = values
         .into_iter()
         .map(|value| FacetOption {
             label: facet_value_label(&value),
@@ -362,15 +366,6 @@ pub fn section_facets(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<Fac
     }]
 }
 
-/// Whether `category` is one of the values this section offers as a filter.
-fn is_section_facet(section: Section, category: &str) -> bool {
-    match section {
-        Section::PcGames => category.starts_with(STORE_CATEGORY_PREFIX),
-        Section::Applications => category.starts_with(SOURCE_CATEGORY_PREFIX),
-        Section::ConsoleGames => false,
-    }
-}
-
 /// How a local facet value reads on a chip: a store drops its tag prefix, and a
 /// source drops its own and reads as the place it names.
 fn facet_value_label(value: &str) -> String {
@@ -378,7 +373,7 @@ fn facet_value_label(value: &str) -> String {
         return source_label(source);
     }
     value
-        .strip_prefix(STORE_CATEGORY_PREFIX)
+        .strip_prefix(STORE_FILTER_PREFIX)
         .unwrap_or(value)
         .to_owned()
 }
@@ -628,9 +623,8 @@ impl AppLibraryConfig {
     /// The entries one tab of one section shows: the section's records, the
     /// tab's group, the search box and the facet selection, all applied.
     ///
-    /// Every selected value must be one of the entry's categories. This is how a
-    /// locally-loaded section filters, whose facet values ([`section_facets`])
-    /// are its own categories.
+    /// Every selected value must match the item's metadata or categories using
+    /// the compatible values offered by [`section_facets`].
     pub fn filtered_by_facets(
         &self,
         section: Section,
@@ -658,13 +652,7 @@ impl AppLibraryConfig {
                 {
                     return false;
                 }
-                if !facets.values().all(|value| {
-                    if FormFactor::from_category(value).is_some() {
-                        de.matches_category(value)
-                    } else {
-                        de.categories.iter().any(|category| category == value)
-                    }
-                }) {
+                if !facets.values().all(|value| de.matches_facet(value)) {
                     return false;
                 }
                 if !input_value.is_empty()
@@ -771,15 +759,14 @@ fn derived_groups(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<AppGrou
     match section {
         Section::PcGames => {
             let stores: BTreeMap<String, String> = shown
-                .flat_map(|entry| entry.categories.iter())
-                .filter(|category| category.starts_with(STORE_CATEGORY_PREFIX))
-                .map(|category| (category.to_lowercase(), category.clone()))
+                .filter_map(|entry| entry.store_filter_value())
+                .map(|value| (value.to_lowercase(), value))
                 .collect();
             stores
                 .into_values()
                 .map(|category| AppGroup {
                     name: category
-                        .strip_prefix(STORE_CATEGORY_PREFIX)
+                        .strip_prefix(STORE_FILTER_PREFIX)
                         .map_or_else(|| category.clone(), str::to_owned),
                     icon: "folder-symbolic".to_string(),
                     filter: FilterType::Categories {
@@ -856,8 +843,13 @@ mod tests {
             exec: None,
             icon: IconSource::Name(String::new()),
             form_factor: None,
+            store: categories
+                .iter()
+                .find_map(|value| value.strip_prefix("hearthdeck-store:"))
+                .map(str::to_owned),
             categories: categories
                 .iter()
+                .filter(|value| !value.starts_with("hearthdeck-store:"))
                 .map(|category| (*category).into())
                 .collect(),
         };
@@ -1231,6 +1223,8 @@ mod tests {
         ];
 
         let pc = section_facets(Section::PcGames, &entries);
+        assert_eq!(entries[0].categories, ["Game"]);
+        assert_eq!(entries[0].store.as_deref(), Some("Steam"));
         assert_eq!(pc.len(), 1, "pc games should offer one facet");
         assert_eq!(pc[0].id, "store");
         assert_eq!(
@@ -1298,5 +1292,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["a"]
         );
+    }
+
+    #[test]
+    fn saved_store_groups_and_search_match_items_without_store_tags() {
+        let group: AppGroup = serde_json::from_value(serde_json::json!({
+            "name": "Steam",
+            "icon": "folder-symbolic",
+            "filter": {"Categories": {
+                "categories": ["HEARTHDECK-STORE:STEAM"],
+                "include": [],
+                "exclude": []
+            }}
+        }))
+        .expect("existing group format");
+        let game = entry("a", &["Game", "hearthdeck-store:Steam"]);
+        assert_eq!(game.categories, ["Game"]);
+        assert!(group.matches(&game));
+        let config = AppLibraryConfig::default();
+        let found = config.filtered_by_facets(
+            Section::PcGames,
+            None,
+            "hearthdeck-store:steam",
+            &[game],
+            &BTreeMap::new(),
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "a");
     }
 }
