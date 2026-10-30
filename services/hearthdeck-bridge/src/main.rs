@@ -210,46 +210,24 @@ async fn handle_request(
             session_id,
             input_profile,
         } => {
-            let _transition = session_transition.lock().await;
-            if let Err(error) =
-                stop_other_active_sessions(&source_id, sessions, session_directory).await
-            {
-                warn!(source_id, application_id, %error, "registered application launch rejected");
-                return BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
-                };
-            }
-            if let Err(error) = input::set_input_profile(input_profile, false).await {
-                warn!(source_id, application_id, %error, "input compatibility profile rejected");
-                return BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
-                };
-            }
-            match desktop_apps::launch_application(&source_id, &application_id, &session_id).await {
-                Ok(launched) => {
-                    register_launch(
-                        sessions,
-                        session_directory,
-                        source_id,
-                        application_id,
-                        session_id,
-                        launched,
-                        input_profile,
-                    )
-                    .await
-                }
-                Err(error) => {
-                    sync_input_profile(sessions, session_directory).await;
-                    warn!(source_id, application_id, %error, "registered application launch rejected");
-                    BridgeResponse::Error {
-                        code: BridgeErrorCode::LaunchFailed,
-                        message: error.to_string(),
-                    }
-                }
-            }
+            let session = running_session(source_id, application_id, session_id);
+            let launch = desktop_apps::launch_application(
+                &session.source_id,
+                &session.application_id,
+                &session.id,
+            );
+            launch_session(
+                sessions,
+                session_transition,
+                session_directory,
+                &session,
+                input_profile,
+                launch,
+            )
+            .await
         }
+        // A Stremio title is a desktop application launch underneath, so it occupies
+        // the same single-session slot and is registered under the same source.
         BridgeRequest::LaunchStremioTitle {
             application_id,
             video_id,
@@ -257,106 +235,54 @@ async fn handle_request(
             session_id,
             input_profile,
         } => {
-            let _transition = session_transition.lock().await;
-            // A Stremio title is a desktop application launch underneath, so it occupies
-            // the same single-session slot and is registered under the same source.
-            if let Err(error) = stop_other_active_sessions(
-                desktop_apps::DESKTOP_APPS_SOURCE,
+            let session = running_session(
+                desktop_apps::DESKTOP_APPS_SOURCE.to_owned(),
+                application_id,
+                session_id,
+            );
+            let launch = stremio::launch_stremio_title(
+                &session.application_id,
+                &video_id,
+                media_type,
+                &session.id,
+            );
+            launch_session(
                 sessions,
+                session_transition,
                 session_directory,
+                &session,
+                input_profile,
+                launch,
             )
             .await
-            {
-                warn!(video_id, %error, "stremio launch rejected");
-                return BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
-                };
-            }
-            if let Err(error) = input::set_input_profile(input_profile, false).await {
-                warn!(video_id, %error, "input compatibility profile rejected");
-                return BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
-                };
-            }
-            match stremio::launch_stremio_title(&application_id, &video_id, media_type, &session_id)
-                .await
-            {
-                Ok(launched) => {
-                    register_launch(
-                        sessions,
-                        session_directory,
-                        desktop_apps::DESKTOP_APPS_SOURCE.to_owned(),
-                        application_id,
-                        session_id,
-                        launched,
-                        input_profile,
-                    )
-                    .await
-                }
-                Err(error) => {
-                    sync_input_profile(sessions, session_directory).await;
-                    warn!(video_id, %error, "stremio launch rejected");
-                    BridgeResponse::Error {
-                        code: BridgeErrorCode::LaunchFailed,
-                        message: error.to_string(),
-                    }
-                }
-            }
         }
+        // Heroic is a shared, reused resource (see HEROIC_UNIT_NAME's own docs),
+        // not a fresh session per launch, so this deliberately ignores the
+        // daemon-generated session_id and always registers/overwrites the same
+        // stable session record - the second game launched through an
+        // already-running Heroic replaces the first's record rather than leaking a
+        // second, orphaned one that nothing will ever stop on its own.
         BridgeRequest::LaunchHeroicGame {
             runner,
             application_id,
             session_id: _,
             input_profile,
         } => {
-            let _transition = session_transition.lock().await;
-            if let Err(error) =
-                stop_other_active_sessions(sources::HEROIC, sessions, session_directory).await
-            {
-                warn!(%error, "Heroic game launch rejected");
-                return BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
-                };
-            }
-            if let Err(error) = input::set_input_profile(input_profile, false).await {
-                warn!(%error, "Heroic input compatibility profile rejected");
-                return BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
-                };
-            }
-            match heroic::launch_heroic_game(runner, &application_id).await {
-                Ok(launched) => {
-                    // Heroic is a shared, reused resource (see HEROIC_UNIT_NAME's
-                    // own docs), not a fresh session per launch, so this
-                    // deliberately ignores the daemon-generated session_id above
-                    // and always registers/overwrites the same stable session
-                    // record - the second game launched through an already-running
-                    // Heroic replaces the first's record rather than leaking a
-                    // second, orphaned one that nothing will ever stop on its own.
-                    register_launch(
-                        sessions,
-                        session_directory,
-                        sources::HEROIC.to_owned(),
-                        application_id,
-                        HEROIC_SESSION_ID.to_owned(),
-                        launched,
-                        input_profile,
-                    )
-                    .await
-                }
-                Err(error) => {
-                    sync_input_profile(sessions, session_directory).await;
-                    warn!(%error, "Heroic game launch rejected");
-                    BridgeResponse::Error {
-                        code: BridgeErrorCode::LaunchFailed,
-                        message: error.to_string(),
-                    }
-                }
-            }
+            let session = running_session(
+                sources::HEROIC.to_owned(),
+                application_id,
+                HEROIC_SESSION_ID.to_owned(),
+            );
+            let launch = heroic::launch_heroic_game(runner, &session.application_id);
+            launch_session(
+                sessions,
+                session_transition,
+                session_directory,
+                &session,
+                input_profile,
+                launch,
+            )
+            .await
         }
         BridgeRequest::LaunchRetroGame {
             core_path,
@@ -364,45 +290,18 @@ async fn handle_request(
             session_id,
             input_profile,
         } => {
-            let _transition = session_transition.lock().await;
-            if let Err(error) =
-                stop_other_active_sessions(sources::RETROARCH, sessions, session_directory).await
-            {
-                warn!(%error, "RetroArch game launch rejected");
-                return BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
-                };
-            }
-            if let Err(error) = input::set_input_profile(input_profile, true).await {
-                warn!(%error, "RetroArch input compatibility profile rejected");
-                return BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
-                };
-            }
-            match retroarch::launch_retro_game(&core_path, &rom_path, &session_id).await {
-                Ok(launched) => {
-                    register_launch(
-                        sessions,
-                        session_directory,
-                        sources::RETROARCH.to_owned(),
-                        rom_path,
-                        session_id,
-                        launched,
-                        input_profile,
-                    )
-                    .await
-                }
-                Err(error) => {
-                    sync_input_profile(sessions, session_directory).await;
-                    warn!(%error, "RetroArch game launch rejected");
-                    BridgeResponse::Error {
-                        code: BridgeErrorCode::LaunchFailed,
-                        message: error.to_string(),
-                    }
-                }
-            }
+            let session = running_session(sources::RETROARCH.to_owned(), rom_path, session_id);
+            let launch =
+                retroarch::launch_retro_game(&core_path, &session.application_id, &session.id);
+            launch_session(
+                sessions,
+                session_transition,
+                session_directory,
+                &session,
+                input_profile,
+                launch,
+            )
+            .await
         }
         BridgeRequest::InstallRetroCores { packages } => {
             let packages = match core_install::validate_install_packages(&packages) {
@@ -506,20 +405,65 @@ async fn stop_managed_session(
     }
 }
 
-async fn register_launch(
-    sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
-    session_directory: &Path,
+fn running_session(
     source_id: String,
     application_id: String,
-    session_id: String,
-    launched: systemd::LaunchedApplication,
-    input_profile: InputProfile,
-) -> BridgeResponse {
-    let session = hearthdeck_protocol::ApplicationSession {
-        id: session_id.clone(),
-        source_id: source_id.clone(),
-        application_id: application_id.clone(),
+    id: String,
+) -> hearthdeck_protocol::ApplicationSession {
+    hearthdeck_protocol::ApplicationSession {
+        id,
+        source_id,
+        application_id,
         state: hearthdeck_protocol::ApplicationSessionState::Running,
+    }
+}
+
+/// Every launch, whatever it starts: the session id is checked before it can
+/// name a unit or a file, the one running session is replaced, the input
+/// profile is set before the app starts, and the record is persisted or the
+/// launch undone. `launch` is lazy, so a rejected request starts nothing.
+async fn launch_session(
+    sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
+    session_transition: &Mutex<()>,
+    session_directory: &Path,
+    session: &hearthdeck_protocol::ApplicationSession,
+    input_profile: InputProfile,
+    launch: impl Future<Output = Result<systemd::LaunchedApplication>>,
+) -> BridgeResponse {
+    let source_id = session.source_id.as_str();
+    let application_id = session.application_id.as_str();
+    if !valid_session_id(&session.id) {
+        warn!(
+            source_id,
+            application_id, "launch rejected: invalid session id"
+        );
+        return BridgeResponse::Error {
+            code: BridgeErrorCode::InvalidRequest,
+            message: "application session has an invalid identifier".to_owned(),
+        };
+    }
+    let _transition = session_transition.lock().await;
+    let prepared = async {
+        stop_other_active_sessions(source_id, sessions, session_directory).await?;
+        input::set_input_profile(input_profile, source_id == sources::RETROARCH).await
+    };
+    if let Err(error) = prepared.await {
+        warn!(source_id, application_id, %error, "application launch rejected");
+        return BridgeResponse::Error {
+            code: BridgeErrorCode::LaunchFailed,
+            message: error.to_string(),
+        };
+    }
+    let launched = match launch.await {
+        Ok(launched) => launched,
+        Err(error) => {
+            sync_input_profile(sessions, session_directory).await;
+            warn!(source_id, application_id, %error, "application launch rejected");
+            return BridgeResponse::Error {
+                code: BridgeErrorCode::LaunchFailed,
+                message: error.to_string(),
+            };
+        }
     };
     let managed = ManagedSession {
         session: session.clone(),
@@ -535,12 +479,11 @@ async fn register_launch(
             message: "could not persist managed application session".to_owned(),
         };
     }
-    sessions.lock().await.insert(session_id, managed);
-    info!(
-        source_id,
-        application_id, "registered application launch accepted"
-    );
-    BridgeResponse::LaunchAccepted { session }
+    sessions.lock().await.insert(session.id.clone(), managed);
+    info!(source_id, application_id, "application launch accepted");
+    BridgeResponse::LaunchAccepted {
+        session: session.clone(),
+    }
 }
 
 async fn sync_input_profile(
@@ -773,6 +716,35 @@ mod tests {
             transition.try_lock().is_ok(),
             "failed stop must release the transition"
         );
+    }
+
+    #[tokio::test]
+    async fn a_launch_with_an_unsafe_session_id_is_refused_before_anything_starts() {
+        let temporary = tempfile::tempdir().unwrap();
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+
+        let response = handle_request(
+            BridgeRequest::LaunchApplication {
+                source_id: "desktop-apps".to_owned(),
+                application_id: "org.example.App.desktop".to_owned(),
+                session_id: "x.service ../../evil".to_owned(),
+                input_profile: InputProfile::Native,
+            },
+            &sessions,
+            &Mutex::new(()),
+            temporary.path(),
+        )
+        .await;
+
+        assert!(matches!(
+            response,
+            BridgeResponse::Error {
+                code: BridgeErrorCode::InvalidRequest,
+                ..
+            }
+        ));
+        assert!(sessions.lock().await.is_empty());
+        assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 0);
     }
 
     #[tokio::test]
