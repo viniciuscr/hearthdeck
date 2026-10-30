@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<policyconfig>
+  <vendor>Hearthdeck</vendor>
+  <vendor_url>https://github.com/viniciuscr/hearthdeck</vendor_url>
+
+  <!--
+    pkexec consults this action for one program only: the annotated path
+    below. The rules file (10-hearthdeck-cores.rules) answers yes for the
+    active local session, which is the readiness screen's button press being
+    the approval. Nothing else is widened: every other pkexec target still
+    asks for authentication.
+  -->
+  <action id="org.hearthdeck.core.install">
+    <description>Install emulator cores</description>
+    <message>Authentication is required to install emulator cores</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/hearthdeck/hearthdeck-install-cores</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+</policyconfig>

@@ -1,0 +1,40 @@
+#!/bin/sh
+# Installs libretro core packages through pacman for the Hearthdeck
+# readiness screen's "install missing cores" button.
+#
+# This script is the whole privileged step. pkexec may run exactly this file
+# (polkit action org.hearthdeck.core.install names its path), and this file
+# installs exactly libretro-* packages - the same shape the bridge validates
+# before calling, re-checked here because the bridge is not privileged and
+# this is.
+#
+# Prints one line per package: "ok <package>" or "fail <package> <reason>".
+# One pacman run per package so a single bad name cannot take the rest down.
+set -u
+
+status=0
+for package in "$@"; do
+    name=${package#libretro-}
+    case "$package" in
+        libretro-?*) ;;
+        *)
+            echo "fail $package not-an-allowed-package-name"
+            status=1
+            continue
+            ;;
+    esac
+    case "$name" in
+        *[!a-z0-9-]*)
+            echo "fail $package not-an-allowed-package-name"
+            status=1
+            continue
+            ;;
+    esac
+    if pacman -S --needed --noconfirm -- "$package" >/dev/null 2>&1 </dev/null; then
+        echo "ok $package"
+    else
+        echo "fail $package pacman-failed"
+        status=1
+    fi
+done
+exit "$status"

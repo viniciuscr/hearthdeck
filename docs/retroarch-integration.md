@@ -60,8 +60,9 @@ Gamescope-per-launch was removed as it was never shown on hardware).
 - Discovery/catalog: RomM is *not* a `DiscoveryProvider`/`CatalogRecord`
   source (only Heroic and desktop apps are). It is a separate
   direct-proxy surface.
-- Install requests: not offered. No pacman/Flatpak call exists in the daemon
-  or bridge.
+- Install requests: only `libretro-*` core packages, through the
+  polkit-scoped helper (`org.hearthdeck.core.install`). No pacman/Flatpak
+  call exists in the daemon itself; the bridge runs the allowlisted helper.
 
 ## Research findings that shape the decisions below
 
@@ -137,9 +138,11 @@ disagrees.
 3. **Core installation goes through the OS package manager (pacman),
    not a custom libretro-buildbot downloader.** Rationale: matches how
    distro-packaged RetroArch expects cores to arrive, keeps cores
-   security-patched by the distro, and reuses the already-designed (if
-   currently stub) typed install-request boundary instead of inventing a
-   new privileged download-and-place-`.so`-files mechanism.
+   security-patched by the distro, and reuses the typed install-request
+   boundary (`POST /v1/retro/cores/install`, now real) instead of inventing
+   a new privileged download-and-place-`.so`-files mechanism. A core no
+   package provides — LRPS2 for PS2 — is the one exception: it comes from
+   the user's own source repository like BIOS files (decision 13).
 4. **Save files sync through RomM's own sync-orchestrator API**, implemented
    as a client the same way Grout is one. Rationale: it's an existing,
    documented, hash-based, conflict-aware protocol; reimplementing it worse
@@ -509,22 +512,36 @@ status view, next to the daemon/bridge cards — reusing
 provider-refresh controls on the same screen. Only shown/wired for the
 `romm_container` card; every other service card is unaffected.
 
+13. **Emulator readiness is a settings card, and the user's own GitHub
+   project is the source for everything no package provides.** The card
+   reports per platform with roms: its core (installed, and from where) and
+   its BIOS files (present, verified). Two buttons act on it: install the
+   missing `libretro-*` packages through the polkit-scoped helper (decision
+   3), and fetch missing BIOS files plus source-only cores from
+   `HEARTHDECK_BIOS_SOURCE_URL` — a GitHub project the *user* names and
+   owns, laid out `bios/<Company>/<Console>/<file>` and `cores/<file>`.
+   Hearthdeck ships no firmware and never fetches from a source the user did
+   not configure; every copy is verified before it is placed (known-good
+   SHA-1/size identities for BIOS, ELF shape for cores) under the pinned
+   `system_directory` and a user cores directory beside it (decision 11's
+   root). Rationale: one importer serves BIOS (which no package may legally
+   provide) and the cores no distro packages (LRPS2 for PS2).
+
 ## Open questions (need a decision before/at the relevant phase)
 
-1. **Install-request privilege model.** Supporting install requests that
-  actually install a `libretro-*` package needs a real privileged path — most
-   likely a polkit rule scoped to an allowlisted pacman transaction pattern,
-   invoked from a small helper, never the daemon calling `pacman` directly
-   as the user. This is real, separate security work and deserves its own
-   design pass, not a quick shortcut.
-2. **Which cores ship by default vs. install on demand.** Fully
-   on-demand (install a core only the first time a platform's first ROM is
-   seen) is the ideal you described, and is achievable *if* (1) above is
-   solved — the daemon already sees RomM platform data, so "first ROM seen
-   for platform X, no matching core file on disk" is a detectable, one-time
-   event, not something that needs to happen every launch. Until (1) is
-   solved, fall back to bundling a small curated set of common-platform
-   cores via `depends`/`optdepends` in `PKGBUILD`, with the rest manual.
+1. **Install-request privilege model. Resolved:** a polkit action
+   (`org.hearthdeck.core.install`) scoped to exactly one program via its
+   `exec.path` annotation — `scripts/hearthdeck-install-cores`, which
+   re-checks every name against `libretro-*` and runs `pacman -S --needed`
+   per package. The bridge re-validates the names before pkexec sees them,
+   and the daemon never calls `pacman` at all. The active local session is
+   allowed without a password: the settings button press is the approval.
+2. **Which cores ship by default vs. install on demand.** Now answered
+   with both halves: the curated `optdepends` set stays the packaging, and
+   on demand is the readiness card's install button — missing cores are
+   detected exactly as described here (first ROM seen, no core file on
+   disk). The automatic "install on first launch" trigger was deliberately
+   not built: the button press is the approval the privilege model needs.
 3. **When Hearthdeck syncs states relative to a play session.** The local
    location is settled by decision 11; what is left is scheduling: upload after
    `StopApplicationSession` and fetch the latest before `LaunchRetroGame`, and
@@ -623,10 +640,10 @@ Each phase is scoped to be doable in one sitting and independently useful.
   `/api/states` when a play session ends, and fetch the latest one before a
   launch if the local copy is missing or older. Revisit if RomM adds
   device-sync orchestration for states later.
-- **Phase 8 — On-demand core install (stretch).** Only after open question 2
-  has a real answer: detect first-ROM-for-new-platform, trigger the
-  install-request flow end-to-end (approval UI + privileged helper), replace
-  the Phase 0 curated core list with true on-demand installation.
+- **Phase 8 — On-demand core install. Done in its settings-screen form:**
+  the readiness card detects the missing cores (first ROM seen, no core on
+  disk) and the install button runs the approval + privileged helper flow
+  end to end. The Phase 0 curated list remains `optdepends` on purpose.
 
 ## Next concrete step
 

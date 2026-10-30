@@ -44,6 +44,7 @@ fn shell() -> App {
         categorization_notice: None,
         stremio: settings::stremio_link::Flow::default(),
         romm: settings::romm::Form::default(),
+        retro_readiness: settings::readiness::Flow::default(),
         cursors: Cursors::default(),
         dashboard_cursor: dashboard::focus::Cursor::default(),
         bar_cursor: None,

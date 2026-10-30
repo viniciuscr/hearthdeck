@@ -22,7 +22,7 @@ use crate::{
 /// bridge re-validates independently rather than trusting this module's
 /// output, so a mismatch here fails safe as a rejected launch, not a
 /// security hole.
-const CORE_DIRECTORY: &str = "/usr/lib/libretro";
+pub(crate) const CORE_DIRECTORY: &str = "/usr/lib/libretro";
 
 /// Platform `fs_slug` (RomM's on-disk-folder-naming slug, e.g. "snes",
 /// "ngc") to libretro core filename.
@@ -35,12 +35,15 @@ const CORE_DIRECTORY: &str = "/usr/lib/libretro";
 /// failure users hit even though the core is installed under
 /// `/usr/lib/libretro`, so the aliases are deliberately broad.
 ///
-/// Only cores Arch actually packages at the time of writing are listed;
-/// `packaging/arch/PKGBUILD`'s `optdepends` mirrors this file and the
-/// `every_pkgbuild_optdepend_core_has_a_platform_mapping` test keeps the two
-/// in sync. See docs/retroarch-integration.md open question 2 for the plan to
-/// make this on-demand and user-configurable instead of a fixed table.
-const CORE_BY_PLATFORM_SLUG: &[(&str, &str)] = &[
+/// Only cores this deployment's pacman repository actually packages are
+/// listed (Arch's own); a mapped core no package provides — currently LRPS2,
+/// the PS2 core — arrives from the user's own source repository instead (see
+/// `readiness`). `packaging/arch/PKGBUILD`'s `optdepends` mirrors this file
+/// and the `every_pkgbuild_optdepend_core_has_a_platform_mapping` test keeps
+/// the two in sync. See docs/retroarch-integration.md open question 2 for the
+/// plan to make this on-demand and user-configurable instead of a fixed
+/// table.
+pub(crate) const CORE_BY_PLATFORM_SLUG: &[(&str, &str)] = &[
     // Nintendo Entertainment System / Famicom / Famicom Disk System.
     ("nes", "fceumm_libretro.so"),
     ("famicom", "fceumm_libretro.so"),
@@ -105,9 +108,9 @@ const CORE_BY_PLATFORM_SLUG: &[(&str, &str)] = &[
     ("ps1", "mednafen_psx_libretro.so"),
     ("playstation", "mednafen_psx_libretro.so"),
     ("sony-playstation", "mednafen_psx_libretro.so"),
-    ("ps2", "play_libretro.so"),
-    ("playstation-2", "play_libretro.so"),
-    ("sony-playstation-2", "play_libretro.so"),
+    ("ps2", "pcsx2_libretro.so"),
+    ("playstation-2", "pcsx2_libretro.so"),
+    ("sony-playstation-2", "pcsx2_libretro.so"),
     ("psp", "ppsspp_libretro.so"),
     ("playstation-portable", "ppsspp_libretro.so"),
     ("sony-playstation-portable", "ppsspp_libretro.so"),
@@ -309,7 +312,7 @@ async fn library_rom_path(
 /// Content wins over platform on purpose. A platform slug is the weaker signal
 /// for anything that is an add-on or shares a folder (32X in a Mega Drive
 /// library), and getting it wrong launches a core that cannot run the rom.
-fn core_filename_for(fs_slug: &str, content_name: &str) -> Option<&'static str> {
+pub(crate) fn core_filename_for(fs_slug: &str, content_name: &str) -> Option<&'static str> {
     if let Some(extension) = Path::new(content_name)
         .extension()
         .and_then(|ext| ext.to_str())
@@ -325,14 +328,57 @@ fn core_filename_for(fs_slug: &str, content_name: &str) -> Option<&'static str> 
         .map(|(_, core)| *core)
 }
 
+/// Mapped cores no Arch package provides: they arrive from the user's own
+/// source repository (see `readiness`), and readiness shows the file name
+/// where the package name would be.
+pub(crate) const SOURCE_ONLY_CORES: &[&str] = &["pcsx2_libretro.so"];
+
+/// The Arch package that provides a libretro core file: the inverse of the
+/// PKGBUILD's `optdepends` list, kept honest from both sides by
+/// `every_pkgbuild_optdepend_core_has_a_platform_mapping` here and
+/// `every_mapped_core_has_a_package` in `readiness`. `None` means no package
+/// provides this core and it comes from the user's source instead.
+pub(crate) fn core_package_for(core_filename: &str) -> Option<&'static str> {
+    Some(match core_filename {
+        "fceumm_libretro.so" => "libretro-fceumm",
+        "snes9x_libretro.so" => "libretro-snes9x",
+        "genesis_plus_gx_libretro.so" => "libretro-genesis-plus-gx",
+        "picodrive_libretro.so" => "libretro-picodrive",
+        "mgba_libretro.so" => "libretro-mgba",
+        "mupen64plus_next_libretro.so" => "libretro-mupen64plus-next",
+        "mednafen_psx_libretro.so" => "libretro-beetle-psx",
+        "ppsspp_libretro.so" => "libretro-ppsspp",
+        "desmume_libretro.so" => "libretro-desmume",
+        "dolphin_libretro.so" => "libretro-dolphin",
+        "flycast_libretro.so" => "libretro-flycast",
+        "kronos_libretro.so" => "libretro-kronos",
+        "mednafen_pce_fast_libretro.so" => "libretro-beetle-pce-fast",
+        "mednafen_supergrafx_libretro.so" => "libretro-beetle-supergrafx",
+        "mame_libretro.so" => "libretro-mame",
+        "scummvm_libretro.so" => "libretro-scummvm",
+        _ => return None,
+    })
+}
+
+/// Where a core file lives: the distro cores directory first, then the
+/// user's own cores directory (`readiness::retro_cores_directory`), which is
+/// where the readiness sync places cores no distro package provides.
 async fn core_path_for(core_filename: &str) -> Result<PathBuf, RetroLaunchError> {
-    let core_path = Path::new(CORE_DIRECTORY).join(core_filename);
-    fs::metadata(&core_path)
-        .await
-        .map_err(|_| RetroLaunchError::CoreNotInstalled {
-            core_path: core_path.clone(),
-        })?;
-    Ok(core_path)
+    for directory in [
+        PathBuf::from(CORE_DIRECTORY),
+        crate::readiness::retro_cores_directory(),
+    ] {
+        let core_path = directory.join(core_filename);
+        if fs::metadata(&core_path)
+            .await
+            .is_ok_and(|metadata| metadata.is_file())
+        {
+            return Ok(core_path);
+        }
+    }
+    Err(RetroLaunchError::CoreNotInstalled {
+        core_path: Path::new(CORE_DIRECTORY).join(core_filename),
+    })
 }
 
 fn validate_content_filename(fs_name: &str) -> Result<(), RetroLaunchError> {
@@ -377,6 +423,20 @@ mod tests {
                 cores_with_mappings.contains(core.as_str()),
                 "PKGBUILD packages {package} (core {core}) but no platform slug maps to it"
             );
+        }
+    }
+
+    /// The package map must invert the PKGBUILD's own package→core helper,
+    /// or readiness points users at a package that provides a different file.
+    #[test]
+    fn core_packages_are_the_inverse_of_the_pkgbuild_mapping() {
+        for &(_, core) in CORE_BY_PLATFORM_SLUG.iter() {
+            // Source-only cores have no package to invert.
+            if super::SOURCE_ONLY_CORES.contains(&core) {
+                continue;
+            }
+            let package = super::core_package_for(core).expect("mapped core without a package");
+            assert_eq!(core_file_for_package(package), core);
         }
     }
 

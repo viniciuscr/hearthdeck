@@ -142,7 +142,16 @@ pub(crate) async fn launch_retro_game(
     // *ignored* (RetroArch logs one warning and silently falls back to its own
     // default), so writing the config alone would leave saves wherever the
     // desktop install keeps them on the first play of every game.
-    let save_directories = create_save_directories(&retro_save_root(), &rom_path).await?;
+    let save_root = retro_save_root();
+    let save_directories = create_save_directories(&save_root, &rom_path).await?;
+    // The system directory holds the BIOS files the daemon's readiness check
+    // verifies; like the save directories it must exist before RetroArch reads
+    // the config, or RetroArch ignores the pin and cores fall back to its own
+    // default location.
+    let system_directory = save_root.join("system");
+    tokio::fs::create_dir_all(&system_directory)
+        .await
+        .context("could not create the RetroArch system directory")?;
     let config_path = config_directory.join("retroarch.cfg");
     // Regenerated on every launch so the settings Hearthdeck enforces can
     // never go stale from a previous session's in-game changes (the Knulli
@@ -173,6 +182,7 @@ pub(crate) async fn launch_retro_game(
         retroarch_managed_config(
             &autoconfig_directory,
             &save_directories,
+            &system_directory,
             shader_preset.as_deref(),
         ),
     )
@@ -196,6 +206,7 @@ pub(crate) async fn launch_retro_game(
 fn retroarch_managed_config(
     autoconfig_directory: &Path,
     save_directories: &RetroSaveDirectories,
+    system_directory: &Path,
     shader_preset: Option<&Path>,
 ) -> String {
     let mut config = [
@@ -252,7 +263,11 @@ fn retroarch_managed_config(
         autoconfig_directory.display()
     ));
     // One folder per game under a root the user can point a backup or cloud
-    // sync client at without knowing anything about RetroArch.
+    // sync client at without knowing anything about RetroArch. The system
+    // directory is pinned to the `system` sibling under that same root: it is
+    // where the daemon's readiness check verifies BIOS files
+    // (`readiness::retro_system_directory`), and where this launch's cores
+    // look for them.
     //
     // The paths are pinned here rather than left to `sort_*`, because neither
     // RetroArch sort flag produces a per-game folder: `sort_savefiles_enable`
@@ -263,7 +278,8 @@ fn retroarch_managed_config(
     // launch's saves somewhere else. The `*_in_content_dir` flags matter more:
     // `true` would write saves next to the ROM, i.e. into RomM's library mount.
     config.push_str(&format!(
-        "savefile_directory = \"{}\"\n\
+        "system_directory = \"{}\"\n\
+         savefile_directory = \"{}\"\n\
          savestate_directory = \"{}\"\n\
          savefiles_in_content_dir = \"false\"\n\
          savestates_in_content_dir = \"false\"\n\
@@ -271,6 +287,7 @@ fn retroarch_managed_config(
          sort_savefiles_by_content_enable = \"false\"\n\
          sort_savestates_enable = \"false\"\n\
          sort_savestates_by_content_enable = \"false\"\n",
+        system_directory.display(),
         save_directories.saves.display(),
         save_directories.states.display(),
     ));
@@ -449,7 +466,14 @@ fn retro_rom_library_root() -> PathBuf {
 }
 
 fn validate_retro_core_path(core_path: &str) -> Result<PathBuf> {
-    let allowed_directories: Vec<&Path> = RETRO_CORE_DIRECTORIES.iter().map(Path::new).collect();
+    // The user's own cores directory joins the distro's: that is where the
+    // readiness sync places cores no distro package provides.
+    let user_cores_directory = retro_save_root().join("cores");
+    let allowed_directories: Vec<&Path> = RETRO_CORE_DIRECTORIES
+        .iter()
+        .map(Path::new)
+        .chain(std::iter::once(user_cores_directory.as_path()))
+        .collect();
     validate_retro_core_path_in(core_path, &allowed_directories)
 }
 
@@ -508,6 +532,12 @@ mod tests {
             Path::new("/home/user/.local/share/hearthdeck/retroarch"),
             Path::new("/mnt/romM/library/roms/snes/Zelda - A Link to the Past (USA).sfc"),
         )
+    }
+
+    /// The system directory the same launch would pin, so config tests do not
+    /// restate the layout.
+    fn test_system_directory() -> &'static Path {
+        Path::new("/home/user/.local/share/hearthdeck/retroarch/system")
     }
 
     #[test]
@@ -605,8 +635,12 @@ mod tests {
     #[test]
     fn managed_retroarch_config_takes_compositor_fullscreen_at_the_current_output_resolution() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
-        let config =
-            retroarch_managed_config(autoconfig_directory.path(), &test_save_directories(), None);
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &test_save_directories(),
+            test_system_directory(),
+            None,
+        );
 
         assert!(config.contains("video_fullscreen = \"true\""));
         assert!(config.contains("video_windowed_fullscreen = \"false\""));
@@ -621,8 +655,12 @@ mod tests {
     #[test]
     fn managed_retroarch_config_enables_retroarchs_gamemode_integration() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
-        let config =
-            retroarch_managed_config(autoconfig_directory.path(), &test_save_directories(), None);
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &test_save_directories(),
+            test_system_directory(),
+            None,
+        );
 
         assert!(config.contains("gamemode_enable = \"true\""));
     }
@@ -630,8 +668,12 @@ mod tests {
     #[test]
     fn managed_retroarch_config_pins_player_one_and_the_udev_autoconfig_directory() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
-        let config =
-            retroarch_managed_config(autoconfig_directory.path(), &test_save_directories(), None);
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &test_save_directories(),
+            test_system_directory(),
+            None,
+        );
 
         assert!(config.contains("input_player1_joypad_index = \"0\""));
         assert!(config.contains("input_joypad_driver = \"udev\""));
@@ -642,12 +684,36 @@ mod tests {
         assert!(config.ends_with('\n'));
     }
 
+    /// The system directory is pinned to the `system` folder under the save
+    /// root, where the daemon's readiness check verifies BIOS files and where
+    /// the launch's cores look for them.
+    #[test]
+    fn managed_retroarch_config_pins_the_system_directory() {
+        let autoconfig_directory = tempfile::tempdir().unwrap();
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &test_save_directories(),
+            test_system_directory(),
+            None,
+        );
+
+        assert!(config.contains(&format!(
+            "system_directory = \"{}\"",
+            test_system_directory().display()
+        )));
+    }
+
     #[test]
     fn managed_retroarch_config_pins_a_per_game_save_and_state_directory() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
         let save_directories = test_save_directories();
 
-        let config = retroarch_managed_config(autoconfig_directory.path(), &save_directories, None);
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &save_directories,
+            test_system_directory(),
+            None,
+        );
 
         // One folder per game, named after the ROM - not the core, and not the
         // platform folder RomM files it in.
@@ -735,6 +801,7 @@ mod tests {
         let config = retroarch_managed_config(
             Path::new("/home/user/.config/hearthdeck/retroarch/autoconfig"),
             &save_directories,
+            test_system_directory(),
             None,
         );
 
@@ -821,6 +888,7 @@ mod tests {
         let config = retroarch_managed_config(
             autoconfig_directory.path(),
             &test_save_directories(),
+            test_system_directory(),
             Some(preset),
         );
 
@@ -835,8 +903,12 @@ mod tests {
     fn managed_retroarch_config_leaves_the_video_driver_to_retroarch() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
 
-        let config =
-            retroarch_managed_config(autoconfig_directory.path(), &test_save_directories(), None);
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &test_save_directories(),
+            test_system_directory(),
+            None,
+        );
 
         assert!(!config.contains("video_driver = "));
         assert!(!config.contains("video_shader"));
@@ -917,8 +989,12 @@ mod tests {
     fn managed_retroarch_config_moves_the_menu_off_the_guide_button() {
         let autoconfig_directory = tempfile::tempdir().unwrap();
 
-        let config =
-            retroarch_managed_config(autoconfig_directory.path(), &test_save_directories(), None);
+        let config = retroarch_managed_config(
+            autoconfig_directory.path(),
+            &test_save_directories(),
+            test_system_directory(),
+            None,
+        );
 
         // Guide/Home opens Hearthdeck's overlay, so RetroArch must not also use
         // it as a menu button...

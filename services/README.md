@@ -35,9 +35,12 @@ restart.
 
 `GET /v1/health` exposes host capabilities. Remote clients, including Android,
 may browse the library, but must not assume they can launch host applications.
-Install requests are currently advertised as unsupported and return `501` until
-a privileged host-side approval path exists; the daemon never invokes pacman,
-Flatpak, Steam, or another package manager directly.
+Install requests cover `libretro-*` core packages only: `POST
+/v1/retro/cores/install` hands the missing package names to the bridge,
+which runs one allowlisted helper through pkexec (polkit action
+`org.hearthdeck.core.install`). The daemon never invokes pacman, Flatpak,
+Steam, or another package manager directly, and no other install kind is
+offered.
 
 On Linux, `hearthdeck.target` is the systemd user-session root. It starts the
 API daemon and input broker and owns `hearthdeck-bridge.socket`; the bridge

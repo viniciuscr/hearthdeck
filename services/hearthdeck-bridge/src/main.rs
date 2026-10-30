@@ -1,3 +1,4 @@
+mod core_install;
 mod desktop_apps;
 mod heroic;
 mod input;
@@ -398,6 +399,28 @@ async fn handle_request(
                     warn!(%error, "RetroArch game launch rejected");
                     BridgeResponse::Error {
                         code: BridgeErrorCode::LaunchFailed,
+                        message: error.to_string(),
+                    }
+                }
+            }
+        }
+        BridgeRequest::InstallRetroCores { packages } => {
+            let packages = match core_install::validate_install_packages(&packages) {
+                Ok(packages) => packages,
+                Err(error) => {
+                    warn!(%error, "core install rejected");
+                    return BridgeResponse::Error {
+                        code: BridgeErrorCode::InvalidRequest,
+                        message: error.to_string(),
+                    };
+                }
+            };
+            match core_install::install_cores(&packages).await {
+                Ok(report) => BridgeResponse::RetroCoresInstalled { report },
+                Err(error) => {
+                    warn!(%error, "core install failed");
+                    BridgeResponse::Error {
+                        code: BridgeErrorCode::Internal,
                         message: error.to_string(),
                     }
                 }

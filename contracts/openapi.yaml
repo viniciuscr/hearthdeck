@@ -274,6 +274,73 @@ paths:
                   $ref: '#/components/schemas/RetroConsole'
         '503':
           description: RomM is not configured
+  /v1/retro/readiness:
+    get:
+      operationId: getRetroReadiness
+      description: >-
+        Whether each platform with roms can actually play: its libretro core
+        installed under the cores directory, and the BIOS files its emulator
+        knows about present and verified under the RetroArch system directory.
+        Computed from the same platform-to-core mapping the launch path
+        resolves, so a green entry is exactly what a launch would use.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Readiness, one entry per platform that has roms
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RetroSystemReadiness'
+        '503':
+          description: RomM is not configured
+  /v1/retro/readiness/bios-sync:
+    post:
+      operationId: syncRetroBios
+      description: >-
+        Places missing BIOS files and source-only cores for platforms that
+        have roms, fetching only those from the user's own source
+        (HEARTHDECK_BIOS_SOURCE_URL) laid out as bios/<Company>/<Console>/<file>
+        and cores/<file>. Hearthdeck never ships firmware and never fetches
+        from a source the user did not configure. Each file is verified
+        before it is placed: known-good identities for BIOS, ELF shape for
+        cores.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: What was placed, what failed, and the readiness that holds
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetroBiosSyncReport'
+        '503':
+          description: RomM is not configured, or no BIOS source is configured
+  /v1/retro/cores/install:
+    post:
+      operationId: installRetroCores
+      description: >-
+        Installs the libretro core packages the active platforms are missing,
+        through the distro package manager. The daemon names the packages
+        from its readiness report — only libretro-* packages from its own
+        platform-to-core table — and the bridge re-validates every name before
+        the polkit-scoped helper runs. The helper allows nothing beyond those
+        packages.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Per-package outcome of the install run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetroCoreInstallReport'
+        '503':
+          description: >-
+            RomM is not configured, or this deployment has no privileged
+            install helper
   /v1/retro/roms:
     get:
       operationId: listRetroRoms
@@ -1076,6 +1143,68 @@ components:
         artwork_paths:
           type: array
           items: { type: string }
+    RetroSystemReadiness:
+      type: object
+      required: [platform, display_name, core, bios]
+      properties:
+        platform: { type: string }
+        display_name: { type: string }
+        core: { $ref: '#/components/schemas/RetroCoreReadiness' }
+        bios:
+          type: array
+          items: { $ref: '#/components/schemas/RetroBiosFile' }
+    RetroCoreReadiness:
+      type: object
+      required: [core_filename, package, installed]
+      properties:
+        core_filename: { type: string }
+        package: { type: string }
+        installed: { type: boolean }
+    RetroBiosFile:
+      type: object
+      required: [system, filename, required, present, verified, target]
+      properties:
+        system: { type: string }
+        filename: { type: string }
+        required: { type: boolean }
+        present: { type: boolean }
+        verified: { type: boolean }
+        target: { type: string }
+    RetroBiosSyncReport:
+      type: object
+      required: [fetched, failed, readiness]
+      properties:
+        fetched:
+          type: array
+          items: { type: string }
+        failed:
+          type: array
+          items: { $ref: '#/components/schemas/RetroBiosSyncFailure' }
+        readiness:
+          type: array
+          items: { $ref: '#/components/schemas/RetroSystemReadiness' }
+    RetroBiosSyncFailure:
+      type: object
+      required: [filename, reason]
+      properties:
+        filename: { type: string }
+        reason: { type: string }
+    RetroCoreInstallReport:
+      type: object
+      required: [installed, failed]
+      properties:
+        installed:
+          type: array
+          items: { type: string }
+        failed:
+          type: array
+          items: { $ref: '#/components/schemas/RetroCoreInstallFailure' }
+    RetroCoreInstallFailure:
+      type: object
+      required: [package, reason]
+      properties:
+        package: { type: string }
+        reason: { type: string }
     RetroFacet:
       type: object
       required: [id, label, options]
