@@ -145,7 +145,7 @@ has no widget to resolve and controller focus silently fails.
 
 ## Artwork is read off disk, then copied once
 
-`romm_asset` in the daemon reads per-ROM artwork **straight off the resources
+`romm::asset` in the daemon reads per-ROM artwork **straight off the resources
 mount** (`read_resources_asset`) — only bundled console art goes through RomM's
 HTTP. But the frontend still pulls those bytes over loopback
 (`/v1/retro/assets`) and writes a second copy into `~/.cache/hearthdeck/icons`,
