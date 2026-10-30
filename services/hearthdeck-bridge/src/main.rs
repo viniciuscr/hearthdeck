@@ -414,7 +414,7 @@ async fn handle_request(
             BridgeResponse::ApplicationSession { session }
         }
         BridgeRequest::StopApplicationSession { session_id } => {
-            let _transition = session_transition.lock().await;
+            let transition = session_transition.lock().await;
             let managed = sessions.lock().await.get(&session_id).cloned();
             let Some(managed) = managed else {
                 warn!(
@@ -426,31 +426,50 @@ async fn handle_request(
                     message: "application session is not running".to_owned(),
                 };
             };
-            info!(
-                session_id,
-                unit_name = managed.unit_name.as_deref().unwrap_or("<none>"),
-                "stopping application session"
-            );
-            match systemd::stop_application(managed.unit_name.as_deref()).await {
-                Ok(()) => {
-                    sessions.lock().await.remove(&session_id);
-                    if let Err(error) = remove_managed_session(session_directory, &session_id).await
-                    {
-                        warn!(session_id, %error, "could not remove stopped application session record");
-                    }
-                    if let Err(error) = input::set_input_profile(InputProfile::Native, false).await
-                    {
-                        warn!(%error, "could not reset input profile after application stop");
-                    }
-                    info!(session_id, "application session stopped");
-                    BridgeResponse::StopAccepted { session_id }
-                }
-                Err(error) => BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: error.to_string(),
-                },
-            }
+            stop_managed_session(sessions, session_directory, managed, &transition).await
         }
+        BridgeRequest::StopActiveApplicationSession => {
+            let transition = session_transition.lock().await;
+            let Some((_, managed)) = active_managed_session(sessions, session_directory).await
+            else {
+                return BridgeResponse::Error {
+                    code: BridgeErrorCode::NotFound,
+                    message: "no application session is active".to_owned(),
+                };
+            };
+            stop_managed_session(sessions, session_directory, managed, &transition).await
+        }
+    }
+}
+
+async fn stop_managed_session(
+    sessions: &Arc<Mutex<HashMap<String, ManagedSession>>>,
+    session_directory: &Path,
+    managed: ManagedSession,
+    _transition: &tokio::sync::MutexGuard<'_, ()>,
+) -> BridgeResponse {
+    let session_id = managed.session.id;
+    info!(
+        session_id,
+        unit_name = managed.unit_name.as_deref().unwrap_or("<none>"),
+        "stopping application session"
+    );
+    match systemd::stop_application(managed.unit_name.as_deref()).await {
+        Ok(()) => {
+            sessions.lock().await.remove(&session_id);
+            if let Err(error) = remove_managed_session(session_directory, &session_id).await {
+                warn!(session_id, %error, "could not remove stopped application session record");
+            }
+            if let Err(error) = input::set_input_profile(InputProfile::Native, false).await {
+                warn!(%error, "could not reset input profile after application stop");
+            }
+            info!(session_id, "application session stopped");
+            BridgeResponse::StopAccepted { session_id }
+        }
+        Err(error) => BridgeResponse::Error {
+            code: BridgeErrorCode::LaunchFailed,
+            message: error.to_string(),
+        },
     }
 }
 
@@ -658,11 +677,20 @@ fn valid_session_id(session_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ManagedSession, load_managed_sessions, managed_session_path, save_managed_session,
-        select_active_session, should_replace_active_session,
+        ManagedSession, handle_request, load_managed_sessions, managed_session_path,
+        save_managed_session, select_active_session, should_replace_active_session,
     };
-    use hearthdeck_protocol::{ApplicationSession, ApplicationSessionState, InputProfile};
+    use hearthdeck_protocol::{
+        ApplicationSession, ApplicationSessionState, BridgeErrorCode, BridgeRequest,
+        BridgeResponse, InputProfile,
+    };
+    use std::collections::HashMap;
+    use std::future::Future;
+    use std::pin::pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Waker};
     use std::time::{Duration, SystemTime};
+    use tokio::sync::Mutex;
 
     fn managed_session() -> ManagedSession {
         ManagedSession {
@@ -675,6 +703,82 @@ mod tests {
             unit_name: Some("hearthdeck-app-session-1.service".to_owned()),
             input_profile: InputProfile::Native,
         }
+    }
+
+    #[tokio::test]
+    async fn stop_active_waits_for_launch_and_holds_transition_during_selection() {
+        let temporary = tempfile::tempdir().unwrap();
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        let transition = Mutex::new(());
+        let launch = transition.lock().await;
+        let selection = sessions.lock().await;
+        let mut stop = pin!(handle_request(
+            BridgeRequest::StopActiveApplicationSession,
+            &sessions,
+            &transition,
+            temporary.path(),
+        ));
+        let mut context = Context::from_waker(Waker::noop());
+
+        assert!(matches!(stop.as_mut().poll(&mut context), Poll::Pending));
+        drop(launch);
+        assert!(matches!(stop.as_mut().poll(&mut context), Poll::Pending));
+        assert!(
+            transition.try_lock().is_err(),
+            "selection must exclude launches"
+        );
+        drop(selection);
+
+        assert!(matches!(
+            stop.await,
+            BridgeResponse::Error {
+                code: BridgeErrorCode::NotFound,
+                ..
+            }
+        ));
+        assert!(
+            transition.try_lock().is_ok(),
+            "failed stop must release the transition"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_stop_retains_the_tracked_session() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut managed = managed_session();
+        managed.unit_name = None;
+        save_managed_session(temporary.path(), &managed)
+            .await
+            .unwrap();
+        let sessions = Arc::new(Mutex::new(HashMap::from([(
+            managed.session.id.clone(),
+            managed,
+        )])));
+
+        let response = handle_request(
+            BridgeRequest::StopApplicationSession {
+                session_id: "session-1".to_owned(),
+            },
+            &sessions,
+            &Mutex::new(()),
+            temporary.path(),
+        )
+        .await;
+
+        assert!(matches!(
+            response,
+            BridgeResponse::Error {
+                code: BridgeErrorCode::LaunchFailed,
+                ..
+            }
+        ));
+        assert!(sessions.lock().await.contains_key("session-1"));
+        assert!(
+            load_managed_sessions(temporary.path())
+                .await
+                .unwrap()
+                .contains_key("session-1")
+        );
     }
 
     #[tokio::test]

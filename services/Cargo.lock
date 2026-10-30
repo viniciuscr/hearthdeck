@@ -3588,6 +3588,7 @@ dependencies = [
  "hearthdeck-protocol",
  "libcosmic",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
