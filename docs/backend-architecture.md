@@ -32,6 +32,13 @@ the socket existing rather than on a race-prone bridge process startup. Future
 host capabilities receive their own typed socket/service pair under the same
 target.
 
+The daemon's session service owns launch acceptance, activity recording,
+session-change events and exit reconciliation. HTTP handlers prepare launch
+targets and map errors; the activity store only persists and queries plays.
+Explicit stops and the periodic watcher share the same idempotent completion
+path. The service borrows its bridge path, activity store, discovery coordinator
+and event sender, rather than depending on the whole application state.
+
 ## Platform Adaptation Rules
 
 Hearthdeck targets Linux only. Platform-specific behavior still terminates at an

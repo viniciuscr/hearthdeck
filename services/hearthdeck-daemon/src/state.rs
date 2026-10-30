@@ -46,6 +46,15 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn sessions(&self) -> crate::sessions::SessionService<'_> {
+        crate::sessions::SessionService {
+            bridge_socket: &self.config.bridge_socket_path,
+            activity: &self.activity,
+            discovery: self.discovery.as_ref(),
+            events: &self.events,
+        }
+    }
+
     pub async fn provider_health(&self) -> Vec<ProviderHealth> {
         let mut providers = Vec::new();
         if let Some(discovery) = &self.discovery {

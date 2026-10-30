@@ -1,20 +1,8 @@
-use std::time::Duration;
-
 use anyhow::{Context, Result};
-use hearthdeck_protocol::{ApplicationSession, BridgeRequest, BridgeResponse};
+use hearthdeck_protocol::ApplicationSession;
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
-use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
-
-use crate::state::{AppState, ServerEvent, SharedState};
 
 pub use hearthdeck_protocol::{ActivityEntry, RecentActivity};
-
-/// How often the daemon looks at the bridge while something is playing.
-///
-/// This is also the resolution of a recorded duration: the play ended somewhere
-/// between the two ticks that bracket it.
-const SESSION_WATCH_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub struct ActivityStore {
@@ -235,96 +223,6 @@ fn recent_activity_from_row(row: SqliteRow) -> Result<RecentActivity> {
     })
 }
 
-/// Watches for plays that have finished, and closes their rows.
-///
-/// The bridge knows when a session ends — it checks the systemd unit when asked —
-/// but nothing asks once the frontend's overlay is gone, so a game closed from the
-/// couch used to leave no trace of having stopped. This asks on a slow tick for as
-/// long as something is running, and not at all otherwise.
-///
-/// The returned handle is deliberately droppable: dropping it detaches the task,
-/// which is what a daemon that never stops wanting this should do.
-pub fn spawn_session_watcher(state: SharedState) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(SESSION_WATCH_INTERVAL).await;
-            let running = match state.activity.running_sessions().await {
-                Ok(running) => running,
-                Err(error) => {
-                    warn!(%error, "could not list running plays");
-                    continue;
-                }
-            };
-            if running.is_empty() {
-                continue;
-            }
-            let request = crate::bridge::request(
-                &state.config.bridge_socket_path,
-                BridgeRequest::ActiveApplicationSession,
-            );
-            let active = match request.await {
-                Ok(BridgeResponse::ApplicationSession { session }) => session.map(|it| it.id),
-                Ok(_) => {
-                    warn!("bridge answered the wrong way about the active session");
-                    continue;
-                }
-                // A bridge that cannot answer says nothing about whether a play
-                // ended, so nothing is closed on its account.
-                Err(error) => {
-                    debug!(%error, "bridge unreachable while watching a play");
-                    continue;
-                }
-            };
-            for session_id in finished_sessions(&running, active.as_deref()) {
-                play_finished(&state, &session_id).await;
-            }
-        }
-    })
-}
-
-/// Everything that follows a play's end, whoever noticed it: the row is
-/// closed, the source it came from is asked to look again — a film watched
-/// moved Continue Watching, a game played moved its playtime — and clients are
-/// told the session is gone.
-///
-/// Only the close that actually ended the play does the rest, so Stop and the
-/// watcher noticing the same exit refresh once, not twice.
-pub async fn play_finished(state: &AppState, session_id: &str) {
-    let source = match state
-        .activity
-        .session_ended(session_id, SessionOutcome::Closed)
-        .await
-    {
-        Ok(Some(source)) => Some(source),
-        Ok(None) => return,
-        Err(error) => {
-            warn!(%error, %session_id, "could not close a finished play");
-            None
-        }
-    };
-    info!(%session_id, source = source.as_deref(), "play finished");
-    // A source with no discovery provider (a retro game) has nothing to refresh.
-    if let (Some(source), Some(discovery)) = (source, &state.discovery) {
-        discovery.request(&source).await;
-    }
-    let _ = state
-        .events
-        .send(ServerEvent::ApplicationSessionChanged { session: None });
-}
-
-/// The running plays the bridge is no longer reporting.
-///
-/// The whole of the decision, apart from its own function so it can be tested
-/// without a bridge: the bridge enforces one session at a time, so anything it is
-/// not reporting has stopped.
-fn finished_sessions(running: &[String], active: Option<&str>) -> Vec<String> {
-    running
-        .iter()
-        .filter(|session_id| Some(session_id.as_str()) != active)
-        .cloned()
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use hearthdeck_protocol::{ApplicationSession, ApplicationSessionState};
@@ -332,7 +230,7 @@ mod tests {
     use sqlx::{Row, SqlitePool};
     use tempfile::tempdir;
 
-    use super::{ActivityEntry, ActivityStore, SessionOutcome, finished_sessions};
+    use super::{ActivityEntry, ActivityStore, SessionOutcome};
     use crate::database::Database;
 
     fn entry() -> ActivityEntry {
@@ -502,17 +400,6 @@ mod tests {
         assert!(ended_at.is_none());
         assert!(duration.is_none());
         assert!(activity.running_sessions().await.unwrap().is_empty());
-    }
-
-    #[test]
-    fn finished_sessions_are_the_ones_the_bridge_stopped_reporting() {
-        let running = vec!["a".to_owned(), "b".to_owned()];
-
-        assert!(finished_sessions(&running, Some("a")).eq(&["b"]));
-        // Nothing active: everything that was running has stopped.
-        assert!(finished_sessions(&running, None).eq(&["a", "b"]));
-        assert!(finished_sessions(&running, Some("b")).eq(&["a"]));
-        assert!(finished_sessions(&[], None).is_empty());
     }
 
     #[tokio::test]
