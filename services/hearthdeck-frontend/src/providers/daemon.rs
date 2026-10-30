@@ -1,18 +1,14 @@
 use futures::{StreamExt, future::join_all, stream};
 use hearthdeck_protocol::{ApplicationSession, InputProfile};
 use serde::Deserialize;
-use std::{
-    collections::BTreeMap,
-    env,
-    hash::{DefaultHasher, Hasher},
-    io::{Read, Write},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{collections::BTreeMap, time::Duration};
 
-use super::{catalog_item_to_library_item, library_icon};
+use super::{
+    art_cache, belongs_in_the_app_library, catalog_item_to_library_item,
+    retro_game_to_library_item, retro_version_list,
+};
 use crate::icon_cache::{self, IconReference};
-use crate::library_item::{ConsoleMetadata, LibraryItem};
+use crate::library_item::LibraryItem;
 use crate::providers::filter::Facet;
 
 /// Prefix a catalog item's id carries on its way into the library.
@@ -28,10 +24,6 @@ pub const CATALOG_ENTRY_PREFIX: &str = "hearthdeck:";
 /// Without a deadline a hung daemon leaves every poll chain waiting forever, and
 /// the session poll that returns input to the pad never fires again.
 const DAEMON_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// How long one artwork download may take. Artwork comes from third-party hosts
-/// and is fetched on a blocking thread, which a stalled server would hold for good.
-const ICON_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct RommSettings {
@@ -566,39 +558,19 @@ impl DaemonClient {
     /// the daemon's proxy and returns its local cached path, reusing an
     /// already-cached copy when there is one.
     async fn cache_retro_asset_path(&self, path: Option<&str>) -> Option<String> {
-        if let Some(path) = path {
-            let key = format!("romm:{path}");
-            if let Some(cached) = cached_icon(&key) {
-                return Some(cached);
-            }
-            let mut url = url::Url::parse(&self.api_url("/v1/retro/assets")).ok()?;
-            url.query_pairs_mut().append_pair("path", path);
-            let response = self
-                .transport
-                .http()
-                .get(url)
-                .headers(self.auth_headers().await.ok()?)
-                .send()
-                .await
-                .ok()?;
-            if response.status().is_success() {
-                let extension = image_extension(
-                    response
-                        .headers()
-                        .get(reqwest::header::CONTENT_TYPE)
-                        .and_then(|value| value.to_str().ok()),
-                );
-                let bytes = response.bytes().await.ok()?.to_vec();
-                return tokio::task::spawn_blocking(move || {
-                    cache_icon_bytes(&key, extension, &bytes)
-                })
-                .await
-                .ok()
-                .flatten();
-            }
+        let path = path?;
+        let key = format!("romm:{path}");
+        if let Some(cached) = art_cache::cached(&key) {
+            return Some(cached);
         }
-
-        None
+        let mut url = url::Url::parse(&self.api_url("/v1/retro/assets")).ok()?;
+        url.query_pairs_mut().append_pair("path", path);
+        let request = self
+            .transport
+            .http()
+            .get(url)
+            .headers(self.auth_headers().await.ok()?);
+        art_cache::download(request, key).await
     }
 
     /// Fetches one game's full detail plus its artwork, both already cached
@@ -722,19 +694,25 @@ impl DaemonClient {
     pub async fn resolve_icon(&self, reference: Option<&str>) -> Option<String> {
         match icon_cache::classify(reference?)? {
             IconReference::Remote(url) => {
-                // Blocking, and deliberately so: this reads and writes image
-                // files, which is what a blocking HTTP client is for. The same
-                // art is retried at Metahub's other sizes when the one the feed
-                // sent will not come down - see `icon_cache::art_candidates`.
-                let candidates = icon_cache::art_candidates(url);
-                tokio::task::spawn_blocking(move || {
-                    candidates
-                        .iter()
-                        .find_map(|candidate| cache_icon(candidate))
-                })
-                .await
-                .ok()
-                .flatten()
+                // The same art is retried at Metahub's other sizes when the one
+                // the feed sent will not come down - see
+                // `icon_cache::art_candidates`.
+                for candidate in icon_cache::art_candidates(url) {
+                    if let Some(cached) = art_cache::cached(&candidate) {
+                        return Some(cached);
+                    }
+                    // Third-party hosts: no auth headers, and a shorter leash
+                    // than the daemon gets.
+                    let request = self
+                        .transport
+                        .http()
+                        .get(&candidate)
+                        .timeout(art_cache::DOWNLOAD_TIMEOUT);
+                    if let Some(cached) = art_cache::download(request, candidate).await {
+                        return Some(cached);
+                    }
+                }
+                None
             }
             IconReference::RommAsset(path) => self.cache_retro_asset_path(Some(path)).await,
             IconReference::File(path) => Some(path.to_owned()),
@@ -952,49 +930,6 @@ fn retro_rom_query_params(
     params
 }
 
-fn retro_game_to_library_item(game: RetroGame, icon: Option<String>) -> LibraryItem {
-    LibraryItem {
-        id: format!("romm:{}", game.id),
-        name: game.title,
-        exec: Some(game.id.to_string()),
-        icon: library_icon(icon.as_deref(), "applications-games"),
-        categories: vec!["Game".to_owned()],
-        section: hearthdeck_protocol::Section::ConsoleGames,
-        console: Some(ConsoleMetadata {
-            platform_id: game.platform_id,
-            genres: game.genres,
-            regions: game.regions,
-        }),
-        ..LibraryItem::default()
-    }
-}
-
-/// The files a console record collapsed: the entry's own first — Play's
-/// target, and what the details screen opens on — then every sibling RomM
-/// folded into it, as the disc picker lists them.
-///
-/// Two files can share a name, so a repeat gets its id appended to stay
-/// distinguishable.
-fn retro_version_list(game: &RetroGame) -> Vec<RetroRomVersion> {
-    if game.sibling_roms.is_empty() {
-        return Vec::new();
-    }
-    let mut versions = Vec::with_capacity(game.sibling_roms.len() + 1);
-    versions.push(RetroRomVersion {
-        id: game.id,
-        title: game.version_label.as_ref().unwrap_or(&game.title).clone(),
-        is_main_sibling: true,
-    });
-    versions.extend(game.sibling_roms.iter().cloned());
-    let mut seen = std::collections::HashSet::new();
-    for version in &mut versions {
-        if !seen.insert(version.title.clone()) {
-            version.title = format!("{} (#{})", version.title, version.id);
-        }
-    }
-    versions
-}
-
 pub type EventStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -1069,126 +1004,6 @@ impl DaemonClient {
     }
 }
 
-/// Whether a catalog record belongs in the application library.
-///
-/// A streaming provider publishes films and series so the dashboard can draw a rail, and
-/// the daemon serves them from the same endpoint as desktop entries, so without this a
-/// Continue Watching film appeared in the All Apps list beside the programs, with the
-/// same open-it action as one.
-///
-/// Keyed on the record's own kind rather than on which provider published it: the rule is
-/// *a television title is not an application*, not *Stremio is special*, so the next
-/// media provider inherits it. A record with no kind at all is kept, because dropping
-/// something unrecognised from the library is worse than showing it.
-fn belongs_in_the_app_library(item: &CatalogItem) -> bool {
-    let kind = item.kind.trim();
-    if kind.is_empty() {
-        return true;
-    }
-    matches!(kind.to_ascii_lowercase().as_str(), "game" | "application")
-}
-
-fn cache_icon(url: &str) -> Option<String> {
-    // A poster URL frequently carries no extension at all — Metahub serves
-    // `/poster/medium/tt0149460/img` — so the format cannot be read off the URL.
-    // Deriving the extension there made every such file `<hash>.png`, and the
-    // half of the covers the server sends as webp were then saved with an
-    // extension the image decoder refuses: the placeholder. The extension is now
-    // taken from the response after the fetch, and the early return probes every
-    // extension the cache can hold rather than one guessed from the URL.
-    if let Some(cached) = cached_icon(url) {
-        return Some(cached);
-    }
-
-    // `ureq` is blocking, and that is deliberate: this function runs inside
-    // `spawn_blocking` (it reads and writes image files), so a blocking HTTP client
-    // is the honest choice. `reqwest` is async and would want a runtime handle this
-    // call does not have.
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(ICON_DOWNLOAD_TIMEOUT))
-        .build()
-        .into();
-    let response = agent.get(url).call().ok()?;
-    // Resolved to a `&'static str` here, before `response` is consumed below, so
-    // the borrow of its headers does not outlive the move into the body reader.
-    let extension = image_extension(
-        response
-            .headers()
-            .get("content-type")
-            .and_then(|value| value.to_str().ok()),
-    );
-    let mut body = Vec::new();
-    response
-        .into_body()
-        .into_reader()
-        .read_to_end(&mut body)
-        .ok()?;
-    cache_icon_bytes(url, extension, &body)
-}
-
-pub(crate) fn cached_icon(key: &str) -> Option<String> {
-    // `svg` and `ico` matter for RomM's bundled console art, which is served
-    // in those formats; omitting them made platform icons re-download on every
-    // refresh because the cache lookup never matched.
-    ["jpg", "jpeg", "png", "webp", "svg", "ico"]
-        .into_iter()
-        .map(|extension| icon_cache_dir().join(cache_file_name(key, extension)))
-        .find(|path| path.metadata().is_ok_and(|metadata| metadata.len() >= 16))
-        .map(|path| path.to_string_lossy().into_owned())
-}
-
-/// The file name a cached download is stored under: a stable hash of its key,
-/// then the given extension.
-///
-/// Pure and free of any network or disk access, which is the point: the whole of
-/// the extension-mismatch bug lived in this naming decision, so a test can pin it
-/// here. Every writer names its file through it, and `cached_icon`'s probe
-/// rebuilds the same names, so what one writes the others find.
-fn cache_file_name(key: &str, extension: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    hasher.write(key.as_bytes());
-    format!("{:016x}.{extension}", hasher.finish())
-}
-
-fn cache_icon_bytes(key: &str, extension: &str, bytes: &[u8]) -> Option<String> {
-    if bytes.len() < 16 {
-        return None;
-    }
-    let cache_dir = icon_cache_dir();
-    std::fs::create_dir_all(&cache_dir).ok()?;
-    let cached = cache_dir.join(cache_file_name(key, extension));
-    std::fs::File::create(&cached).ok()?.write_all(bytes).ok()?;
-    Some(cached.to_string_lossy().into_owned())
-}
-
-fn image_extension(content_type: Option<&str>) -> &'static str {
-    let Some(content_type) = content_type else {
-        return "jpg";
-    };
-    let content_type = content_type.to_ascii_lowercase();
-    if content_type.starts_with("image/png") {
-        "png"
-    } else if content_type.starts_with("image/webp") {
-        "webp"
-    } else if content_type.starts_with("image/svg") {
-        "svg"
-    } else if content_type.contains("icon") {
-        // Covers both `image/x-icon` and `image/vnd.microsoft.icon`; RomM's
-        // bundled console art ships `.ico` for platforms with no `.svg`.
-        "ico"
-    } else {
-        "jpg"
-    }
-}
-
-fn icon_cache_dir() -> PathBuf {
-    env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("hearthdeck/icons")
-}
-
 /// Response from the /v1/retro/roms endpoint.
 #[derive(Clone, Debug, Deserialize)]
 pub struct RetroGamesResponse {
@@ -1211,9 +1026,8 @@ mod tests {
 
     use super::{
         CatalogItem, Collection, CollectionItem, DaemonClient, DaemonConfig, DaemonError,
-        DaemonEvent, RetroGame, RetroRomVersion, belongs_in_the_app_library, cache_file_name,
-        catalog_item_to_library_item, image_extension, retro_game_to_library_item,
-        retro_rom_query_params,
+        DaemonEvent, RetroGame, RetroRomVersion, belongs_in_the_app_library,
+        catalog_item_to_library_item, retro_game_to_library_item, retro_rom_query_params,
     };
 
     #[tokio::test]
@@ -1242,33 +1056,6 @@ mod tests {
             DaemonEvent::ApplicationSessionChanged
         );
         assert_eq!(parse(r#"{"type":"from_the_future"}"#), DaemonEvent::Unknown);
-    }
-
-    /// The extension a cached cover is stored with must come from the response,
-    /// not the URL. Metahub poster URLs carry no extension, so the old URL-derived
-    /// name was always `<hash>.png` — and a webp poster saved as `.png` is a file
-    /// the image decoder refuses, which draws the placeholder. That is exactly why
-    /// only some Continue Watching tiles were blank, and always the same ones.
-    #[test]
-    fn cached_icon_name_follows_the_response_content_type() {
-        let poster = "https://images.metahub.space/poster/medium/tt0149460/img";
-
-        assert_eq!(image_extension(Some("image/webp")), "webp");
-        assert_eq!(image_extension(Some("image/jpeg")), "jpg");
-        assert_eq!(image_extension(Some("image/png")), "png");
-
-        // An extension-free URL no longer forces "png": the name carries the
-        // extension the response asked for.
-        assert!(cache_file_name(poster, image_extension(Some("image/webp"))).ends_with(".webp"));
-        assert!(cache_file_name(poster, image_extension(Some("image/jpeg"))).ends_with(".jpg"));
-
-        // One URL, any extension: one stem. That is what lets `cached_icon`'s
-        // multi-extension probe find whatever `cache_icon` wrote.
-        let stem = |name: String| name.rsplit_once('.').unwrap().0.to_string();
-        assert_eq!(
-            stem(cache_file_name(poster, "png")),
-            stem(cache_file_name(poster, "webp"))
-        );
     }
 
     /// A reference that is already drawable is resolved to itself, so every
