@@ -343,6 +343,9 @@ pub enum Message {
     /// Hearthdeck's own settings were saved outside this shell: what the
     /// pages show may have moved with them.
     AppConfigChanged,
+    /// The icon worker resolved artwork a view asked for, so the views draw
+    /// again and pick it up.
+    IconsRendered,
     /// The settings, re-read from cosmic-config. Only what actually changed is
     /// rebuilt, so a save that touches nothing here moves nothing.
     AppConfigLoaded(AppLibraryConfig),
@@ -1276,6 +1279,7 @@ impl Application for App {
             Message::WallpaperLoaded(wallpaper) => {
                 self.wallpaper = wallpaper;
             }
+            Message::IconsRendered => return Task::none(),
             Message::AppConfigChanged => {
                 return App::load_config();
             }
@@ -1412,6 +1416,7 @@ impl Application for App {
         let settings = config_watch(crate::config::APP_ID, AppLibraryConfig::version())
             .map(|_keys| Message::AppConfigChanged);
         subs.push(settings);
+        subs.push(crate::icon_cache::rendered_icons().map(|()| Message::IconsRendered));
         // The frame clock runs only while motion is in flight: an idle window
         // schedules no redraws at all, and an ungated frame subscription would pin
         // the compositor at the refresh rate forever.

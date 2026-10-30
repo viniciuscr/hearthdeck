@@ -2,9 +2,12 @@
 
 use cosmic::desktop::{IconSourceExt, fde::IconSource};
 use cosmic::iced::core::{image as core_image, svg as core_svg};
+use cosmic::iced::{Subscription, stream};
 use cosmic::widget::icon;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::{SinkExt, StreamExt};
 use resvg::{tiny_skia, usvg};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
@@ -275,77 +278,194 @@ fn rasterize_svg(svg: &core_svg::Handle, width: u32, height: u32) -> Option<icon
     Some(icon::from_raster_pixels(width, height, pixmap.take()))
 }
 
-/// Stable identity for a resolved icon handle, used as the cache key.
-fn handle_identity(base: &icon::Handle) -> String {
-    match &base.data {
-        icon::Data::Svg(svg) => format!("svg-{:x}", svg.id()),
-        icon::Data::Image(image) => match image {
-            core_image::Handle::Path(_, path) => format!("img-{}", path.to_string_lossy()),
-            core_image::Handle::Bytes(_, _) => "img-bytes".into(),
-            core_image::Handle::Rgba { id, .. } => format!("img-rgba-{id:?}"),
-        },
+/// An [`IconSource`], hashable.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum SourceKey {
+    Name(String),
+    Path(PathBuf),
+}
+
+impl SourceKey {
+    fn of(source: &IconSource) -> Self {
+        match source {
+            IconSource::Name(name) => Self::Name(name.clone()),
+            IconSource::Path(path) => Self::Path(path.clone()),
+        }
+    }
+
+    fn source(&self) -> IconSource {
+        match self {
+            Self::Name(name) => IconSource::Name(name.clone()),
+            Self::Path(path) => IconSource::Path(path.clone()),
+        }
     }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct RasterIconKey {
-    identity: String,
+    source: SourceKey,
     size: u32,
     /// A cover turned to fill a portrait card is a different picture from the
     /// same cover drawn as it is, so the two are cached apart.
     portrait: bool,
 }
 
-static RASTER_ICON_CACHE: OnceLock<Mutex<HashMap<RasterIconKey, icon::Handle>>> = OnceLock::new();
-
 /// Cap on the rasterized-icon cache.
 ///
-/// Each entry is a full RGBA tile — hundreds of KiB at the sizes the grid uses —
+/// Each entry is a full RGBA tile - hundreds of KiB at the sizes the grid uses -
 /// so an unbounded map is a slow leak on a kiosk that browses a large RomM
-/// library. When it fills, the map is dropped wholesale rather than evicted one at
-/// a time: re-rasterizing is cheap next to the bookkeeping an LRU would need, and
-/// nothing holds a key across a clear (the caller has already cloned its handle).
+/// library.
 const RASTER_ICON_CACHE_CAP: usize = 256;
 
-/// Resolve an entry icon into an [`icon::Handle`], pre-rendering SVG icons to
-/// raw RGBA at `size` so the renderer never rasterizes vectors on the render
-/// thread (which froze page scrolling). PNGs are kept as-is (cheap to decode) —
-/// except on a portrait card, where a clearly landscape cover is turned a
-/// quarter turn so it fills the card. Results are cached by handle identity, the
-/// size, and whether the cover was turned.
+/// The icons resolved so far, and the ones a view asked for that the worker has
+/// not resolved yet.
+#[derive(Default)]
+struct RasterIcons {
+    /// Each handle with the tick it was last drawn at, so a full cache drops
+    /// what has been off screen longest rather than everything at once.
+    resolved: HashMap<RasterIconKey, (icon::Handle, u64)>,
+    tick: u64,
+    queued: HashSet<RasterIconKey>,
+}
+
+impl RasterIcons {
+    /// The resolved handle for `key`, marked as just drawn.
+    fn get(&mut self, key: &RasterIconKey) -> Option<icon::Handle> {
+        self.tick += 1;
+        let tick = self.tick;
+        let (handle, used) = self.resolved.get_mut(key)?;
+        *used = tick;
+        Some(handle.clone())
+    }
+
+    fn insert(&mut self, key: RasterIconKey, handle: icon::Handle) {
+        self.queued.remove(&key);
+        if self.resolved.len() >= RASTER_ICON_CACHE_CAP
+            && let Some(oldest) = self
+                .resolved
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(key, _)| key.clone())
+        {
+            self.resolved.remove(&oldest);
+        }
+        self.tick += 1;
+        self.resolved.insert(key, (handle, self.tick));
+    }
+}
+
+static RASTER_ICONS: LazyLock<Mutex<RasterIcons>> = LazyLock::new(Mutex::default);
+
+/// The queue from the views to the worker. The worker's end waits here until
+/// [`rendered_icons`] takes it, so a request made before it starts is kept.
+type Jobs = (
+    UnboundedSender<RasterIconKey>,
+    Mutex<Option<UnboundedReceiver<RasterIconKey>>>,
+);
+static JOBS: LazyLock<Jobs> = LazyLock::new(|| {
+    let (sender, receiver) = futures::channel::mpsc::unbounded();
+    (sender, Mutex::new(Some(receiver)))
+});
+
+fn raster_icons() -> std::sync::MutexGuard<'static, RasterIcons> {
+    RASTER_ICONS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Draws an entry icon without touching the disk.
+///
+/// A raster file drawn as it is needs no work: the renderer decodes it. Anything
+/// else - an icon-theme lookup, an SVG to rasterize, a cover to turn - is too
+/// slow for `view`, so a miss is handed to [`rendered_icons`] and drawn as the
+/// untouched picture, or [`GENERIC_ICON`] when there is none, until the worker
+/// answers.
 pub fn entry_icon_handle(source: &IconSource, size: u32, orientation: Orientation) -> icon::Handle {
-    let base = source.as_cosmic_icon();
+    let picture = match source {
+        IconSource::Path(path) if !is_svg(path) => {
+            let picture = icon::from_path(path.clone());
+            if orientation == Orientation::AsIs {
+                return picture;
+            }
+            Some(picture)
+        }
+        _ => None,
+    };
     let key = RasterIconKey {
-        identity: handle_identity(&base),
+        source: SourceKey::of(source),
         size,
         portrait: orientation == Orientation::Portrait,
     };
-
-    let mut cache = RASTER_ICON_CACHE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-
-    if let Some(handle) = cache.get(&key) {
-        return handle.clone();
+    let mut icons = raster_icons();
+    if let Some(handle) = icons.get(&key) {
+        return handle;
     }
+    if icons.queued.insert(key.clone()) && JOBS.0.unbounded_send(key).is_err() {
+        log::warn!("icon worker is gone; icons stay generic");
+    }
+    drop(icons);
+    picture
+        .unwrap_or_else(|| icon_cache_handle(GENERIC_ICON, u16::try_from(size).unwrap_or(u16::MAX)))
+}
 
-    let handle = match (&base.data, orientation) {
-        (icon::Data::Svg(svg), _) => rasterize_svg(svg, size, size).unwrap_or(base),
+fn is_svg(path: &std::path::Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+}
+
+/// Resolves the icons views asked for, off the UI thread, and emits once per
+/// batch so the views that asked draw again.
+pub fn rendered_icons() -> Subscription<()> {
+    Subscription::run_with("hearthdeck-icon-worker", |_| {
+        stream::channel(1, async move |mut output| {
+            let taken = JOBS.1.lock().unwrap_or_else(|e| e.into_inner()).take();
+            let Some(mut jobs) = taken else {
+                log::warn!("icon worker started twice; the first one keeps the queue");
+                return;
+            };
+            while let Some(first) = jobs.next().await {
+                let mut batch = vec![first];
+                while let Ok(key) = jobs.try_recv() {
+                    batch.push(key);
+                }
+                let resolved = tokio::task::spawn_blocking(move || {
+                    batch
+                        .into_iter()
+                        .map(|key| {
+                            let handle = resolve(&key);
+                            (key, handle)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+                match resolved {
+                    Ok(resolved) => {
+                        let mut icons = raster_icons();
+                        for (key, handle) in resolved {
+                            icons.insert(key, handle);
+                        }
+                    }
+                    Err(error) => log::warn!("icon worker failed: {error}"),
+                }
+                if output.send(()).await.is_err() {
+                    return;
+                }
+            }
+        })
+    })
+}
+
+/// Resolves one icon: SVGs pre-rendered to raw RGBA at its size so the renderer
+/// never rasterizes vectors on the render thread (which froze page scrolling),
+/// PNGs kept as they are (cheap to decode) - except on a portrait card, where a
+/// clearly landscape cover is turned a quarter turn so it fills the card.
+fn resolve(key: &RasterIconKey) -> icon::Handle {
+    let base = key.source.source().as_cosmic_icon();
+    match (&base.data, key.portrait) {
+        (icon::Data::Svg(svg), _) => rasterize_svg(svg, key.size, key.size).unwrap_or(base),
         // A cover drawn for a horizontal box, on a card taller than it is wide:
         // turned, so the picture fills the card instead of banding inside it.
-        (icon::Data::Image(image), Orientation::Portrait) => {
-            turned_for_portrait(image).unwrap_or(base)
-        }
-        (icon::Data::Image(_), Orientation::AsIs) => base,
-    };
-
-    if cache.len() >= RASTER_ICON_CACHE_CAP {
-        cache.clear();
+        (icon::Data::Image(image), true) => turned_for_portrait(image).unwrap_or(base),
+        (icon::Data::Image(_), false) => base,
     }
-    cache.insert(key, handle.clone());
-
-    handle
 }
 
 /// A landscape cover turned a quarter turn clockwise, as an icon of its own.
@@ -390,9 +510,21 @@ fn turned_portrait(raster: &image::RgbaImage) -> Option<image::RgbaImage> {
 #[cfg(test)]
 mod tests {
     use super::{
-        GENERIC_ICON, IconReference, Orientation, art_candidates, classify, is_landscape,
-        reference_handle, turned_portrait,
+        GENERIC_ICON, IconReference, Orientation, RASTER_ICON_CACHE_CAP, RasterIconKey,
+        RasterIcons, SourceKey, art_candidates, classify, entry_icon_handle, is_landscape,
+        raster_icons, reference_handle, resolve, turned_portrait,
     };
+    use cosmic::desktop::fde::IconSource;
+    use cosmic::widget::icon;
+    use std::path::PathBuf;
+
+    fn key(path: &str) -> RasterIconKey {
+        RasterIconKey {
+            source: SourceKey::Path(PathBuf::from(path)),
+            size: 64,
+            portrait: false,
+        }
+    }
 
     /// A reference is the daemon's, and it means one of four things. Reading it
     /// wrong is the whole of the bug this vocabulary exists to stop: a poster URL
@@ -483,11 +615,7 @@ mod tests {
     /// fixed one.
     #[test]
     fn a_resolved_file_is_drawn_as_an_image() {
-        let cached = reference_handle(
-            Some("/tmp/hearthdeck-cache/cover.png"),
-            64,
-            Orientation::AsIs,
-        );
+        let cached = resolve(&key("/tmp/hearthdeck-cache/cover.png"));
         assert!(!cached.symbolic);
 
         assert!(
@@ -551,5 +679,64 @@ mod tests {
             art_candidates("/home/user/.cache/hearthdeck/icons/1a2b3c4d.png"),
             vec!["/home/user/.cache/hearthdeck/icons/1a2b3c4d.png".to_owned()]
         );
+    }
+
+    /// `view` never resolves an icon itself: a miss draws the generic mark and
+    /// is queued once for the worker, however many frames ask for it.
+    #[test]
+    fn a_miss_draws_the_generic_mark_and_queues_the_icon_once() {
+        let path = "/tmp/hearthdeck-test/never-resolved.svg";
+        let source = IconSource::Path(PathBuf::from(path));
+
+        let first = entry_icon_handle(&source, 64, Orientation::AsIs);
+        let again = entry_icon_handle(&source, 64, Orientation::AsIs);
+
+        assert!(first.symbolic && again.symbolic, "the mark stands in");
+        let icons = raster_icons();
+        assert!(icons.queued.contains(&key(path)), "queued for the worker");
+        assert!(!icons.resolved.contains_key(&key(path)));
+    }
+
+    /// A raster cover is drawn at once: as it is, with nothing to queue, and on
+    /// a portrait card as it is until the worker has turned it.
+    #[test]
+    fn a_raster_cover_is_drawn_while_it_waits() {
+        let path = "/tmp/hearthdeck-test/cover.png";
+        let source = IconSource::Path(PathBuf::from(path));
+
+        assert!(!entry_icon_handle(&source, 64, Orientation::AsIs).symbolic);
+        assert!(!raster_icons().queued.contains(&key(path)), "nothing to do");
+
+        assert!(!entry_icon_handle(&source, 64, Orientation::Portrait).symbolic);
+        let portrait = RasterIconKey {
+            portrait: true,
+            ..key(path)
+        };
+        assert!(
+            raster_icons().queued.contains(&portrait),
+            "the turn is queued"
+        );
+    }
+
+    /// A full cache drops what has been off screen longest, so the tiles on
+    /// screen never fall back to the mark while the grid scrolls.
+    #[test]
+    fn a_full_cache_drops_the_icon_drawn_longest_ago() {
+        let mut icons = RasterIcons::default();
+        let handle = || icon::from_raster_pixels(1, 1, vec![0; 4]);
+        for index in 0..RASTER_ICON_CACHE_CAP {
+            icons.insert(key(&format!("/icon-{index}.png")), handle());
+        }
+        assert!(icons.get(&key("/icon-0.png")).is_some(), "drawn again");
+
+        icons.insert(key("/new.png"), handle());
+
+        assert_eq!(icons.resolved.len(), RASTER_ICON_CACHE_CAP);
+        assert!(
+            icons.get(&key("/icon-0.png")).is_some(),
+            "recently drawn stays"
+        );
+        assert!(icons.get(&key("/icon-1.png")).is_none(), "the oldest goes");
+        assert!(icons.get(&key("/new.png")).is_some());
     }
 }
