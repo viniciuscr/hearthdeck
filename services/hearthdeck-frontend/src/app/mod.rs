@@ -882,8 +882,7 @@ impl Application for App {
                 self.bar_cursor = None;
                 // A platform with no tab yet opens the "all consoles" tab.
                 let group = self
-                    .config
-                    .sections
+                    .tabs
                     .console_games
                     .iter()
                     .position(|group| group.romm_platform_id() == Some(platform_id));
