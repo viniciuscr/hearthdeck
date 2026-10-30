@@ -423,7 +423,7 @@ pub fn rendered_icons() -> Subscription<()> {
             };
             while let Some(first) = jobs.next().await {
                 let mut batch = vec![first];
-                while let Ok(Some(key)) = jobs.try_next() {
+                while let Ok(key) = jobs.try_recv() {
                     batch.push(key);
                 }
                 let resolved = tokio::task::spawn_blocking(move || {
