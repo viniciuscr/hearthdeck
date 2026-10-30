@@ -398,9 +398,9 @@ imperative shell-out embedded in the daemon or bridge.
 contain host-specific command construction." Wrapping `podman-compose up -d` in a
 daemon startup routine would be exactly that, plus it would reinvent what systemd
 already does correctly for free: start/stop ordering and session integration. So
-the daemon *reports* RomM's status and can ask systemd to restart it
-(`diagnostics::restart_romm_service`, a fixed unit constant); it never starts the
-stack itself.
+the daemon *reports* RomM's status and can ask the bridge to restart it
+(`BridgeRequest::RestartRommService`, a fixed unit constant in the bridge); it
+never starts the stack itself.
 
 ### What triggers what, in order
 
@@ -500,9 +500,9 @@ view next to the daemon and bridge — no new screen, no separate place to go
 looking for whether it's up.
 
 **Done: a restart control from within Hearthdeck's own UI.**
-`POST /v1/retro/service/restart` runs `systemctl --user restart
-romm.service` — the unit name is a fixed constant in
-`diagnostics::restart_romm_service`, never a request parameter, so this is
+`POST /v1/retro/service/restart` asks the bridge to run `systemctl --user restart
+romm.service` — the unit name is a fixed constant in the bridge's
+`systemd::restart_romm_service`, never a request parameter, so this is
 one narrowly scoped action, not a generic "restart any unit" capability
 (same discipline as the existing install-request boundary). Threaded
 through `CatalogRepository.restartRommService()` and surfaced as a
