@@ -1,5 +1,5 @@
 use super::*;
-use crate::app_group::{AppGroup, FilterType, GroupSource, SectionUi};
+use crate::app_group::{AppGroup, FilterType, SectionUi};
 use crate::providers::daemon::RetroRomVersion;
 use crate::providers::filter::FacetOption;
 use crate::style::PAGE_TRANSITION_DURATION;
@@ -22,6 +22,7 @@ fn shell() -> App {
         tab_slide: None,
         scrolls: Scrolls::default(),
         config: AppLibraryConfig::default(),
+        tabs: Sections::default(),
         config_store: None,
         daemon_client: DaemonClient::new(DaemonConfig {
             base_url: String::new(),
@@ -131,7 +132,7 @@ fn a_romm_sign_in_reloads_consoles_and_removal_clears_the_url() {
     use settings::romm::Message as Romm;
 
     let mut app = showing_a_console_game(Vec::new());
-    app.config.sync_console_groups(&[(7, "SNES".into())]);
+    app.tabs.sync_console_groups(&[(7, "SNES".into())]);
     let scope = app.console_scope();
     assert!(!app.console.entries(&scope).is_empty());
     let connection = || RommSettings {
@@ -148,7 +149,7 @@ fn a_romm_sign_in_reloads_consoles_and_removal_clears_the_url() {
     let _ = app.update(Message::Romm(Romm::SignedIn(Ok(connection()))));
     assert!(app.romm.sign_in.is_none());
     assert!(app.console.entries(&scope).is_empty());
-    assert!(app.config.sections.console_games.is_empty());
+    assert!(app.tabs.console_games.is_empty());
     let _ = app.update(Message::Romm(Romm::Removed(Ok(()))));
     assert!(app.romm.base_url.is_empty());
     assert!(app.romm.connection.is_none());
@@ -175,21 +176,15 @@ fn pending_romm_requests_cannot_be_overwritten_or_submitted_twice() {
 
 /// The labels of a section's tabs, in the order the strip shows them.
 fn tabs(app: &App, section: Section) -> Vec<String> {
-    app.config
-        .sections
-        .get(section)
-        .iter()
-        .map(AppGroup::name)
-        .collect()
+    app.tabs.get(section).iter().map(AppGroup::name).collect()
 }
 
-/// A legacy folder, kept when the catalog rebuilds the derived tabs.
-fn add_user_group(app: &mut App, section: Section, name: &str) {
-    app.config.sections.get_mut(section).push(AppGroup {
+/// Appends a tab named `name` to the PC Games strip.
+fn add_pc_tab(app: &mut App, name: &str) {
+    app.tabs.pc_games.push(AppGroup {
         name: name.to_owned(),
         icon: "folder-symbolic".to_string(),
         filter: FilterType::AppIds(Vec::new()),
-        source: GroupSource::Local,
     });
 }
 
@@ -379,7 +374,7 @@ fn showing_console_tabs() -> App {
     let mut app = navigable();
     app.page = Page::Library;
     app.cur_section = Section::ConsoleGames;
-    app.config
+    app.tabs
         .sync_console_groups(&[(7, "SNES".to_owned()), (9, "PlayStation".to_owned())]);
     app.cur_group = Some(0);
     console_page(
@@ -1011,7 +1006,7 @@ fn showing_a_long_tab_strip() -> App {
         "Sega Mega Drive",
         "Sony PlayStation",
     ] {
-        add_user_group(&mut app, Section::PcGames, name);
+        add_pc_tab(&mut app, name);
     }
     app
 }
@@ -1019,7 +1014,7 @@ fn showing_a_long_tab_strip() -> App {
 /// Whether tab `index` sits entirely inside the strip's visible width, measured
 /// the way the follow measures it.
 fn tab_is_on_screen(app: &App, index: usize) -> bool {
-    let widths = header::tab_widths(app.cur_section, app.config.sections.get(app.cur_section));
+    let widths = header::tab_widths(app.cur_section, app.tabs.get(app.cur_section));
     let viewport = header::tab_viewport(app.window_width, !app.facets.is_empty());
     let gap = f32::from(theme::spacing().space_m);
     let start = widths.iter().take(index).sum::<f32>() + index as f32 * gap;
@@ -2171,67 +2166,6 @@ fn the_health_reply_says_whether_the_feature_exists_here() {
     assert_eq!(app.categorization_capable, Some(true), "and this one can");
 }
 
-/// Restoring the defaults rebuilds the derived tabs, drops what an older scan
-/// left behind, and keeps the user's own folders.
-#[test]
-fn restoring_the_defaults_rebuilds_the_tabs_and_keeps_the_users_folders() {
-    let mut app = showing(4);
-    app.cur_section = Section::Applications;
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
-    add_user_group(&mut app, Section::Applications, "Mine");
-    app.config.sections.applications.push(AppGroup {
-        name: "Speedruns".to_owned(),
-        icon: "folder-symbolic".to_owned(),
-        filter: FilterType::AppIds(vec!["app.one".to_owned()]),
-        source: GroupSource::Categorization,
-    });
-    app.config.sections.applications.remove(0);
-    app.cur_group = Some(1);
-
-    let _ = app.update(Message::RestoreDefaultCategories);
-
-    assert_eq!(
-        tabs(&app, Section::Applications),
-        ["Desktop", "Mine"],
-        "the derived tab is back, the scan's is gone and the user's stays"
-    );
-    assert_eq!(app.cur_group, None, "the library lands on its all tab");
-}
-
-/// Settings saved outside the shell reach the pages when the watch fires:
-/// the tabs come back rebuilt, and the library lands on its all tab the way
-/// a restore does.
-#[test]
-fn a_live_settings_change_rebuilds_the_tabs() {
-    let mut app = showing(4);
-    app.cur_section = Section::Applications;
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
-    add_user_group(&mut app, Section::Applications, "Mine");
-    app.cur_group = Some(1);
-
-    let mut saved = app.config.clone();
-    saved.sections.applications = vec![AppGroup {
-        name: "FromDisk".to_owned(),
-        icon: "folder-symbolic".to_owned(),
-        filter: FilterType::AppIds(Vec::new()),
-        source: GroupSource::Local,
-    }];
-    let _ = app.update(Message::AppConfigLoaded(saved));
-
-    assert_eq!(
-        tabs(&app, Section::Applications),
-        ["FromDisk"],
-        "the tabs are what the save said"
-    );
-    assert_eq!(app.cur_group, None, "the library lands on its all tab");
-}
-
 /// A save that does not touch these tabs must not move the user: the cursor
 /// stays where it was. The toggle itself is live.
 #[test]
@@ -2260,7 +2194,8 @@ fn a_live_change_to_the_input_toggles_leaves_the_cursor_alone() {
 }
 
 /// A form overridden outside the shell moves its tiles between the lists at
-/// once, without waiting for the next catalog load.
+/// once, without waiting for the next catalog load, and the Desktop tab goes
+/// with the last desktop app.
 #[test]
 fn a_live_form_override_moves_the_tiles() {
     let mut app = showing(4);
@@ -2282,28 +2217,10 @@ fn a_live_form_override_moves_the_tiles() {
     let _ = app.update(Message::AppConfigLoaded(saved));
 
     assert_eq!(app.visible.len(), 1, "the default view shows it now");
-}
-
-/// Turning smart categorization off must also undo a scan's leftovers: it is
-/// the way out for someone whose tabs it broke.
-#[test]
-fn turning_smart_categorization_off_restores_the_default_tabs() {
-    let mut app = showing(4);
-    app.cur_section = Section::Applications;
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
-    app.config.sections.applications = vec![AppGroup {
-        name: "Speedruns".to_owned(),
-        icon: "folder-symbolic".to_owned(),
-        filter: FilterType::AppIds(vec!["app.one".to_owned()]),
-        source: GroupSource::Categorization,
-    }];
-
-    let _ = app.update(Message::SetCategorization(false));
-
-    assert_eq!(tabs(&app, Section::Applications), ["Desktop"]);
+    assert!(
+        tabs(&app, Section::Applications).is_empty(),
+        "nothing wants a desktop, so there is no Desktop tab"
+    );
 }
 
 /// A refused categorization action lands in the section's own status text,

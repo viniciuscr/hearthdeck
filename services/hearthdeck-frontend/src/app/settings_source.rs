@@ -161,9 +161,7 @@ impl App {
         }
         self.console.invalidate();
         self.console_platforms.clear();
-        if self.config.sync_console_groups(&[]) {
-            self.persist_config();
-        }
+        self.tabs.sync_console_groups(&[]);
         if self.cur_section == crate::app_group::Section::ConsoleGames {
             self.cur_group = None;
             self.facets.clear();
@@ -419,35 +417,12 @@ impl App {
         )
     }
 
-    /// Rebuilds every section's tabs from the catalog and the console platforms,
-    /// dropping what an older scan left behind and keeping the user's own
-    /// folders.
-    ///
-    /// The library lands on its "all" tab: the indices the selection held name
-    /// different tabs once the strips are rebuilt.
-    pub(super) fn restore_default_categories(&mut self) -> Task<Message> {
-        let platforms: Vec<(i64, String)> = self
-            .console_platforms
-            .iter()
-            .map(|console| (console.id, console.label.clone()))
-            .collect();
-        if self
-            .config
-            .restore_default_groups(&self.catalog, &platforms)
-        {
-            self.persist_config();
-        }
-        self.apply_group(None)
-    }
-
     /// Applies settings that changed outside the shell.
     ///
     /// Only what actually changed is rebuilt: a save that does not touch this
     /// section's tabs leaves the cursor and the scroll where the user left
     /// them, and the echo of a save this shell made itself moves nothing.
     pub(super) fn apply_live_config(&mut self, config: AppLibraryConfig) -> Task<Message> {
-        let tabs_changed =
-            config.sections.get(self.cur_section) != self.config.sections.get(self.cur_section);
         let forms_changed = config.form_overrides != self.config.form_overrides;
         self.config.desktop_input_apps = config.desktop_input_apps;
         if forms_changed {
@@ -455,12 +430,12 @@ impl App {
             // The couch filter reads each entry's form, so an override moves
             // its tiles between the lists at once.
             self.config.apply_form_overrides(&mut self.catalog);
-        }
-        self.config.sections = config.sections;
-        if tabs_changed {
-            return self.apply_group(None);
-        }
-        if forms_changed {
+            // The Desktop tab is there only while something wants a desktop.
+            let before = self.tabs.get(self.cur_section).clone();
+            self.tabs.sync_category_groups(&self.catalog);
+            if self.tabs.get(self.cur_section) != &before {
+                return self.apply_group(None);
+            }
             self.refilter();
         }
         Task::none()

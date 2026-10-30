@@ -13,7 +13,7 @@ impl App {
     /// The RomM platform id of the console group in scope, when one is selected.
     pub(super) fn console_platform_id(&self) -> Option<i64> {
         self.cur_group
-            .and_then(|index| self.config.sections.console_games.get(index))
+            .and_then(|index| self.tabs.console_games.get(index))
             .and_then(|group| group.romm_platform_id())
     }
 
@@ -110,8 +110,7 @@ impl App {
     /// are left out, so a repeat does not fetch them twice.
     pub(super) fn queue_console_prefetch(&mut self) -> Task<Message> {
         let platforms = std::iter::once(None).chain(
-            self.config
-                .sections
+            self.tabs
                 .console_games
                 .iter()
                 .map(|group| group.romm_platform_id()),

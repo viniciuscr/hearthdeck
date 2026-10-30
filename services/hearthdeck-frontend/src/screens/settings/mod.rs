@@ -98,28 +98,20 @@ pub fn view<'a>(
     .into()
 }
 
-/// The library's own tabs and the dashboard's rails: the controls that put them
-/// back as Hearthdeck derives them.
+/// Where the library's tabs and the dashboard's rails come from, and the
+/// control that puts the rails back as Hearthdeck derives them.
 ///
-/// Its own section, and always on offer: both can go wrong whether or not the
-/// local model is installed, or even supported, and the way out must not depend
-/// on a feature the user may never have turned on.
+/// Its own section, and always on offer: the rails can go wrong whether or not
+/// the local model is installed, or even supported, and the way out must not
+/// depend on a feature the user may never have turned on.
 fn library_and_dashboard<'a>() -> Element<'a, Message> {
     let Spacing { space_s, .. } = theme::spacing();
-    let buttons = row![
-        action_button(
-            fl!("categories-restore"),
-            Message::RestoreDefaultCategories,
-            standard_button_class(),
-            true,
-        ),
-        action_button(
-            fl!("dashboard-restore"),
-            Message::RestoreDashboard,
-            standard_button_class(),
-            true,
-        ),
-    ]
+    let buttons = row![action_button(
+        fl!("dashboard-restore"),
+        Message::RestoreDashboard,
+        standard_button_class(),
+        true,
+    )]
     .spacing(space_s);
     titled_section(fl!("categories-heading"))
         .add(body_line(fl!("categories-intro")))
