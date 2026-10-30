@@ -1180,27 +1180,25 @@ impl Application for App {
                 // keyboard is up is a fact about the caret, not about which
                 // window is focused. Dropping Back here would leave the pad
                 // dead with the keyboard gone.
-                if self.text_entry.is_active() {
-                    if event == GamepadEvent::Back {
-                        return self.end_text_entry();
-                    }
-                    return Task::none();
-                }
+                //
                 // The RomM sign-in dialog is a surface over the settings page,
                 // not a place in its rows, so the pad cannot walk into it. It
                 // is driven by the one button that means yes and the one that
                 // means no, and while it is up nothing behind it may move.
-                //
                 // Read before ownership as well: losing focus to the keyboard
                 // on the way in must not leave the dialog impossible to close.
-                if self.romm.sign_in.is_some() {
+                //
+                // Both surfaces are rungs of `back`, which unwinds them.
+                if self.text_entry.is_active() || self.romm.sign_in.is_some() {
                     return match event {
-                        GamepadEvent::Back => self.update(Message::Romm(
-                            crate::screens::settings::romm::Message::SignInClosed,
-                        )),
-                        GamepadEvent::Confirm if self.romm.can_sign_in() => self.update(
-                            Message::Romm(crate::screens::settings::romm::Message::SignInPressed),
-                        ),
+                        GamepadEvent::Back => self.back(),
+                        GamepadEvent::Confirm
+                            if !self.text_entry.is_active() && self.romm.can_sign_in() =>
+                        {
+                            self.update(Message::Romm(
+                                crate::screens::settings::romm::Message::SignInPressed,
+                            ))
+                        }
                         _ => Task::none(),
                     };
                 }
