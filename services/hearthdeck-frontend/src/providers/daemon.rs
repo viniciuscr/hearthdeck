@@ -13,9 +13,9 @@ use std::{
 use tokio::sync::OnceCell;
 
 use super::GameRecord;
-use crate::app_group::{romm_console_category, romm_genre_category, romm_region_category};
 use crate::form_factor::FormFactor;
 use crate::icon_cache::{self, IconReference};
+use crate::library_item::ConsoleMetadata;
 use crate::providers::filter::Facet;
 
 /// Prefix a catalog item's id carries on its way into the library.
@@ -1172,6 +1172,7 @@ pub fn catalog_item_to_game_record(item: CatalogItem) -> GameRecord {
         },
         sibling_roms: Vec::new(),
         version_label: None,
+        console: None,
     }
 }
 
@@ -1202,26 +1203,22 @@ fn retro_rom_query_params(
 }
 
 pub fn retro_game_to_game_record(game: RetroGame, icon: Option<String>) -> GameRecord {
-    // The grid still filters the LibraryItem adapter's categories.
-    let mut categories = vec!["Game".to_string(), romm_console_category(game.platform_id)];
-    categories.extend(game.genres.iter().map(|genre| romm_genre_category(genre)));
-    categories.extend(
-        game.regions
-            .iter()
-            .map(|region| romm_region_category(region)),
-    );
-
     GameRecord {
         id: format!("romm:{}", game.id),
         name: game.title,
         exec: Some(game.id.to_string()),
         icon,
-        categories,
+        categories: vec!["Game".to_owned()],
         store: None,
         install_source: None,
         modeled_form: None,
         sibling_roms: game.sibling_roms,
         version_label: game.version_label,
+        console: Some(ConsoleMetadata {
+            platform_id: game.platform_id,
+            genres: game.genres,
+            regions: game.regions,
+        }),
     }
 }
 
@@ -1868,16 +1865,15 @@ mod tests {
         assert_eq!(record.id, "romm:42");
         assert_eq!(record.exec.as_deref(), Some("42"));
         assert_eq!(record.icon.as_deref(), Some("/tmp/example.jpg"));
-        // Existing console filter values keep their saved category format.
-        assert_eq!(
-            record.categories,
-            vec![
-                "Game",
-                "hearthdeck-console:7",
-                "hearthdeck-genre:RPG",
-                "hearthdeck-region:Japan",
-            ]
-        );
+        assert_eq!(record.categories, ["Game"]);
+        let item = record.into_library_item();
+        let console = item.console.as_ref().expect("console metadata");
+        assert_eq!(console.platform_id, 7);
+        assert_eq!(console.genres, ["RPG"]);
+        assert_eq!(console.regions, ["Japan"]);
+        assert!(item.matches_category("hearthdeck-console:7"));
+        assert!(item.matches_category("hearthdeck-genre:rpg"));
+        assert!(item.matches_facet("hearthdeck-region:Japan"));
     }
 
     /// A facet selection travels as the daemon route's own parameter names, so
@@ -1964,6 +1960,7 @@ mod tests {
             modeled_form: None,
             sibling_roms,
             version_label: label.map(str::to_owned),
+            console: None,
         }
     }
 

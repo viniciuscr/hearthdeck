@@ -161,8 +161,11 @@ against that field, not tags on each item. PC-game stores also live in a typed
 remain compatible, including case-insensitive group/search matching and exact
 facet matching. Install-source and streaming labels use a typed `sources` list;
 source facets and saved `hearthdeck-source:*` filters read that list with the
-same matching rules. Custom source strings stay open-ended. Only console facets
-remain category-encoded.
+same matching rules. Custom source strings stay open-ended. Console items carry
+optional `ConsoleMetadata` with a platform ID, genres and regions; section
+classification and filtering read it directly. Saved `hearthdeck-console:*`,
+`hearthdeck-genre:*` and `hearthdeck-region:*` values stay compatible without
+encoding that metadata in item categories.
 
 | Slice | Where | Status |
 | --- | --- | --- |

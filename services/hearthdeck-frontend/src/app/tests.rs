@@ -76,12 +76,23 @@ fn entry(id: &str, categories: &[&str]) -> Arc<LibraryItem> {
         categories: categories
             .iter()
             .filter(|value| !value.starts_with("hearthdeck-store:"))
+            .filter(|value| !value.starts_with("hearthdeck-console:"))
             .map(|category| (*category).to_owned())
             .collect(),
         store: categories
             .iter()
             .find_map(|value| value.strip_prefix("hearthdeck-store:"))
             .map(str::to_owned),
+        console: categories.iter().find_map(|value| {
+            value
+                .strip_prefix("hearthdeck-console:")
+                .and_then(|id| id.parse().ok())
+                .map(|platform_id| crate::library_item::ConsoleMetadata {
+                    platform_id,
+                    genres: Vec::new(),
+                    regions: Vec::new(),
+                })
+        }),
         ..LibraryItem::default()
     };
     if Section::Applications.matches(&entry) {

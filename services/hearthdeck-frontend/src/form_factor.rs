@@ -117,6 +117,7 @@ mod tests {
             form_factor: None,
             store: None,
             sources: Vec::new(),
+            console: None,
         }
     }
 
