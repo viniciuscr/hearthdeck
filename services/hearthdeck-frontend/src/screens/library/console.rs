@@ -83,8 +83,7 @@ impl ConsoleScope {
 pub struct Page {
     pub entries: Vec<Arc<LibraryItem>>,
     /// The version lists of the multi-file entries on this page, keyed by
-    /// entry id. They ride along here because this is the last moment they
-    /// exist: the record's metadata is dropped when it becomes an entry.
+    /// entry id, kept separate from the grid's display items.
     pub versions: BTreeMap<String, Vec<RetroRomVersion>>,
     pub total: u64,
     pub offset: u32,
