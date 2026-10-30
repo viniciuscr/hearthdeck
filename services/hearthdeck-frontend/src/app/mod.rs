@@ -154,6 +154,16 @@ pub enum Message {
     DaemonChanged(FeedEvent),
     /// The settings screen's smart-categories state, as the daemon reports it.
     CategorizationLoaded(Result<crate::providers::daemon::CategorizationSnapshot, String>),
+    /// The emulator readiness report the settings card draws.
+    RefreshRetroReadiness,
+    RetroReadinessLoaded(Result<Vec<crate::providers::daemon::RetroSystemReadiness>, String>),
+    /// Places the missing BIOS files from the user's own BIOS source.
+    SyncRetroBios,
+    RetroBiosSynced(Result<crate::providers::daemon::RetroBiosSyncReport, String>),
+    /// Installs the missing libretro core packages through the daemon's
+    /// privileged helper.
+    InstallRetroCores,
+    RetroCoresInstalled(Result<crate::providers::daemon::RetroCoreInstallReport, String>),
     /// A categorization action finished. The shell re-reads the state either way,
     /// because a failed action is still news about what the daemon thinks.
     CategorizationDone(Result<(), String>),
@@ -466,6 +476,8 @@ pub struct App {
     /// `update` decides what a reply means, it only runs what the flow asks for.
     stremio: settings::stremio_link::Flow,
     romm: settings::romm::Form,
+    /// The emulator-readiness card's state.
+    retro_readiness: settings::readiness::Flow,
     facet_selection: BTreeMap<String, String>,
     /// Whether the filter sidebar is open.
     filter_open: bool,
@@ -608,6 +620,7 @@ impl Application for App {
             categorization_notice: None,
             stremio: settings::stremio_link::Flow::default(),
             romm: settings::romm::Form::default(),
+            retro_readiness: settings::readiness::Flow::default(),
             // The first tile: with nothing loaded yet there is nothing to point
             // at, and every read of the cursor tolerates that.
             cursors: Cursors::default(),
@@ -1037,6 +1050,7 @@ impl Application for App {
                 // still offer.
                 reads.push(self.load_stremio_connection());
                 reads.push(self.load_romm_settings());
+                reads.push(self.load_retro_readiness());
                 return Task::batch(reads);
             }
             Message::SetCategorization(on) => {
@@ -1065,6 +1079,51 @@ impl Application for App {
                 Ok(snapshot) => self.categorization = Some(snapshot),
                 Err(error) => log::warn!("categorization read failed: {error}"),
             },
+            Message::RefreshRetroReadiness => return self.load_retro_readiness(),
+            Message::RetroReadinessLoaded(result) => match result {
+                Ok(readiness) => self.retro_readiness.readiness = Some(readiness),
+                Err(error) => log::warn!("readiness read failed: {error}"),
+            },
+            Message::SyncRetroBios => {
+                self.retro_readiness.syncing = true;
+                self.retro_readiness.notice = None;
+                return self.sync_retro_bios();
+            }
+            Message::InstallRetroCores => {
+                self.retro_readiness.installing = true;
+                self.retro_readiness.notice = None;
+                return self.install_retro_cores();
+            }
+            Message::RetroCoresInstalled(result) => {
+                self.retro_readiness.installing = false;
+                match result {
+                    Ok(report) => {
+                        self.retro_readiness.notice =
+                            Some(settings::readiness::install_notice(&report));
+                    }
+                    Err(error) => {
+                        log::warn!("core install failed: {error}");
+                        self.retro_readiness.notice = Some(format!("core install failed: {error}"));
+                    }
+                }
+                // The installed flags live in the readiness report: reread it
+                // so the rows and the button reflect what just landed.
+                return self.load_retro_readiness();
+            }
+            Message::RetroBiosSynced(result) => {
+                self.retro_readiness.syncing = false;
+                match result {
+                    Ok(report) => {
+                        let notice = settings::readiness::sync_notice(&report);
+                        self.retro_readiness.readiness = Some(report.readiness);
+                        self.retro_readiness.notice = Some(notice);
+                    }
+                    Err(error) => {
+                        log::warn!("BIOS sync failed: {error}");
+                        self.retro_readiness.notice = Some(format!("BIOS sync failed: {error}"));
+                    }
+                }
+            }
             // The deployment says whether the feature exists here at all, which
             // is the one answer that outranks everything the daemon reports.
             Message::HealthLoaded(result) => match result {
@@ -1578,6 +1637,7 @@ impl App {
                 notice: self.categorization_notice.as_deref(),
                 stremio: &self.stremio,
                 romm: &self.romm,
+                readiness: &self.retro_readiness,
             },
             &self.top_bar(top_bar::Destination::Settings),
             navigate,

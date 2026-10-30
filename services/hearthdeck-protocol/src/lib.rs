@@ -111,6 +111,15 @@ pub enum BridgeRequest {
         #[serde(default)]
         input_profile: InputProfile,
     },
+    /// Installs the named libretro core packages through the distro package
+    /// manager. The daemon names only `libretro-*` packages it computed from
+    /// its readiness report, and the bridge re-validates every name against
+    /// that shape before handing anything to the polkit-scoped helper
+    /// (`org.hearthdeck.core.install`, which allows exactly its own
+    /// allowlisted script and nothing else). Never a free-form command.
+    InstallRetroCores {
+        packages: Vec<String>,
+    },
     ActiveApplicationSession,
     StopActiveApplicationSession,
     StopApplicationSession {
@@ -187,10 +196,30 @@ pub enum BridgeResponse {
     StopAccepted {
         session_id: String,
     },
+    /// Per-package outcome of an install run: what landed, and what could
+    /// not, with a reason per failure.
+    RetroCoresInstalled {
+        report: RetroCoreInstallReport,
+    },
     Error {
         code: BridgeErrorCode,
         message: String,
     },
+}
+
+/// What one core install run did: which packages landed, and which could not,
+/// with a reason per failure.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetroCoreInstallReport {
+    pub installed: Vec<String>,
+    pub failed: Vec<RetroCoreInstallFailure>,
+}
+
+/// One core package an install run could not place, and why.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetroCoreInstallFailure {
+    pub package: String,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -291,6 +320,72 @@ pub struct CatalogItem {
     pub icon: Option<String>,
     pub metadata: serde_json::Value,
     pub classification: CatalogClassification,
+}
+
+/// Whether one platform's launch stack is ready to play: its libretro core on
+/// disk, and the BIOS files its emulator will look for.
+///
+/// Computed from the same platform-to-core table the launch path resolves
+/// against, so a green readiness is exactly what a launch would use.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetroSystemReadiness {
+    /// RomM's `fs_slug`: the platform's on-disk-folder slug.
+    pub platform: String,
+    pub display_name: String,
+    pub core: RetroCoreReadiness,
+    /// BIOS files this system's emulator knows about. Empty for systems that
+    /// run without one; `required` separates must-haves from files that only
+    /// improve accuracy where the core can fall back.
+    pub bios: Vec<RetroBiosFile>,
+}
+
+/// One platform's libretro core, as a readiness fact.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetroCoreReadiness {
+    /// File name inside the cores directory, e.g. `snes9x_libretro.so`.
+    pub core_filename: String,
+    /// Distro package that provides that file, e.g. `libretro-snes9x`.
+    pub package: String,
+    pub installed: bool,
+}
+
+/// One BIOS file, as a readiness fact: where it sits in the user's own BIOS
+/// source tree, whether the emulator needs it, and whether the copy on disk is
+/// a known-good dump.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetroBiosFile {
+    /// Folder under `bios/` in the source layout, e.g. `Sony/PlayStation 2`.
+    pub system: String,
+    /// File name inside that folder, e.g. `scph70012.bin`.
+    pub filename: String,
+    /// False for files an emulator can work without.
+    pub required: bool,
+    /// A copy exists at `target` under the RetroArch system directory.
+    pub present: bool,
+    /// The copy on disk matches a known-good dump for this file.
+    /// `present && !verified` means "a file is there, but not the right one".
+    pub verified: bool,
+    /// Destination relative to the RetroArch system directory, e.g.
+    /// `pcsx2/bios/scph70012.bin`.
+    pub target: String,
+}
+
+/// What one BIOS sync run did: which files it copied from the user's own BIOS
+/// source, which it could not, and the readiness that holds afterwards.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetroBiosSyncReport {
+    /// File names copied into the system directory, verified after writing.
+    pub fetched: Vec<String>,
+    pub failed: Vec<RetroBiosSyncFailure>,
+    /// Same shape as `GET /v1/retro/readiness`, refreshed after the run.
+    pub readiness: Vec<RetroSystemReadiness>,
+}
+
+/// One BIOS file the sync could not place, and why.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetroBiosSyncFailure {
+    pub filename: String,
+    pub reason: String,
 }
 
 /// One selectable version of a retro game, as offered in the version picker.
@@ -572,8 +667,9 @@ mod tests {
         BridgeResponse, CatalogItem, CategorizationPhase, CategorizationSnapshot,
         CategorizationStatus, Collection, CollectionItem, DiscoveredApplication, HealthResponse,
         HeroicRunner, HostCapabilities, InputMode, InputProfile, ModelStatus, ProviderHealth,
-        ProviderKind, ProviderStatus, RetroGame, RetroGameDetails, RetroRomVersion, Section,
-        ServerEvent, ServerEventKind,
+        ProviderKind, ProviderStatus, RetroBiosFile, RetroCoreReadiness, RetroGame,
+        RetroGameDetails, RetroRomVersion, RetroSystemReadiness, Section, ServerEvent,
+        ServerEventKind,
     };
 
     #[test]
@@ -911,6 +1007,55 @@ mod tests {
         assert_eq!(serialized["runner"], "legendary");
         assert!(serialized.get("command").is_none());
         assert!(serialized.get("url").is_none());
+    }
+
+    #[test]
+    fn install_retro_cores_carries_only_package_names() {
+        let request = super::BridgeRequest::InstallRetroCores {
+            packages: vec!["libretro-snes9x".to_owned()],
+        };
+        let serialized = serde_json::to_value(request).unwrap();
+        assert_eq!(serialized["type"], "install_retro_cores");
+        assert_eq!(serialized["packages"][0], "libretro-snes9x");
+
+        let response = super::BridgeResponse::RetroCoresInstalled {
+            report: super::RetroCoreInstallReport {
+                installed: vec!["libretro-snes9x".to_owned()],
+                failed: vec![super::RetroCoreInstallFailure {
+                    package: "libretro-mame".to_owned(),
+                    reason: "pacman exited with an error".to_owned(),
+                }],
+            },
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["report"]["installed"][0], "libretro-snes9x");
+        assert_eq!(json["report"]["failed"][0]["package"], "libretro-mame");
+    }
+
+    #[test]
+    fn retro_readiness_types_round_trip_through_json() {
+        let readiness = RetroSystemReadiness {
+            platform: "ps2".to_owned(),
+            display_name: "PlayStation 2".to_owned(),
+            core: RetroCoreReadiness {
+                core_filename: "lrps2_libretro.so".to_owned(),
+                package: "libretro-lrps2".to_owned(),
+                installed: true,
+            },
+            bios: vec![RetroBiosFile {
+                system: "Sony/PlayStation 2".to_owned(),
+                filename: "scph70012.bin".to_owned(),
+                required: true,
+                present: true,
+                verified: true,
+                target: "pcsx2/bios/scph70012.bin".to_owned(),
+            }],
+        };
+        let json = serde_json::to_value(&readiness).unwrap();
+        assert_eq!(json["core"]["core_filename"], "lrps2_libretro.so");
+        assert_eq!(json["bios"][0]["required"], true);
+        let decoded: RetroSystemReadiness = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), json);
     }
 
     #[test]

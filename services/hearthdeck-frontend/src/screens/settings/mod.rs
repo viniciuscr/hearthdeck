@@ -25,6 +25,7 @@ use crate::style::{
 use crate::widgets::top_bar;
 
 pub mod categorization;
+pub mod readiness;
 pub mod romm;
 pub mod stremio_link;
 
@@ -47,6 +48,9 @@ pub struct Settings<'a> {
     /// this section reads it and names the request each control makes.
     pub stremio: &'a stremio_link::Flow,
     pub romm: &'a romm::Form,
+    /// The emulator-readiness card's state: what can play and what the last
+    /// BIOS sync did.
+    pub readiness: &'a readiness::Flow,
 }
 
 /// The page: the shared top bar, then the sections.
@@ -67,7 +71,8 @@ pub fn view<'a>(
             library_and_dashboard(),
             categorization(state),
             stremio(state),
-            romm::view(state.romm)
+            romm::view(state.romm),
+            readiness::view(state.readiness)
         ]))
         .width(Length::Fill)
         .height(Length::Fill)

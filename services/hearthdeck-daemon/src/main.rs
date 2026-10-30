@@ -14,6 +14,7 @@ mod diagnostics;
 mod discovery;
 mod enrichment;
 mod provider_worker;
+mod readiness;
 mod retro;
 mod romm_link;
 mod sessions;

@@ -218,6 +218,53 @@ impl App {
     /// Read whenever the settings screen is opened, for the same reason the state
     /// beside it is: the categorization program may have been installed or
     /// removed since the shell started.
+    /// Reads the emulator readiness report the settings card draws. Read
+    /// whenever the screen is opened, for the same reason the state beside it
+    /// is: a core may have been installed since the shell started.
+    pub(super) fn load_retro_readiness(&self) -> Task<Message> {
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                client
+                    .retro_readiness()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::RetroReadinessLoaded(result)),
+        )
+    }
+
+    /// Fetches the BIOS files the active platforms are missing from the
+    /// user's own BIOS source.
+    pub(super) fn sync_retro_bios(&self) -> Task<Message> {
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                client
+                    .sync_retro_bios()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::RetroBiosSynced(result)),
+        )
+    }
+
+    /// Installs the missing core packages through the daemon's polkit-scoped
+    /// helper. The daemon names the packages; the client only presses the
+    /// button.
+    pub(super) fn install_retro_cores(&self) -> Task<Message> {
+        let client = self.daemon_client.clone();
+        Task::perform(
+            async move {
+                client
+                    .install_retro_cores()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
+            |result| cosmic::Action::App(Message::RetroCoresInstalled(result)),
+        )
+    }
+
     pub(super) fn load_health(&self) -> Task<Message> {
         let client = self.daemon_client.clone();
         Task::perform(

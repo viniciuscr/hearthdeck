@@ -56,7 +56,8 @@ pub struct DaemonClient {
 
 pub use hearthdeck_protocol::{
     CatalogItem, CategorizationPhase, Collection, CollectionItem, HealthResponse, ModelStatus,
-    RetroGame, RetroGameDetails, RetroRomVersion, ScanReport, ServerEventKind as DaemonEvent,
+    RetroBiosSyncReport, RetroCoreInstallReport, RetroGame, RetroGameDetails, RetroRomVersion,
+    RetroSystemReadiness, ScanReport, ServerEventKind as DaemonEvent,
 };
 
 /// The daemon's categorization state and shared scan report.
@@ -488,6 +489,63 @@ impl DaemonClient {
 
     /// Lists retro ROMs, optionally narrowed by platform, a search term, and
     /// facet selections (facet id -> value, e.g. `genre` -> `Action`).
+    /// Whether each platform with roms can play: its core installed and its
+    /// BIOS files in place. Read whenever the settings screen opens.
+    pub async fn retro_readiness(&self) -> Result<Vec<RetroSystemReadiness>, DaemonError> {
+        let response = self
+            .transport
+            .http()
+            .get(self.api_url("/v1/retro/readiness"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    /// Places the BIOS files the active platforms are missing, fetching only
+    /// those from the user's own BIOS source.
+    pub async fn sync_retro_bios(&self) -> Result<RetroBiosSyncReport, DaemonError> {
+        let response = self
+            .transport
+            .http()
+            .post(self.api_url("/v1/retro/readiness/bios-sync"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
+    /// Installs the missing libretro core packages through the daemon's
+    /// polkit-scoped helper. The daemon names the packages itself.
+    pub async fn install_retro_cores(&self) -> Result<RetroCoreInstallReport, DaemonError> {
+        let response = self
+            .transport
+            .http()
+            .post(self.api_url("/v1/retro/cores/install"))
+            .headers(self.auth_headers().await?)
+            .send()
+            .await
+            .map_err(DaemonError::Connection)?;
+
+        if !response.status().is_success() {
+            return Err(Self::http_error(response).await);
+        }
+
+        response.json().await.map_err(DaemonError::Deserialization)
+    }
+
     pub async fn list_retro_roms(
         &self,
         platform_id: Option<i64>,

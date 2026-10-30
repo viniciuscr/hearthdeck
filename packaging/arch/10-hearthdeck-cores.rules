@@ -1,0 +1,11 @@
+// The readiness screen's "install missing cores" button is the approval: the
+// active local session may run the allowlisted helper without a password.
+// Scoping is strict: the action exists only for this program (the policy's
+// exec.path annotation), the helper accepts only libretro-* packages, and
+// nothing else pkexec is asked to run is affected.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.hearthdeck.core.install" &&
+        subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});

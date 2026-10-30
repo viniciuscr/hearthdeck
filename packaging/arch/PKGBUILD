@@ -7,7 +7,7 @@ pkgdesc='Remote-friendly TV launcher with local desktop discovery'
 arch=('x86_64')
 url='https://github.com/viniciuscr/hearthdeck'
 license=('MIT')
-depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'libxkbcommon' 'retroarch' 'sqlite' 'systemd' 'xorg-xwayland')
+depends=('gcc-libs' 'gamescope' 'glibc' 'gtk3' 'hicolor-icon-theme' 'libxkbcommon' 'polkit' 'retroarch' 'sqlite' 'systemd' 'xorg-xwayland')
 makedepends=('clang' 'cmake' 'just' 'libxkbcommon' 'ninja' 'pkgconf' 'rust' 'sqlite')
 # RetroArch runs no emulator without a libretro core. Cores are separate
 # packages upstream (docs.libretro.com/guides/download-cores: distro-packaged
@@ -23,7 +23,6 @@ optdepends=(
   'libretro-mgba: RetroArch core for Game Boy/Color/Advance'
   'libretro-mupen64plus-next: RetroArch core for Nintendo 64'
   'libretro-beetle-psx: RetroArch core for PlayStation'
-  'libretro-play: RetroArch core for PlayStation 2'
   'libretro-ppsspp: RetroArch core for PlayStation Portable'
   'libretro-desmume: RetroArch core for Nintendo DS'
   'libretro-dolphin: RetroArch core for GameCube and Wii'
@@ -59,6 +58,9 @@ package() {
   install -Dm755 packaging/arch/hearthdeck "$pkgdir/usr/bin/hearthdeck"
   install -Dm755 scripts/hearthdeck-autologin "$pkgdir/usr/lib/hearthdeck/hearthdeck-autologin"
   install -Dm755 scripts/linux-acceptance "$pkgdir/usr/lib/hearthdeck/linux-acceptance"
+  install -Dm755 scripts/hearthdeck-install-cores "$pkgdir/usr/lib/hearthdeck/hearthdeck-install-cores"
+  install -Dm644 packaging/arch/org.hearthdeck.core.install.policy "$pkgdir/usr/share/polkit-1/actions/org.hearthdeck.core.install.policy"
+  install -Dm644 packaging/arch/10-hearthdeck-cores.rules "$pkgdir/usr/share/polkit-1/rules.d/10-hearthdeck-cores.rules"
   install -Dm755 services/target/release/hearthdeck-bridge "$pkgdir/usr/lib/hearthdeck/hearthdeck-bridge"
   install -Dm755 services/target/release/hearthdeck-daemon "$pkgdir/usr/lib/hearthdeck/hearthdeck-daemon"
   # The scan runs in this child process. It sits beside the daemon because that is
