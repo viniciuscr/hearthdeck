@@ -1872,6 +1872,52 @@ fn two_rails() -> App {
     app
 }
 
+/// The pad walks the rails by their lengths alone, counted without building a
+/// card, so each count must be the number of cards the view draws: an empty
+/// dashboard, the library fallback, a rail past the tile cap, and consoles
+/// between the arrivals and the rest.
+#[test]
+fn the_rail_lengths_the_pad_walks_are_the_cards_the_view_draws() {
+    fn drawn(app: &App) -> Vec<usize> {
+        app.dashboard_shelves()
+            .iter()
+            .map(|shelf| shelf.cards.len())
+            .collect()
+    }
+
+    let app = shell();
+    assert_eq!(app.dashboard_rail_lengths(), drawn(&app), "nothing loaded");
+
+    let mut app = loaded(crate::style::DASHBOARD_RAIL_TILES + 3);
+    assert_eq!(
+        app.dashboard_rail_lengths(),
+        drawn(&app),
+        "library fallback"
+    );
+
+    let ids: Vec<String> = (0..crate::style::DASHBOARD_RAIL_TILES + 3)
+        .map(|index| format!("hearthdeck:game-{index}"))
+        .collect();
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+        collection("favorites", None, &ids),
+        collection("smart:empty", None, &[]),
+        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+    ])));
+    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
+        crate::providers::daemon::RetroConsole {
+            id: 1,
+            label: "Mega Drive".to_owned(),
+            artwork: None,
+        },
+    ])));
+    assert_eq!(
+        app.dashboard_rail_lengths(),
+        vec![1, 1, crate::style::DASHBOARD_RAIL_TILES]
+    );
+    assert_eq!(app.dashboard_rail_lengths(), drawn(&app));
+}
+
 /// The dashboard's rails are the daemon's collections - so a collection this
 /// client has never heard of, which is what a feature's own categories and so
 /// the AI's are, becomes a shelf without a change in the frontend. That is

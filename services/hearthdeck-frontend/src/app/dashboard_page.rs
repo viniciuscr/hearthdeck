@@ -22,6 +22,13 @@ use super::{
     widget_focus,
 };
 
+/// One dashboard rail, named by what it is drawn from.
+enum Rail<'a> {
+    Collection(&'a Collection),
+    Consoles,
+    Library,
+}
+
 impl App {
     /// The dashboard's rails: the daemon's collections, in the order it composes
     /// them, with a consoles rail at the top when RomM is configured.
@@ -38,65 +45,67 @@ impl App {
             content_horizontal_padding(),
             spacing.space_l,
         );
-        let mut shelves = Vec::new();
+        self.dashboard_rails()
+            .into_iter()
+            .filter_map(|rail| match rail {
+                Rail::Collection(collection) => Some(Self::collection_shelf(collection, size)),
+                Rail::Consoles => Some(self.consoles_shelf()),
+                Rail::Library => self.library_shelf(size),
+            })
+            .collect()
+    }
 
-        // What has just arrived on Stremio first, in the banner's old place:
-        // the rail under the blank space at the top of the page. It is a
-        // collection rail like every other - the difference is only where it is
-        // drawn - and its cards carry the wide art that fills the window behind
-        // the page as the pad walks them.
+    /// Which rails the dashboard has, in order, without building a card.
+    ///
+    /// What has just arrived on Stremio comes first, in the banner's old place:
+    /// it is a collection rail like every other, drawn on top with the wide art
+    /// that fills the window behind the page. Then the RomM consoles, then the
+    /// rest of the daemon's collections in the order it composes them.
+    fn dashboard_rails(&self) -> Vec<Rail<'_>> {
         let (arrivals, rest): (Vec<_>, Vec<_>) = self
             .collections
             .iter()
+            .filter(|collection| !collection.items.is_empty())
             .partition(|collection| collection.slug == NEW_ARRIVALS_COLLECTION);
-        shelves.extend(
-            arrivals
-                .iter()
-                .filter(|collection| !collection.items.is_empty())
-                .map(|collection| Self::collection_shelf(collection, size)),
-        );
-
-        // Consoles rail: shows all RomM platforms with their artwork.
+        let mut rails: Vec<Rail<'_>> = arrivals.into_iter().map(Rail::Collection).collect();
         if !self.console_platforms.is_empty() {
-            let console_size = dashboard_console_tile_size(
-                self.window_width,
-                content_horizontal_padding(),
-                spacing.space_l,
-            );
-            let cards: Vec<Card> = self
-                .console_platforms
-                .iter()
-                .take(DASHBOARD_RAIL_TILES)
-                .enumerate()
-                .map(|(index, platform)| {
-                    Card::new(
-                        dashboard_card_id("consoles", index),
-                        platform.label.clone(),
-                        crate::icon_cache::reference_handle(
-                            platform.artwork.as_deref(),
-                            console_size as u32,
-                            // A platform's logo is drawn square on the card, so
-                            // there is nothing to turn.
-                            crate::icon_cache::Orientation::AsIs,
-                        ),
-                        Some(launch_console_message(platform.id)),
-                    )
-                })
-                .collect();
-            shelves.push(Shelf::new(true, fl!("consoles"), cards));
+            rails.push(Rail::Consoles);
         }
+        rails.extend(rest.into_iter().map(Rail::Collection));
+        if rails.is_empty() {
+            rails.push(Rail::Library);
+        }
+        rails
+    }
 
-        // The rest of the daemon's collections, in the order it composes them.
-        shelves.extend(
-            rest.iter()
-                .filter(|collection| !collection.items.is_empty())
-                .map(|collection| Self::collection_shelf(collection, size)),
+    /// Consoles rail: shows all RomM platforms with their artwork.
+    fn consoles_shelf(&self) -> Shelf {
+        let console_size = dashboard_console_tile_size(
+            self.window_width,
+            content_horizontal_padding(),
+            theme::spacing().space_l,
         );
-
-        if shelves.is_empty() {
-            return self.library_shelf(size);
-        }
-        shelves
+        let cards: Vec<Card> = self
+            .console_platforms
+            .iter()
+            .take(DASHBOARD_RAIL_TILES)
+            .enumerate()
+            .map(|(index, platform)| {
+                Card::new(
+                    dashboard_card_id("consoles", index),
+                    platform.label.clone(),
+                    crate::icon_cache::reference_handle(
+                        platform.artwork.as_deref(),
+                        console_size as u32,
+                        // A platform's logo is drawn square on the card, so
+                        // there is nothing to turn.
+                        crate::icon_cache::Orientation::AsIs,
+                    ),
+                    Some(launch_console_message(platform.id)),
+                )
+            })
+            .collect();
+        Shelf::new(true, fl!("consoles"), cards)
     }
 
     /// One collection as a rail: its items as cards, in the order the daemon
@@ -137,7 +146,7 @@ impl App {
 
     /// The library as a single rail, for when the daemon has composed nothing yet
     /// - a fresh install, or a fetch that has not landed.
-    pub(super) fn library_shelf(&self, size: f32) -> Vec<Shelf> {
+    fn library_shelf(&self, size: f32) -> Option<Shelf> {
         let cards: Vec<Card> = self
             .catalog
             .iter()
@@ -157,18 +166,26 @@ impl App {
                 )
             })
             .collect();
-        if cards.is_empty() {
-            return Vec::new();
-        }
-        vec![Shelf::new(false, fl!("all-games"), cards)]
+        (!cards.is_empty()).then(|| Shelf::new(false, fl!("all-games"), cards))
     }
 
     /// How many cards each rail holds, which is the shape the rail navigation
-    /// walks.
+    /// walks. Counted from the source data: every pad step asks, and building
+    /// the cards would resolve every card's artwork to answer.
     pub(super) fn dashboard_rail_lengths(&self) -> Vec<usize> {
-        self.dashboard_shelves()
-            .iter()
-            .map(|shelf| shelf.cards.len())
+        self.dashboard_rails()
+            .into_iter()
+            .map(|rail| match rail {
+                Rail::Collection(collection) => collection.items.len(),
+                Rail::Consoles => self.console_platforms.len(),
+                Rail::Library => self
+                    .catalog
+                    .iter()
+                    .filter(|entry| Section::PcGames.matches(entry))
+                    .count(),
+            })
+            .map(|cards| cards.min(DASHBOARD_RAIL_TILES))
+            .filter(|&cards| cards > 0)
             .collect()
     }
 
