@@ -15,8 +15,7 @@ use cosmic::iced::core::alignment::{Horizontal, Vertical};
 use cosmic::iced::{Alignment, ContentFit, Length};
 use cosmic::theme;
 use cosmic::widget::{
-    Id, autosize::autosize, button, column, container, icon, list, list::list_column, row,
-    scrollable, space, text,
+    Id, button, column, container, icon, list, list::list_column, row, scrollable, space, text,
 };
 
 use crate::app::Message;
@@ -236,11 +235,9 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
             container(
                 column![
                     text::title3(fl!("disc-selection")).size(DETAILS_TEXT_HEADER),
-                    autosize(
-                        container(scrollable(rows.into_element())).padding(1),
-                        Id::new("details-disc-autosize"),
-                    )
-                    .max_height(MENU_MAX_HEIGHT),
+                    container(scrollable(rows.into_element()).height(Length::Shrink))
+                        .padding(1)
+                        .max_height(MENU_MAX_HEIGHT),
                 ]
                 .spacing(space_m),
             )

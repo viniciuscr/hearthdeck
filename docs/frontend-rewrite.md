@@ -136,6 +136,10 @@ the cruft inherited from the project this started from.
   drawer, the details screen and its disc picker, the top bar, the keyboard's
   ring, then the page itself - and nothing else handles Back for itself. The
   rung still missing is the page behind the library: the Dashboard.
+- **Disc selection is a vertical list.** Up/Down moves between files and Confirm
+  picks the highlighted disc; clicking a row uses the same selection message.
+  Selection closes the picker and returns focus to Play. The list is constrained
+  by the card width and maximum menu height, without autosizing its hit bounds.
 
 ## Running
 

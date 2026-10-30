@@ -68,7 +68,9 @@ pub struct Layout {
 #[must_use]
 pub fn rows(layout: Layout) -> Vec<Vec<Focus>> {
     if layout.picker_open {
-        return vec![(0..layout.discs).map(Focus::DiscChoice).collect()];
+        return (0..layout.discs)
+            .map(|index| vec![Focus::DiscChoice(index)])
+            .collect();
     }
     let mut rows = Vec::new();
     if layout.shots > 0 {
@@ -196,12 +198,36 @@ mod tests {
         };
         assert_eq!(
             rows(layout),
-            [vec![
-                Focus::DiscChoice(0),
-                Focus::DiscChoice(1),
-                Focus::DiscChoice(2)
-            ]],
+            [
+                vec![Focus::DiscChoice(0)],
+                vec![Focus::DiscChoice(1)],
+                vec![Focus::DiscChoice(2)],
+            ],
         );
+    }
+
+    #[test]
+    fn disc_choices_follow_the_vertical_list_and_stop_at_its_edges() {
+        let layout = Layout {
+            picker_open: true,
+            ..multi_file()
+        };
+        assert_eq!(
+            step(layout, Focus::DiscChoice(0), Direction::Down),
+            Some(Focus::DiscChoice(1))
+        );
+        assert_eq!(
+            step(layout, Focus::DiscChoice(1), Direction::Up),
+            Some(Focus::DiscChoice(0))
+        );
+        assert_eq!(
+            step(layout, Focus::DiscChoice(1), Direction::Down),
+            Some(Focus::DiscChoice(2))
+        );
+        assert_eq!(step(layout, Focus::DiscChoice(0), Direction::Up), None);
+        assert_eq!(step(layout, Focus::DiscChoice(2), Direction::Down), None);
+        assert_eq!(step(layout, Focus::DiscChoice(1), Direction::Left), None);
+        assert_eq!(step(layout, Focus::DiscChoice(1), Direction::Right), None);
     }
 
     #[test]
@@ -227,7 +253,6 @@ mod tests {
         // A step off the top or bottom edge does nothing.
         assert_eq!(step(layout, Focus::Screenshot(1), Direction::Up), None);
         assert_eq!(step(layout, Focus::PlayLater, Direction::Down), None);
-        // An open picker is a single row: there is nothing above it.
         assert_eq!(
             step(
                 Layout {
@@ -238,7 +263,7 @@ mod tests {
                 Focus::DiscChoice(2),
                 Direction::Up
             ),
-            None,
+            Some(Focus::DiscChoice(1)),
         );
     }
 
