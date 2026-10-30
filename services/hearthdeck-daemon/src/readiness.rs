@@ -433,19 +433,33 @@ pub(crate) struct BiosSource {
     token: Option<String>,
 }
 
+/// Where `HEARTHDECK_BIOS_SOURCE_URL` points when the user has not set one:
+/// the example BIOS/core project whose `bios/<Company>/<Console>/<file>` and
+/// `cores/<file>` layout this importer follows. A deployment replaces it
+/// with a project the user owns; only this variable ever names a source.
+pub(crate) const DEFAULT_BIOS_SOURCE_URL: &str = "https://github.com/Abdess/retrobios";
+
 impl BiosSource {
     /// From `HEARTHDECK_BIOS_SOURCE_URL` plus the optional
-    /// `HEARTHDECK_BIOS_SOURCE_TOKEN` for a private project. Unset is
-    /// [`ReadinessError::NoSource`]: Hearthdeck never picks a source itself.
+    /// `HEARTHDECK_BIOS_SOURCE_TOKEN` for a private project. Unset falls back
+    /// to [`DEFAULT_BIOS_SOURCE_URL`]; a set-but-invalid URL is refused
+    /// rather than silently defaulted past.
     pub(crate) fn from_env() -> Result<Self, ReadinessError> {
         let url = std::env::var("HEARTHDECK_BIOS_SOURCE_URL")
             .ok()
-            .filter(|value| !value.trim().is_empty())
-            .ok_or(ReadinessError::NoSource)?;
+            .filter(|value| !value.trim().is_empty());
         let token = std::env::var("HEARTHDECK_BIOS_SOURCE_TOKEN")
             .ok()
             .filter(|value| !value.is_empty());
-        Self::parse(&url, token)
+        Self::resolve(url.as_deref(), token)
+    }
+
+    /// The source this deployment reads: the project the user configured, or
+    /// [`DEFAULT_BIOS_SOURCE_URL`] when none is configured. Split from the
+    /// environment so the fallback is unit-testable, the same way
+    /// `retro_save_root_from` is.
+    fn resolve(url: Option<&str>, token: Option<String>) -> Result<Self, ReadinessError> {
+        Self::parse(url.unwrap_or(DEFAULT_BIOS_SOURCE_URL), token)
     }
 
     /// Accepts `https://github.com/<owner>/<repo>` with an optional
@@ -643,17 +657,12 @@ impl<'a> SourceFetcher<'a> {
 
 #[derive(Debug)]
 pub(crate) enum ReadinessError {
-    NoSource,
     InvalidSourceUrl,
 }
 
 impl std::fmt::Display for ReadinessError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoSource => write!(
-                formatter,
-                "no BIOS source is configured (HEARTHDECK_BIOS_SOURCE_URL)"
-            ),
             Self::InvalidSourceUrl => {
                 write!(
                     formatter,
@@ -1242,6 +1251,24 @@ mod tests {
     fn bios_slots_only_cover_platforms_with_bios() {
         assert!(bios_slots_for("ps2").count() > 0);
         assert!(bios_slots_for("gba").count() == 0);
+    }
+
+    #[test]
+    fn the_default_source_applies_until_one_is_configured() {
+        // The fallback is the example project's own link; an explicit
+        // configuration still wins over it.
+        let defaulted = BiosSource::resolve(None, None).unwrap();
+        assert_eq!(defaulted.owner, "Abdess");
+        assert_eq!(defaulted.repo, "retrobios");
+
+        let configured = BiosSource::resolve(
+            Some("https://github.com/someone/my-bios"),
+            Some("token".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(configured.owner, "someone");
+        assert_eq!(configured.repo, "my-bios");
+        assert_eq!(configured.token.as_deref(), Some("token"));
     }
 
     #[test]
