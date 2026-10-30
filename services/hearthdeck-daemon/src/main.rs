@@ -13,6 +13,7 @@ mod database;
 mod diagnostics;
 mod discovery;
 mod enrichment;
+mod launch;
 mod provider_worker;
 mod retro;
 mod romm_link;

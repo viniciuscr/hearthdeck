@@ -14,8 +14,8 @@ use futures_util::{StreamExt, stream};
 use hearthdeck_ai::categorization::{ScanReport, Taxonomy, rail_app_ids};
 use hearthdeck_protocol::{
     ApplicationSession, BridgeRequest, BridgeResponse, CategorizationSnapshot, Collection,
-    CollectionItem, HealthResponse, HeroicRunner, HostCapabilities, InputProfile, ProviderHealth,
-    RetroGame, RetroGameDetails, RetroRomVersion, ServerEvent, StremioMediaType,
+    CollectionItem, HealthResponse, HostCapabilities, InputProfile, ProviderHealth, RetroGame,
+    RetroGameDetails, RetroRomVersion, ServerEvent,
 };
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
@@ -946,9 +946,6 @@ async fn launch_item(
     }
 }
 
-/// The catalog half of a launch: resolves the record,
-/// decides which launch shape its `source_id` asks the bridge for — desktop
-/// application, Heroic game, or Stremio title — and runs it.
 async fn launch_catalog(
     state: &SharedState,
     id: &str,
@@ -960,52 +957,11 @@ async fn launch_catalog(
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(ApiError::not_found)?;
-    let launch_id = item.launch_id.as_deref().ok_or_else(ApiError::not_found)?;
-    let session_id = Uuid::new_v4().to_string();
-    // Both catalog sources this integration publishes name Stremio titles: the
-    // account's Continue Watching records, and the new arrivals the hero banner
-    // shows.
-    let stremio_title = (item.source_id == stremio::SOURCE_ID
-        || item.source_id == stremio_arrivals::SOURCE_ID)
-        .then(|| stremio_title_target(&item))
-        .flatten();
-    let request = if item.source_id == hearthdeck_protocol::sources::HEROIC {
-        let (runner, application_id) =
-            heroic_launch_target(launch_id).ok_or_else(ApiError::not_found)?;
-        BridgeRequest::LaunchHeroicGame {
-            runner,
-            application_id,
-            session_id,
-            input_profile,
-        }
-    } else if let Some((video_id, media_type)) = stremio_title {
-        // A Stremio record names a title, so the bridge is asked for that title rather
-        // than for the application the record carries. The id travels, not a URL: the
-        // bridge validates it and builds the URI itself.
-        BridgeRequest::LaunchStremioTitle {
-            // The entry the provider resolved from this host's own application list,
-            // which is also what a plain application launch carries. The bridge validates
-            // it and the video id, and builds the URI itself.
-            application_id: launch_id.to_owned(),
-            video_id,
-            media_type,
-            session_id,
-            input_profile,
-        }
-    } else {
-        BridgeRequest::LaunchApplication {
-            // Not `item.source_id`: see DESKTOP_APPS_SOURCE. What is being started is
-            // a desktop entry whichever provider published the record naming it, and
-            // the bridge refuses any other source id.
-            source_id: crate::DESKTOP_APPS_SOURCE.to_owned(),
-            application_id: launch_id.to_owned(),
-            session_id,
-            input_profile,
-        }
-    };
+    let plan = crate::launch::catalog(&item, Uuid::new_v4().to_string(), input_profile)
+        .ok_or_else(ApiError::not_found)?;
     let session = state
         .sessions()
-        .launch(request, catalog_activity_entry(&item))
+        .launch(plan.request, plan.activity)
         .await
         .map_err(|error| match error {
             LaunchError::Unexpected(other) => {
@@ -1028,54 +984,6 @@ struct RecentActivityQuery {
     limit: Option<u32>,
 }
 
-/// The Stremio title a record names, when it names one.
-///
-/// The Stremio title a record names: its video id, and whether that id is a film
-/// or a series.
-///
-/// The provider publishes both in the record's own metadata, which the catalog keeps
-/// under `discovery`. The type matters only for a bare IMDb id — `tt0149460` is a
-/// different page for a film and for a series — while `tt0149460:4:7` already says
-/// series by carrying an episode. A record without a video id is launched as a plain
-/// application instead: an older record, or one whose account has since been
-/// unlinked. Either way the card does something rather than failing.
-fn stremio_title_target(item: &crate::catalog::CatalogItem) -> Option<(String, StremioMediaType)> {
-    let discovery = item.metadata.get("discovery")?;
-    let video_id = discovery
-        .get("video_id")?
-        .as_str()
-        .map(str::trim)
-        .filter(|video_id| !video_id.is_empty())?;
-    let media_type = match discovery.get("type").and_then(serde_json::Value::as_str) {
-        Some("series") => StremioMediaType::Series,
-        // Anything not spelled series — including records that predate the field —
-        // was launched as a film before the two kinds were told apart, and stays one.
-        _ => StremioMediaType::Movie,
-    };
-    Some((video_id.to_owned(), media_type))
-}
-
-fn catalog_activity_entry(item: &crate::catalog::CatalogItem) -> ActivityEntry {
-    let categories = item
-        .metadata
-        .get("categories")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .collect();
-    ActivityEntry {
-        id: format!("hearthdeck:{}", item.id),
-        title: item.title.clone(),
-        icon: item.icon.clone(),
-        categories,
-        kind: Some(item.kind.clone()),
-        source: item.source_id.clone(),
-        metadata: item.metadata.clone(),
-    }
-}
-
 fn retro_activity_entry(game: &RommGame) -> ActivityEntry {
     let game = RetroGame::from(game);
     ActivityEntry {
@@ -1095,19 +1003,6 @@ fn retro_activity_entry(game: &RommGame) -> ActivityEntry {
             "screenshot_paths": game.screenshot_paths,
         }),
     }
-}
-
-fn heroic_launch_target(launch_id: &str) -> Option<(HeroicRunner, String)> {
-    let (runner, application_id) = launch_id.split_once(':')?;
-    if application_id.is_empty() {
-        return None;
-    }
-    let runner = match runner {
-        "legendary" => HeroicRunner::Legendary,
-        "gog" => HeroicRunner::Gog,
-        _ => return None,
-    };
-    Some((runner, application_id.to_owned()))
 }
 
 async fn active_application_session(
@@ -2092,8 +1987,7 @@ mod tests {
         http::{Request, StatusCode},
     };
     use hearthdeck_protocol::{
-        ApplicationSession, ApplicationSessionState, BridgeRequest, BridgeResponse, HeroicRunner,
-        InputProfile,
+        ApplicationSession, ApplicationSessionState, BridgeRequest, BridgeResponse, InputProfile,
     };
     use tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -2582,7 +2476,7 @@ mod tests {
                         icon: None,
                         // The provider's own payload: the catalog wraps it under
                         // `discovery` when it serves the record, which is the shape
-                        // `stremio_title_target` reads back.
+                        // the launch planner reads back.
                         metadata: serde_json::json!({
                             "source": "stremio",
                             "video_id": "tt0149460:4:7"
@@ -3476,20 +3370,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(launch_unknown_item.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[test]
-    fn parses_only_supported_heroic_launch_targets() {
-        assert!(matches!(
-            super::heroic_launch_target("legendary:Fortnite"),
-            Some((HeroicRunner::Legendary, application_id)) if application_id == "Fortnite"
-        ));
-        assert!(matches!(
-            super::heroic_launch_target("gog:1091500"),
-            Some((HeroicRunner::Gog, application_id)) if application_id == "1091500"
-        ));
-        assert!(super::heroic_launch_target("steam:570").is_none());
-        assert!(super::heroic_launch_target("legendary:").is_none());
     }
 
     #[test]

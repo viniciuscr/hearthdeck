@@ -34,10 +34,17 @@ target.
 
 The daemon's session service owns launch acceptance, activity recording,
 session-change events and exit reconciliation. HTTP handlers prepare launch
-targets and map errors; the activity store only persists and queries plays.
+requests and map errors; the activity store only persists and queries plays.
 Explicit stops and the periodic watcher share the same idempotent completion
 path. The service borrows its bridge path, activity store, discovery coordinator
 and event sender, rather than depending on the whole application state.
+
+Catalog launch planning is a pure mapping from a catalog record to a typed
+bridge request and its activity snapshot. It owns Heroic runner selection,
+Stremio title selection (including desktop fallback for legacy records) and
+desktop-entry dispatch. The HTTP handler only loads the record, asks for a plan
+and submits it to the session service. Retro filesystem/core resolution stays
+in the retro adapter.
 
 ## Platform Adaptation Rules
 
