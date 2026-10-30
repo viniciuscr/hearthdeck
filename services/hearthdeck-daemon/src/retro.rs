@@ -332,6 +332,7 @@ pub(crate) fn core_filename_for(fs_slug: &str, content_name: &str) -> Option<&'s
 /// Mapped cores no Arch package provides: they arrive from the user's own
 /// source repository (see `readiness`), and readiness shows the file name
 /// where the package name would be.
+#[allow(dead_code)]
 pub(crate) const SOURCE_ONLY_CORES: &[&str] = &["pcsx2_libretro.so"];
 
 /// The Arch package that provides a libretro core file: the inverse of the

@@ -407,6 +407,7 @@ pub(crate) async fn install_missing_cores(
 /// `retro::SOURCE_ONLY_CORES` list gates what may be fetched at all — a core
 /// missing both a package and a declaration is a mapping bug, not a fetch
 /// candidate.
+#[allow(dead_code)]
 pub(crate) fn missing_source_cores(report: &[RetroSystemReadiness]) -> Vec<String> {
     let mut files: Vec<String> = report
         .iter()
@@ -546,17 +547,6 @@ pub(crate) async fn sync_bios(
             Err(failure) => failed.push(failure),
         }
     }
-    // Cores no distro package provides come from the same source, one folder
-    // over: `cores/<file name>`.
-    for core_file in missing_source_cores(&readiness(platforms, paths).await) {
-        match place_core(&mut fetcher, &core_file, &paths.user_cores_dir).await {
-            Ok(()) => fetched.push(core_file),
-            Err(reason) => failed.push(RetroBiosSyncFailure {
-                filename: core_file,
-                reason,
-            }),
-        }
-    }
 
     for file in &fetched {
         tracing::info!(file = %file, "placed source file");
@@ -623,6 +613,7 @@ async fn place_bios(
 }
 
 /// Fetches one source-only core into the user's cores directory.
+#[allow(dead_code)]
 async fn place_core(
     fetcher: &mut SourceFetcher<'_>,
     core_file: &str,
