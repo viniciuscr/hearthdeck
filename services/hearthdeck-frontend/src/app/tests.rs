@@ -179,9 +179,9 @@ fn tabs(app: &App, section: Section) -> Vec<String> {
     app.tabs.get(section).iter().map(AppGroup::name).collect()
 }
 
-/// Appends a tab named `name` to a section's strip.
-fn add_tab(app: &mut App, section: Section, name: &str) {
-    app.tabs.get_mut(section).push(AppGroup {
+/// Appends a tab named `name` to the PC Games strip.
+fn add_pc_tab(app: &mut App, name: &str) {
+    app.tabs.pc_games.push(AppGroup {
         name: name.to_owned(),
         icon: "folder-symbolic".to_string(),
         filter: FilterType::AppIds(Vec::new()),
@@ -1006,7 +1006,7 @@ fn showing_a_long_tab_strip() -> App {
         "Sega Mega Drive",
         "Sony PlayStation",
     ] {
-        add_tab(&mut app, Section::PcGames, name);
+        add_pc_tab(&mut app, name);
     }
     app
 }

@@ -347,14 +347,6 @@ impl Sections {
         }
     }
 
-    pub fn get_mut(&mut self, section: Section) -> &mut Vec<AppGroup> {
-        match section {
-            Section::PcGames => &mut self.pc_games,
-            Section::ConsoleGames => &mut self.console_games,
-            Section::Applications => &mut self.applications,
-        }
-    }
-
     /// Rebuilds the local sections' tabs from the entries currently present.
     ///
     /// PC Games gets a tab per store that installed something. Applications gets
