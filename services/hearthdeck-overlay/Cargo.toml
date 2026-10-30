@@ -18,7 +18,8 @@ cosmic-settings-config = { git = "https://github.com/pop-os/cosmic-settings-daem
 evdev = { version = "0.13", features = ["tokio"] }
 futures-channel = "0.3"
 futures-util = "0.3"
-hearthdeck-protocol = { path = "../hearthdeck-protocol" }
+hearthdeck-client = { path = "../hearthdeck-client" }
+reqwest.workspace = true
 # Bare URL, deliberately: cargo treats "git+URL" and "git+URL?rev=..." as different
 # sources, and cosmic-app-list-config requires this same bare URL. Any rev here
 # would compile the whole libcosmic workspace twice. Cargo.lock pins the commit.
@@ -28,11 +29,7 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
   "wgpu",
   "tokio",
 ] }
-serde_json = "1"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 xkbcommon = "0.9"
-
-[dev-dependencies]
-tempfile = "3.27.0"

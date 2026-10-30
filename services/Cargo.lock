@@ -3489,6 +3489,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hearthdeck-client"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "hearthdeck-daemon"
 version = "0.1.0"
 dependencies = [
@@ -3529,6 +3542,7 @@ dependencies = [
  "cosmic-protocols",
  "futures",
  "gilrs",
+ "hearthdeck-client",
  "hearthdeck-protocol",
  "i18n-embed",
  "i18n-embed-fl",
@@ -3585,10 +3599,9 @@ dependencies = [
  "evdev",
  "futures-channel",
  "futures-util",
- "hearthdeck-protocol",
+ "hearthdeck-client",
  "libcosmic",
- "serde_json",
- "tempfile",
+ "reqwest 0.12.28",
  "tokio",
  "tracing",
  "tracing-subscriber",

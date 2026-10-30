@@ -144,10 +144,17 @@ records from `degraded`; an empty catalog is not a bridge health signal.
 - The bridge protocol has typed health, discovery, launch, active-session, and
   stop-session requests. It has no command or argument field.
 - `stop_active_application_session` selects and stops the active session under
-  the launch-transition lock. Overlay Close App and logout send this single
-  command, rather than a lookup followed by a stop that can race a new launch.
-  The overlay still talks directly to the bridge; daemon-mediated session
-  control is a separate remaining boundary change.
+  the launch-transition lock. Overlay Close App and logout call the authenticated
+  daemon route `POST /v1/sessions/active/stop`; only the daemon sends this bridge
+  command and processes play completion before replying. No client-side lookup
+  or automatic stop retry can race a new launch.
+- `hearthdeck-client` owns pairing and authenticated transport for frontend and
+  overlay. Automatic pairing requests a code on loopback admin port 38401 only;
+  remote clients need an explicit token. The overlay uses the same
+  `HEARTHDECK_BACKEND_URL` and `HEARTHDECK_PAIRING_TOKEN` settings as the frontend.
+  Its HTTP request timeout is 130 seconds, allowing the bridge's 120-second
+  exchange deadline to return an error first. The overlay no longer opens the
+  bridge socket or reads unbounded JSON lines. Update daemon and overlay together.
 - The bridge re-discovers the requested desktop ID locally and validates its
   launch specification before creating a transient systemd user service; it does
   not accept `Exec` strings from the daemon.

@@ -89,6 +89,10 @@ pub fn router(state: SharedState) -> Router {
         .route("/v1/metadata/{provider_id}/refresh", post(refresh_metadata))
         .route("/v1/launch/{item_id}", post(launch_item))
         .route("/v1/sessions/active", get(active_application_session))
+        .route(
+            "/v1/sessions/active/stop",
+            post(stop_active_application_session),
+        )
         .route("/v1/sessions/{id}/stop", post(stop_application_session))
         .route("/v1/events", get(events))
         .with_state(state)
@@ -1217,6 +1221,37 @@ async fn active_application_session(
     Ok(Json(session))
 }
 
+async fn stop_active_application_session(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authenticate(&state, &headers).await?;
+    let response = crate::bridge::request(
+        &state.config.bridge_socket_path,
+        BridgeRequest::StopActiveApplicationSession,
+    )
+    .await
+    .map_err(ApiError::bad_gateway)?;
+    match response {
+        BridgeResponse::StopAccepted { session_id } => {
+            crate::activity::play_finished(&state, &session_id).await;
+            Ok(StatusCode::ACCEPTED)
+        }
+        BridgeResponse::Error {
+            code: hearthdeck_protocol::BridgeErrorCode::NotFound,
+            message,
+        } => Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message,
+            settings: None,
+        }),
+        BridgeResponse::Error { message, .. } => Err(ApiError::bad_gateway(message)),
+        _ => Err(ApiError::bad_gateway(
+            "bridge rejected application-session stop",
+        )),
+    }
+}
+
 async fn stop_application_session(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -2239,6 +2274,148 @@ mod tests {
     }
 
     struct ApiTestProvider;
+
+    #[tokio::test]
+    async fn stop_active_requires_auth_and_finishes_only_the_bridge_selected_play() {
+        use crate::activity::ActivityEntry;
+        use hearthdeck_protocol::BridgeErrorCode;
+
+        for (reply, expected_status, expected_message) in [
+            (
+                BridgeResponse::StopAccepted {
+                    session_id: "selected".to_owned(),
+                },
+                StatusCode::ACCEPTED,
+                None,
+            ),
+            (
+                BridgeResponse::Error {
+                    code: BridgeErrorCode::NotFound,
+                    message: "no active session".to_owned(),
+                },
+                StatusCode::NOT_FOUND,
+                Some("no active session"),
+            ),
+            (
+                BridgeResponse::Error {
+                    code: BridgeErrorCode::LaunchFailed,
+                    message: "systemd stop failed".to_owned(),
+                },
+                StatusCode::BAD_GATEWAY,
+                Some("systemd stop failed"),
+            ),
+            (
+                BridgeResponse::Health {
+                    version: "unexpected".to_owned(),
+                },
+                StatusCode::BAD_GATEWAY,
+                Some("bridge rejected application-session stop"),
+            ),
+        ] {
+            let temporary = tempfile::tempdir().unwrap();
+            let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+                .await
+                .unwrap();
+            database.migrate().await.unwrap();
+            let state = Arc::new(AppState::new(
+                Config {
+                    bind_address: "127.0.0.1:38400".parse().unwrap(),
+                    local_admin_address: "127.0.0.1:38401".parse().unwrap(),
+                    database_path: temporary.path().join("hearthdeck.db"),
+                    bridge_socket_path: temporary.path().join("bridge.sock"),
+                    lan_enabled: false,
+                    tls: None,
+                    romm: crate::config::RommPaths::resolve(None, None, None),
+                },
+                database,
+            ));
+            for id in ["selected", "other"] {
+                state
+                    .activity
+                    .session_started(
+                        ActivityEntry {
+                            id: id.to_owned(),
+                            title: id.to_owned(),
+                            icon: None,
+                            categories: Vec::new(),
+                            kind: Some("game".to_owned()),
+                            source: "test".to_owned(),
+                            metadata: serde_json::Value::Null,
+                        },
+                        &ApplicationSession {
+                            id: id.to_owned(),
+                            source_id: "test".to_owned(),
+                            application_id: id.to_owned(),
+                            state: ApplicationSessionState::Running,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            let (status, _) = response_json(
+                router(state.clone()),
+                Request::post("/v1/sessions/active/stop")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+            assert_eq!(state.activity.running_sessions().await.unwrap().len(), 2);
+
+            let (_, pairing) = response_json(
+                local_router(state.clone()),
+                Request::post("/v1/pairing").body(Body::empty()).unwrap(),
+            )
+            .await;
+            let (_, paired) = response_json(
+                router(state.clone()),
+                Request::post("/v1/pairing/complete")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "code": pairing["code"], "client_name": "stop-active-test"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await;
+            let token = paired["token"].as_str().unwrap();
+            let bridge =
+                spawn_fake_bridge(state.config.bridge_socket_path.clone(), move |request| {
+                    assert!(matches!(
+                        request,
+                        BridgeRequest::StopActiveApplicationSession
+                    ));
+                    reply
+                });
+            let response = router(state.clone())
+                .oneshot(
+                    Request::post("/v1/sessions/active/stop")
+                        .header("authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected_status);
+            timeout(Duration::from_secs(5), bridge)
+                .await
+                .unwrap()
+                .unwrap();
+            let running = state.activity.running_sessions().await.unwrap();
+            assert_eq!(
+                running.contains(&"selected".to_owned()),
+                expected_status != StatusCode::ACCEPTED
+            );
+            assert!(running.contains(&"other".to_owned()));
+            if let Some(message) = expected_message {
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(json["error"], message);
+            }
+        }
+    }
 
     #[async_trait]
     impl DiscoveryProvider for ApiTestProvider {

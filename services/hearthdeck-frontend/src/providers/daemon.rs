@@ -1,16 +1,14 @@
 use futures::{StreamExt, future::join_all, stream};
 use hearthdeck_protocol::{ApplicationSession, InputProfile};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     collections::BTreeMap,
     env,
     hash::{DefaultHasher, Hasher},
     io::{Read, Write},
     path::PathBuf,
-    sync::Arc,
     time::Duration,
 };
-use tokio::sync::OnceCell;
 
 use super::{catalog_item_to_library_item, library_icon};
 use crate::icon_cache::{self, IconReference};
@@ -53,25 +51,7 @@ pub struct DaemonConfig {
 /// Client for communicating with the HearthDeck daemon API.
 #[derive(Clone)]
 pub struct DaemonClient {
-    config: DaemonConfig,
-    http: reqwest::Client,
-    token: Arc<OnceCell<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PairingCodeResponse {
-    code: String,
-}
-
-#[derive(Debug, Serialize)]
-struct CompletePairingRequest<'a> {
-    code: &'a str,
-    client_name: &'a str,
-}
-
-#[derive(Debug, Deserialize)]
-struct PairingCompleteResponse {
-    token: String,
+    transport: hearthdeck_client::Client,
 }
 
 pub use hearthdeck_protocol::{
@@ -246,27 +226,29 @@ impl DaemonClient {
                 reqwest::Client::new()
             });
         Self {
-            config,
-            http,
-            token: Arc::new(OnceCell::new()),
+            transport: hearthdeck_client::Client::new(
+                http,
+                config.base_url,
+                config.token,
+                "hearthdeck-cosmic-frontend",
+            ),
         }
     }
 
     /// Returns the base URL for API requests.
     fn api_url(&self, path: &str) -> String {
-        format!("{}{}", self.config.base_url, path)
+        self.transport.api_url(path)
     }
 
     pub fn base_url(&self) -> &str {
-        &self.config.base_url
+        self.transport.base_url()
     }
 
     /// Opens the daemon's change feed (`GET /v1/events`).
     pub async fn connect_events(&self) -> Result<EventStream, DaemonError> {
         use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest};
 
-        let mut url =
-            url::Url::parse(&self.config.base_url).map_err(DaemonError::InvalidBaseUrl)?;
+        let mut url = url::Url::parse(self.base_url()).map_err(DaemonError::InvalidBaseUrl)?;
         let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
         url.set_scheme(scheme).map_err(|()| {
             DaemonError::Events(tungstenite::Error::Url(
@@ -295,87 +277,19 @@ impl DaemonClient {
     /// Gateway". Falls back to the status code when the body is not the
     /// daemon's error JSON (proxy errors, non-daemon endpoints).
     async fn http_error(response: reqwest::Response) -> DaemonError {
-        let status = response.status();
-        match response.bytes().await {
-            Ok(body) => daemon_error_from_body(status, &body),
-            Err(_) => DaemonError::UnexpectedStatus(status),
-        }
+        hearthdeck_client::response_error(response).await.into()
     }
 
     /// Returns authorization headers for API requests.
     async fn auth_headers(&self) -> Result<reqwest::header::HeaderMap, DaemonError> {
-        let token = self
-            .token
-            .get_or_try_init(|| async {
-                if self.config.token.is_empty() {
-                    self.pair_local().await
-                } else {
-                    Ok(self.config.token.clone())
-                }
-            })
-            .await?;
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
-                .map_err(DaemonError::InvalidToken)?,
-        );
-        Ok(headers)
-    }
-
-    async fn pair_local(&self) -> Result<String, DaemonError> {
-        let mut api_url =
-            url::Url::parse(&self.config.base_url).map_err(DaemonError::InvalidBaseUrl)?;
-        if !matches!(api_url.host_str(), Some("127.0.0.1" | "localhost" | "::1")) {
-            return Err(DaemonError::PairingRequiresLoopback);
-        }
-        let mut admin_url = api_url.clone();
-        admin_url
-            .set_port(Some(38401))
-            .map_err(|_| DaemonError::PairingRequiresLoopback)?;
-        admin_url.set_path("/v1/pairing");
-        admin_url.set_query(None);
-
-        let response = self
-            .http
-            .post(admin_url.clone())
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-        let pairing = response
-            .json::<PairingCodeResponse>()
-            .await
-            .map_err(DaemonError::Deserialization)?;
-
-        api_url.set_path("/v1/pairing/complete");
-        api_url.set_query(None);
-        let response = self
-            .http
-            .post(api_url)
-            .json(&CompletePairingRequest {
-                code: &pairing.code,
-                client_name: "hearthdeck-cosmic-frontend",
-            })
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-        response
-            .json::<PairingCompleteResponse>()
-            .await
-            .map(|pairing| pairing.token)
-            .map_err(DaemonError::Deserialization)
+        self.transport.auth_headers().await.map_err(Into::into)
     }
 
     /// Checks if the daemon is reachable and returns its health status.
     pub async fn health(&self) -> Result<HealthResponse, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .get(self.api_url("/v1/health"))
             .send()
             .await
@@ -391,7 +305,8 @@ impl DaemonClient {
     /// Fetches the full catalog from the daemon.
     pub async fn fetch_library(&self) -> Result<Vec<CatalogItem>, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .get(self.api_url("/v1/library"))
             .headers(self.auth_headers().await?)
             .send()
@@ -408,7 +323,8 @@ impl DaemonClient {
     /// Reads the categorization scan's state and its last report.
     pub async fn categorization(&self) -> Result<CategorizationSnapshot, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .get(self.api_url("/v1/categorization"))
             .headers(self.auth_headers().await?)
             .send()
@@ -441,7 +357,8 @@ impl DaemonClient {
     /// Removes the dashboard rails the model published.
     pub async fn remove_categorization_collections(&self) -> Result<(), DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .delete(self.api_url("/v1/categorization/collections"))
             .headers(self.auth_headers().await?)
             .send()
@@ -467,7 +384,8 @@ impl DaemonClient {
     /// A POST that carries nothing and answers nothing.
     async fn post_empty(&self, path: &str) -> Result<(), DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .post(self.api_url(path))
             .headers(self.auth_headers().await?)
             .send()
@@ -490,7 +408,8 @@ impl DaemonClient {
         input_profile: InputProfile,
     ) -> Result<ApplicationSession, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .post(self.api_url(&format!("/v1/launch/{}", item_id)))
             .query(&[("input_profile", input_profile)])
             .headers(self.auth_headers().await?)
@@ -508,7 +427,8 @@ impl DaemonClient {
     /// Gets the currently active application session.
     pub async fn active_session(&self) -> Result<Option<ApplicationSession>, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .get(self.api_url("/v1/sessions/active"))
             .headers(self.auth_headers().await?)
             .send()
@@ -525,7 +445,8 @@ impl DaemonClient {
     /// Lists available retro consoles from RomM, caching their artwork.
     pub async fn list_retro_consoles(&self) -> Result<Vec<RetroConsole>, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .get(self.api_url("/v1/retro/consoles"))
             .headers(self.auth_headers().await?)
             .send()
@@ -579,7 +500,8 @@ impl DaemonClient {
         let url = format!("{}?{}", self.api_url("/v1/retro/roms"), params.join("&"));
 
         let response = self
-            .http
+            .transport
+            .http()
             .get(&url)
             .headers(self.auth_headers().await?)
             .send()
@@ -603,7 +525,8 @@ impl DaemonClient {
         }
 
         let response = self
-            .http
+            .transport
+            .http()
             .get(&url)
             .headers(self.auth_headers().await?)
             .send()
@@ -674,7 +597,8 @@ impl DaemonClient {
             let mut url = url::Url::parse(&self.api_url("/v1/retro/assets")).ok()?;
             url.query_pairs_mut().append_pair("path", path);
             let response = self
-                .http
+                .transport
+                .http()
                 .get(url)
                 .headers(self.auth_headers().await.ok()?)
                 .send()
@@ -704,7 +628,8 @@ impl DaemonClient {
     /// locally, so the details screen paints without a second round trip.
     pub async fn retro_rom_details(&self, rom_id: i64) -> Result<RetroDetails, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .get(self.api_url(&format!("/v1/retro/roms/{rom_id}")))
             .headers(self.auth_headers().await?)
             .send()
@@ -758,7 +683,8 @@ impl DaemonClient {
     /// and drawing a generic mark for anything its library did not also hold.
     pub async fn list_collections(&self) -> Result<Vec<Collection>, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .get(self.api_url("/v1/collections"))
             .headers(self.auth_headers().await?)
             .send()
@@ -866,7 +792,8 @@ impl DaemonClient {
         item: &CollectionItem,
     ) -> Result<Collection, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .post(self.api_url(&format!("/v1/collections/{slug}/items")))
             .json(&serde_json::json!({
                 "item_id": item.item_id,
@@ -893,7 +820,8 @@ impl DaemonClient {
         item_id: &str,
     ) -> Result<Collection, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .delete(self.api_url(&format!("/v1/collections/{slug}/items")))
             .json(&serde_json::json!({ "item_id": item_id }))
             .headers(self.auth_headers().await?)
@@ -914,7 +842,8 @@ impl DaemonClient {
     /// password: the daemon does not accept one, so there is none to send.
     pub async fn start_stremio_link(&self) -> Result<StremioLinkOffer, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .post(self.api_url("/v1/stremio/link"))
             .headers(self.auth_headers().await?)
             .send()
@@ -934,7 +863,8 @@ impl DaemonClient {
     /// crosses this call: it only asks what the daemon found.
     pub async fn poll_stremio_link(&self) -> Result<StremioLink, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .get(self.api_url("/v1/stremio/link"))
             .headers(self.auth_headers().await?)
             .send()
@@ -951,7 +881,8 @@ impl DaemonClient {
     /// The linked Stremio account, or `None` when none is linked.
     pub async fn stremio_connection(&self) -> Result<Option<StremioConnection>, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .get(self.api_url("/v1/stremio/settings"))
             .headers(self.auth_headers().await?)
             .send()
@@ -967,7 +898,8 @@ impl DaemonClient {
 
     pub async fn romm_settings(&self) -> Result<Option<RommSettings>, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .get(self.api_url("/v1/retro/settings"))
             .headers(self.auth_headers().await?)
             .send()
@@ -988,7 +920,8 @@ impl DaemonClient {
         password: &str,
     ) -> Result<RommSettings, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .post(self.api_url("/v1/retro/login"))
             .headers(self.auth_headers().await?)
             .json(&serde_json::json!({
@@ -1008,7 +941,8 @@ impl DaemonClient {
     /// Asks the daemon for a RomM device code the user approves on a phone.
     pub async fn start_romm_link(&self, base_url: &str) -> Result<RommLinkOffer, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .post(self.api_url("/v1/retro/link"))
             .headers(self.auth_headers().await?)
             .json(&serde_json::json!({ "base_url": base_url }))
@@ -1023,7 +957,8 @@ impl DaemonClient {
 
     pub async fn poll_romm_link(&self) -> Result<RommLink, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .get(self.api_url("/v1/retro/link"))
             .headers(self.auth_headers().await?)
             .send()
@@ -1037,7 +972,8 @@ impl DaemonClient {
 
     pub async fn clear_romm_settings(&self) -> Result<(), DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .delete(self.api_url("/v1/retro/settings"))
             .headers(self.auth_headers().await?)
             .send()
@@ -1052,7 +988,8 @@ impl DaemonClient {
     /// Unlinks the account: the session and the rows it published go together.
     pub async fn unlink_stremio(&self) -> Result<(), DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .delete(self.api_url("/v1/stremio/settings"))
             .headers(self.auth_headers().await?)
             .send()
@@ -1085,7 +1022,8 @@ impl DaemonClient {
         favorite: bool,
     ) -> Result<bool, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .post(self.api_url(&format!("/v1/retro/roms/{rom_id}/favorite")))
             .json(&serde_json::json!({ "favorite": favorite }))
             .headers(self.auth_headers().await?)
@@ -1112,7 +1050,8 @@ impl DaemonClient {
         backlogged: bool,
     ) -> Result<bool, DaemonError> {
         let response = self
-            .http
+            .transport
+            .http()
             .post(self.api_url(&format!("/v1/retro/roms/{rom_id}/backlog")))
             .json(&serde_json::json!({ "backlogged": backlogged }))
             .headers(self.auth_headers().await?)
@@ -1234,21 +1173,17 @@ pub enum DaemonError {
     Events(tokio_tungstenite::tungstenite::Error),
 }
 
-/// Maps a daemon error-response body to a [`DaemonError`], surfacing the
-/// `{"error": ...}` message the daemon attaches to launch failures (e.g. a
-/// bridge rejection reason) instead of dropping it for the bare status code.
-fn daemon_error_from_body(status: reqwest::StatusCode, body: &[u8]) -> DaemonError {
-    let message = serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|body| {
-            body.get("error")
-                .and_then(serde_json::Value::as_str)
-                .map(|message| message.trim().to_owned())
-                .filter(|message| !message.is_empty())
-        });
-    match message {
-        Some(message) => DaemonError::Api { status, message },
-        None => DaemonError::UnexpectedStatus(status),
+impl From<hearthdeck_client::Error> for DaemonError {
+    fn from(error: hearthdeck_client::Error) -> Self {
+        match error {
+            hearthdeck_client::Error::Connection(error) => Self::Connection(error),
+            hearthdeck_client::Error::UnexpectedStatus(status) => Self::UnexpectedStatus(status),
+            hearthdeck_client::Error::Api { status, message } => Self::Api { status, message },
+            hearthdeck_client::Error::Deserialization(error) => Self::Deserialization(error),
+            hearthdeck_client::Error::InvalidBaseUrl(error) => Self::InvalidBaseUrl(error),
+            hearthdeck_client::Error::InvalidToken(error) => Self::InvalidToken(error),
+            hearthdeck_client::Error::PairingRequiresLoopback => Self::PairingRequiresLoopback,
+        }
     }
 }
 
@@ -1422,8 +1357,8 @@ mod tests {
     use super::{
         CatalogItem, Collection, CollectionItem, DaemonClient, DaemonConfig, DaemonError,
         DaemonEvent, RetroGame, RetroRomVersion, belongs_in_the_app_library, cache_file_name,
-        catalog_item_to_library_item, daemon_error_from_body, image_extension,
-        retro_game_to_library_item, retro_rom_query_params,
+        catalog_item_to_library_item, image_extension, retro_game_to_library_item,
+        retro_rom_query_params,
     };
 
     #[tokio::test]
@@ -1695,31 +1630,6 @@ mod tests {
                 "metadata: {metadata}"
             );
         }
-    }
-
-    #[test]
-    fn daemon_error_bodies_surface_the_bridge_launch_reason() {
-        let status = reqwest::StatusCode::BAD_GATEWAY;
-        let body = br#"{"error":"input compatibility service failed to start"}"#;
-
-        assert_eq!(
-            daemon_error_from_body(status, body).to_string(),
-            "502 Bad Gateway: input compatibility service failed to start"
-        );
-    }
-
-    #[test]
-    fn non_daemon_error_bodies_fall_back_to_the_status_code() {
-        let status = reqwest::StatusCode::BAD_GATEWAY;
-
-        assert!(matches!(
-            daemon_error_from_body(status, b"<html>proxy error</html>"),
-            DaemonError::UnexpectedStatus(reqwest::StatusCode::BAD_GATEWAY)
-        ));
-        assert!(matches!(
-            daemon_error_from_body(status, b""),
-            DaemonError::UnexpectedStatus(reqwest::StatusCode::BAD_GATEWAY)
-        ));
     }
 
     #[test]

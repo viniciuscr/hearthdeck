@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "hearthdeck-protocol",
+  "hearthdeck-client",
   "hearthdeck-observability",
   "hearthdeck-daemon",
   "hearthdeck-bridge",
