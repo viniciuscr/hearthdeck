@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::app_group::SectionUi;
 use crate::form_factor::FormFactor;
 use crate::icon_cache::{self, IconReference};
-use crate::library_item::LibraryItem;
+use crate::library_item::{ConsoleMetadata, LibraryItem};
 use cosmic::desktop::fde;
 use hearthdeck_protocol::RetroRomVersion;
 
@@ -25,6 +25,7 @@ pub struct GameRecord {
     pub store: Option<String>,
     pub install_source: Option<String>,
     pub modeled_form: Option<FormFactor>,
+    pub console: Option<ConsoleMetadata>,
     pub sibling_roms: Vec<RetroRomVersion>,
     pub version_label: Option<String>,
 }
@@ -69,6 +70,7 @@ impl GameRecord {
             form_factor: None,
             store: if is_game { self.store } else { None },
             sources: Vec::new(),
+            console: self.console,
         };
         crate::app_group::set_sources(&mut entry, self.install_source.as_deref());
         if crate::app_group::Section::Applications.matches(&entry) {
@@ -98,6 +100,7 @@ mod tests {
             store: None,
             install_source: None,
             modeled_form: None,
+            console: None,
             sibling_roms: Vec::new(),
             version_label: None,
         }

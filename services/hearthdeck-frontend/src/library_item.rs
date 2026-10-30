@@ -4,6 +4,14 @@ use cosmic::desktop::fde::IconSource;
 /// Compatibility encoding for saved store filters, not an item category.
 pub const STORE_FILTER_PREFIX: &str = "hearthdeck-store:";
 pub const SOURCE_FILTER_PREFIX: &str = "hearthdeck-source:";
+pub const CONSOLE_FILTER_PREFIX: &str = "hearthdeck-console:";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsoleMetadata {
+    pub platform_id: i64,
+    pub genres: Vec<String>,
+    pub regions: Vec<String>,
+}
 
 /// A library entry owned by Hearthdeck, not the desktop shell.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,12 +25,36 @@ pub struct LibraryItem {
     pub form_factor: Option<FormFactor>,
     pub store: Option<String>,
     pub sources: Vec<String>,
+    pub console: Option<ConsoleMetadata>,
 }
 
 impl LibraryItem {
     /// Matches saved category filters against typed metadata when applicable.
     #[must_use]
     pub fn matches_category(&self, category: &str) -> bool {
+        if let Some((prefix, value)) = category.split_once(':') {
+            match prefix.to_ascii_lowercase().as_str() {
+                "hearthdeck-console" => {
+                    return self
+                        .console
+                        .as_ref()
+                        .is_some_and(|console| console.platform_id.to_string() == value);
+                }
+                "hearthdeck-genre" | "hearthdeck-region" => {
+                    return self.console.as_ref().is_some_and(|console| {
+                        let values = if prefix.eq_ignore_ascii_case("hearthdeck-genre") {
+                            &console.genres
+                        } else {
+                            &console.regions
+                        };
+                        values
+                            .iter()
+                            .any(|entry| entry.to_lowercase() == value.to_lowercase())
+                    });
+                }
+                _ => {}
+            }
+        }
         if category
             .get(..STORE_FILTER_PREFIX.len())
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case(STORE_FILTER_PREFIX))
@@ -63,7 +95,19 @@ impl LibraryItem {
 
     #[must_use]
     pub fn matches_facet(&self, value: &str) -> bool {
-        if let Some(store) = value.strip_prefix(STORE_FILTER_PREFIX) {
+        if let Some(platform) = value.strip_prefix(CONSOLE_FILTER_PREFIX) {
+            self.console
+                .as_ref()
+                .is_some_and(|console| console.platform_id.to_string() == platform)
+        } else if let Some(genre) = value.strip_prefix("hearthdeck-genre:") {
+            self.console
+                .as_ref()
+                .is_some_and(|console| console.genres.iter().any(|value| value == genre))
+        } else if let Some(region) = value.strip_prefix("hearthdeck-region:") {
+            self.console
+                .as_ref()
+                .is_some_and(|console| console.regions.iter().any(|value| value == region))
+        } else if let Some(store) = value.strip_prefix(STORE_FILTER_PREFIX) {
             self.store.as_deref() == Some(store)
         } else if let Some(source) = value.strip_prefix(SOURCE_FILTER_PREFIX) {
             self.sources.iter().any(|value| value == source)
@@ -87,13 +131,71 @@ impl Default for LibraryItem {
             form_factor: None,
             store: None,
             sources: Vec::new(),
+            console: None,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::LibraryItem;
+    use super::{ConsoleMetadata, LibraryItem};
+
+    #[test]
+    fn console_filters_use_typed_metadata_and_keep_saved_matching_rules() {
+        let item = LibraryItem {
+            console: Some(ConsoleMetadata {
+                platform_id: 7,
+                genres: vec!["Rôle".to_owned(), "Action".to_owned()],
+                regions: vec!["Japan".to_owned(), "USA".to_owned()],
+            }),
+            categories: vec![
+                "hearthdeck-console:9".to_owned(),
+                "hearthdeck-genre:Other".to_owned(),
+                "hearthdeck-region:Europe".to_owned(),
+            ],
+            ..LibraryItem::default()
+        };
+        for value in [
+            "HEARTHDECK-CONSOLE:7",
+            "hearthdeck-genre:RÔLE",
+            "hearthdeck-genre:action",
+            "HEARTHDECK-REGION:JAPAN",
+            "hearthdeck-region:usa",
+        ] {
+            assert!(item.matches_category(value), "{value}");
+        }
+        for value in [
+            "hearthdeck-console:9",
+            "hearthdeck-console:07",
+            "hearthdeck-console:invalid",
+            "hearthdeck-genre:Other",
+            "hearthdeck-region:Europe",
+        ] {
+            assert!(!item.matches_category(value), "{value}");
+            assert!(!item.matches_facet(value), "{value}");
+        }
+        for value in [
+            "hearthdeck-console:7",
+            "hearthdeck-genre:Rôle",
+            "hearthdeck-genre:Action",
+            "hearthdeck-region:Japan",
+            "hearthdeck-region:USA",
+        ] {
+            assert!(item.matches_facet(value), "{value}");
+            assert!(!LibraryItem::default().matches_category(value), "{value}");
+            assert!(!LibraryItem::default().matches_facet(value), "{value}");
+        }
+        assert!(!item.matches_facet("hearthdeck-genre:rôle"));
+        assert!(!item.matches_facet("hearthdeck-region:japan"));
+        let mut changed = item.clone();
+        changed
+            .console
+            .as_mut()
+            .expect("console metadata")
+            .genres
+            .push("Puzzle".to_owned());
+        assert_ne!(item, changed, "catalog refresh must see metadata changes");
+    }
 
     #[test]
     fn store_filters_use_the_typed_value_not_conflicting_category_text() {

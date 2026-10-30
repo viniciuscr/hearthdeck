@@ -1,7 +1,9 @@
 use crate::config::APP_ID;
 use crate::fl;
 use crate::form_factor::{self, FormFactor};
-use crate::library_item::{LibraryItem, SOURCE_FILTER_PREFIX, STORE_FILTER_PREFIX};
+use crate::library_item::{
+    CONSOLE_FILTER_PREFIX, LibraryItem, SOURCE_FILTER_PREFIX, STORE_FILTER_PREFIX,
+};
 use crate::providers::filter::{Facet, FacetOption};
 use cosmic::cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use cosmic::cosmic_config::{
@@ -12,30 +14,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-const CONSOLE_CATEGORY_PREFIX: &str = "hearthdeck-console:";
-
 /// The name the Applications section's Desktop tab is stored under, which
 /// [`AppGroup::name`] shows in the user's language. Its sibling, the Couch view,
 /// is the section's "all" tab rather than a stored one.
 const DESKTOP_TAB_NAME: &str = "hearthdeck-desktop";
 
 pub fn romm_console_category(platform_id: i64) -> String {
-    format!("{CONSOLE_CATEGORY_PREFIX}{platform_id}")
-}
-
-/// RomM metadata that the console grid can filter on rides on each record as a
-/// namespaced category, the same way stores ([`AppLibraryConfig::sync_category_groups`])
-/// and consoles (above) do. These values still use the saved filter format;
-/// replacing the desktop-shell model does not migrate the user's groups.
-const GENRE_FACET_PREFIX: &str = "hearthdeck-genre:";
-const REGION_FACET_PREFIX: &str = "hearthdeck-region:";
-
-pub fn romm_genre_category(genre: &str) -> String {
-    format!("{GENRE_FACET_PREFIX}{genre}")
-}
-
-pub fn romm_region_category(region: &str) -> String {
-    format!("{REGION_FACET_PREFIX}{region}")
+    format!("{CONSOLE_FILTER_PREFIX}{platform_id}")
 }
 
 /// The source label a streaming client carries on top of its origin. What kind of
@@ -44,8 +29,7 @@ pub fn romm_region_category(region: &str) -> String {
 pub const STREAMING_SOURCE: &str = "streaming";
 
 /// A RomM metadata field the Console Games grid can be filtered by. Each
-/// variant owns the record-category prefix carrying its values, so adding a
-/// filter option is one variant plus one tag on the record.
+/// variant maps to a daemon filter parameter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RommFacet {
     Genre,
@@ -250,7 +234,7 @@ impl AppGroup {
         };
         categories.iter().find_map(|category| {
             category
-                .strip_prefix(CONSOLE_CATEGORY_PREFIX)
+                .strip_prefix(CONSOLE_FILTER_PREFIX)
                 .and_then(|id| id.parse().ok())
         })
     }
@@ -485,11 +469,7 @@ pub(crate) fn set_sources(entry: &mut LibraryItem, origin: Option<&str>) {
 /// Returns true when the entry looks like a console emulator, identified by
 /// its ID or Exec string.
 fn is_emulator_entry(entry: &LibraryItem) -> bool {
-    if entry
-        .categories
-        .iter()
-        .any(|category| category.starts_with(CONSOLE_CATEGORY_PREFIX))
-    {
+    if entry.console.is_some() {
         return true;
     }
     const EMULATORS: &[&str] = &[
@@ -828,6 +808,16 @@ mod tests {
             exec: None,
             icon: IconSource::Name(String::new()),
             form_factor: None,
+            console: categories.iter().find_map(|value| {
+                value
+                    .strip_prefix("hearthdeck-console:")
+                    .and_then(|id| id.parse().ok())
+                    .map(|platform_id| crate::library_item::ConsoleMetadata {
+                        platform_id,
+                        genres: Vec::new(),
+                        regions: Vec::new(),
+                    })
+            }),
             store: categories
                 .iter()
                 .find_map(|value| value.strip_prefix("hearthdeck-store:"))
@@ -841,6 +831,7 @@ mod tests {
                 .iter()
                 .filter(|value| !value.starts_with("hearthdeck-store:"))
                 .filter(|value| !value.starts_with("hearthdeck-source:"))
+                .filter(|value| !value.starts_with("hearthdeck-console:"))
                 .map(|category| (*category).into())
                 .collect(),
         };
@@ -1350,5 +1341,43 @@ mod tests {
         );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, "a");
+    }
+
+    #[test]
+    fn saved_console_groups_search_and_facets_match_without_category_tags() {
+        let group: AppGroup = serde_json::from_value(serde_json::json!({
+            "name": "SNES",
+            "icon": "folder-symbolic",
+            "filter": {"Categories": {
+                "categories": ["hearthdeck-console:7"],
+                "include": [],
+                "exclude": []
+            }}
+        }))
+        .expect("existing group format");
+        let game = Arc::new(LibraryItem {
+            id: "romm:42".to_owned(),
+            categories: vec!["Game".to_owned()],
+            console: Some(crate::library_item::ConsoleMetadata {
+                platform_id: 7,
+                genres: vec!["RPG".to_owned()],
+                regions: vec!["Japan".to_owned()],
+            }),
+            ..LibraryItem::default()
+        });
+        assert!(Section::ConsoleGames.matches(&game));
+        assert!(!Section::PcGames.matches(&game));
+        assert!(group.matches(&game));
+        assert_eq!(group.romm_platform_id(), Some(7));
+        let config = AppLibraryConfig::default();
+        let found = config.filtered_by_facets(
+            Section::ConsoleGames,
+            None,
+            "HEARTHDECK-GENRE:rpg",
+            &[game],
+            &BTreeMap::from([("region".to_owned(), "hearthdeck-region:Japan".to_owned())]),
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "romm:42");
     }
 }
