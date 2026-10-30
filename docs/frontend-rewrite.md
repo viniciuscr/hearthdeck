@@ -154,17 +154,22 @@ The library, filters, grid and console cache use Hearthdeck's `LibraryItem`,
 not COSMIC's `DesktopEntryData`. The model keeps the fields those consumers
 actually read; desktop actions, MIME types, working directories and local
 process-launch flags are not part of it. Launches still go through the daemon.
-Form factor is a typed optional field on `LibraryItem`; rules supply the default,
-model verdicts can promote to Couch,
-and user overrides win. Existing saved `hearthdeck-form:*` filters are matched
+The daemon serves a required typed `classification` on every catalog item:
+section, streaming status and optional form factor. Its deterministic rules run
+without a model scan and share the streaming/emulator tables with heuristic
+categorization. The frontend no longer matches app names to classify them.
+Daemon rules supply the form default, model verdicts can promote to Couch,
+and local user overrides win. Frontend and daemon must be updated together;
+an old daemon response fails deserialization instead of guessing placement.
+Existing saved `hearthdeck-form:*` filters are matched
 against that field, not tags on each item. PC-game stores also live in a typed
 `store` field; tabs and facets derive from it. Saved `hearthdeck-store:*` values
 remain compatible, including case-insensitive group/search matching and exact
 facet matching. Install-source and streaming labels use a typed `sources` list;
 source facets and saved `hearthdeck-source:*` filters read that list with the
 same matching rules. Custom source strings stay open-ended. Console items carry
-optional `ConsoleMetadata` with a platform ID, genres and regions; section
-classification and filtering read it directly. Saved `hearthdeck-console:*`,
+optional `ConsoleMetadata` with a platform ID, genres and regions; filtering
+reads it directly and retro items explicitly belong to Console Games. Saved `hearthdeck-console:*`,
 `hearthdeck-genre:*` and `hearthdeck-region:*` values stay compatible without
 encoding that metadata in item categories.
 

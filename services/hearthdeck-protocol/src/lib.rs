@@ -17,6 +17,8 @@
 use serde::{Deserialize, Serialize};
 
 pub mod categorization;
+pub mod classification;
+pub use classification::{CatalogClassification, FormFactor};
 pub mod paths;
 pub mod sources;
 pub use categorization::{
@@ -287,6 +289,7 @@ pub struct CatalogItem {
     pub launch_id: Option<String>,
     pub icon: Option<String>,
     pub metadata: serde_json::Value,
+    pub classification: CatalogClassification,
 }
 
 /// One selectable version of a retro game, as offered in the version picker.
@@ -791,6 +794,7 @@ mod tests {
             launch_id: None,
             icon: None,
             metadata: serde_json::Value::Null,
+            classification: crate::CatalogClassification::default(),
         };
         let value = serde_json::to_value(item).unwrap();
         for field in [
@@ -801,6 +805,7 @@ mod tests {
             "launch_id",
             "icon",
             "metadata",
+            "classification",
         ] {
             assert!(value.get(field).is_some(), "catalog item lost `{field}`");
         }

@@ -67,12 +67,23 @@ fn shell() -> App {
     }
 }
 
-/// A record as a provider hands it over: an application is tagged with its form
-/// factor on the way in.
+/// Display fixtures with the section and form a daemon response supplies.
 fn entry(id: &str, categories: &[&str]) -> Arc<LibraryItem> {
     let mut entry = LibraryItem {
         id: id.to_owned(),
         name: id.to_owned(),
+        section: if categories.contains(&"Game") {
+            if categories
+                .iter()
+                .any(|value| value.starts_with("hearthdeck-console:"))
+            {
+                Section::ConsoleGames
+            } else {
+                Section::PcGames
+            }
+        } else {
+            Section::Applications
+        },
         categories: categories
             .iter()
             .filter(|value| !value.starts_with("hearthdeck-store:"))
@@ -96,7 +107,7 @@ fn entry(id: &str, categories: &[&str]) -> Arc<LibraryItem> {
         ..LibraryItem::default()
     };
     if Section::Applications.matches(&entry) {
-        crate::form_factor::tag(&mut entry);
+        entry.form_factor = Some(crate::form_factor::FormFactor::Desktop);
     }
     Arc::new(entry)
 }

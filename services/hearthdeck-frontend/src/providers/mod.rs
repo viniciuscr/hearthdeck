@@ -3,12 +3,10 @@ pub mod filter;
 
 use std::path::PathBuf;
 
-use crate::app_group::SectionUi;
-use crate::form_factor::FormFactor;
 use crate::icon_cache::{self, IconReference};
 use crate::library_item::LibraryItem;
 use cosmic::desktop::fde;
-use hearthdeck_protocol::CatalogItem;
+use hearthdeck_protocol::{CatalogItem, Section};
 
 pub(super) fn library_icon(icon: Option<&str>, fallback: &str) -> fde::IconSource {
     match icon.and_then(icon_cache::classify) {
@@ -44,9 +42,7 @@ pub(super) fn catalog_item_to_library_item(item: CatalogItem) -> LibraryItem {
     {
         categories.push(store.to_owned());
     }
-    let is_game = categories
-        .iter()
-        .any(|category| category.eq_ignore_ascii_case("game"));
+    let is_game = item.classification.section != Section::Applications;
     if is_game && let Some(store) = store {
         categories.retain(|category| !category.eq_ignore_ascii_case(store));
     }
@@ -63,6 +59,8 @@ pub(super) fn catalog_item_to_library_item(item: CatalogItem) -> LibraryItem {
         exec: item.launch_id,
         icon: library_icon(item.icon.as_deref(), fallback_icon),
         categories,
+        section: item.classification.section,
+        form_factor: item.classification.form_factor,
         store: if is_game {
             store.map(str::to_owned)
         } else {
@@ -70,25 +68,24 @@ pub(super) fn catalog_item_to_library_item(item: CatalogItem) -> LibraryItem {
         },
         ..LibraryItem::default()
     };
-    crate::app_group::set_sources(
-        &mut entry,
-        metadata.get("source").and_then(|value| value.as_str()),
-    );
-    if crate::app_group::Section::Applications.matches(&entry) {
-        crate::form_factor::tag(&mut entry);
-        // Model verdicts may promote an app but cannot demote a known couch app.
-        if metadata.get("form_factor").and_then(|value| value.as_str()) == Some("couch") {
-            crate::form_factor::set(&mut entry, FormFactor::Couch);
-        }
+    if let Some(origin) = metadata
+        .get("source")
+        .and_then(|value| value.as_str())
+        .filter(|source| !source.is_empty())
+    {
+        entry.sources.push(origin.to_owned());
+    }
+    if item.classification.streaming {
+        entry.sources.push("streaming".to_owned());
     }
     entry
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FormFactor, catalog_item_to_library_item};
+    use super::catalog_item_to_library_item;
     use cosmic::desktop::fde::IconSource;
-    use hearthdeck_protocol::CatalogItem;
+    use hearthdeck_protocol::{CatalogClassification, CatalogItem, FormFactor, Section};
 
     fn record(icon: Option<&str>) -> CatalogItem {
         CatalogItem {
@@ -99,6 +96,7 @@ mod tests {
             launch_id: None,
             icon: icon.map(str::to_owned),
             metadata: serde_json::json!({"categories": ["Utility"]}),
+            classification: CatalogClassification::default(),
         }
     }
 
@@ -109,6 +107,11 @@ mod tests {
         game.title = "Example".to_owned();
         game.launch_id = Some("legendary:example".to_owned());
         game.kind = "game".to_owned();
+        game.classification = CatalogClassification {
+            section: Section::PcGames,
+            streaming: false,
+            form_factor: None,
+        };
         game.metadata = serde_json::json!({"categories": ["Game", "Epic"], "store": "Epic"});
 
         let item = catalog_item_to_library_item(game);
@@ -169,6 +172,11 @@ mod tests {
 
         let mut game = record(Some(romm));
         game.kind = "game".to_owned();
+        game.classification = CatalogClassification {
+            section: Section::PcGames,
+            streaming: false,
+            form_factor: None,
+        };
         assert!(matches!(
             catalog_item_to_library_item(game).icon,
             IconSource::Name(name) if name == "applications-games"
@@ -179,6 +187,11 @@ mod tests {
     fn game_store_is_typed_without_a_category_tag() {
         let mut game = record(None);
         game.kind = "game".to_owned();
+        game.classification = CatalogClassification {
+            section: Section::PcGames,
+            streaming: false,
+            form_factor: None,
+        };
         game.metadata =
             serde_json::json!({"categories": ["Game", "Epic Games"], "store": "Epic Games"});
 
@@ -197,17 +210,12 @@ mod tests {
         assert_eq!(item.sources, ["flatpak"]);
     }
 
-    /// The model can say an application suits the couch, and only that: its
-    /// doubt about one the rules already know is no reason to demote it.
     #[test]
-    fn a_model_verdict_can_promote_an_application_but_never_demote_one() {
+    fn daemon_form_verdicts_are_not_reclassified_by_the_frontend() {
         let resolved_form = |form: FormFactor, id: &str| {
             let mut application = record(None);
             application.id = id.into();
-            application.metadata["form_factor"] = serde_json::json!(match form {
-                FormFactor::Couch => "couch",
-                FormFactor::Desktop => "desktop",
-            });
+            application.classification.form_factor = Some(form);
             catalog_item_to_library_item(application).form_factor
         };
 
@@ -217,7 +225,7 @@ mod tests {
         );
         assert_eq!(
             resolved_form(FormFactor::Desktop, "net.stremio.Stremio.desktop"),
-            Some(FormFactor::Couch)
+            Some(FormFactor::Desktop)
         );
     }
 
@@ -228,6 +236,7 @@ mod tests {
         let mut client = record(None);
         client.id = "desktop:net.stremio.Stremio.desktop".into();
         client.metadata = serde_json::json!({"categories": ["Video"], "source": "flatpak"});
+        client.classification.streaming = true;
 
         let item = catalog_item_to_library_item(client);
         assert_eq!(item.categories, ["Video"]);
@@ -243,5 +252,21 @@ mod tests {
             assert!(item.sources.is_empty());
             assert_eq!(item.categories, ["Utility"]);
         }
+    }
+
+    #[test]
+    fn daemon_classification_wins_over_names_and_category_text() {
+        let mut application = record(None);
+        application.id = "netflix-retroarch".to_owned();
+        application.metadata = serde_json::json!({"categories": ["Game"]});
+        application.classification = CatalogClassification {
+            section: Section::Applications,
+            streaming: false,
+            form_factor: Some(FormFactor::Desktop),
+        };
+        let item = catalog_item_to_library_item(application);
+        assert_eq!(item.section, Section::Applications);
+        assert!(item.sources.is_empty());
+        assert_eq!(item.form_factor, Some(FormFactor::Desktop));
     }
 }

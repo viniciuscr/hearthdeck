@@ -1165,6 +1165,7 @@ fn retro_game_to_library_item(game: RetroGame, icon: Option<String>) -> LibraryI
         exec: Some(game.id.to_string()),
         icon: library_icon(icon.as_deref(), "applications-games"),
         categories: vec!["Game".to_owned()],
+        section: hearthdeck_protocol::Section::ConsoleGames,
         console: Some(ConsoleMetadata {
             platform_id: game.platform_id,
             genres: game.genres,
@@ -1604,6 +1605,9 @@ mod tests {
                 "launch_id": null,
                 "icon": null,
                 "metadata": {},
+                "classification": {
+                    "section": "applications", "streaming": false, "form_factor": "desktop"
+                },
             }))
             .unwrap()
         };
@@ -1633,6 +1637,7 @@ mod tests {
             launch_id: Some("org.example.App.desktop".to_owned()),
             icon: None,
             metadata: serde_json::json!({ "categories": ["Utility"], "source": "flatpak" }),
+            classification: hearthdeck_protocol::CatalogClassification::default(),
         };
 
         let record = catalog_item_to_library_item(item);
@@ -1641,11 +1646,10 @@ mod tests {
     }
 
     #[test]
-    fn catalog_form_verdicts_keep_the_promotion_only_rule() {
-        for (id, verdict, expected) in [
-            ("org.gimp.GIMP", "couch", FormFactor::Couch),
-            ("net.stremio.Stremio", "desktop", FormFactor::Couch),
-            ("org.gimp.GIMP", "unknown", FormFactor::Desktop),
+    fn catalog_form_verdicts_come_from_the_daemon_not_local_name_rules() {
+        for (id, expected) in [
+            ("org.gimp.GIMP", FormFactor::Couch),
+            ("net.stremio.Stremio", FormFactor::Desktop),
         ] {
             let record = catalog_item_to_library_item(CatalogItem {
                 id: id.to_owned(),
@@ -1654,10 +1658,14 @@ mod tests {
                 kind: "application".to_owned(),
                 launch_id: None,
                 icon: None,
-                metadata: serde_json::json!({"source": "flatpak", "form_factor": verdict}),
+                metadata: serde_json::json!({"source": "flatpak", "form_factor": "couch"}),
+                classification: hearthdeck_protocol::CatalogClassification {
+                    form_factor: Some(expected),
+                    ..hearthdeck_protocol::CatalogClassification::default()
+                },
             });
 
-            assert_eq!(of(&record), expected, "id: {id}, verdict: {verdict}");
+            assert_eq!(of(&record), expected, "id: {id}");
             assert!(record.sources.contains(&"flatpak".to_owned()));
         }
     }
@@ -1677,6 +1685,7 @@ mod tests {
                 launch_id: None,
                 icon: None,
                 metadata: metadata.clone(),
+                classification: hearthdeck_protocol::CatalogClassification::default(),
             });
             assert_eq!(record.store, None, "metadata: {metadata}");
             assert!(record.sources.is_empty(), "metadata: {metadata}");
@@ -1726,6 +1735,7 @@ mod tests {
                 "categories": ["Utility", "Game"],
                 "summary": "A test application",
             }),
+            classification: hearthdeck_protocol::CatalogClassification::default(),
         };
 
         let record = catalog_item_to_library_item(item);
@@ -1750,6 +1760,11 @@ mod tests {
                 "store": "Epic",
                 "runner": "legendary",
             }),
+            classification: hearthdeck_protocol::CatalogClassification {
+                section: hearthdeck_protocol::Section::PcGames,
+                streaming: false,
+                form_factor: None,
+            },
         };
 
         let record = catalog_item_to_library_item(item);
@@ -1768,6 +1783,7 @@ mod tests {
             launch_id: None,
             icon: None,
             metadata: serde_json::json!({}),
+            classification: hearthdeck_protocol::CatalogClassification::default(),
         };
 
         let record = catalog_item_to_library_item(item);

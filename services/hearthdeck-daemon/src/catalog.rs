@@ -1,4 +1,6 @@
+use hearthdeck_ai::categorization::rules::classify_catalog;
 use hearthdeck_protocol::sources::HEROIC as HEROIC_SOURCE;
+use hearthdeck_protocol::{FormFactor, Section};
 use serde_json::{Map, Value, json};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use tracing::info;
@@ -210,12 +212,37 @@ fn catalog_item_from_row(row: SqliteRow) -> CatalogItem {
         metadata["form_factor"] = Value::String(form_factor);
     }
     let kind = served_kind(&source_id, &row.get::<String, _>("kind"));
+    let id: String = row.get("id");
+    let launch_id: Option<String> = row.get("launch_id");
+    let section = if !kind.eq_ignore_ascii_case("game") {
+        Section::Applications
+    } else if metadata
+        .get("categories")
+        .and_then(Value::as_array)
+        .is_some_and(|categories| {
+            categories
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|category| category.starts_with("hearthdeck-console:"))
+        })
+    {
+        Section::ConsoleGames
+    } else {
+        Section::PcGames
+    };
+    let modeled_form = match metadata.get("form_factor").and_then(Value::as_str) {
+        Some("couch") => Some(FormFactor::Couch),
+        Some("desktop") => Some(FormFactor::Desktop),
+        _ => None,
+    };
+    let classification = classify_catalog(&id, launch_id.as_deref(), section, modeled_form);
     CatalogItem {
-        id: row.get("id"),
+        id,
         source_id,
         title,
         kind,
-        launch_id: row.get("launch_id"),
+        launch_id,
+        classification,
         icon: row
             .get::<Option<String>, _>("icon")
             .or_else(|| metadata_string(enrichment.as_ref(), "icon")),
@@ -364,6 +391,147 @@ mod tests {
 
     use super::{CatalogRecord, CatalogStore, EnrichmentRecord, merged_metadata};
     use crate::database::Database;
+
+    #[tokio::test]
+    async fn every_catalog_read_serves_classification_without_a_model_scan() {
+        let directory = tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let catalog = CatalogStore::new(database.pool().clone());
+        let cases = [
+            (
+                "net.stremio.Stremio",
+                "application",
+                None,
+                serde_json::json!({}),
+                super::Section::Applications,
+                true,
+                Some(super::FormFactor::Couch),
+            ),
+            (
+                "browser",
+                "application",
+                Some("chromium --app=https://netflix.com"),
+                serde_json::json!({"categories": ["Network"]}),
+                super::Section::Applications,
+                true,
+                Some(super::FormFactor::Couch),
+            ),
+            (
+                "ordinary",
+                "game",
+                None,
+                serde_json::json!({"categories": ["Game"]}),
+                super::Section::PcGames,
+                false,
+                None,
+            ),
+            (
+                "romm:42",
+                "game",
+                None,
+                serde_json::json!({"categories": ["hearthdeck-console:7"]}),
+                super::Section::ConsoleGames,
+                false,
+                None,
+            ),
+        ];
+        catalog
+            .replace_source(
+                "heroic",
+                cases
+                    .iter()
+                    .map(|(id, kind, exec, metadata, ..)| CatalogRecord {
+                        id: (*id).to_owned(),
+                        title: (*id).to_owned(),
+                        kind: (*kind).to_owned(),
+                        launch_id: exec.map(str::to_owned),
+                        icon: None,
+                        metadata: metadata.clone(),
+                        updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                    })
+                    .collect(),
+            )
+            .await
+            .unwrap();
+
+        let listed = catalog.list().await.unwrap();
+        let source = catalog.list_source("heroic", cases.len()).await.unwrap();
+        for (id, _, _, _, section, streaming, form_factor) in cases {
+            let expected = hearthdeck_protocol::CatalogClassification {
+                section,
+                streaming,
+                form_factor,
+            };
+            assert_eq!(
+                catalog.get(id).await.unwrap().unwrap().classification,
+                expected,
+                "{id}"
+            );
+            assert_eq!(
+                listed
+                    .iter()
+                    .find(|item| item.id == id)
+                    .unwrap()
+                    .classification,
+                expected,
+                "{id}"
+            );
+            assert_eq!(
+                source
+                    .iter()
+                    .find(|item| item.id == id)
+                    .unwrap()
+                    .classification,
+                expected,
+                "{id}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stored_model_verdicts_can_promote_but_never_demote_rule_matches() {
+        let directory = tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let catalog = CatalogStore::new(database.pool().clone());
+        catalog
+            .replace_source(
+                "test",
+                ["gimp", "stremio"]
+                    .into_iter()
+                    .map(|id| CatalogRecord {
+                        id: id.to_owned(),
+                        title: id.to_owned(),
+                        kind: "application".to_owned(),
+                        launch_id: None,
+                        icon: None,
+                        metadata: serde_json::json!({}),
+                        updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                    })
+                    .collect(),
+            )
+            .await
+            .unwrap();
+        for (id, form) in [("gimp", "couch"), ("stremio", "desktop")] {
+            sqlx::query("INSERT INTO item_traits (item_id, trait, value, confidence, input_hash, model, updated_at) VALUES (?, 'form_factor', ?, 1.0, 'test', 'test', '2026-01-01')")
+                .bind(id).bind(form).execute(database.pool()).await.unwrap();
+            let item = catalog.get(id).await.unwrap().unwrap();
+            assert_eq!(
+                item.classification.form_factor,
+                Some(super::FormFactor::Couch),
+                "{id}"
+            );
+            assert_eq!(
+                item.metadata["form_factor"], form,
+                "keep the existing model verdict field"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn duplicate_metadata_aliases_replace_the_prior_record() {

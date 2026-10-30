@@ -455,6 +455,7 @@ mod tests {
         Arc::new(LibraryItem {
             id: format!("romm:{index}"),
             name: format!("Game {index}"),
+            section: hearthdeck_protocol::Section::ConsoleGames,
             ..LibraryItem::default()
         })
     }

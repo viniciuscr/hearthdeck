@@ -51,6 +51,7 @@ pub mod error;
 pub mod heuristic;
 pub mod model;
 pub mod prompt;
+pub mod rules;
 pub mod scan;
 pub mod taxonomy;
 

@@ -911,7 +911,7 @@ components:
         revision: { type: integer, minimum: 0 }
     LibraryItem:
       type: object
-      required: [id, source_id, title, kind, metadata]
+      required: [id, source_id, title, kind, metadata, classification]
       properties:
         id: { type: string }
         source_id: { type: string }
@@ -919,6 +919,13 @@ components:
         kind: { type: string }
         launch_id: { type: [string, 'null'] }
         icon: { type: [string, 'null'] }
+        classification:
+          type: object
+          required: [section, streaming, form_factor]
+          properties:
+            section: { type: string, enum: [pc_games, console_games, applications] }
+            streaming: { type: boolean }
+            form_factor: { type: [string, 'null'], enum: [couch, desktop, null] }
         metadata:
           type: object
           required: [summary, categories, urls, provenance]

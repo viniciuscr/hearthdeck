@@ -1285,6 +1285,7 @@ mod tests {
             title: "Netflix".to_owned(),
             kind: "application".to_owned(),
             launch_id: Some("netflix.desktop".to_owned()),
+            classification: hearthdeck_protocol::CatalogClassification::default(),
             icon: None,
             metadata: serde_json::json!({
                 "comment": "Watch TV shows and movies",
