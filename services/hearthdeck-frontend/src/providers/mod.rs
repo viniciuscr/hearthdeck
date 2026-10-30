@@ -1,12 +1,13 @@
+mod art_cache;
 pub mod daemon;
 pub mod filter;
 
 use std::path::PathBuf;
 
 use crate::icon_cache::{self, IconReference};
-use crate::library_item::LibraryItem;
+use crate::library_item::{ConsoleMetadata, LibraryItem};
 use cosmic::desktop::fde;
-use hearthdeck_protocol::{CatalogItem, Section};
+use hearthdeck_protocol::{CatalogItem, RetroGame, RetroRomVersion, Section};
 
 pub(super) fn library_icon(icon: Option<&str>, fallback: &str) -> fde::IconSource {
     match icon.and_then(icon_cache::classify) {
@@ -79,6 +80,68 @@ pub(super) fn catalog_item_to_library_item(item: CatalogItem) -> LibraryItem {
         entry.sources.push("streaming".to_owned());
     }
     entry
+}
+
+/// Whether a catalog record belongs in the application library.
+///
+/// A streaming provider publishes films and series so the dashboard can draw a rail, and
+/// the daemon serves them from the same endpoint as desktop entries, so without this a
+/// Continue Watching film appeared in the All Apps list beside the programs, with the
+/// same open-it action as one.
+///
+/// Keyed on the record's own kind rather than on which provider published it: the rule is
+/// *a television title is not an application*, not *Stremio is special*, so the next
+/// media provider inherits it. A record with no kind at all is kept, because dropping
+/// something unrecognised from the library is worse than showing it.
+pub(super) fn belongs_in_the_app_library(item: &CatalogItem) -> bool {
+    let kind = item.kind.trim();
+    if kind.is_empty() {
+        return true;
+    }
+    matches!(kind.to_ascii_lowercase().as_str(), "game" | "application")
+}
+
+pub(super) fn retro_game_to_library_item(game: RetroGame, icon: Option<String>) -> LibraryItem {
+    LibraryItem {
+        id: format!("romm:{}", game.id),
+        name: game.title,
+        exec: Some(game.id.to_string()),
+        icon: library_icon(icon.as_deref(), "applications-games"),
+        categories: vec!["Game".to_owned()],
+        section: hearthdeck_protocol::Section::ConsoleGames,
+        console: Some(ConsoleMetadata {
+            platform_id: game.platform_id,
+            genres: game.genres,
+            regions: game.regions,
+        }),
+        ..LibraryItem::default()
+    }
+}
+
+/// The files a console record collapsed: the entry's own first — Play's
+/// target, and what the details screen opens on — then every sibling RomM
+/// folded into it, as the disc picker lists them.
+///
+/// Two files can share a name, so a repeat gets its id appended to stay
+/// distinguishable.
+pub(super) fn retro_version_list(game: &RetroGame) -> Vec<RetroRomVersion> {
+    if game.sibling_roms.is_empty() {
+        return Vec::new();
+    }
+    let mut versions = Vec::with_capacity(game.sibling_roms.len() + 1);
+    versions.push(RetroRomVersion {
+        id: game.id,
+        title: game.version_label.as_ref().unwrap_or(&game.title).clone(),
+        is_main_sibling: true,
+    });
+    versions.extend(game.sibling_roms.iter().cloned());
+    let mut seen = std::collections::HashSet::new();
+    for version in &mut versions {
+        if !seen.insert(version.title.clone()) {
+            version.title = format!("{} (#{})", version.title, version.id);
+        }
+    }
+    versions
 }
 
 #[cfg(test)]
