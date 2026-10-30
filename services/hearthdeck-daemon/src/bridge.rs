@@ -44,6 +44,22 @@ pub async fn request(socket_path: &Path, request: BridgeRequest) -> Result<Bridg
     })?
 }
 
+/// Fails when the bridge is unreachable or comes from another build, whose
+/// protocol may not match this daemon's.
+pub async fn check_version(socket_path: &Path) -> Result<()> {
+    let expected = env!("CARGO_PKG_VERSION");
+    match request(socket_path, BridgeRequest::Health).await? {
+        BridgeResponse::Health { version } => {
+            ensure!(
+                version == expected,
+                "bridge is version {version}, daemon is {expected}"
+            );
+            Ok(())
+        }
+        other => bail!("bridge answered health with {other:?}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -147,6 +163,32 @@ mod tests {
                     result.unwrap(),
                     BridgeResponse::Health { version } if version == "1"
                 ));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bridge_from_another_build_fails_the_version_check() {
+        for (version, matches) in [(env!("CARGO_PKG_VERSION"), true), ("0.0.0-other", false)] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("bridge.sock");
+            let listener = UnixListener::bind(&path).unwrap();
+            let server = async {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut line = String::new();
+                BufReader::new(&mut stream)
+                    .read_line(&mut line)
+                    .await
+                    .unwrap();
+                let reply = format!("{{\"type\":\"health\",\"version\":\"{version}\"}}\n");
+                stream.write_all(reply.as_bytes()).await.unwrap();
+            };
+            let (result, ()) = tokio::join!(check_version(&path), server);
+            if matches {
+                result.unwrap();
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains("0.0.0-other"), "{error:#}");
             }
         }
     }

@@ -1,6 +1,8 @@
 use std::{path::Path, time::Duration};
 
-use hearthdeck_protocol::{ApplicationSession, BridgeRequest, BridgeResponse, ServerEvent};
+use hearthdeck_protocol::{
+    ApplicationSession, BridgeErrorCode, BridgeRequest, BridgeResponse, ServerEvent,
+};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
@@ -21,7 +23,10 @@ pub(crate) struct SessionService<'a> {
 #[derive(Debug)]
 pub(crate) enum LaunchError {
     Transport(anyhow::Error),
-    Rejected(String),
+    Rejected {
+        code: BridgeErrorCode,
+        message: String,
+    },
     Unexpected(BridgeResponse),
 }
 
@@ -29,7 +34,7 @@ impl std::fmt::Display for LaunchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Transport(error) => write!(formatter, "{error}"),
-            Self::Rejected(message) => write!(formatter, "{message}"),
+            Self::Rejected { message, .. } => write!(formatter, "{message}"),
             Self::Unexpected(response) => {
                 write!(formatter, "unexpected bridge launch response: {response:?}")
             }
@@ -41,7 +46,7 @@ impl std::error::Error for LaunchError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Transport(error) => Some(error.as_ref()),
-            Self::Rejected(_) | Self::Unexpected(_) => None,
+            Self::Rejected { .. } | Self::Unexpected(_) => None,
         }
     }
 }
@@ -57,7 +62,9 @@ impl SessionService<'_> {
             .map_err(LaunchError::Transport)?;
         let session = match response {
             BridgeResponse::LaunchAccepted { session } => session,
-            BridgeResponse::Error { message, .. } => return Err(LaunchError::Rejected(message)),
+            BridgeResponse::Error { code, message } => {
+                return Err(LaunchError::Rejected { code, message });
+            }
             other => return Err(LaunchError::Unexpected(other)),
         };
         if let Err(error) = self.activity.session_started(entry, &session).await {
@@ -141,7 +148,7 @@ fn finished_sessions(running: &[String], active: Option<&str>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use hearthdeck_protocol::{ApplicationSessionState, BridgeErrorCode, InputProfile};
+    use hearthdeck_protocol::{ApplicationSessionState, InputProfile};
     use tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
         net::UnixListener,
@@ -255,7 +262,7 @@ mod tests {
             } else {
                 if rejected {
                     assert!(
-                        matches!(result, Err(LaunchError::Rejected(message)) if message == "launch failed")
+                        matches!(result, Err(LaunchError::Rejected { code: BridgeErrorCode::LaunchFailed, message }) if message == "launch failed")
                     );
                 } else {
                     assert!(matches!(

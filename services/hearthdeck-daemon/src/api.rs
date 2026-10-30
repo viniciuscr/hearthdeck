@@ -13,15 +13,15 @@ use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream};
 use hearthdeck_ai::categorization::{ScanReport, Taxonomy, rail_app_ids};
 use hearthdeck_protocol::{
-    ApplicationSession, BridgeRequest, BridgeResponse, CategorizationSnapshot, Collection,
-    CollectionItem, HealthResponse, HostCapabilities, InputProfile, ProviderHealth,
+    ApplicationSession, BridgeErrorCode, BridgeRequest, BridgeResponse, CategorizationSnapshot,
+    Collection, CollectionItem, HealthResponse, HostCapabilities, InputProfile, ProviderHealth,
     RetroBiosSyncReport, RetroCoreInstallReport, RetroGame, RetroGameDetails, RetroRomVersion,
     RetroSystemReadiness, ServerEvent,
 };
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -468,6 +468,7 @@ async fn launch_retro(
                 LaunchError::Unexpected(_) => {
                     ApiError::bad_gateway("bridge rejected retro game launch")
                 }
+                LaunchError::Rejected { code, message } => ApiError::bridge(code, message),
                 other => ApiError::bad_gateway(other),
             })?;
     info!(rom_id, "retro game launch accepted");
@@ -486,7 +487,7 @@ async fn restart_romm_service(State(state): State<SharedState>) -> Result<Status
     .map_err(ApiError::bad_gateway)?
     {
         BridgeResponse::RommServiceRestarted => {}
-        BridgeResponse::Error { message, .. } => return Err(ApiError::bad_gateway(message)),
+        BridgeResponse::Error { code, message } => return Err(ApiError::bridge(code, message)),
         _ => {
             return Err(ApiError::bad_gateway(
                 "bridge answered the RomM restart with an unexpected response",
@@ -1032,6 +1033,7 @@ async fn launch_catalog(
             LaunchError::Unexpected(other) => {
                 ApiError::bad_gateway(format!("bridge rejected application launch: {other:?}"))
             }
+            LaunchError::Rejected { code, message } => ApiError::bridge(code, message),
             other => ApiError::bad_gateway(other),
         })?;
     info!(item_id = %id, "catalog launch accepted");
@@ -1101,15 +1103,7 @@ async fn stop_active_application_session(
             state.sessions().finished(&session_id).await;
             Ok(StatusCode::ACCEPTED)
         }
-        BridgeResponse::Error {
-            code: hearthdeck_protocol::BridgeErrorCode::NotFound,
-            message,
-        } => Err(ApiError {
-            status: StatusCode::NOT_FOUND,
-            message,
-            settings: None,
-        }),
-        BridgeResponse::Error { message, .. } => Err(ApiError::bad_gateway(message)),
+        BridgeResponse::Error { code, message } => Err(ApiError::bridge(code, message)),
         _ => Err(ApiError::bad_gateway(
             "bridge rejected application-session stop",
         )),
@@ -1128,10 +1122,14 @@ async fn stop_application_session(
     )
     .await
     .map_err(ApiError::bad_gateway)?;
-    if !matches!(response, BridgeResponse::StopAccepted { .. }) {
-        return Err(ApiError::bad_gateway(
-            "bridge rejected application-session stop",
-        ));
+    match response {
+        BridgeResponse::StopAccepted { .. } => {}
+        BridgeResponse::Error { code, message } => return Err(ApiError::bridge(code, message)),
+        _ => {
+            return Err(ApiError::bad_gateway(
+                "bridge rejected application-session stop",
+            ));
+        }
     }
     // A stop the user asked for knows when the play ended, so it does not wait for
     // the watcher's next tick.
@@ -2016,10 +2014,27 @@ impl ApiError {
         }
     }
 
+    /// The bridge refused. Only "no such thing" is the caller's problem; every
+    /// other refusal is the upstream failing, whatever the bridge calls it.
+    fn bridge(code: BridgeErrorCode, message: String) -> Self {
+        Self {
+            status: match code {
+                BridgeErrorCode::NotFound => StatusCode::NOT_FOUND,
+                BridgeErrorCode::InvalidRequest
+                | BridgeErrorCode::LaunchFailed
+                | BridgeErrorCode::Internal => StatusCode::BAD_GATEWAY,
+            },
+            message,
+            settings: None,
+        }
+    }
+
+    /// The detail can hold paths and SQL, so it goes to the journal, not the client.
     fn internal(error: impl std::fmt::Display) -> Self {
+        error!(error = format!("{error:#}"), "internal error");
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: error.to_string(),
+            message: "internal error".to_owned(),
             settings: None,
         }
     }
@@ -2422,6 +2437,31 @@ mod tests {
                 assert_eq!(json["error"], message);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn bridge_refusals_keep_their_meaning_and_internal_errors_keep_their_detail() {
+        use axum::response::IntoResponse;
+        use hearthdeck_protocol::BridgeErrorCode;
+
+        use super::ApiError;
+
+        for (code, expected) in [
+            (BridgeErrorCode::NotFound, StatusCode::NOT_FOUND),
+            (BridgeErrorCode::InvalidRequest, StatusCode::BAD_GATEWAY),
+            (BridgeErrorCode::LaunchFailed, StatusCode::BAD_GATEWAY),
+            (BridgeErrorCode::Internal, StatusCode::BAD_GATEWAY),
+        ] {
+            let response = ApiError::bridge(code, "refused".to_owned()).into_response();
+            assert_eq!(response.status(), expected, "{code:?}");
+        }
+
+        let error = anyhow::anyhow!("/var/lib/hearthdeck/hearthdeck.db is locked")
+            .context("listing collections");
+        let response = ApiError::internal(error).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], br#"{"error":"internal error"}"#);
     }
 
     #[tokio::test]
