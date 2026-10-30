@@ -9,6 +9,7 @@ mod form_factor;
 mod icon_cache;
 mod input_ownership;
 mod launch_state;
+mod library_item;
 mod localize;
 mod motion;
 mod providers;

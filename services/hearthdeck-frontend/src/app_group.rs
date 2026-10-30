@@ -1,12 +1,12 @@
 use crate::config::APP_ID;
 use crate::fl;
 use crate::form_factor::{self, FormFactor};
+use crate::library_item::LibraryItem;
 use crate::providers::filter::{Facet, FacetOption};
 use cosmic::cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use cosmic::cosmic_config::{
     CosmicConfigEntry, {self},
 };
-use cosmic::desktop::DesktopEntryData;
 pub use hearthdeck_protocol::Section;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,9 +25,8 @@ pub fn romm_console_category(platform_id: i64) -> String {
 
 /// RomM metadata that the console grid can filter on rides on each record as a
 /// namespaced category, the same way stores ([`AppLibraryConfig::sync_category_groups`])
-/// and consoles (above) do. `DesktopEntryData` has no metadata field, so
-/// categories are the only channel a record's RomM metadata survives on; a
-/// facet is then a prefix plus a value, and matching is a category lookup.
+/// and consoles (above) do. These values still use the saved filter format;
+/// replacing the desktop-shell model does not migrate the user's groups.
 const GENRE_FACET_PREFIX: &str = "hearthdeck-genre:";
 const REGION_FACET_PREFIX: &str = "hearthdeck-region:";
 
@@ -229,7 +228,7 @@ impl Ord for AppGroup {
 }
 
 impl AppGroup {
-    fn matches(&self, entry: &DesktopEntryData) -> bool {
+    fn matches(&self, entry: &LibraryItem) -> bool {
         match &self.filter {
             FilterType::AppIds(names) => names.iter().any(|id| id == &entry.id),
             FilterType::Categories {
@@ -277,7 +276,7 @@ pub(crate) trait SectionUi {
     fn name(self) -> String;
     fn index(self) -> usize;
     fn all_name(self) -> String;
-    fn matches(self, entry: &DesktopEntryData) -> bool;
+    fn matches(self, entry: &LibraryItem) -> bool;
 }
 
 impl SectionUi for Section {
@@ -316,7 +315,7 @@ impl SectionUi for Section {
     /// Whether an entry belongs to this section. Games are split between the
     /// PC Games and Console Games sections (console games being emulator
     /// titles), everything else lands in Applications.
-    fn matches(self, entry: &DesktopEntryData) -> bool {
+    fn matches(self, entry: &LibraryItem) -> bool {
         let is_game = entry
             .categories
             .iter()
@@ -338,7 +337,7 @@ impl SectionUi for Section {
 /// category it matches, which makes the selection a plain category check in
 /// [`AppLibraryConfig::filtered_by_facets`]. A dimension with fewer than two
 /// options is dropped: a filter with one choice is not a choice.
-pub fn section_facets(section: Section, entries: &[Arc<DesktopEntryData>]) -> Vec<Facet> {
+pub fn section_facets(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<Facet> {
     let (id, label) = match section {
         Section::PcGames => ("store", fl!("filter-store")),
         Section::Applications => ("source", fl!("filter-source")),
@@ -443,7 +442,7 @@ impl Sections {
 /// declare anything useful either — they ship as a browser `--app=<url>` window
 /// (a hand-written desktop entry) or a bundled Electron client — so the id and
 /// exec line are what is left to match on.
-pub(crate) fn is_watch_entry(entry: &DesktopEntryData) -> bool {
+pub(crate) fn is_watch_entry(entry: &LibraryItem) -> bool {
     if entry
         .categories
         .iter()
@@ -494,7 +493,7 @@ pub(crate) fn is_watch_entry(entry: &DesktopEntryData) -> bool {
 /// client also gets the [`STREAMING_SOURCE`] tag, because what it is matters at
 /// least as much as where it came from; carrying both means a selection on
 /// either value finds it, which is how one facet can answer both questions.
-pub(crate) fn tag_source(entry: &mut DesktopEntryData, origin: Option<&str>) {
+pub(crate) fn tag_source(entry: &mut LibraryItem, origin: Option<&str>) {
     if let Some(origin) = origin.filter(|origin| !origin.is_empty()) {
         entry
             .categories
@@ -509,7 +508,7 @@ pub(crate) fn tag_source(entry: &mut DesktopEntryData, origin: Option<&str>) {
 
 /// Returns true when the entry looks like a console emulator, identified by
 /// its ID or Exec string.
-fn is_emulator_entry(entry: &DesktopEntryData) -> bool {
+fn is_emulator_entry(entry: &LibraryItem) -> bool {
     if entry
         .categories
         .iter()
@@ -600,7 +599,7 @@ impl AppLibraryConfig {
     /// own - a console game is always pad-driven, and a PC game keeps the
     /// explicit toggle alone - so the form default applies to applications only.
     #[must_use]
-    pub fn desktop_input_for(&self, entry: &DesktopEntryData) -> bool {
+    pub fn desktop_input_for(&self, entry: &LibraryItem) -> bool {
         let desktop_by_default =
             Section::Applications.matches(entry) && form_factor::of(entry) == FormFactor::Desktop;
         self.desktop_input_enabled(&entry.id) ^ desktop_by_default
@@ -611,7 +610,7 @@ impl AppLibraryConfig {
     }
 
     /// Puts the user's choices onto freshly loaded records.
-    pub fn apply_form_overrides(&self, entries: &mut [Arc<DesktopEntryData>]) {
+    pub fn apply_form_overrides(&self, entries: &mut [Arc<LibraryItem>]) {
         for entry in entries {
             if let Some(form) = self.form_overrides.get(&entry.id)
                 && form_factor::of(entry) != *form
@@ -641,9 +640,9 @@ impl AppLibraryConfig {
         section: Section,
         tab: Option<usize>,
         input_value: &str,
-        entries: &[Arc<DesktopEntryData>],
+        entries: &[Arc<LibraryItem>],
         facets: &BTreeMap<String, String>,
-    ) -> Vec<Arc<DesktopEntryData>> {
+    ) -> Vec<Arc<LibraryItem>> {
         let tab_group = tab.and_then(|i| self.sections.get(section).get(i));
         // The Applications section opens on what suits the couch; a search looks
         // through both, because the app being looked for may be the other kind.
@@ -691,7 +690,7 @@ impl AppLibraryConfig {
     /// one Desktop tab when anything wants a desktop; the Couch view is the
     /// section's "all" tab. Tabs an older scan left behind are dropped: they used
     /// to hide every derived tab, and a config stuck that way had no way back.
-    pub fn sync_category_groups(&mut self, entries: &[Arc<DesktopEntryData>]) -> bool {
+    pub fn sync_category_groups(&mut self, entries: &[Arc<LibraryItem>]) -> bool {
         let mut changed = false;
         for section in [Section::PcGames, Section::Applications] {
             let existing = self.sections.get(section);
@@ -751,7 +750,7 @@ impl AppLibraryConfig {
     /// anything changed.
     pub fn restore_default_groups(
         &mut self,
-        entries: &[Arc<DesktopEntryData>],
+        entries: &[Arc<LibraryItem>],
         platforms: &[(i64, String)],
     ) -> bool {
         let before = self.sections.clone();
@@ -771,7 +770,7 @@ impl AppLibraryConfig {
 }
 
 /// The tabs `section` derives from `entries`, before any folder of the user's.
-fn derived_groups(section: Section, entries: &[Arc<DesktopEntryData>]) -> Vec<AppGroup> {
+fn derived_groups(section: Section, entries: &[Arc<LibraryItem>]) -> Vec<AppGroup> {
     let mut shown = entries.iter().filter(|entry| section.matches(entry));
     match section {
         Section::PcGames => {
@@ -821,7 +820,8 @@ mod tests {
         AppGroup, AppLibraryConfig, FilterType, GroupSource, Section, SectionUi, section_facets,
     };
     use crate::form_factor::{self, FormFactor};
-    use cosmic::desktop::{DesktopEntryData, fde::IconSource};
+    use crate::library_item::LibraryItem;
+    use cosmic::desktop::fde::IconSource;
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
@@ -852,22 +852,17 @@ mod tests {
 
     /// A record as a provider hands it over: an application is tagged with its
     /// form factor on the way in.
-    fn entry(id: &str, categories: &[&str]) -> Arc<DesktopEntryData> {
-        let mut entry = DesktopEntryData {
+    fn entry(id: &str, categories: &[&str]) -> Arc<LibraryItem> {
+        let mut entry = LibraryItem {
             id: id.into(),
             name: id.into(),
             wm_class: None,
             exec: None,
             icon: IconSource::Name(String::new()),
-            path: None,
             categories: categories
                 .iter()
                 .map(|category| (*category).into())
                 .collect(),
-            desktop_actions: Vec::new(),
-            mime_types: Vec::new(),
-            prefers_dgpu: false,
-            terminal: false,
         };
         if Section::Applications.matches(&entry) {
             form_factor::tag(&mut entry);
@@ -894,7 +889,7 @@ mod tests {
         let entries = [stremio, writer];
         let mut config = AppLibraryConfig::default();
         config.sync_category_groups(&entries);
-        let names = |found: Vec<Arc<DesktopEntryData>>| {
+        let names = |found: Vec<Arc<LibraryItem>>| {
             found
                 .iter()
                 .map(|found| found.id.clone())
@@ -1045,7 +1040,7 @@ mod tests {
         );
         // ...and a hand-written browser web app by its `--app=` URL, because it
         // declares nothing useful.
-        let netflix = Arc::new(DesktopEntryData {
+        let netflix = Arc::new(LibraryItem {
             exec: Some("google-chrome --app=https://www.netflix.com".into()),
             ..entry("chrome-netflix.desktop", &["Network"])
                 .as_ref()

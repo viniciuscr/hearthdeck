@@ -98,7 +98,7 @@ impl App {
                             entries: page
                                 .items
                                 .into_iter()
-                                .map(|record| Arc::new(record.into_desktop_entry()))
+                                .map(|record| Arc::new(record.into_library_item()))
                                 .collect(),
                             versions,
                             total: page.total,

@@ -149,8 +149,12 @@ frontend discovery-provider registry: discovery belongs to the daemon.
 `GameRecord` carries store, install source, model form-factor and ROM variants
 as typed fields; it does not rebuild or reparse a JSON metadata bag. Descriptive
 details stay in their daemon detail responses, not in unused record fields.
-`GameRecord` and the `DesktopEntryData` view adapter remain pending replacement
-by the typed library model.
+The library, filters, grid and console cache use Hearthdeck's `LibraryItem`,
+not COSMIC's `DesktopEntryData`. The model keeps the fields those consumers
+actually read; desktop actions, MIME types, working directories and local
+process-launch flags are not part of it. Launches still go through the daemon.
+`GameRecord` remains the loading adapter. Category-encoded facets and form
+factors retain the existing saved filter format pending their own migration.
 
 | Slice | Where | Status |
 | --- | --- | --- |

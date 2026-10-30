@@ -69,20 +69,32 @@ fn shell() -> App {
 
 /// A record as a provider hands it over: an application is tagged with its form
 /// factor on the way in.
-fn entry(id: &str, categories: &[&str]) -> Arc<DesktopEntryData> {
-    let mut entry = DesktopEntryData {
+fn entry(id: &str, categories: &[&str]) -> Arc<LibraryItem> {
+    let mut entry = LibraryItem {
         id: id.to_owned(),
         name: id.to_owned(),
         categories: categories
             .iter()
             .map(|category| (*category).to_owned())
             .collect(),
-        ..DesktopEntryData::default()
+        ..LibraryItem::default()
     };
     if Section::Applications.matches(&entry) {
         crate::form_factor::tag(&mut entry);
     }
     Arc::new(entry)
+}
+
+#[test]
+fn an_unchanged_catalog_keeps_the_grid_scroll_position() {
+    let mut app = shell();
+    let entries = vec![entry("game", &["Game"])];
+    let _ = app.update(Message::CatalogLoaded(Ok(entries.clone())));
+    app.grid_scroll_offset = 240.0;
+
+    let _ = app.update(Message::CatalogLoaded(Ok(entries)));
+
+    assert_eq!(app.grid_scroll_offset, 240.0);
 }
 
 #[test]
@@ -351,7 +363,7 @@ fn showing_console_tabs() -> App {
 
 /// Feeds the console grid one page the way a daemon answer would, for the
 /// scope the shell is currently showing.
-fn console_page(app: &mut App, entries: Vec<Arc<DesktopEntryData>>) {
+fn console_page(app: &mut App, entries: Vec<Arc<LibraryItem>>) {
     let scope = app.console_scope();
     let generation = app.console.begin(&scope, 0).expect("the load is allowed");
     let total = entries.len() as u64;
@@ -1593,14 +1605,12 @@ fn a_rail_card_draws_the_icon_its_own_item_carries() {
     let mut app = shell();
     // A library entry under the rail item's own id, wearing artwork of its
     // own: it is not what the card draws.
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![Arc::new(
-        DesktopEntryData {
-            id: "hearthdeck:game-0".to_owned(),
-            name: "Library's own".to_owned(),
-            icon: IconSource::Path(PathBuf::from("/usr/share/icons/library-only.png")),
-            ..DesktopEntryData::default()
-        },
-    )])));
+    let _ = app.update(Message::CatalogLoaded(Ok(vec![Arc::new(LibraryItem {
+        id: "hearthdeck:game-0".to_owned(),
+        name: "Library's own".to_owned(),
+        icon: IconSource::Path(PathBuf::from("/usr/share/icons/library-only.png")),
+        ..LibraryItem::default()
+    })])));
     let rail = |app: &mut App, icon: Option<&str>| {
         let _ = app.update(Message::CollectionsLoaded(Ok(vec![Collection {
             slug: "favorites".to_owned(),

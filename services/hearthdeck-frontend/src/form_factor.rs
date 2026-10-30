@@ -10,7 +10,7 @@
 //! library is usable with smart categorization switched off, and a model that
 //! later knows better only moves an app across. What the user chose always wins.
 
-use cosmic::desktop::DesktopEntryData;
+use crate::library_item::LibraryItem;
 use serde::{Deserialize, Serialize};
 
 use crate::app_group::is_watch_entry;
@@ -59,7 +59,7 @@ impl FormFactor {
 
 /// What the rules say `entry` is, before anyone has overridden them.
 #[must_use]
-pub fn classify(entry: &DesktopEntryData) -> FormFactor {
+pub fn classify(entry: &LibraryItem) -> FormFactor {
     if is_watch_entry(entry) || is_couch_launcher(entry) {
         FormFactor::Couch
     } else {
@@ -67,7 +67,7 @@ pub fn classify(entry: &DesktopEntryData) -> FormFactor {
     }
 }
 
-fn is_couch_launcher(entry: &DesktopEntryData) -> bool {
+fn is_couch_launcher(entry: &LibraryItem) -> bool {
     let haystack =
         format!("{} {}", entry.id, entry.exec.as_deref().unwrap_or_default()).to_lowercase();
     COUCH_LAUNCHERS
@@ -76,13 +76,13 @@ fn is_couch_launcher(entry: &DesktopEntryData) -> bool {
 }
 
 /// Writes the rules' answer onto a record that carries none yet.
-pub fn tag(entry: &mut DesktopEntryData) {
+pub fn tag(entry: &mut LibraryItem) {
     let form = classify(entry);
     set(entry, form);
 }
 
 /// Makes `form` the only form tag the record carries.
-pub fn set(entry: &mut DesktopEntryData, form: FormFactor) {
+pub fn set(entry: &mut LibraryItem, form: FormFactor) {
     entry
         .categories
         .retain(|category| !category.starts_with(FORM_CATEGORY_PREFIX));
@@ -92,7 +92,7 @@ pub fn set(entry: &mut DesktopEntryData, form: FormFactor) {
 /// The form a record carries, which is what every reader goes by. A record with
 /// no tag - one that never went through [`tag`] - is read by the rules.
 #[must_use]
-pub fn of(entry: &DesktopEntryData) -> FormFactor {
+pub fn of(entry: &LibraryItem) -> FormFactor {
     [FormFactor::Couch, FormFactor::Desktop]
         .into_iter()
         .find(|form| entry.categories.contains(&form.tag()))
@@ -108,21 +108,17 @@ pub fn category(form: FormFactor) -> String {
 #[cfg(test)]
 mod tests {
     use super::{FormFactor, classify, of, set, tag};
-    use cosmic::desktop::{DesktopEntryData, fde::IconSource};
+    use crate::library_item::LibraryItem;
+    use cosmic::desktop::fde::IconSource;
 
-    fn entry(id: &str, exec: &str) -> DesktopEntryData {
-        DesktopEntryData {
+    fn entry(id: &str, exec: &str) -> LibraryItem {
+        LibraryItem {
             id: id.into(),
             name: id.into(),
             wm_class: None,
             exec: Some(exec.into()),
             icon: IconSource::Name(String::new()),
-            path: None,
             categories: Vec::new(),
-            desktop_actions: Vec::new(),
-            mime_types: Vec::new(),
-            prefers_dgpu: false,
-            terminal: false,
         }
     }
 

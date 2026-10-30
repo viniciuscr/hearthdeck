@@ -139,7 +139,7 @@ impl App {
                     .map(|records| {
                         records
                             .into_iter()
-                            .map(|record| Arc::new(record.into_desktop_entry()))
+                            .map(|record| Arc::new(record.into_library_item()))
                             .collect()
                     })
                     .map_err(|error| error.to_string())
