@@ -237,12 +237,8 @@ impl AppGroup {
                 exclude,
                 ..
             } => {
-                categories.iter().any(|cat| {
-                    entry
-                        .categories
-                        .iter()
-                        .any(|acat| acat.to_lowercase() == cat.to_lowercase())
-                }) && exclude.iter().all(|id| id != &entry.id)
+                categories.iter().any(|cat| entry.matches_category(cat))
+                    && exclude.iter().all(|id| id != &entry.id)
                     || include.iter().any(|id| id == &entry.id)
             }
             FilterType::None => true,
@@ -662,18 +658,18 @@ impl AppLibraryConfig {
                 {
                     return false;
                 }
-                if !facets
-                    .values()
-                    .all(|value| de.categories.iter().any(|category| category == value))
-                {
+                if !facets.values().all(|value| {
+                    if FormFactor::from_category(value).is_some() {
+                        de.matches_category(value)
+                    } else {
+                        de.categories.iter().any(|category| category == value)
+                    }
+                }) {
                     return false;
                 }
                 if !input_value.is_empty()
                     && !de.name.to_lowercase().contains(&input_value.to_lowercase())
-                    && !de
-                        .categories
-                        .iter()
-                        .any(|acat| acat.to_lowercase() == input_value.to_lowercase())
+                    && !de.matches_category(input_value)
                 {
                     return false;
                 }
@@ -859,6 +855,7 @@ mod tests {
             wm_class: None,
             exec: None,
             icon: IconSource::Name(String::new()),
+            form_factor: None,
             categories: categories
                 .iter()
                 .map(|category| (*category).into())
@@ -920,6 +917,36 @@ mod tests {
         config.apply_form_overrides(&mut entries);
 
         assert_eq!(form_factor::of(&entries[0]), FormFactor::Couch);
+    }
+
+    #[test]
+    fn saved_form_filters_match_typed_items_without_category_tags() {
+        let group: AppGroup = serde_json::from_value(serde_json::json!({
+            "name": "Desktop",
+            "icon": "folder-symbolic",
+            "filter": {"Categories": {
+                "categories": ["hearthdeck-form:desktop"],
+                "include": [],
+                "exclude": []
+            }}
+        }))
+        .expect("existing group format");
+        let mut writer = entry("writer", &["Office"]);
+        let game = entry("game", &["Game"]);
+        assert_eq!(writer.categories, ["Office"]);
+        assert!(group.matches(&writer));
+        assert!(!group.matches(&game));
+        form_factor::set(Arc::make_mut(&mut writer), FormFactor::Couch);
+        assert!(!group.matches(&writer));
+
+        let config = AppLibraryConfig::default();
+        let facets = BTreeMap::from([("form".to_owned(), "hearthdeck-form:couch".to_owned())]);
+        assert_eq!(
+            config
+                .filtered_by_facets(Section::Applications, None, "", &[writer], &facets)
+                .len(),
+            1
+        );
     }
 
     #[test]

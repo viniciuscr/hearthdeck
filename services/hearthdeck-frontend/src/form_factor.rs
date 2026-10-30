@@ -2,9 +2,8 @@
 //!
 //! Applications are split in two: the ones a person can use from a sofa with a
 //! controller (streaming clients, media centres, the game launchers themselves)
-//! and everything that wants a keyboard and a pointer. The split rides on each
-//! record as a namespaced category, the way a store or an install source does,
-//! so the tabs, the filters and the launch profile all read the same tag.
+//! and everything that wants a keyboard and a pointer. The split is a typed
+//! library-item field shared by tabs, filters and launch profiles.
 //!
 //! The rules here are deliberately plain: they decide without any model, so the
 //! library is usable with smart categorization switched off, and a model that
@@ -14,9 +13,6 @@ use crate::library_item::LibraryItem;
 use serde::{Deserialize, Serialize};
 
 use crate::app_group::is_watch_entry;
-
-/// The record-category prefix carrying an application's form factor.
-const FORM_CATEGORY_PREFIX: &str = "hearthdeck-form:";
 
 /// Launchers and front-ends whose whole job is to be driven from a couch. Matched
 /// against the id and exec line, so each name is specific enough not to appear in
@@ -39,12 +35,18 @@ pub enum FormFactor {
 }
 
 impl FormFactor {
-    fn tag(self) -> String {
-        let name = match self {
-            Self::Couch => "couch",
-            Self::Desktop => "desktop",
-        };
-        format!("{FORM_CATEGORY_PREFIX}{name}")
+    #[must_use]
+    pub fn from_category(category: &str) -> Option<Self> {
+        [Self::Couch, Self::Desktop]
+            .into_iter()
+            .find(|form| category.eq_ignore_ascii_case(form.category_value()))
+    }
+
+    fn category_value(self) -> &'static str {
+        match self {
+            Self::Couch => "hearthdeck-form:couch",
+            Self::Desktop => "hearthdeck-form:desktop",
+        }
     }
 
     /// The other one, which is what moving an application does.
@@ -75,34 +77,27 @@ fn is_couch_launcher(entry: &LibraryItem) -> bool {
         .any(|launcher| haystack.contains(launcher))
 }
 
-/// Writes the rules' answer onto a record that carries none yet.
+/// Writes the rules' answer onto a freshly loaded record.
 pub fn tag(entry: &mut LibraryItem) {
     let form = classify(entry);
     set(entry, form);
 }
 
-/// Makes `form` the only form tag the record carries.
+/// Sets the resolved form without changing the item's categories.
 pub fn set(entry: &mut LibraryItem, form: FormFactor) {
-    entry
-        .categories
-        .retain(|category| !category.starts_with(FORM_CATEGORY_PREFIX));
-    entry.categories.push(form.tag());
+    entry.form_factor = Some(form);
 }
 
-/// The form a record carries, which is what every reader goes by. A record with
-/// no tag - one that never went through [`tag`] - is read by the rules.
+/// Uses the resolved form when present, otherwise the classification rules.
 #[must_use]
 pub fn of(entry: &LibraryItem) -> FormFactor {
-    [FormFactor::Couch, FormFactor::Desktop]
-        .into_iter()
-        .find(|form| entry.categories.contains(&form.tag()))
-        .unwrap_or_else(|| classify(entry))
+    entry.form_factor.unwrap_or_else(|| classify(entry))
 }
 
 /// The category a tab filtering on `form` matches.
 #[must_use]
 pub fn category(form: FormFactor) -> String {
-    form.tag()
+    form.category_value().to_owned()
 }
 
 #[cfg(test)]
@@ -119,6 +114,7 @@ mod tests {
             exec: Some(exec.into()),
             icon: IconSource::Name(String::new()),
             categories: Vec::new(),
+            form_factor: None,
         }
     }
 
@@ -147,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn a_record_carries_exactly_one_form_and_the_tag_is_what_is_read() {
+    fn changing_form_replaces_the_typed_value_without_category_tags() {
         let mut app = entry("org.gimp.GIMP.desktop", "gimp");
         tag(&mut app);
         assert_eq!(of(&app), FormFactor::Desktop);
@@ -155,13 +151,8 @@ mod tests {
         set(&mut app, FormFactor::Couch);
 
         assert_eq!(of(&app), FormFactor::Couch);
-        assert_eq!(
-            app.categories
-                .iter()
-                .filter(|category| category.starts_with("hearthdeck-form:"))
-                .count(),
-            1
-        );
+        assert_eq!(app.form_factor, Some(FormFactor::Couch));
+        assert!(app.categories.is_empty());
     }
 
     #[test]
@@ -170,5 +161,16 @@ mod tests {
             of(&entry("org.gimp.GIMP.desktop", "gimp")),
             FormFactor::Desktop
         );
+    }
+
+    #[test]
+    fn category_text_cannot_override_the_typed_form() {
+        let mut app = entry("org.gimp.GIMP.desktop", "gimp");
+        app.categories.push("hearthdeck-form:couch".to_owned());
+        set(&mut app, FormFactor::Desktop);
+
+        assert_eq!(of(&app), FormFactor::Desktop);
+        assert!(app.matches_category("HEARTHDECK-FORM:DESKTOP"));
+        assert!(!app.matches_category("hearthdeck-form:couch"));
     }
 }
