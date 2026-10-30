@@ -23,11 +23,6 @@ pub fn romm_console_category(platform_id: i64) -> String {
     format!("{CONSOLE_FILTER_PREFIX}{platform_id}")
 }
 
-/// The source label a streaming client carries on top of its origin. What kind of
-/// application it is matters at least as much as where it was installed, and an
-/// entry may carry both labels, so filtering by either finds it.
-pub const STREAMING_SOURCE: &str = "streaming";
-
 /// A RomM metadata field the Console Games grid can be filtered by. Each
 /// variant maps to a daemon filter parameter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -283,20 +278,9 @@ impl SectionUi for Section {
         }
     }
 
-    /// Whether an entry belongs to this section. Games are split between the
-    /// PC Games and Console Games sections (console games being emulator
-    /// titles), everything else lands in Applications.
+    /// Placement is resolved by the daemon, not inferred from display fields.
     fn matches(self, entry: &LibraryItem) -> bool {
-        let is_game = entry
-            .categories
-            .iter()
-            .any(|cat| cat.eq_ignore_ascii_case("game"));
-        let is_emulator = is_emulator_entry(entry);
-        match self {
-            Section::PcGames => is_game && !is_emulator,
-            Section::ConsoleGames => is_game && is_emulator,
-            Section::Applications => !is_game,
-        }
+        self == entry.section
     }
 }
 
@@ -392,118 +376,6 @@ impl Sections {
             Section::Applications => &mut self.applications,
         }
     }
-}
-
-/// Returns true when the entry is a streaming service client — the kind the
-/// dashboard's Watch shelf is for — rather than a game, a local media player,
-/// or a general utility.
-///
-/// Matching is by name only, on purpose. Freedesktop categories are too coarse
-/// to identify a service: `AudioVideo` is also declared by volume mixers and
-/// video-capture tools, and `Player` by local players, so a category match
-/// pulled in apps that have nothing to watch. The services themselves rarely
-/// declare anything useful either — they ship as a browser `--app=<url>` window
-/// (a hand-written desktop entry) or a bundled Electron client — so the id and
-/// exec line are what is left to match on.
-pub(crate) fn is_watch_entry(entry: &LibraryItem) -> bool {
-    if entry
-        .categories
-        .iter()
-        .any(|category| category.eq_ignore_ascii_case("game"))
-    {
-        return false;
-    }
-
-    // Deliberately specific strings: these are matched against the whole exec
-    // line, which can contain a path with the user's name in it, so a bare
-    // service name like "max" or "prime" would match far too much.
-    const SERVICES: &[&str] = &[
-        "stremio",
-        "netflix",
-        "primevideo",
-        "prime video",
-        "prime-video",
-        "disneyplus",
-        "disney+",
-        "hulu",
-        "hbomax",
-        "hbo max",
-        "max.com",
-        "crunchyroll",
-        "paramountplus",
-        "paramount+",
-        "peacock",
-        "tubitv",
-        "tubi.tv",
-        "plutotv",
-        "pluto.tv",
-        "appletv",
-        "apple tv",
-        "tv.apple",
-        "plex",
-        "jellyfin",
-        "emby",
-        "kodi",
-    ];
-    let haystack =
-        format!("{} {}", entry.id, entry.exec.as_deref().unwrap_or_default()).to_lowercase();
-    SERVICES.iter().any(|service| haystack.contains(service))
-}
-
-/// Records the origin and streaming classification for the Applications filter.
-///
-/// `origin` is the resolved origin a discovery provider reported. A streaming
-/// client also gets the [`STREAMING_SOURCE`] value, because what it is matters at
-/// least as much as where it came from; carrying both means a selection on
-/// either value finds it, which is how one facet can answer both questions.
-pub(crate) fn set_sources(entry: &mut LibraryItem, origin: Option<&str>) {
-    entry.sources.clear();
-    if let Some(origin) = origin.filter(|origin| !origin.is_empty()) {
-        entry.sources.push(origin.to_owned());
-    }
-    if is_watch_entry(entry) {
-        entry.sources.push(STREAMING_SOURCE.to_owned());
-    }
-}
-
-/// Returns true when the entry looks like a console emulator, identified by
-/// its ID or Exec string.
-fn is_emulator_entry(entry: &LibraryItem) -> bool {
-    if entry.console.is_some() {
-        return true;
-    }
-    const EMULATORS: &[&str] = &[
-        "retroarch",
-        "dolphin",
-        "pcsx2",
-        "duckstation",
-        "rpcs3",
-        "citra",
-        "yuzu",
-        "ryujinx",
-        "mame",
-        "mupen",
-        "xemu",
-        "melon",
-        "ppsspp",
-        "snes9x",
-        "mgba",
-        "mednafen",
-        "desmume",
-        "fsuae",
-        "scummvm",
-        "cemu",
-        "ares",
-        "bsnes",
-        "limbo",
-        "flycast",
-        "redream",
-        "standalone",
-        "emulator",
-    ];
-    let haystack =
-        format!("{} {}", entry.id, entry.exec.as_deref().unwrap_or_default()).to_lowercase();
-    EMULATORS.iter().any(|emulator| haystack.contains(emulator))
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, CosmicConfigEntry)]
@@ -798,8 +670,7 @@ mod tests {
         assert_ne!(left.cmp(&right), std::cmp::Ordering::Equal);
     }
 
-    /// A record as a provider hands it over: an application is tagged with its
-    /// form factor on the way in.
+    /// Display fixtures with the section and form a daemon response supplies.
     fn entry(id: &str, categories: &[&str]) -> Arc<LibraryItem> {
         let mut entry = LibraryItem {
             id: id.into(),
@@ -808,6 +679,18 @@ mod tests {
             exec: None,
             icon: IconSource::Name(String::new()),
             form_factor: None,
+            section: if categories.contains(&"Game") {
+                if categories
+                    .iter()
+                    .any(|value| value.starts_with("hearthdeck-console:"))
+                {
+                    Section::ConsoleGames
+                } else {
+                    Section::PcGames
+                }
+            } else {
+                Section::Applications
+            },
             console: categories.iter().find_map(|value| {
                 value
                     .strip_prefix("hearthdeck-console:")
@@ -836,7 +719,10 @@ mod tests {
                 .collect(),
         };
         if Section::Applications.matches(&entry) {
-            form_factor::tag(&mut entry);
+            entry.form_factor = Some(match id {
+                "com.stremio.Stremio.desktop" | "stremio.desktop" => FormFactor::Couch,
+                _ => FormFactor::Desktop,
+            });
         }
         Arc::new(entry)
     }
@@ -1030,51 +916,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["PlayStation"]
         );
-    }
-
-    #[test]
-    fn watch_entries_are_classified_by_name_only() {
-        // A packaged streaming client is recognized by its id...
-        let stremio = entry(
-            "com.stremio.Stremio.desktop",
-            &["AudioVideo", "Video", "Player"],
-        );
-        // ...and a hand-written browser web app by its `--app=` URL, because it
-        // declares nothing useful.
-        let netflix = Arc::new(LibraryItem {
-            exec: Some("google-chrome --app=https://www.netflix.com".into()),
-            ..entry("chrome-netflix.desktop", &["Network"])
-                .as_ref()
-                .clone()
-        });
-
-        assert!(super::is_watch_entry(&stremio));
-        assert!(super::is_watch_entry(&netflix));
-        // A game never counts, whatever it plays.
-        assert!(!super::is_watch_entry(&entry(
-            "hearthdeck:video-game",
-            &["Game", "AudioVideo"]
-        )));
-    }
-
-    #[test]
-    fn media_categories_alone_do_not_make_a_watch_app() {
-        // Volume mixers and capture tools declare AudioVideo/Video/Player but
-        // have nothing to watch; matching on the category used to pull them in
-        // alongside the players a local install already has.
-        let mixer = entry(
-            "org.pulseaudio.pavucontrol.desktop",
-            &["AudioVideo", "Utility"],
-        );
-        let capture = entry("qvidcap.desktop", &["AudioVideo", "Video", "Player"]);
-        let player = entry(
-            "com.system76.CosmicPlayer.desktop",
-            &["AudioVideo", "Player", "Video"],
-        );
-
-        assert!(!super::is_watch_entry(&mixer));
-        assert!(!super::is_watch_entry(&capture));
-        assert!(!super::is_watch_entry(&player));
     }
 
     #[test]
@@ -1357,6 +1198,7 @@ mod tests {
         .expect("existing group format");
         let game = Arc::new(LibraryItem {
             id: "romm:42".to_owned(),
+            section: Section::ConsoleGames,
             categories: vec!["Game".to_owned()],
             console: Some(crate::library_item::ConsoleMetadata {
                 platform_id: 7,

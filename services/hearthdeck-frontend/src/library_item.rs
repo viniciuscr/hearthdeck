@@ -26,6 +26,7 @@ pub struct LibraryItem {
     pub store: Option<String>,
     pub sources: Vec<String>,
     pub console: Option<ConsoleMetadata>,
+    pub section: hearthdeck_protocol::Section,
 }
 
 impl LibraryItem {
@@ -132,6 +133,7 @@ impl Default for LibraryItem {
             store: None,
             sources: Vec::new(),
             console: None,
+            section: hearthdeck_protocol::Section::Applications,
         }
     }
 }

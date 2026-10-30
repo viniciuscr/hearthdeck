@@ -1,18 +1,17 @@
-//! A deterministic engine that reproduces what the frontend does today.
+//! A deterministic scan engine using the catalog's shared identity rules.
 //!
 //! It exists for three reasons: it is the fallback when no checkpoint can be
 //! loaded, it is the baseline a Laya scan has to beat before the switch is worth
 //! making, and it is what the tests run against, since loading a checkpoint in
 //! CI is neither fast nor hermetic.
 //!
-//! The service and emulator lists are lifted from `app_group.rs` in the
-//! frontend, where they are the "shady" matching this crate is meant to replace.
 
 use super::decision::{
     AppCategorization, AppTraits, Categorizer, CategoryMatch, DecisionProvenance,
 };
 use super::error::Result;
 use super::model::AppProfile;
+use super::rules;
 use super::taxonomy::{Section, Taxonomy, section_from_traits};
 
 /// Probability assigned to a trait a hard rule matched.
@@ -23,67 +22,6 @@ const MAPPED: f64 = 0.6;
 
 /// Namespace the daemon uses to tag a record with its RomM console.
 const CONSOLE_PREFIX: &str = "hearthdeck-console:";
-
-/// Streaming and broadcast services.
-const WATCH_SERVICES: &[&str] = &[
-    "stremio",
-    "netflix",
-    "primevideo",
-    "prime video",
-    "prime-video",
-    "disneyplus",
-    "disney+",
-    "hulu",
-    "hbomax",
-    "hbo max",
-    "max.com",
-    "crunchyroll",
-    "paramountplus",
-    "paramount+",
-    "peacock",
-    "tubitv",
-    "tubi.tv",
-    "plutotv",
-    "pluto.tv",
-    "appletv",
-    "apple tv",
-    "tv.apple",
-    "plex",
-    "jellyfin",
-    "emby",
-    "kodi",
-];
-
-/// Console emulators and retro-game frontends.
-const EMULATORS: &[&str] = &[
-    "retroarch",
-    "dolphin",
-    "pcsx2",
-    "duckstation",
-    "rpcs3",
-    "citra",
-    "yuzu",
-    "ryujinx",
-    "mame",
-    "mupen",
-    "xemu",
-    "melon",
-    "ppsspp",
-    "snes9x",
-    "mgba",
-    "mednafen",
-    "desmume",
-    "fsuae",
-    "scummvm",
-    "cemu",
-    "ares",
-    "bsnes",
-    "limbo",
-    "flycast",
-    "redream",
-    "standalone",
-    "emulator",
-];
 
 /// Freedesktop category to taxonomy slug, checked in order: the first category
 /// on a record that has a mapping wins.
@@ -130,10 +68,10 @@ impl Categorizer for HeuristicCategorizer {
             .categories
             .iter()
             .any(|category| category.starts_with(CONSOLE_PREFIX))
-            || EMULATORS.iter().any(|name| signal.contains(name));
+            || rules::emulator(&signal);
         // A game is never a streaming-service client, however its exec line is
-        // spelled — the same guard the frontend applies.
-        let watch = !is_game && WATCH_SERVICES.iter().any(|name| signal.contains(name));
+        // spelled — the same guard the catalog applies.
+        let watch = !is_game && rules::streaming(&signal);
 
         let game_probability = if is_game { HARD } else { 0.0 };
         let emulator_probability = if emulator { HARD } else { 0.0 };
