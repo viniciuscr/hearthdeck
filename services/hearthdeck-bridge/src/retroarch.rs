@@ -781,9 +781,13 @@ mod tests {
     /// at all, and the env file still wins (`EnvironmentFile=` overrides
     /// `Environment=`), which is how a box moves the tree to a synced folder.
     #[test]
-    fn every_bridge_unit_presets_the_save_root_the_code_defaults_to() {
+    fn every_bridge_and_daemon_unit_presets_the_save_root_the_code_defaults_to() {
         let deploy_unit = include_str!("../../../deploy/systemd/hearthdeck-bridge.service");
         let packaged_unit = include_str!("../../../packaging/arch/hearthdeck-bridge.service");
+        let daemon_units = [
+            include_str!("../../../deploy/systemd/hearthdeck-daemon.service"),
+            include_str!("../../../packaging/arch/hearthdeck-daemon.service"),
+        ];
         let env_example = include_str!("../../../deploy/systemd/daemon.env.example");
 
         let preset = |unit: &str| {
@@ -797,6 +801,13 @@ mod tests {
             Some(deployed.as_str()),
             "the packaged unit and the checkout unit disagree on the save root"
         );
+        for unit in daemon_units {
+            assert_eq!(
+                preset(unit).as_deref(),
+                Some(deployed.as_str()),
+                "a daemon unit and the bridge unit disagree on the save root"
+            );
+        }
         // `%h` is systemd's home specifier; the code resolves the same place
         // from $HOME for a dev run that has no unit at all.
         assert_eq!(

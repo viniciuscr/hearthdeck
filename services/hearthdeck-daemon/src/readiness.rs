@@ -458,7 +458,10 @@ impl BiosSource {
     /// [`DEFAULT_BIOS_SOURCE_URL`] when none is configured. Split from the
     /// environment so the fallback is unit-testable, the same way
     /// `retro_save_root_from` is.
-    fn resolve(url: Option<&str>, token: Option<String>) -> Result<Self, ReadinessError> {
+    pub(crate) fn resolve(
+        url: Option<&str>,
+        token: Option<String>,
+    ) -> Result<Self, ReadinessError> {
         Self::parse(url.unwrap_or(DEFAULT_BIOS_SOURCE_URL), token)
     }
 
@@ -655,7 +658,7 @@ impl<'a> SourceFetcher<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum ReadinessError {
     InvalidSourceUrl,
 }

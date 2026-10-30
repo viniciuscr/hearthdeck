@@ -3,6 +3,8 @@ use std::{env, net::SocketAddr, path::PathBuf};
 use anyhow::{Context, Result, bail};
 use directories::ProjectDirs;
 
+use crate::readiness::{BiosSource, ReadinessError};
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub bind_address: SocketAddr,
@@ -14,6 +16,9 @@ pub struct Config {
     /// Host roots of the RomM deployment, so the daemon reads roms and artwork
     /// off disk instead of downloading them through the API.
     pub romm: RommPaths,
+    /// The user's BIOS/core source, read once at startup. A malformed URL is
+    /// kept as the error so the sync answers 503 instead of the daemon refusing to start.
+    pub(crate) bios_source: Result<BiosSource, ReadinessError>,
 }
 
 #[derive(Clone, Debug)]
@@ -123,6 +128,7 @@ impl Config {
             bridge_socket_path: hearthdeck_protocol::paths::bridge_socket_path(),
             lan_enabled,
             tls,
+            bios_source: BiosSource::from_env(),
             romm,
         })
     }

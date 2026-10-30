@@ -305,37 +305,18 @@ impl DaemonClient {
 
     /// Fetches the full catalog from the daemon.
     pub async fn fetch_library(&self) -> Result<Vec<CatalogItem>, DaemonError> {
-        let response = self
-            .transport
-            .http()
-            .get(self.api_url("/v1/library"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+        let request = self.transport.http().get(self.api_url("/v1/library"));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
     /// Reads the categorization scan's state and its last report.
     pub async fn categorization(&self) -> Result<CategorizationSnapshot, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .get(self.api_url("/v1/categorization"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+            .get(self.api_url("/v1/categorization"));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
@@ -357,17 +338,11 @@ impl DaemonClient {
 
     /// Removes the dashboard rails the model published.
     pub async fn remove_categorization_collections(&self) -> Result<(), DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .delete(self.api_url("/v1/categorization/collections"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
+            .delete(self.api_url("/v1/categorization/collections"));
+        self.send(request).await?;
         Ok(())
     }
 
@@ -413,56 +388,32 @@ impl DaemonClient {
         item_id: &str,
         input_profile: InputProfile,
     ) -> Result<ApplicationSession, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
             .post(self.api_url(&format!("/v1/launch/{}", item_id)))
-            .query(&[("input_profile", input_profile)])
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+            .query(&[("input_profile", input_profile)]);
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
     /// Gets the currently active application session.
     pub async fn active_session(&self) -> Result<Option<ApplicationSession>, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .get(self.api_url("/v1/sessions/active"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+            .get(self.api_url("/v1/sessions/active"));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
     /// Lists available retro consoles from RomM, caching their artwork.
     pub async fn list_retro_consoles(&self) -> Result<Vec<RetroConsole>, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .get(self.api_url("/v1/retro/consoles"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+            .get(self.api_url("/v1/retro/consoles"));
+        let response = self.send(request).await?;
         let platforms: Vec<RetroPlatform> = response
             .json()
             .await
@@ -512,7 +463,7 @@ impl DaemonClient {
         let request = self
             .transport
             .http()
-            .post(self.api_url("/v1/retro/readiness/bios-sync"));
+            .post(self.api_url("/v1/retro/readiness/sync"));
         self.send(request)
             .await?
             .json()
@@ -547,19 +498,8 @@ impl DaemonClient {
         let params = retro_rom_query_params(platform_id, search, filters, limit, offset);
         let url = format!("{}?{}", self.api_url("/v1/retro/roms"), params.join("&"));
 
-        let response = self
-            .transport
-            .http()
-            .get(&url)
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+        let request = self.transport.http().get(&url);
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
@@ -572,19 +512,8 @@ impl DaemonClient {
             url = format!("{url}?platform_id={platform_id}");
         }
 
-        let response = self
-            .transport
-            .http()
-            .get(&url)
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+        let request = self.transport.http().get(&url);
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
@@ -675,19 +604,11 @@ impl DaemonClient {
     /// Fetches one game's full detail plus its artwork, both already cached
     /// locally, so the details screen paints without a second round trip.
     pub async fn retro_rom_details(&self, rom_id: i64) -> Result<RetroDetails, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .get(self.api_url(&format!("/v1/retro/roms/{rom_id}")))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+            .get(self.api_url(&format!("/v1/retro/roms/{rom_id}")));
+        let response = self.send(request).await?;
         let info: RetroGameDetails = response
             .json()
             .await
@@ -730,19 +651,8 @@ impl DaemonClient {
     /// for itself - which is how the dashboard ended up looking its own items up
     /// and drawing a generic mark for anything its library did not also hold.
     pub async fn list_collections(&self) -> Result<Vec<Collection>, DaemonError> {
-        let response = self
-            .transport
-            .http()
-            .get(self.api_url("/v1/collections"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+        let request = self.transport.http().get(self.api_url("/v1/collections"));
+        let response = self.send(request).await?;
         let collections: Vec<Collection> = response
             .json()
             .await
@@ -839,7 +749,7 @@ impl DaemonClient {
         slug: &str,
         item: &CollectionItem,
     ) -> Result<Collection, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
             .post(self.api_url(&format!("/v1/collections/{slug}/items")))
@@ -847,16 +757,8 @@ impl DaemonClient {
                 "item_id": item.item_id,
                 "name": item.name,
                 "icon": item.icon,
-            }))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+            }));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
@@ -867,20 +769,12 @@ impl DaemonClient {
         slug: &str,
         item_id: &str,
     ) -> Result<Collection, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
             .delete(self.api_url(&format!("/v1/collections/{slug}/items")))
-            .json(&serde_json::json!({ "item_id": item_id }))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+            .json(&serde_json::json!({ "item_id": item_id }));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
@@ -889,19 +783,8 @@ impl DaemonClient {
     /// The code is approved on another device, which is why nothing here sends a
     /// password: the daemon does not accept one, so there is none to send.
     pub async fn start_stremio_link(&self) -> Result<StremioLinkOffer, DaemonError> {
-        let response = self
-            .transport
-            .http()
-            .post(self.api_url("/v1/stremio/link"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+        let request = self.transport.http().post(self.api_url("/v1/stremio/link"));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
@@ -910,52 +793,27 @@ impl DaemonClient {
     /// The daemon is what talks to Stremio, so neither the code nor the session
     /// crosses this call: it only asks what the daemon found.
     pub async fn poll_stremio_link(&self) -> Result<StremioLink, DaemonError> {
-        let response = self
-            .transport
-            .http()
-            .get(self.api_url("/v1/stremio/link"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+        let request = self.transport.http().get(self.api_url("/v1/stremio/link"));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
     /// The linked Stremio account, or `None` when none is linked.
     pub async fn stremio_connection(&self) -> Result<Option<StremioConnection>, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .get(self.api_url("/v1/stremio/settings"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+            .get(self.api_url("/v1/stremio/settings"));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
     pub async fn romm_settings(&self) -> Result<Option<RommSettings>, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .get(self.api_url("/v1/retro/settings"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
+            .get(self.api_url("/v1/retro/settings"));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
@@ -967,87 +825,52 @@ impl DaemonClient {
         username: &str,
         password: &str,
     ) -> Result<RommSettings, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
             .post(self.api_url("/v1/retro/login"))
-            .headers(self.auth_headers().await?)
             .json(&serde_json::json!({
                 "base_url": base_url,
                 "username": username,
                 "password": password,
-            }))
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
+            }));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
     /// Asks the daemon for a RomM device code the user approves on a phone.
     pub async fn start_romm_link(&self, base_url: &str) -> Result<RommLinkOffer, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
             .post(self.api_url("/v1/retro/link"))
-            .headers(self.auth_headers().await?)
-            .json(&serde_json::json!({ "base_url": base_url }))
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
+            .json(&serde_json::json!({ "base_url": base_url }));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
     pub async fn poll_romm_link(&self) -> Result<RommLink, DaemonError> {
-        let response = self
-            .transport
-            .http()
-            .get(self.api_url("/v1/retro/link"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
+        let request = self.transport.http().get(self.api_url("/v1/retro/link"));
+        let response = self.send(request).await?;
         response.json().await.map_err(DaemonError::Deserialization)
     }
 
     pub async fn clear_romm_settings(&self) -> Result<(), DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .delete(self.api_url("/v1/retro/settings"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
+            .delete(self.api_url("/v1/retro/settings"));
+        self.send(request).await?;
         Ok(())
     }
 
     /// Unlinks the account: the session and the rows it published go together.
     pub async fn unlink_stremio(&self) -> Result<(), DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
-            .delete(self.api_url("/v1/stremio/settings"))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+            .delete(self.api_url("/v1/stremio/settings"));
+        self.send(request).await?;
         Ok(())
     }
 
@@ -1069,20 +892,12 @@ impl DaemonClient {
         rom_id: i64,
         favorite: bool,
     ) -> Result<bool, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
             .post(self.api_url(&format!("/v1/retro/roms/{rom_id}/favorite")))
-            .json(&serde_json::json!({ "favorite": favorite }))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+            .json(&serde_json::json!({ "favorite": favorite }));
+        let response = self.send(request).await?;
         let state: FavoriteState = response
             .json()
             .await
@@ -1097,20 +912,12 @@ impl DaemonClient {
         rom_id: i64,
         backlogged: bool,
     ) -> Result<bool, DaemonError> {
-        let response = self
+        let request = self
             .transport
             .http()
             .post(self.api_url(&format!("/v1/retro/roms/{rom_id}/backlog")))
-            .json(&serde_json::json!({ "backlogged": backlogged }))
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(DaemonError::Connection)?;
-
-        if !response.status().is_success() {
-            return Err(Self::http_error(response).await);
-        }
-
+            .json(&serde_json::json!({ "backlogged": backlogged }));
+        let response = self.send(request).await?;
         let state: BacklogState = response
             .json()
             .await

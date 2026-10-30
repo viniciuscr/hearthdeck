@@ -66,7 +66,7 @@ fn protected_routes() -> Router<SharedState> {
         )
         .route("/v1/retro/consoles", get(list_retro_consoles))
         .route("/v1/retro/readiness", get(retro_readiness))
-        .route("/v1/retro/readiness/bios-sync", post(sync_retro_bios))
+        .route("/v1/retro/readiness/sync", post(sync_retro_readiness))
         .route("/v1/retro/cores/install", post(install_retro_cores))
         .route("/v1/retro/roms", get(list_retro_roms))
         .route("/v1/retro/facets", get(list_retro_facets))
@@ -264,11 +264,11 @@ async fn retro_readiness(
 /// Places the BIOS files (and source-only cores) the active platforms need,
 /// fetched only from the user's own source. Refused outright when no source is
 /// configured: Hearthdeck never picks one for the user.
-async fn sync_retro_bios(
+async fn sync_retro_readiness(
     State(state): State<SharedState>,
 ) -> Result<Json<RetroBiosSyncReport>, ApiError> {
     let platforms = romm_platforms(&state).await?;
-    let source = readiness::BiosSource::from_env().map_err(|error| ApiError {
+    let source = state.config.bios_source.clone().map_err(|error| ApiError {
         status: StatusCode::SERVICE_UNAVAILABLE,
         message: error.to_string(),
         settings: None,
@@ -2153,6 +2153,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         ));
@@ -2331,6 +2332,7 @@ mod tests {
                     lan_enabled: false,
                     tls: None,
                     romm: crate::config::RommPaths::resolve(None, None, None),
+                    bios_source: crate::readiness::BiosSource::resolve(None, None),
                 },
                 database,
             ));
@@ -2450,6 +2452,7 @@ mod tests {
                     lan_enabled: false,
                     tls: None,
                     romm: crate::config::RommPaths::resolve(None, None, None),
+                    bios_source: crate::readiness::BiosSource::resolve(None, None),
                 },
                 database,
             ));
@@ -2538,6 +2541,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         ));
@@ -2596,6 +2600,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         ));
@@ -2752,6 +2757,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         ));
@@ -2877,6 +2883,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         ));
@@ -2972,6 +2979,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         ));
@@ -3071,6 +3079,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         ));
@@ -3170,6 +3179,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         ));
@@ -3215,6 +3225,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         );
@@ -3550,6 +3561,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         ));
@@ -3809,6 +3821,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         ));
@@ -3914,6 +3927,7 @@ mod tests {
                 lan_enabled: false,
                 tls: None,
                 romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
         ));
