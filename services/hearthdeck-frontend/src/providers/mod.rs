@@ -67,6 +67,7 @@ impl GameRecord {
             exec: self.exec,
             icon: icon_source,
             categories: self.categories,
+            form_factor: None,
         };
         crate::app_group::tag_source(&mut entry, self.install_source.as_deref());
         if crate::app_group::Section::Applications.matches(&entry) {
@@ -195,11 +196,7 @@ mod tests {
 
         assert_eq!(
             application.into_library_item().categories,
-            [
-                "Utility",
-                "hearthdeck-source:flatpak",
-                "hearthdeck-form:desktop"
-            ]
+            ["Utility", "hearthdeck-source:flatpak"]
         );
     }
 
@@ -207,20 +204,20 @@ mod tests {
     /// doubt about one the rules already know is no reason to demote it.
     #[test]
     fn a_model_verdict_can_promote_an_application_but_never_demote_one() {
-        let categories = |form: FormFactor, id: &str| {
+        let resolved_form = |form: FormFactor, id: &str| {
             let mut application = record(None);
             application.id = id.into();
             application.modeled_form = Some(form);
-            application.into_library_item().categories
+            application.into_library_item().form_factor
         };
 
-        assert!(
-            categories(FormFactor::Couch, "org.gimp.GIMP.desktop")
-                .contains(&"hearthdeck-form:couch".to_owned())
+        assert_eq!(
+            resolved_form(FormFactor::Couch, "org.gimp.GIMP.desktop"),
+            Some(FormFactor::Couch)
         );
-        assert!(
-            categories(FormFactor::Desktop, "net.stremio.Stremio.desktop")
-                .contains(&"hearthdeck-form:couch".to_owned())
+        assert_eq!(
+            resolved_form(FormFactor::Desktop, "net.stremio.Stremio.desktop"),
+            Some(FormFactor::Couch)
         );
     }
 
@@ -238,8 +235,7 @@ mod tests {
             [
                 "Video",
                 "hearthdeck-source:flatpak",
-                "hearthdeck-source:streaming",
-                "hearthdeck-form:couch"
+                "hearthdeck-source:streaming"
             ]
         );
     }

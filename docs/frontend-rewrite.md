@@ -153,8 +153,11 @@ The library, filters, grid and console cache use Hearthdeck's `LibraryItem`,
 not COSMIC's `DesktopEntryData`. The model keeps the fields those consumers
 actually read; desktop actions, MIME types, working directories and local
 process-launch flags are not part of it. Launches still go through the daemon.
-`GameRecord` remains the loading adapter. Category-encoded facets and form
-factors retain the existing saved filter format pending their own migration.
+`GameRecord` remains the loading adapter. Form factor is a typed optional field
+on `LibraryItem`; rules supply the default, model verdicts can promote to Couch,
+and user overrides win. Existing saved `hearthdeck-form:*` filters are matched
+against that field, not tags on each item. Other category-encoded facets remain
+pending migration.
 
 | Slice | Where | Status |
 | --- | --- | --- |
