@@ -30,6 +30,7 @@ use crate::{
     diagnostics::{self, RommGame, RommPlatform, RommQueryError},
     retro::RetroLaunchError,
     romm_link::{self, DeviceOffer, DevicePoll},
+    sessions::LaunchError,
     settings::{
         self, BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
     },
@@ -404,21 +405,18 @@ async fn launch_retro(
         session_id,
         input_profile,
     };
-    let response = crate::bridge::request(&state.config.bridge_socket_path, request)
-        .await
-        .map_err(ApiError::bad_gateway)?;
-    let session = match response {
-        BridgeResponse::LaunchAccepted { session } => session,
-        BridgeResponse::Error { message, .. } => return Err(ApiError::bad_gateway(message)),
-        _ => return Err(ApiError::bad_gateway("bridge rejected retro game launch")),
-    };
-    if let Err(error) = state.activity.session_started(activity, &session).await {
-        warn!(%error, rom_id, "failed to record retro launch activity");
-    }
+    let session =
+        state
+            .sessions()
+            .launch(request, activity)
+            .await
+            .map_err(|error| match error {
+                LaunchError::Unexpected(_) => {
+                    ApiError::bad_gateway("bridge rejected retro game launch")
+                }
+                other => ApiError::bad_gateway(other),
+            })?;
     info!(rom_id, "retro game launch accepted");
-    let _ = state.events.send(ServerEvent::ApplicationSessionChanged {
-        session: Some(session.clone()),
-    });
     Ok(Json(session))
 }
 
@@ -1005,32 +1003,17 @@ async fn launch_catalog(
             input_profile,
         }
     };
-    let response = crate::bridge::request(&state.config.bridge_socket_path, request)
+    let session = state
+        .sessions()
+        .launch(request, catalog_activity_entry(&item))
         .await
-        .map_err(ApiError::bad_gateway)?;
-    // The bridge's own words whenever it has any. "bridge rejected application
-    // launch" on its own sent somebody looking in the wrong place for a launch that
-    // failed because of a source id, which the bridge had already named.
-    let session = match response {
-        BridgeResponse::LaunchAccepted { session } => session,
-        BridgeResponse::Error { message, .. } => return Err(ApiError::bad_gateway(message)),
-        other => {
-            return Err(ApiError::bad_gateway(format!(
-                "bridge rejected application launch: {other:?}"
-            )));
-        }
-    };
-    if let Err(error) = state
-        .activity
-        .session_started(catalog_activity_entry(&item), &session)
-        .await
-    {
-        warn!(%error, item_id = %id, "failed to record catalog launch activity");
-    }
+        .map_err(|error| match error {
+            LaunchError::Unexpected(other) => {
+                ApiError::bad_gateway(format!("bridge rejected application launch: {other:?}"))
+            }
+            other => ApiError::bad_gateway(other),
+        })?;
     info!(item_id = %id, "catalog launch accepted");
-    let _ = state.events.send(ServerEvent::ApplicationSessionChanged {
-        session: Some(session.clone()),
-    });
     Ok(Json(session))
 }
 
@@ -1155,7 +1138,7 @@ async fn stop_active_application_session(
     .map_err(ApiError::bad_gateway)?;
     match response {
         BridgeResponse::StopAccepted { session_id } => {
-            crate::activity::play_finished(&state, &session_id).await;
+            state.sessions().finished(&session_id).await;
             Ok(StatusCode::ACCEPTED)
         }
         BridgeResponse::Error {
@@ -1192,7 +1175,7 @@ async fn stop_application_session(
     }
     // A stop the user asked for knows when the play ended, so it does not wait for
     // the watcher's next tick.
-    crate::activity::play_finished(&state, &id).await;
+    state.sessions().finished(&id).await;
     Ok(StatusCode::ACCEPTED)
 }
 

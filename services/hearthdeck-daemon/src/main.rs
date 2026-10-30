@@ -16,6 +16,7 @@ mod enrichment;
 mod provider_worker;
 mod retro;
 mod romm_link;
+mod sessions;
 mod settings;
 mod state;
 mod stremio;
@@ -117,7 +118,10 @@ async fn main() -> Result<()> {
     // overlay is gone, so a game closed from the couch would never be recorded as
     // finished. Dropping the handle detaches the watcher, which is what a daemon
     // that wants it for its whole life should do.
-    let _session_watcher = activity::spawn_session_watcher(state.clone());
+    let session_state = state.clone();
+    let _session_watcher = tokio::spawn(async move {
+        session_state.sessions().watch().await;
+    });
     // Nothing runs at boot, on purpose: the model is fetched when the user turns
     // smart categorization on, and nothing is classified until a button asks.
     // Until then, the ordinary category tabs stand and no checkpoint is fetched.
