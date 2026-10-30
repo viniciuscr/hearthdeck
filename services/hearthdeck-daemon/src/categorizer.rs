@@ -118,6 +118,11 @@ pub struct CategorizerSettings {
     /// because scans coalesce on `running`, every later scan would silently
     /// no-op until the daemon restarted.
     pub timeout: Duration,
+    /// The child's `MemoryMax=`, in any form systemd accepts (`4G`, `50%`).
+    ///
+    /// A cap on the scan alone: over it, the kernel kills the scan, never the
+    /// daemon or the game being played.
+    pub memory_max: String,
 }
 
 impl CategorizerSettings {
@@ -184,6 +189,9 @@ impl CategorizerSettings {
                 .filter(|seconds| *seconds > 0)
                 .map(Duration::from_secs)
                 .unwrap_or_else(default_scan_timeout),
+            memory_max: get("HEARTHDECK_AI_MEMORY_MAX")
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "50%".to_owned()),
         }
     }
 
@@ -309,6 +317,26 @@ impl ProcessScanRunner {
         }
         arguments
     }
+
+    /// `systemd-run` arguments that run the child in its own transient scope at
+    /// the lowest CPU and IO weight, under [`CategorizerSettings::memory_max`].
+    /// The scope keeps the child's stdio and PID, so relaying and the timeout
+    /// kill work unchanged.
+    fn scope_arguments(&self) -> Vec<OsString> {
+        let mut arguments: Vec<OsString> = vec![
+            "--user".into(),
+            "--scope".into(),
+            "--quiet".into(),
+            "--collect".into(),
+            "--property=CPUWeight=1".into(),
+            "--property=IOWeight=1".into(),
+            format!("--property=MemoryMax={}", self.settings.memory_max).into(),
+            "--".into(),
+            self.settings.binary.clone().into_os_string(),
+        ];
+        arguments.extend(self.arguments());
+        arguments
+    }
 }
 
 #[async_trait]
@@ -360,9 +388,9 @@ impl ScanRunner for ProcessScanRunner {
             }
         }
 
-        let mut command = tokio::process::Command::new(&self.settings.binary);
+        let mut command = tokio::process::Command::new("systemd-run");
         command
-            .args(self.arguments())
+            .args(self.scope_arguments())
             // The hub would otherwise cache into the user's shared
             // `~/.cache/huggingface`, outside anything this project manages.
             .env("HF_HUB_CACHE", &self.settings.cache_dir)
@@ -1068,6 +1096,7 @@ mod tests {
             model_path: None,
             dtype: "float16".to_owned(),
             timeout: std::time::Duration::from_secs(60 * 60),
+            memory_max: "50%".to_owned(),
         }
     }
 
@@ -1247,6 +1276,7 @@ mod tests {
             model_path: Some("/models/laya".into()),
             dtype: "float32".to_owned(),
             timeout: std::time::Duration::from_secs(60 * 60),
+            memory_max: "50%".to_owned(),
         };
         let runner = ProcessScanRunner::new(settings);
         let arguments: Vec<String> = runner
@@ -1275,6 +1305,55 @@ mod tests {
                 "/models/laya",
             ]
         );
+    }
+
+    #[test]
+    fn the_child_runs_in_its_own_capped_low_priority_scope() {
+        let mut settings = CategorizerSettings::from_lookup(
+            std::path::Path::new("/data/hearthdeck.db"),
+            &|name| (name == "HEARTHDECK_AI_MEMORY_MAX").then(|| "3G".to_owned()),
+            "hearthdeck-ai".into(),
+        );
+        settings.model_path = None;
+        let runner = ProcessScanRunner::new(settings);
+        let arguments: Vec<String> = runner
+            .scope_arguments()
+            .into_iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        let child_at = arguments
+            .iter()
+            .position(|argument| argument == "--")
+            .unwrap();
+
+        assert_eq!(
+            arguments[..child_at],
+            [
+                "--user",
+                "--scope",
+                "--quiet",
+                "--collect",
+                "--property=CPUWeight=1",
+                "--property=IOWeight=1",
+                "--property=MemoryMax=3G",
+            ]
+        );
+        assert_eq!(arguments[child_at + 1], "hearthdeck-ai");
+        assert_eq!(
+            arguments[child_at + 2..],
+            runner
+                .arguments()
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()[..]
+        );
+
+        let default = CategorizerSettings::from_lookup(
+            std::path::Path::new("/data/hearthdeck.db"),
+            &|_| None,
+            "hearthdeck-ai".into(),
+        );
+        assert_eq!(default.memory_max, "50%");
     }
 
     #[test]
