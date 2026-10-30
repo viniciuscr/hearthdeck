@@ -140,6 +140,10 @@ records from `degraded`; an empty catalog is not a bridge health signal.
 
 ## Trust Boundaries
 
+- Protected API routes are grouped behind one authentication route layer, before
+  body, path, query and WebSocket extraction. Unpaired malformed requests return
+  401 rather than parser errors. Only health and pairing completion are public;
+  pairing-code creation remains exclusive to the loopback admin router.
 - The client API receives typed resource and action IDs, never shell commands.
 - The bridge protocol has typed health, discovery, launch, active-session, and
   stop-session requests. It has no command or argument field.

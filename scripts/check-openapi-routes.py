@@ -7,7 +7,7 @@ root = Path(__file__).resolve().parents[1]
 api = (root / "services/hearthdeck-daemon/src/api.rs").read_text()
 router = api.split("pub fn router(", 1)[1].split("/// Routes served only", 1)[0]
 route_pattern = re.compile(
-    r'\.route\(\s*"([^"]+)"\s*,(.*?)(?=\n\s*\.route\(|\n\s*\.with_state\(state\))',
+    r'\.route\(\s*"([^"]+)"\s*,(.*?)(?=\n\s*\.route\(|\n\s*\.with_state\(state\)|\n\})',
     re.DOTALL,
 )
 method_pattern = re.compile(r"\b(get|post|put|delete|patch|head|options|trace)\s*\(")

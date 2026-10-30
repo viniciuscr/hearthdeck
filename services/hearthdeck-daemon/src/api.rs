@@ -1,10 +1,11 @@
 use axum::{
     Json, Router,
     extract::{
-        Path, Query, State,
+        Path, Query, Request, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
@@ -41,8 +42,19 @@ use crate::discovery::providers::stremio_arrivals;
 pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/v1/health", get(health))
-        .route("/v1/diagnostics", get(diagnostics))
         .route("/v1/pairing/complete", post(complete_pairing))
+        .merge(
+            protected_routes().route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                require_authentication,
+            )),
+        )
+        .with_state(state)
+}
+
+fn protected_routes() -> Router<SharedState> {
+    Router::new()
+        .route("/v1/diagnostics", get(diagnostics))
         .route("/v1/library", get(list_library))
         .route("/v1/activity/recent", get(list_recent_activity))
         .route("/v1/collections", get(list_collections))
@@ -95,7 +107,6 @@ pub fn router(state: SharedState) -> Router {
         )
         .route("/v1/sessions/{id}/stop", post(stop_application_session))
         .route("/v1/events", get(events))
-        .with_state(state)
 }
 
 /// Routes served only on the loopback admin listener. A remote device can
@@ -200,9 +211,7 @@ async fn complete_pairing(
 
 async fn list_library(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<Json<Vec<crate::catalog::CatalogItem>>, ApiError> {
-    authenticate(&state, &headers).await?;
     let items = state.catalog.list().await.map_err(ApiError::internal)?;
     info!(item_count = items.len(), "catalog listed");
     Ok(Json(items))
@@ -210,10 +219,8 @@ async fn list_library(
 
 async fn list_recent_activity(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Query(query): Query<RecentActivityQuery>,
 ) -> Result<Json<Vec<RecentActivity>>, ApiError> {
-    authenticate(&state, &headers).await?;
     let items = state
         .activity
         .recent(query.limit.unwrap_or(6))
@@ -224,9 +231,7 @@ async fn list_recent_activity(
 
 async fn list_retro_consoles(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<Json<Vec<RommPlatform>>, ApiError> {
-    authenticate(&state, &headers).await?;
     let mut platforms = diagnostics::romm_platforms(&state.settings)
         .await
         .map_err(ApiError::romm_query)?;
@@ -241,10 +246,8 @@ async fn list_retro_consoles(
 
 async fn list_retro_roms(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<RommGamesQuery>,
 ) -> Result<Json<RommGamesResponse>, ApiError> {
-    authenticate(&state, &headers).await?;
     let limit = query.limit.unwrap_or(48).clamp(1, 100);
     let offset = query.offset.unwrap_or(0);
     let search_term = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
@@ -277,10 +280,8 @@ async fn list_retro_roms(
 /// never renders a filter row with nothing to pick.
 async fn list_retro_facets(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<RommFacetsQuery>,
 ) -> Result<Json<Vec<RetroFacet>>, ApiError> {
-    authenticate(&state, &headers).await?;
     let values = diagnostics::romm_filter_values(&state.settings, query.platform_id)
         .await
         .map_err(ApiError::romm_query)?;
@@ -318,10 +319,8 @@ fn retro_facets(values: diagnostics::RommFilterValues) -> Vec<RetroFacet> {
 /// read the RetroArch launch path makes.
 async fn retro_rom_details(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Path(rom_id): Path<i64>,
 ) -> Result<Json<RetroGameDetails>, ApiError> {
-    authenticate(&state, &headers).await?;
     let game = diagnostics::romm_rom(&state.settings, rom_id)
         .await
         .map_err(ApiError::romm_query)?;
@@ -354,11 +353,9 @@ struct FavoriteResponse {
 /// RomM client shows the same thing and the choice survives a reinstall.
 async fn set_retro_favorite(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Path(rom_id): Path<i64>,
     Json(request): Json<FavoriteRequest>,
 ) -> Result<Json<FavoriteResponse>, ApiError> {
-    authenticate(&state, &headers).await?;
     let favorite = diagnostics::romm_set_favorite(&state.settings, rom_id, request.favorite)
         .await
         .map_err(ApiError::romm_query)?;
@@ -380,11 +377,9 @@ struct BacklogResponse {
 /// a local list, so the same flag shows up in RomM's UI and its filters.
 async fn set_retro_backlogged(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Path(rom_id): Path<i64>,
     Json(request): Json<BacklogRequest>,
 ) -> Result<Json<BacklogResponse>, ApiError> {
-    authenticate(&state, &headers).await?;
     let backlogged = diagnostics::romm_set_backlogged(&state.settings, rom_id, request.backlogged)
         .await
         .map_err(ApiError::romm_query)?;
@@ -431,11 +426,7 @@ async fn launch_retro(
 /// (`deploy/systemd/romm.service`), if the user has configured it.
 /// Not a generic "restart any unit" endpoint: the unit name is hardcoded in
 /// `diagnostics::restart_romm_service`, never taken from the request.
-async fn restart_romm_service(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
+async fn restart_romm_service() -> Result<StatusCode, ApiError> {
     diagnostics::restart_romm_service()
         .await
         .map_err(ApiError::bad_gateway)?;
@@ -445,10 +436,8 @@ async fn restart_romm_service(
 
 async fn retro_asset(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<RommAssetQuery>,
 ) -> Result<Response, ApiError> {
-    authenticate(&state, &headers).await?;
     let asset = diagnostics::romm_asset(&state.settings, &state.config.romm, &query.path)
         .await
         .map_err(ApiError::romm_query)?;
@@ -467,17 +456,13 @@ async fn retro_asset(
 
 async fn diagnostics(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<Json<diagnostics::DiagnosticsSnapshot>, ApiError> {
-    authenticate(&state, &headers).await?;
     Ok(Json(diagnostics::snapshot(&state.settings).await))
 }
 
 async fn get_romm_settings(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<Json<Option<RommSettings>>, ApiError> {
-    authenticate(&state, &headers).await?;
     state
         .settings
         .romm()
@@ -488,10 +473,8 @@ async fn get_romm_settings(
 
 async fn update_romm_settings(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Json(request): Json<UpdateRommSettingsRequest>,
 ) -> Result<Json<RommSettings>, ApiError> {
-    authenticate(&state, &headers).await?;
     state
         .settings
         .save_romm(&request.base_url, &request.token)
@@ -500,11 +483,7 @@ async fn update_romm_settings(
         .map_err(ApiError::invalid_romm_settings)
 }
 
-async fn clear_romm_settings(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
+async fn clear_romm_settings(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
     state.romm_link.cancel().await;
     state
         .settings
@@ -520,10 +499,8 @@ async fn clear_romm_settings(
 /// be sent to a loopback RomM.
 async fn romm_login(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Json(request): Json<RommLoginRequest>,
 ) -> Result<Json<RommSettings>, ApiError> {
-    authenticate(&state, &headers).await?;
     let base_url =
         settings::normalize_romm_url(&request.base_url).map_err(ApiError::invalid_romm_settings)?;
     let token = romm_link::mint_token(&base_url, &request.username, &request.password)
@@ -558,10 +535,8 @@ enum RommLinkResponse {
 
 async fn start_romm_link(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Json(request): Json<StartRommLinkRequest>,
 ) -> Result<Json<DeviceOffer>, ApiError> {
-    authenticate(&state, &headers).await?;
     let base_url =
         settings::normalize_romm_url(&request.base_url).map_err(ApiError::invalid_romm_settings)?;
     let offer = state
@@ -575,9 +550,7 @@ async fn start_romm_link(
 
 async fn poll_romm_link(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<Json<RommLinkResponse>, ApiError> {
-    authenticate(&state, &headers).await?;
     let response = match state.romm_link.poll().await.map_err(ApiError::romm_link)? {
         DevicePoll::Idle => RommLinkResponse::Idle,
         DevicePoll::Expired => RommLinkResponse::Expired,
@@ -628,11 +601,7 @@ enum StremioLinkResponse {
 /// The user approves the code on a device where they are already signed in, which
 /// is why no endpoint here accepts a password: there is nothing to encrypt but the
 /// key that comes back, and nothing to store but that key.
-async fn start_stremio_link(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<Json<LinkOffer>, ApiError> {
-    authenticate(&state, &headers).await?;
+async fn start_stremio_link(State(state): State<SharedState>) -> Result<Json<LinkOffer>, ApiError> {
     let offer = stremio::request_link()
         .await
         .map_err(ApiError::stremio_link)?;
@@ -647,9 +616,7 @@ async fn start_stremio_link(
 /// the account linked, and says nothing about the credential.
 async fn poll_stremio_link(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<Json<StremioLinkResponse>, ApiError> {
-    authenticate(&state, &headers).await?;
     let response = match state
         .stremio_link
         .poll()
@@ -679,9 +646,7 @@ async fn poll_stremio_link(
 
 async fn get_stremio_settings(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<Json<Option<StremioConnection>>, ApiError> {
-    authenticate(&state, &headers).await?;
     state
         .stremio
         .connection()
@@ -696,11 +661,7 @@ async fn get_stremio_settings(
 /// Continue Watching rail listing somebody's unfinished films on a box where
 /// nobody is linked — so the pending link is dropped first, then the session, then
 /// the source's rows (the decision recorded in `docs/stremio-integration.md`).
-async fn unlink_stremio(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
+async fn unlink_stremio(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
     state.stremio_link.cancel().await;
     state.stremio.clear().await.map_err(ApiError::internal)?;
     state
@@ -712,11 +673,7 @@ async fn unlink_stremio(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn rescan_library(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
+async fn rescan_library(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
     state
         .discovery
         .as_ref()
@@ -732,9 +689,7 @@ async fn rescan_library(
 
 async fn categorization(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<Json<CategorizationSnapshot<ScanReport>>, ApiError> {
-    authenticate(&state, &headers).await?;
     let service = state
         .categorization
         .as_ref()
@@ -756,11 +711,7 @@ async fn categorization(
 
 /// Turns smart categorization on, which only fetches the checkpoint. Nothing is
 /// classified until a button asks for it.
-async fn enable_categorization(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
+async fn enable_categorization(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
     let service = state
         .categorization
         .as_ref()
@@ -780,11 +731,7 @@ async fn enable_categorization(
 /// Turns it off and undoes what the model changed. A job already running is
 /// left to finish, but what it decides is thrown away. The downloaded model is
 /// kept, so turning it back on does not fetch it again.
-async fn disable_categorization(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
+async fn disable_categorization(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
     state
         .settings
         .set_categorization_enabled(false)
@@ -824,9 +771,7 @@ async fn remove_laya_collections(state: &SharedState) {
 /// feature is still on.
 async fn remove_categorization_collections(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
     remove_laya_collections(&state).await;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -834,11 +779,7 @@ async fn remove_categorization_collections(
 /// Detect couch-friendly apps: asks the model about every application it has
 /// no current verdict for. Answers `202`; the result arrives as a library change.
 /// Refused with `409` while the model is missing or another job holds it.
-async fn detect_form_factors(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
+async fn detect_form_factors(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
     let service = state
         .categorization
         .as_ref()
@@ -872,11 +813,7 @@ async fn detect_form_factors(
 /// Publish dashboard rails: files the library by rules (no model) and writes the
 /// rails that implies. Answers `202`; the result arrives on the event stream.
 /// Requesting one while another job runs is not an error: it coalesces.
-async fn start_categorization(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
+async fn start_categorization(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
     let service = state
         .categorization
         .as_ref()
@@ -902,11 +839,7 @@ async fn start_categorization(
     }
 }
 
-async fn get_settings(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Result<Json<UserSettings>, ApiError> {
-    authenticate(&state, &headers).await?;
+async fn get_settings(State(state): State<SharedState>) -> Result<Json<UserSettings>, ApiError> {
     state
         .settings
         .get()
@@ -917,10 +850,8 @@ async fn get_settings(
 
 async fn update_settings(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Json(request): Json<UpdateSettingsRequest>,
 ) -> Result<Json<UserSettings>, ApiError> {
-    authenticate(&state, &headers).await?;
     let theme_mode = request
         .theme_mode
         .as_deref()
@@ -951,10 +882,8 @@ async fn update_settings(
 
 async fn refresh_source(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Path(source_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
     match state
         .discovery
         .as_ref()
@@ -979,10 +908,8 @@ async fn refresh_source(
 
 async fn refresh_metadata(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Path(provider_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
     match state
         .enrichment
         .as_ref()
@@ -1012,11 +939,9 @@ async fn refresh_metadata(
 /// parses a prefix to pick a route.
 async fn launch_item(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Path(item_id): Path<String>,
     Query(options): Query<LaunchOptions>,
 ) -> Result<Json<ApplicationSession>, ApiError> {
-    authenticate(&state, &headers).await?;
     match item_launch(&item_id) {
         ItemLaunch::Retro(rom_id) => launch_retro(&state, rom_id, options.input_profile).await,
         ItemLaunch::Catalog(id) => launch_catalog(&state, id, options.input_profile).await,
@@ -1204,9 +1129,7 @@ fn heroic_launch_target(launch_id: &str) -> Option<(HeroicRunner, String)> {
 
 async fn active_application_session(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<Json<Option<ApplicationSession>>, ApiError> {
-    authenticate(&state, &headers).await?;
     let response = crate::bridge::request(
         &state.config.bridge_socket_path,
         BridgeRequest::ActiveApplicationSession,
@@ -1223,9 +1146,7 @@ async fn active_application_session(
 
 async fn stop_active_application_session(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
     let response = crate::bridge::request(
         &state.config.bridge_socket_path,
         BridgeRequest::StopActiveApplicationSession,
@@ -1254,10 +1175,8 @@ async fn stop_active_application_session(
 
 async fn stop_application_session(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &headers).await?;
     let response = crate::bridge::request(
         &state.config.bridge_socket_path,
         BridgeRequest::StopApplicationSession {
@@ -1279,10 +1198,8 @@ async fn stop_application_session(
 
 async fn events(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     websocket: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
-    authenticate(&state, &headers).await?;
     Ok(websocket.on_upgrade(move |socket| event_socket(socket, state.events.subscribe())))
 }
 
@@ -1309,6 +1226,15 @@ async fn event_socket(
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         }
     }
+}
+
+async fn require_authentication(
+    State(state): State<SharedState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    authenticate(&state, request.headers()).await?;
+    Ok(next.run(request).await)
 }
 
 async fn authenticate(state: &SharedState, headers: &HeaderMap) -> Result<(), ApiError> {
@@ -1583,9 +1509,7 @@ const COLLECTION_RULE_ITEM_LIMIT: u32 = 20;
 /// place that knows where each rule's data lives.
 async fn list_collections(
     State(state): State<SharedState>,
-    headers: HeaderMap,
 ) -> Result<Json<Vec<Collection>>, ApiError> {
-    authenticate(&state, &headers).await?;
     let mut collections = state.collections.list().await.map_err(ApiError::internal)?;
     for collection in &mut collections {
         // A rail that cannot be resolved is an empty rail, not a failed
@@ -1909,11 +1833,9 @@ struct CollectionItemRef {
 /// stands.
 async fn add_collection_item(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Path(slug): Path<String>,
     Json(request): Json<CollectionItemRequest>,
 ) -> Result<Json<Collection>, ApiError> {
-    authenticate(&state, &headers).await?;
     ensure_curated(&state, &slug).await?;
     let item = CollectionItem {
         item_id: request.item_id,
@@ -1940,11 +1862,9 @@ async fn add_collection_item(
 /// for it to be gone.
 async fn remove_collection_item(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Path(slug): Path<String>,
     Json(request): Json<CollectionItemRef>,
 ) -> Result<Json<Collection>, ApiError> {
-    authenticate(&state, &headers).await?;
     ensure_curated(&state, &slug).await?;
     state
         .collections
@@ -2274,6 +2194,149 @@ mod tests {
     }
 
     struct ApiTestProvider;
+
+    #[tokio::test]
+    async fn protected_routes_authenticate_before_extracting_invalid_requests() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.sock"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+            },
+            database,
+        ));
+        let app = router(state.clone());
+        for (method, path) in [
+            ("GET", "/v1/diagnostics"),
+            ("GET", "/v1/library"),
+            ("GET", "/v1/activity/recent?limit=invalid"),
+            ("GET", "/v1/collections"),
+            ("POST", "/v1/collections/favorites/items"),
+            ("DELETE", "/v1/collections/favorites/items"),
+            ("GET", "/v1/retro/consoles"),
+            ("GET", "/v1/retro/roms?limit=invalid"),
+            ("GET", "/v1/retro/facets"),
+            ("GET", "/v1/retro/roms/invalid"),
+            ("POST", "/v1/retro/roms/invalid/favorite"),
+            ("POST", "/v1/retro/roms/invalid/backlog"),
+            ("POST", "/v1/retro/service/restart"),
+            ("GET", "/v1/retro/assets"),
+            ("GET", "/v1/retro/settings"),
+            ("PUT", "/v1/retro/settings"),
+            ("DELETE", "/v1/retro/settings"),
+            ("POST", "/v1/retro/login"),
+            ("POST", "/v1/retro/link"),
+            ("GET", "/v1/retro/link"),
+            ("POST", "/v1/stremio/link"),
+            ("GET", "/v1/stremio/link"),
+            ("GET", "/v1/stremio/settings"),
+            ("DELETE", "/v1/stremio/settings"),
+            ("POST", "/v1/library/rescan"),
+            ("GET", "/v1/categorization"),
+            ("POST", "/v1/categorization/enable"),
+            ("POST", "/v1/categorization/disable"),
+            ("POST", "/v1/categorization/scan"),
+            ("DELETE", "/v1/categorization/collections"),
+            ("POST", "/v1/categorization/form-factors"),
+            ("GET", "/v1/settings"),
+            ("PUT", "/v1/settings"),
+            ("POST", "/v1/discovery/test/refresh"),
+            ("POST", "/v1/metadata/test/refresh"),
+            ("POST", "/v1/launch/test?input_profile=invalid"),
+            ("GET", "/v1/sessions/active"),
+            ("POST", "/v1/sessions/active/stop"),
+            ("POST", "/v1/sessions/test/stop"),
+            ("GET", "/v1/events"),
+        ] {
+            for token in [None, Some("Bearer invalid"), Some("Basic invalid")] {
+                let mut request = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json");
+                if let Some(token) = token {
+                    request = request.header("authorization", token);
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::from("{")).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::UNAUTHORIZED,
+                    "{method} {path}, {token:?}"
+                );
+            }
+        }
+        assert_eq!(
+            app.clone()
+                .oneshot(Request::get("/v1/health").body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK,
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(Request::post("/v1/pairing").body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND,
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(Request::get("/not-a-route").body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND,
+        );
+        let (_, pairing) = response_json(
+            local_router(state.clone()),
+            Request::post("/v1/pairing").body(Body::empty()).unwrap(),
+        )
+        .await;
+        let (status, paired) = response_json(
+            app.clone(),
+            Request::post("/v1/pairing/complete")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "code": pairing["code"], "client_name": "route-auth-test"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let token = paired["token"].as_str().unwrap();
+        let response = app
+            .oneshot(
+                Request::put("/v1/settings")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "paired requests reach extractors"
+        );
+    }
 
     #[tokio::test]
     async fn stop_active_requires_auth_and_finishes_only_the_bridge_selected_play() {
