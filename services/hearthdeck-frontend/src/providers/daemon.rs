@@ -1730,11 +1730,7 @@ mod tests {
             assert_eq!(record.modeled_form, modeled_form, "verdict: {verdict}");
             let entry = record.into_library_item();
             assert_eq!(of(&entry), expected, "id: {id}, verdict: {verdict}");
-            assert!(
-                entry
-                    .categories
-                    .contains(&"hearthdeck-source:flatpak".to_owned())
-            );
+            assert!(entry.sources.contains(&"flatpak".to_owned()));
         }
     }
 

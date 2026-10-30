@@ -68,8 +68,9 @@ impl GameRecord {
             categories: self.categories,
             form_factor: None,
             store: if is_game { self.store } else { None },
+            sources: Vec::new(),
         };
-        crate::app_group::tag_source(&mut entry, self.install_source.as_deref());
+        crate::app_group::set_sources(&mut entry, self.install_source.as_deref());
         if crate::app_group::Section::Applications.matches(&entry) {
             crate::form_factor::tag(&mut entry);
             // A model can only promote: what it calls desktop-only is what the
@@ -195,10 +196,9 @@ mod tests {
         let mut application = record(None);
         application.install_source = Some("flatpak".into());
 
-        assert_eq!(
-            application.into_library_item().categories,
-            ["Utility", "hearthdeck-source:flatpak"]
-        );
+        let item = application.into_library_item();
+        assert_eq!(item.categories, ["Utility"]);
+        assert_eq!(item.sources, ["flatpak"]);
     }
 
     /// The model can say an application suits the couch, and only that: its
@@ -231,13 +231,19 @@ mod tests {
         client.categories = vec!["Video".into()];
         client.install_source = Some("flatpak".into());
 
-        assert_eq!(
-            client.into_library_item().categories,
-            [
-                "Video",
-                "hearthdeck-source:flatpak",
-                "hearthdeck-source:streaming"
-            ]
-        );
+        let item = client.into_library_item();
+        assert_eq!(item.categories, ["Video"]);
+        assert_eq!(item.sources, ["flatpak", "streaming"]);
+    }
+
+    #[test]
+    fn missing_or_empty_origin_does_not_add_a_source() {
+        for origin in [None, Some(String::new())] {
+            let mut application = record(None);
+            application.install_source = origin;
+            let item = application.into_library_item();
+            assert!(item.sources.is_empty());
+            assert_eq!(item.categories, ["Utility"]);
+        }
     }
 }

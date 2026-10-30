@@ -159,7 +159,10 @@ and user overrides win. Existing saved `hearthdeck-form:*` filters are matched
 against that field, not tags on each item. PC-game stores also live in a typed
 `store` field; tabs and facets derive from it. Saved `hearthdeck-store:*` values
 remain compatible, including case-insensitive group/search matching and exact
-facet matching. Install-source and console facets remain category-encoded.
+facet matching. Install-source and streaming labels use a typed `sources` list;
+source facets and saved `hearthdeck-source:*` filters read that list with the
+same matching rules. Custom source strings stay open-ended. Only console facets
+remain category-encoded.
 
 | Slice | Where | Status |
 | --- | --- | --- |
