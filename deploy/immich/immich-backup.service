@@ -1,0 +1,9 @@
+[Unit]
+Description=Mirror Immich database dumps to the external disk
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/immich-backup.env
+ExecStart=%h/.local/bin/immich-backup
+Nice=10
+IOSchedulingClass=idle

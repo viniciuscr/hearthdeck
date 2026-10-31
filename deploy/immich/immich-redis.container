@@ -1,0 +1,10 @@
+[Unit]
+Description=Immich Valkey
+
+[Container]
+ContainerName=immich-redis
+Image=docker.io/valkey/valkey:9
+Pod=immich.pod
+
+[Service]
+Restart=always

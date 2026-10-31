@@ -1,0 +1,23 @@
+[Unit]
+Description=Immich server
+Requires=immich-db.service immich-redis.service
+After=immich-db.service immich-redis.service
+StartLimitIntervalSec=0
+
+[Container]
+ContainerName=immich-server
+Image=ghcr.io/immich-app/immich-server:v3
+Pod=immich.pod
+Volume=/mnt/immich/data:/data
+Volume=/etc/localtime:/etc/localtime:ro
+Environment=TZ=Europe/Amsterdam
+Environment=DB_HOSTNAME=127.0.0.1 DB_USERNAME=postgres DB_DATABASE_NAME=immich
+Environment=REDIS_HOSTNAME=127.0.0.1
+Environment=IMMICH_MACHINE_LEARNING_URL=http://127.0.0.1:3003
+Secret=immich-db-password,type=env,target=DB_PASSWORD
+
+[Service]
+Restart=always
+RestartSec=15s
+TimeoutStartSec=900
+ExecStartPre=/usr/bin/mountpoint -q /mnt/immich

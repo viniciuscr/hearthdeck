@@ -196,6 +196,7 @@ ContainerName=immich-ml
 Image=ghcr.io/immich-app/immich-machine-learning:v3
 Pod=immich.pod
 Volume=immich-model-cache:/cache
+Environment=MACHINE_LEARNING_MODEL_REVISION=v2
 
 [Service]
 Restart=always
@@ -233,6 +234,13 @@ ExecStartPre=/usr/bin/mountpoint -q /mnt/immich
 The containers need no `[Install]` section: Quadlet adds `Wants=` for every
 container that references `immich.pod` to the pod unit, so starting the pod
 starts them all and the pod is what boots.
+
+The five files are versioned in [`deploy/immich/`](../deploy/immich/). The
+non-destructive reinstall path (`install.sh`), the database restore procedure,
+and the nightly off-disk copy timer are documented in
+[`deploy/immich/README.md`](../deploy/immich/README.md). That runbook is the
+one to follow after a machine format; the provisioning script that created this
+host is not, because it wipes the disk first.
 
 Start it and check:
 
@@ -305,10 +313,16 @@ The minimum worth doing:
 
 1. Keep **Administration → Settings → Database Dump Settings** enabled. The
    dumps land in `/mnt/immich/data/backups/`.
-2. Copy the library and the dumps to the second disk regularly, database first:
+2. Mirror the dumps to the second disk nightly, database first. The timer in
+   [`deploy/immich/`](../deploy/immich/) runs as the desktop user, verifies the
+   newest dump with `gzip -t`, and refuses to run when `/mnt/external` is not
+   mounted. Set `IMMICH_BACKUP_ORIGINALS=1` in `~/.config/immich-backup.env` to
+   copy the library too; thumbnails and encoded video are regenerated, so they
+   are skipped. The manual equivalent is:
 
    ```sh
-   sudo rsync -rlt --delete /mnt/immich/data/ /mnt/external/immich/
+   rsync -rlt --delete /mnt/immich/data/backups/ /mnt/external/immich/backups/
+   rsync -rlt --delete /mnt/immich/data/upload/ /mnt/external/immich/data/upload/
    ```
 
    `/mnt/external` is the second 1 TB disk (exFAT, so `-rlt` instead of
