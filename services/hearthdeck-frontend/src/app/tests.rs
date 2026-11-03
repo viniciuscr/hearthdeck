@@ -40,9 +40,7 @@ fn shell() -> App {
         menu: menu::State::default(),
         cur_section: Section::PcGames,
         cur_group: None,
-        categorization: None,
-        categorization_capable: None,
-        categorization_notice: None,
+        categorization: settings::categorization::State::default(),
         stremio: settings::stremio_link::Flow::default(),
         romm: settings::romm::Form::default(),
         retro_readiness: settings::readiness::Flow::default(),
@@ -2117,15 +2115,29 @@ fn the_settings_destination_opens_settings_and_back_leaves_it() {
 fn the_settings_screen_keeps_the_daemons_answer() {
     let mut app = showing(4);
     assert!(
-        app.categorization.is_none(),
+        app.categorization.snapshot.is_none(),
         "nothing has been read yet, so there is nothing to draw"
     );
 
-    let _ = app.update(Message::CategorizationLoaded(Ok(snapshot(false))));
-    assert!(!app.categorization.as_ref().is_some_and(|snap| snap.enabled));
+    let _ = app.update(Message::Categorization(
+        settings::categorization::Message::Loaded(Ok(Box::new(snapshot(false)))),
+    ));
+    assert!(
+        !app.categorization
+            .snapshot
+            .as_ref()
+            .is_some_and(|snap| snap.enabled)
+    );
 
-    let _ = app.update(Message::CategorizationLoaded(Ok(snapshot(true))));
-    assert!(app.categorization.as_ref().is_some_and(|snap| snap.enabled));
+    let _ = app.update(Message::Categorization(
+        settings::categorization::Message::Loaded(Ok(Box::new(snapshot(true)))),
+    ));
+    assert!(
+        app.categorization
+            .snapshot
+            .as_ref()
+            .is_some_and(|snap| snap.enabled)
+    );
 }
 
 /// A read that fails does not blank the screen: the last answer stands, so a
@@ -2133,14 +2145,19 @@ fn the_settings_screen_keeps_the_daemons_answer() {
 #[test]
 fn a_failed_categorization_read_keeps_the_last_answer() {
     let mut app = showing(4);
-    let _ = app.update(Message::CategorizationLoaded(Ok(snapshot(true))));
+    let _ = app.update(Message::Categorization(
+        settings::categorization::Message::Loaded(Ok(Box::new(snapshot(true)))),
+    ));
 
-    let _ = app.update(Message::CategorizationLoaded(Err(
-        "daemon is down".to_owned()
-    )));
+    let _ = app.update(Message::Categorization(
+        settings::categorization::Message::Loaded(Err("daemon is down".to_owned())),
+    ));
 
     assert!(
-        app.categorization.as_ref().is_some_and(|snap| snap.enabled),
+        app.categorization
+            .snapshot
+            .as_ref()
+            .is_some_and(|snap| snap.enabled),
         "the last answer the daemon gave stands"
     );
 }
@@ -2151,19 +2168,27 @@ fn a_failed_categorization_read_keeps_the_last_answer() {
 fn the_health_reply_says_whether_the_feature_exists_here() {
     let mut app = showing(4);
     assert_eq!(
-        app.categorization_capable, None,
+        app.categorization.capable, None,
         "nothing has asked the deployment yet"
     );
 
-    let _ = app.update(Message::HealthLoaded(Ok(health(false))));
+    let _ = app.update(Message::Categorization(
+        settings::categorization::Message::CapabilityLoaded(Ok(health(false)
+            .capabilities
+            .categorization)),
+    ));
     assert_eq!(
-        app.categorization_capable,
+        app.categorization.capable,
         Some(false),
         "this installation cannot run it"
     );
 
-    let _ = app.update(Message::HealthLoaded(Ok(health(true))));
-    assert_eq!(app.categorization_capable, Some(true), "and this one can");
+    let _ = app.update(Message::Categorization(
+        settings::categorization::Message::CapabilityLoaded(Ok(health(true)
+            .capabilities
+            .categorization)),
+    ));
+    assert_eq!(app.categorization.capable, Some(true), "and this one can");
 }
 
 /// A save that does not touch these tabs must not move the user: the cursor
@@ -2229,17 +2254,19 @@ fn a_live_form_override_moves_the_tiles() {
 fn a_refused_action_lands_in_the_sections_own_status_text() {
     let mut app = showing(4);
 
-    let _ = app.update(Message::CategorizationDone(Err(
-        "the scan was refused".to_owned()
-    )));
+    let _ = app.update(Message::Categorization(
+        settings::categorization::Message::ActionFinished(Err("the scan was refused".to_owned())),
+    ));
     assert_eq!(
-        app.categorization_notice.as_deref(),
+        app.categorization.notice.as_deref(),
         Some("the scan was refused")
     );
 
-    let _ = app.update(Message::DetectCouchFriendly);
+    let _ = app.update(Message::Categorization(
+        settings::categorization::Message::DetectCouch,
+    ));
     assert_eq!(
-        app.categorization_notice, None,
+        app.categorization.notice, None,
         "a new action starts from a clean slate"
     );
 }
