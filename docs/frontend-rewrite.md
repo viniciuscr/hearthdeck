@@ -42,6 +42,9 @@ the cruft inherited from the project this started from.
   `Details::update`. Its view emits local events; App runs launch, daemon,
   focus and page effects. Late detail reads are still dropped after leaving
   the page, while flag replies retain their existing settlement behavior.
+  Dashboard activation and reload identity read the ordered rail sources
+  directly, without constructing artwork-bearing cards. Visual shelves remain
+  the rendering input and currently also supply scroll-follow geometry.
 - `style.rs` — shared tokens and the base button classes; `ui/` composes on top.
 
 ## Build speed
