@@ -12,44 +12,35 @@ use super::{App, Message, STREMIO_LINK_POLL_INTERVAL, STREMIO_PUBLISH_SETTLE};
 
 impl App {
     pub(super) fn load_romm_settings(&mut self) -> Task<Message> {
-        if self.romm.busy {
-            return Task::none();
-        }
-        self.romm.busy = true;
-        self.romm.error = None;
-        let client = self.daemon_client.clone();
-        Task::perform(
-            async move {
-                client
-                    .romm_settings()
-                    .await
-                    .map_err(|error| error.to_string())
-            },
-            |result| cosmic::Action::App(Message::Romm(settings::romm::Message::Loaded(result))),
-        )
+        let effect = self.romm.update(settings::romm::Message::RefreshPressed);
+        self.run_romm_effect(effect)
     }
 
     pub(super) fn update_romm(&mut self, message: settings::romm::Message) -> Task<Message> {
+        let effect = self.romm.update(message);
+        self.run_romm_effect(effect)
+    }
+
+    fn run_romm_effect(&mut self, effect: settings::romm::Effect) -> Task<Message> {
+        use settings::romm::Effect;
         use settings::romm::Message as Romm;
 
-        let changed = match message {
-            Romm::UrlChanged(value) => {
-                if !self.romm.busy && !self.romm.polling {
-                    self.romm.base_url = value;
-                }
-                false
-            }
-            Romm::Loaded(result) => {
-                self.romm.loaded(result);
-                false
-            }
-            Romm::ConnectPressed => {
-                if !self.romm.can_connect() {
-                    return Task::none();
-                }
-                self.romm.begin();
+        match effect {
+            Effect::Nothing => return Task::none(),
+            Effect::Load => {
                 let client = self.daemon_client.clone();
-                let base_url = self.romm.base_url.trim().to_owned();
+                return Task::perform(
+                    async move {
+                        client
+                            .romm_settings()
+                            .await
+                            .map_err(|error| error.to_string())
+                    },
+                    |result| cosmic::Action::App(Message::Romm(Romm::Loaded(result))),
+                );
+            }
+            Effect::Connect(base_url) => {
+                let client = self.daemon_client.clone();
                 return Task::perform(
                     async move {
                         client
@@ -60,57 +51,30 @@ impl App {
                     |result| cosmic::Action::App(Message::Romm(Romm::LinkStarted(result))),
                 );
             }
-            Romm::LinkStarted(result) => {
-                if self.romm.link_started(result) {
-                    return self.poll_romm_link();
-                }
-                false
+            Effect::Poll => return self.poll_romm_link(),
+            Effect::FocusUsername => {
+                self.text_entry.focus(Field::RommUsername);
+                return text_input::focus(settings::romm::username_id());
             }
-            Romm::LinkPolled(result) => match self.romm.link_polled(result) {
-                settings::romm::Next::PollAgain => return self.poll_romm_link(),
-                settings::romm::Next::Stop => false,
-                settings::romm::Next::Connected => true,
-            },
-            Romm::SignInOpened => {
-                if !self.romm.busy {
-                    self.romm.sign_in = Some(settings::romm::SignIn::default());
-                    self.romm.error = None;
-                    // The dialog cannot be walked to, so the shell places the
-                    // caret itself: the username field and the keyboard come up
-                    // together, and the pad can type straight away.
-                    self.text_entry.focus(Field::RommUsername);
-                    return text_input::focus(settings::romm::username_id());
-                }
-                false
+            Effect::FocusPassword => {
+                self.text_entry.focus(Field::RommPassword);
+                return text_input::focus(settings::romm::password_id());
             }
-            Romm::SignInClosed => {
-                if !self.romm.busy {
-                    self.romm.sign_in = None;
-                }
-                return self.end_text_entry();
+            Effect::EndTextEntry => return self.end_text_entry(),
+            Effect::ReleaseTextEntry => {
+                self.text_entry.end();
+                return Task::none();
             }
-            Romm::UsernameChanged(value) => {
-                if let Some(sign_in) = self.romm.sign_in.as_mut().filter(|_| !self.romm.busy) {
-                    sign_in.username = value;
-                }
-                false
-            }
-            Romm::PasswordChanged(value) => {
-                if let Some(sign_in) = self.romm.sign_in.as_mut().filter(|_| !self.romm.busy) {
-                    sign_in.password = value;
-                }
-                false
-            }
-            Romm::SignInPressed => {
-                let Some((username, password)) = self.romm.take_credentials() else {
-                    return Task::none();
-                };
+            Effect::SignIn {
+                base_url,
+                username,
+                password,
+            } => {
                 // The dialog keeps the outcome; the caret goes back to the
                 // screen while the request runs, so the keyboard does not
                 // outlive the form it was typing into.
                 let ended = self.end_text_entry();
                 let client = self.daemon_client.clone();
-                let base_url = self.romm.base_url.trim().to_owned();
                 return Task::batch([
                     ended,
                     Task::perform(
@@ -124,23 +88,7 @@ impl App {
                     ),
                 ]);
             }
-            Romm::SignedIn(result) => {
-                let changed = self.romm.signed_in(result);
-                // A refused sign-in keeps the dialog with an empty password:
-                // put the caret back in it, so the pad has somewhere to type
-                // the retry without walking to a field it cannot reach.
-                if self.romm.sign_in.is_some() && !self.romm.busy {
-                    self.text_entry.focus(Field::RommPassword);
-                    return text_input::focus(settings::romm::password_id());
-                }
-                self.text_entry.end();
-                changed
-            }
-            Romm::RemovePressed => {
-                if self.romm.busy || self.romm.polling || self.romm.connection.is_none() {
-                    return Task::none();
-                }
-                self.romm.begin();
+            Effect::Remove => {
                 let client = self.daemon_client.clone();
                 return Task::perform(
                     async move {
@@ -152,11 +100,15 @@ impl App {
                     |result| cosmic::Action::App(Message::Romm(Romm::Removed(result))),
                 );
             }
-            Romm::Removed(result) => self.romm.removed(result),
-        };
-        if !changed {
-            return Task::none();
+            Effect::SignInSucceeded => {
+                self.text_entry.end();
+            }
+            Effect::ConnectionChanged => {}
         }
+        self.romm_connection_changed()
+    }
+
+    fn romm_connection_changed(&mut self) -> Task<Message> {
         self.console.invalidate();
         self.console_platforms.clear();
         self.tabs.sync_console_groups(&[]);

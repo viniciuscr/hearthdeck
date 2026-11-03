@@ -36,6 +36,7 @@ pub fn password_id() -> Id {
 
 #[derive(Clone)]
 pub enum Message {
+    RefreshPressed,
     UrlChanged(String),
     ConnectPressed,
     LinkStarted(Result<RommLinkOffer, String>),
@@ -56,6 +57,35 @@ impl std::fmt::Debug for Message {
         // Input messages carry credentials.
         formatter
             .debug_tuple("Romm")
+            .field(&std::mem::discriminant(self))
+            .finish()
+    }
+}
+
+pub enum Effect {
+    Nothing,
+    Load,
+    Connect(String),
+    Poll,
+    FocusUsername,
+    FocusPassword,
+    EndTextEntry,
+    SignIn {
+        base_url: String,
+        username: String,
+        password: String,
+    },
+    Remove,
+    ConnectionChanged,
+    SignInSucceeded,
+    ReleaseTextEntry,
+}
+
+impl std::fmt::Debug for Effect {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Request effects carry credentials too.
+        formatter
+            .debug_tuple("RommEffect")
             .field(&std::mem::discriminant(self))
             .finish()
     }
@@ -94,9 +124,8 @@ pub enum Notice {
     Denied,
 }
 
-/// What the shell does after a link poll.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Next {
+enum Next {
     Stop,
     PollAgain,
     Connected,
@@ -116,6 +145,96 @@ pub struct Form {
 }
 
 impl Form {
+    pub fn update(&mut self, message: Message) -> Effect {
+        match message {
+            Message::RefreshPressed => {
+                if !self.busy {
+                    self.busy = true;
+                    self.error = None;
+                    return Effect::Load;
+                }
+            }
+            Message::UrlChanged(value) => {
+                if !self.busy && !self.polling {
+                    self.base_url = value;
+                }
+            }
+            Message::Loaded(result) => self.loaded(result),
+            Message::ConnectPressed => {
+                if self.can_connect() {
+                    self.begin();
+                    return Effect::Connect(self.base_url.trim().to_owned());
+                }
+            }
+            Message::LinkStarted(result) => {
+                if self.link_started(result) {
+                    return Effect::Poll;
+                }
+            }
+            Message::LinkPolled(result) => {
+                return match self.link_polled(result) {
+                    Next::PollAgain => Effect::Poll,
+                    Next::Stop => Effect::Nothing,
+                    Next::Connected => Effect::ConnectionChanged,
+                };
+            }
+            Message::SignInOpened => {
+                if !self.busy {
+                    self.sign_in = Some(SignIn::default());
+                    self.error = None;
+                    return Effect::FocusUsername;
+                }
+            }
+            Message::SignInClosed => {
+                if !self.busy {
+                    self.sign_in = None;
+                }
+                return Effect::EndTextEntry;
+            }
+            Message::UsernameChanged(value) => {
+                if let Some(sign_in) = self.sign_in.as_mut().filter(|_| !self.busy) {
+                    sign_in.username = value;
+                }
+            }
+            Message::PasswordChanged(value) => {
+                if let Some(sign_in) = self.sign_in.as_mut().filter(|_| !self.busy) {
+                    sign_in.password = value;
+                }
+            }
+            Message::SignInPressed => {
+                if let Some((username, password)) = self.take_credentials() {
+                    return Effect::SignIn {
+                        base_url: self.base_url.trim().to_owned(),
+                        username,
+                        password,
+                    };
+                }
+            }
+            Message::SignedIn(result) => {
+                let changed = self.signed_in(result);
+                return if self.sign_in.is_some() && !self.busy {
+                    Effect::FocusPassword
+                } else if changed {
+                    Effect::SignInSucceeded
+                } else {
+                    Effect::ReleaseTextEntry
+                };
+            }
+            Message::RemovePressed => {
+                if !self.busy && !self.polling && self.connection.is_some() {
+                    self.begin();
+                    return Effect::Remove;
+                }
+            }
+            Message::Removed(result) => {
+                if self.removed(result) {
+                    return Effect::ConnectionChanged;
+                }
+            }
+        }
+        Effect::Nothing
+    }
+
     pub fn can_connect(&self) -> bool {
         !self.busy && !self.polling && !self.base_url.trim().is_empty()
     }
@@ -129,13 +248,13 @@ impl Form {
                 .is_some_and(|s| !s.username.trim().is_empty() && !s.password.is_empty())
     }
 
-    pub fn begin(&mut self) {
+    fn begin(&mut self) {
         self.busy = true;
         self.error = None;
         self.notice = None;
     }
 
-    pub fn loaded(&mut self, result: Result<Option<RommSettings>, String>) {
+    fn loaded(&mut self, result: Result<Option<RommSettings>, String>) {
         self.busy = false;
         match result {
             Ok(connection) => {
@@ -150,7 +269,7 @@ impl Form {
     }
 
     /// Returns whether a poll chain should start.
-    pub fn link_started(&mut self, result: Result<RommLinkOffer, String>) -> bool {
+    fn link_started(&mut self, result: Result<RommLinkOffer, String>) -> bool {
         self.busy = false;
         match result {
             Ok(offer) => {
@@ -169,7 +288,7 @@ impl Form {
         }
     }
 
-    pub fn link_polled(&mut self, result: Result<RommLink, String>) -> Next {
+    fn link_polled(&mut self, result: Result<RommLink, String>) -> Next {
         let next = match result {
             Ok(RommLink::Waiting {
                 code,
@@ -206,7 +325,7 @@ impl Form {
     }
 
     /// Takes the credentials out of the dialog; the password leaves the form here.
-    pub fn take_credentials(&mut self) -> Option<(String, String)> {
+    fn take_credentials(&mut self) -> Option<(String, String)> {
         if !self.can_sign_in() {
             return None;
         }
@@ -220,7 +339,7 @@ impl Form {
     }
 
     /// Returns whether the connection changed.
-    pub fn signed_in(&mut self, result: Result<RommSettings, String>) -> bool {
+    fn signed_in(&mut self, result: Result<RommSettings, String>) -> bool {
         match result {
             Ok(connection) => {
                 self.sign_in = None;
@@ -236,7 +355,7 @@ impl Form {
         }
     }
 
-    pub fn removed(&mut self, result: Result<(), String>) -> bool {
+    fn removed(&mut self, result: Result<(), String>) -> bool {
         match result {
             Ok(()) => {
                 self.pending = None;
@@ -538,5 +657,132 @@ mod tests {
         ] {
             assert!(!format!("{message:?}").contains("private-secret"));
         }
+    }
+
+    #[test]
+    fn requests_capture_the_url_and_block_duplicate_submissions() {
+        let mut form = Form::default();
+        assert!(matches!(form.update(Message::RefreshPressed), Effect::Load));
+        assert!(matches!(
+            form.update(Message::RefreshPressed),
+            Effect::Nothing
+        ));
+        assert!(matches!(
+            form.update(Message::Loaded(Ok(Some(connection())))),
+            Effect::Nothing
+        ));
+        form.update(Message::UrlChanged(" http://localhost:8080 ".into()));
+        let effect = form.update(Message::ConnectPressed);
+        assert!(matches!(effect, Effect::Connect(url) if url == "http://localhost:8080"));
+        form.update(Message::UrlChanged("http://localhost:9090".into()));
+        assert_eq!(form.base_url, " http://localhost:8080 ");
+        assert!(matches!(
+            form.update(Message::ConnectPressed),
+            Effect::Nothing
+        ));
+        assert!(matches!(
+            form.update(Message::SignInOpened),
+            Effect::Nothing
+        ));
+        assert!(matches!(
+            form.update(Message::RemovePressed),
+            Effect::Nothing
+        ));
+        assert!(form.sign_in.is_none());
+        assert!(matches!(
+            form.update(Message::LinkStarted(Ok(offer()))),
+            Effect::Poll
+        ));
+        assert!(matches!(
+            form.update(Message::LinkPolled(Ok(RommLink::Linked {
+                settings: connection()
+            }))),
+            Effect::ConnectionChanged
+        ));
+        assert!(!form.polling);
+        assert!(matches!(
+            form.update(Message::RemovePressed),
+            Effect::Remove
+        ));
+        assert!(matches!(
+            form.update(Message::Removed(Err("unavailable".into()))),
+            Effect::Nothing
+        ));
+        assert!(form.connection.is_some());
+        assert!(!form.busy);
+        assert!(matches!(
+            form.update(Message::Removed(Ok(()))),
+            Effect::ConnectionChanged
+        ));
+        assert!(form.base_url.is_empty());
+    }
+
+    #[test]
+    fn sign_in_returns_credentials_once_and_focuses_a_failed_retry() {
+        let mut form = Form {
+            base_url: " http://localhost:8080 ".into(),
+            ..Form::default()
+        };
+        assert!(matches!(
+            form.update(Message::SignInOpened),
+            Effect::FocusUsername
+        ));
+        form.update(Message::UsernameChanged(" admin ".into()));
+        form.update(Message::PasswordChanged("private-secret".into()));
+        let effect = form.update(Message::SignInPressed);
+        assert!(!format!("{effect:?}").contains("private-secret"));
+        assert!(matches!(
+            effect,
+            Effect::SignIn { base_url, username, password }
+                if base_url == "http://localhost:8080"
+                    && username == "admin" && password == "private-secret"
+        ));
+        assert!(form.sign_in.as_ref().expect("dialog").password.is_empty());
+        assert!(matches!(
+            form.update(Message::SignInPressed),
+            Effect::Nothing
+        ));
+        form.update(Message::PasswordChanged("ignored".into()));
+        assert!(form.sign_in.as_ref().expect("dialog").password.is_empty());
+        assert!(matches!(
+            form.update(Message::SignedIn(Err("refused".into()))),
+            Effect::FocusPassword
+        ));
+        assert_eq!(form.error.as_deref(), Some("refused"));
+        form.update(Message::PasswordChanged("retry".into()));
+        assert!(matches!(
+            form.update(Message::SignInPressed),
+            Effect::SignIn { .. }
+        ));
+        assert!(matches!(
+            form.update(Message::SignedIn(Ok(connection()))),
+            Effect::SignInSucceeded
+        ));
+        assert!(form.sign_in.is_none());
+        assert!(!form.busy);
+    }
+
+    #[test]
+    fn closing_a_busy_dialog_releases_the_keyboard_but_keeps_the_request() {
+        let mut form = Form {
+            busy: true,
+            sign_in: Some(SignIn::default()),
+            ..Form::default()
+        };
+        assert!(matches!(
+            form.update(Message::SignInClosed),
+            Effect::EndTextEntry
+        ));
+        assert!(form.sign_in.is_some());
+        form.busy = false;
+        assert!(matches!(
+            form.update(Message::SignInClosed),
+            Effect::EndTextEntry
+        ));
+        assert!(form.sign_in.is_none());
+        assert!(matches!(
+            form.update(Message::SignedIn(Err("late refusal".into()))),
+            Effect::ReleaseTextEntry
+        ));
     }
 }
