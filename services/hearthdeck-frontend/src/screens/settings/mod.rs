@@ -11,12 +11,11 @@ use cosmic::iced::Length;
 use cosmic::theme;
 use cosmic::theme::Button;
 use cosmic::widget::{
-    ListColumn, button, column, container, list, row, scrollable, settings, space, text, toggler,
+    ListColumn, button, column, container, row, scrollable, settings, space, text,
 };
 
 use crate::app::Message;
 use crate::fl;
-use crate::providers::daemon::{CategorizationPhase, CategorizationSnapshot, ModelStatus};
 use crate::style::{
     SETTINGS_MAX_WIDTH, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE,
     content_horizontal_padding, destructive_button_class, error_text_class,
@@ -29,20 +28,9 @@ pub mod readiness;
 pub mod romm;
 pub mod stremio_link;
 
-/// What the first scan costs. Named once, so the sentence that warns about it
-/// cannot drift from the number.
-const DOWNLOAD_SIZE: &str = "~850 MB";
-
 /// What the screen draws.
 pub struct Settings<'a> {
-    /// The daemon's answer, once it has landed. Until then the screen says it is
-    /// checking, rather than showing a switch in a state nobody reported.
-    pub categorization: Option<&'a CategorizationSnapshot>,
-    /// Whether the deployment provides categorization at all, from /v1/health.
-    /// None until the health reply lands.
-    pub capable: Option<bool>,
-    /// Why the last action was refused, for the section's own status text.
-    pub notice: Option<&'a str>,
+    pub categorization: &'a categorization::State,
     /// The Stremio link flow: the linked account, the code being approved
     /// elsewhere, and whether a request is in flight. The flow owns all of it;
     /// this section reads it and names the request each control makes.
@@ -69,10 +57,10 @@ pub fn view<'a>(
         text::title1(fl!("settings-title")).size(TEXT_TITLE),
         scrollable(settings::view_column(vec![
             library_and_dashboard(),
-            categorization(state),
+            categorization::view(state.categorization).map(Message::Categorization),
             stremio(state),
             romm::view(state.romm),
-            readiness::view(state.readiness)
+            readiness::view(state.readiness).map(Message::Readiness)
         ]))
         .width(Length::Fill)
         .height(Length::Fill)
@@ -132,7 +120,7 @@ fn library_and_dashboard<'a>() -> Element<'a, Message> {
 ///
 /// The rows get a little more vertical air than the 8px default: the taller
 /// labels would otherwise sit nearly on the dividers between them.
-fn titled_section<'a>(title: String) -> settings::Section<'a, Message> {
+fn titled_section<'a, M: Clone + 'static>(title: String) -> settings::Section<'a, M> {
     let Spacing {
         space_s, space_m, ..
     } = theme::spacing();
@@ -158,11 +146,11 @@ fn item<'a>(label: String, control: impl Into<Element<'a, Message>>) -> Element<
 
 /// A row whose label carries a sentence beneath it, for a control that needs
 /// explaining: the shape `settings::item::builder` draws, at the page's sizes.
-fn described_item<'a>(
+fn described_item<'a, M: 'a>(
     label: String,
     description: String,
-    control: impl Into<Element<'a, Message>>,
-) -> Element<'a, Message> {
+    control: impl Into<Element<'a, M>>,
+) -> Element<'a, M> {
     let Spacing { space_xxs, .. } = theme::spacing();
     settings::item_row(vec![
         column![
@@ -178,18 +166,18 @@ fn described_item<'a>(
 }
 
 /// A line of the section's own words: a state, a notice, an explanation.
-fn body_line<'a>(line: String) -> Element<'a, Message> {
+fn body_line<'a, M: 'a>(line: String) -> Element<'a, M> {
     text::body(line).size(TEXT_BODY).into()
 }
 
 /// A quieter line: fine print the section only reports (a model path, a count).
-fn caption_line<'a>(line: String) -> Element<'a, Message> {
+fn caption_line<'a, M: 'a>(line: String) -> Element<'a, M> {
     text::caption(line).size(TEXT_CAPTION).into()
 }
 
 /// A line that reports a failure: the theme's destructive color, so it does not
 /// read as one more quiet note.
-fn error_line<'a>(line: String) -> Element<'a, Message> {
+fn error_line<'a, M: 'a>(line: String) -> Element<'a, M> {
     text::body(line)
         .size(TEXT_BODY)
         .class(error_text_class())
@@ -209,103 +197,8 @@ fn summary<'a>(status: String, intro: String) -> Element<'a, Message> {
 }
 
 /// A section's buttons, set against its right edge like a COSMIC dialog's.
-fn button_row<'a>(buttons: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+fn button_row<'a, M: 'a>(buttons: impl Into<Element<'a, M>>) -> Element<'a, M> {
     container(buttons).align_right(Length::Fill).into()
-}
-
-/// The smart-categories section: the local model that sorts the library, and
-/// every switch and action it has.
-///
-/// Every line is the daemon's own answer - a scan's phase, the model it has on
-/// disk, whether the last one failed - so the screen never claims more than it
-/// was told. Nothing heavy runs until the switch is on, which is the promise the
-/// intro makes and the reason the off state says so plainly.
-fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
-    let Spacing { space_s, .. } = theme::spacing();
-    let panel = categorization::Panel {
-        capable: state.capable,
-        snapshot: state.categorization,
-    };
-
-    let section = titled_section(fl!("categorization-heading"));
-
-    let (snapshot, actions) = match categorization::section(&panel) {
-        // A feature this installation does not have is said plainly, with what it
-        // would need - nothing on offer, because nothing here could work.
-        categorization::Section::Unsupported => {
-            return section
-                .add(body_line(fl!("categorization-unsupported")))
-                .add(caption_line(fl!("categorization-unsupported-hint")))
-                .into();
-        }
-        categorization::Section::Checking => {
-            return section
-                .add(body_line(fl!("categorization-reading-status")))
-                .into();
-        }
-        categorization::Section::Ready { snapshot, actions } => (snapshot, actions),
-    };
-
-    // The switch is a whole pressable row, so the controller can flip it from
-    // anywhere on the line, not only by landing on the toggle itself.
-    let mut section = section
-        .add(
-            list::button(described_item(
-                fl!("categorization-toggle"),
-                fl!("categorization-intro", size = DOWNLOAD_SIZE),
-                toggler(snapshot.enabled).on_toggle(|on| {
-                    Message::Categorization(categorization::Message::SetEnabled(on))
-                }),
-            ))
-            .on_press(Message::Categorization(
-                categorization::Message::SetEnabled(!snapshot.enabled),
-            )),
-        )
-        .add(body_line(status_line(snapshot)))
-        .add_maybe(state.notice.map(notice_line));
-
-    // Where the model lives is the user's business only while the feature is
-    // on; in the off state the promise is that nothing runs, and a model line
-    // with no way to act on it would be noise.
-    section = section.add_maybe(
-        snapshot
-            .enabled
-            .then(|| caption_line(model_line(&snapshot.status.model))),
-    );
-
-    section = section.add_maybe(snapshot.report.as_ref().map(|report| {
-        caption_line(fl!(
-            "categorization-report",
-            apps = report.app_count,
-            categories = report.categories.len(),
-            unclassified = report.unclassified.len()
-        ))
-    }));
-
-    let mut buttons = row![].spacing(space_s);
-    let mut has_buttons = false;
-    for action in actions {
-        // The switch is its own row above, so it is the one offer that is not a
-        // button down here (which is why the `action_*` maps still cover it:
-        // the match must stay exhaustive).
-        if action == categorization::Action::Toggle {
-            continue;
-        }
-        buttons = buttons.push(action_button(
-            action_label(action),
-            action_message(action, snapshot),
-            action_class(action),
-            categorization::pressable(action, &panel),
-        ));
-        has_buttons = true;
-    }
-
-    // A row with nothing in it still claims its spacing; when the switch is
-    // the only offer, the section simply ends above it.
-    if has_buttons {
-        section = section.add(button_row(buttons));
-    }
-    section.into()
 }
 
 /// The Stremio section: the account, the code being approved on another device,
@@ -417,12 +310,12 @@ fn stremio_action_label(action: stremio_link::Action) -> String {
 ///
 /// A control the state cannot honour is drawn disabled rather than dropped: the
 /// row is the same row in every phase, so nothing moves under the user's hand.
-fn action_button<'a>(
+fn action_button<'a, M: Clone + 'a>(
     label: String,
-    message: Message,
+    message: M,
     class: Button,
     enabled: bool,
-) -> Element<'a, Message> {
+) -> Element<'a, M> {
     let Spacing { space_s, .. } = theme::spacing();
     button::custom(text::body(label).size(TEXT_BODY))
         .padding([space_s, space_s])
@@ -431,145 +324,11 @@ fn action_button<'a>(
         .into()
 }
 
-/// What the control wears, by what it does: the model actions are the primary
-/// button, and the switch stays ordinary.
-fn action_class(action: categorization::Action) -> Button {
-    match action {
-        categorization::Action::PublishRails | categorization::Action::DetectCouch => {
-            primary_action_button_class()
-        }
-        categorization::Action::Toggle => standard_button_class(),
-    }
-}
-
 /// The same rule for the Stremio controls: linking is the affirmative action,
 /// unlinking removes the account.
 fn stremio_action_class(action: stremio_link::Action) -> Button {
     match action {
         stremio_link::Action::Link => primary_action_button_class(),
         stremio_link::Action::Unlink => destructive_button_class(),
-    }
-}
-
-/// What pressing `action` asks the shell for. The decision is `update`'s; this
-/// only names the request.
-fn action_message(action: categorization::Action, snapshot: &CategorizationSnapshot) -> Message {
-    match action {
-        categorization::Action::Toggle => {
-            Message::Categorization(categorization::Message::SetEnabled(!snapshot.enabled))
-        }
-        categorization::Action::PublishRails => {
-            Message::Categorization(categorization::Message::PublishRails)
-        }
-        categorization::Action::DetectCouch => {
-            Message::Categorization(categorization::Message::DetectCouch)
-        }
-    }
-}
-
-/// The button's own words. The switch reads as the item label above it, which is
-/// why it needs a label even though its row is the toggler's.
-fn action_label(action: categorization::Action) -> String {
-    match action {
-        categorization::Action::Toggle => fl!("categorization-toggle"),
-        categorization::Action::PublishRails => fl!("categorization-publish-rails"),
-        categorization::Action::DetectCouch => fl!("categorization-detect-couch"),
-    }
-}
-
-/// Why the last action was refused, in the daemon's own words.
-fn notice_line<'a>(reason: &str) -> Element<'a, Message> {
-    error_line(fl!("categorization-failed", reason = reason))
-}
-
-/// Where the scan has got to, in the daemon's own words.
-fn status_line(snapshot: &CategorizationSnapshot) -> String {
-    let status = &snapshot.status;
-    if status.running {
-        return match status.phase {
-            CategorizationPhase::Downloading => fl!("categorization-phase-downloading"),
-            CategorizationPhase::Loading => fl!("categorization-phase-loading"),
-            CategorizationPhase::Scanning => fl!(
-                "categorization-phase-scanning",
-                completed = status.completed,
-                total = status.total
-            ),
-            CategorizationPhase::Idle => fl!("categorization-reading-status"),
-        };
-    }
-    // The switch is the headline: off means none of the rest is running, so
-    // "ready" - which reads as "on, waiting for a scan" - would be a lie.
-    if !snapshot.enabled {
-        return fl!("categorization-off");
-    }
-    match status.last_error.as_deref() {
-        Some(reason) => fl!("categorization-failed", reason = reason),
-        // A scan that already ran is not "ready to run": the daemon says when
-        // the last one finished, so that is the line instead of asking again.
-        None => match status.last_completed_at.as_deref() {
-            Some(when) => fl!("categorization-last-run", when = when),
-            None => fl!("categorization-ready"),
-        },
-    }
-}
-
-/// Where the model is, and what it costs to keep.
-fn model_line(model: &ModelStatus) -> String {
-    match model {
-        ModelStatus::Absent => fl!("categorization-model-absent"),
-        ModelStatus::Downloaded { bytes, path } => fl!(
-            "categorization-model-downloaded",
-            size = crate::system_status::human_size(*bytes),
-            path = path.display().to_string()
-        ),
-        ModelStatus::External { path } => fl!(
-            "categorization-model-external",
-            path = path.display().to_string()
-        ),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::status_line;
-    use crate::fl;
-    use crate::providers::daemon::{CategorizationPhase, CategorizationSnapshot, ModelStatus};
-
-    fn snapshot(enabled: bool) -> CategorizationSnapshot {
-        CategorizationSnapshot {
-            enabled,
-            status: hearthdeck_protocol::CategorizationStatus {
-                running: false,
-                phase: CategorizationPhase::Idle,
-                completed: 0,
-                total: 0,
-                model: ModelStatus::Absent,
-                last_error: None,
-                last_completed_at: None,
-            },
-            report: None,
-        }
-    }
-
-    /// The switch being off is the first thing the section says: "ready"
-    /// reads as "on, waiting for a scan", which is exactly what is not true.
-    #[test]
-    fn the_off_switch_says_the_feature_is_off() {
-        let snapshot = snapshot(false);
-
-        assert_eq!(status_line(&snapshot), fl!("categorization-off"));
-    }
-
-    /// A scan that already ran is not "ready to run": the daemon reports when
-    /// the last one finished, and the line says that instead of asking again.
-    #[test]
-    fn a_completed_scan_reads_as_the_last_run() {
-        let mut answered = snapshot(true);
-        answered.status.last_completed_at = Some("2026-10-07T10:00:00Z".to_owned());
-
-        assert_eq!(
-            status_line(&answered),
-            fl!("categorization-last-run", when = "2026-10-07T10:00:00Z")
-        );
     }
 }

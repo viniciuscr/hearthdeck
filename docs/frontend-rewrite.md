@@ -31,6 +31,9 @@ the cruft inherited from the project this started from.
   RomM's `Form::update` owns input guards, approval polling decisions and
   sign-in/removal transitions. It hands credentials to a redacted request
   effect once; App runs daemon calls, keyboard focus and console invalidation.
+  Categorization and readiness views return their own messages, mapped into
+  App messages only by the settings page. Shared settings layout helpers work
+  with either message type; categorization rendering lives beside its state.
 - `style.rs` — shared tokens and the base button classes; `ui/` composes on top.
 
 ## Build speed

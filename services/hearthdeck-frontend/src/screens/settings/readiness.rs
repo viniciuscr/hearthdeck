@@ -9,7 +9,6 @@ use cosmic::cosmic_theme::Spacing;
 use cosmic::theme;
 use cosmic::widget::row;
 
-use crate::app::Message as AppMessage;
 use crate::fl;
 use crate::providers::daemon::{RetroBiosSyncReport, RetroCoreInstallReport, RetroSystemReadiness};
 use crate::style::{primary_action_button_class, standard_button_class};
@@ -254,7 +253,7 @@ pub fn progress_line(syncing: bool, installing: bool) -> Option<String> {
 }
 
 /// The card: the summary, one line per platform, and the check/fetch buttons.
-pub fn view<'a>(state: &Flow) -> Element<'a, AppMessage> {
+pub fn view<'a>(state: &Flow) -> Element<'a, Message> {
     let Spacing { space_s, .. } = theme::spacing();
     let section = titled_section(fl!("readiness-heading"));
 
@@ -281,19 +280,19 @@ pub fn view<'a>(state: &Flow) -> Element<'a, AppMessage> {
     let buttons = row![
         action_button(
             fl!("readiness-check"),
-            AppMessage::Readiness(Message::RefreshPressed),
+            Message::RefreshPressed,
             standard_button_class(),
             !state.syncing && !state.installing,
         ),
         action_button(
             fl!("readiness-install"),
-            AppMessage::Readiness(Message::InstallPressed),
+            Message::InstallPressed,
             primary_action_button_class(),
             !state.syncing && !state.installing && !missing_packages.is_empty(),
         ),
         action_button(
             fl!("readiness-sync"),
-            AppMessage::Readiness(Message::SyncPressed),
+            Message::SyncPressed,
             primary_action_button_class(),
             !state.syncing && !state.installing,
         ),
