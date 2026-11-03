@@ -1177,6 +1177,7 @@ impl Application for App {
 
     fn dialog(&self) -> Option<Element<'_, Self::Message>> {
         crate::screens::settings::romm::sign_in_dialog(&self.romm)
+            .map(|dialog| dialog.map(settings::romm_message))
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
