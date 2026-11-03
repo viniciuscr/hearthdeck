@@ -269,7 +269,7 @@ fn a_console_picked_on_the_dashboard_opens_its_own_tab() {
     ])));
     assert_eq!(app.page, Page::Dashboard);
 
-    let _ = app.update(Message::ActivateConsole(9));
+    let _ = app.update(Message::Dashboard(dashboard::Message::ConsolePressed(9)));
 
     assert_eq!(app.page, Page::Library);
     assert_eq!(app.cur_section, Section::ConsoleGames);
@@ -1818,7 +1818,7 @@ fn a_follow_scroll_is_not_overwritten_by_its_own_reports() {
         app.scrolls.is_moving(ScrollTarget::Page),
         "the page is travelling to the rail"
     );
-    let _ = app.update(Message::PageScrolled(5.0));
+    let _ = app.update(Message::Dashboard(dashboard::Message::PageScrolled(5.0)));
     assert_eq!(
         app.page_offset, target,
         "mid-travel reports are not the target"
@@ -1827,8 +1827,66 @@ fn a_follow_scroll_is_not_overwritten_by_its_own_reports() {
     // Once it has arrived a report is the truth again: a scroll the person
     // made themselves.
     let _ = app.update(Message::Animate(app.now + SCROLL_TRANSITION_DURATION * 2));
-    let _ = app.update(Message::PageScrolled(500.0));
+    let _ = app.update(Message::Dashboard(dashboard::Message::PageScrolled(500.0)));
     assert_eq!(app.page_offset, 500.0);
+}
+
+#[test]
+fn dashboard_rail_reports_preserve_the_target_until_animation_finishes() {
+    use crate::style::SCROLL_TRANSITION_DURATION;
+
+    let mut app = loaded(1);
+    app.set_rail_offset(0, 250.0);
+    let _ = app.animate_scroll_to(ScrollTarget::Rail(0), 0.0, 250.0);
+    let _ = app.update(Message::Dashboard(dashboard::Message::RailScrolled {
+        rail: 0,
+        offset: 50.0,
+    }));
+    assert_eq!(app.rail_offsets[0], 250.0);
+    let _ = app.update(Message::Animate(app.now + SCROLL_TRANSITION_DURATION * 2));
+    let _ = app.update(Message::Dashboard(dashboard::Message::RailScrolled {
+        rail: 0,
+        offset: 75.0,
+    }));
+    assert_eq!(app.rail_offsets[0], 75.0);
+}
+
+#[test]
+fn dashboard_destination_events_use_the_shell_navigation() {
+    let mut app = loaded(1);
+    let _ = app.update(Message::Dashboard(dashboard::Message::DestinationPressed(
+        top_bar::Destination::Library,
+    )));
+    assert_eq!(app.page, Page::Library);
+    let _ = app.update(Message::Dashboard(dashboard::Message::DestinationPressed(
+        top_bar::Destination::Dashboard,
+    )));
+    assert_eq!(app.page, Page::Dashboard);
+}
+
+#[test]
+fn dashboard_pointer_and_controller_launch_the_same_card() {
+    for pointer in [true, false] {
+        let mut app = loaded(1);
+        app.collections = vec![collection("custom", None, &["custom:untouched-id"])];
+        if pointer {
+            let message = app.dashboard_shelves()[0].cards[0]
+                .message
+                .clone()
+                .expect("clickable card");
+            let _ = app.update(Message::Dashboard(message));
+        } else {
+            send(&mut app, GamepadEvent::Confirm);
+        }
+        assert_eq!(
+            app.launch_state,
+            LaunchState::Launching {
+                title: "custom:untouched-id".to_owned()
+            },
+            "pointer: {pointer}"
+        );
+        assert_eq!(app.page, Page::Dashboard, "pointer: {pointer}");
+    }
 }
 
 /// A collection as the daemon composes one.
@@ -1928,7 +1986,7 @@ fn dashboard_activation_reads_the_selected_source_and_clamps_to_the_drawn_cap() 
     app.dashboard_cursor.card = 1;
     assert!(matches!(
         app.dashboard_confirm_message(),
-        Some(Message::ActivateCard { id, .. }) if id == "hearthdeck:game-1"
+        Some(Message::Dashboard(dashboard::Message::CardPressed { id, .. })) if id == "hearthdeck:game-1"
     ));
     assert_eq!(
         app.dashboard_cursor_card(),
@@ -1951,12 +2009,12 @@ fn dashboard_activation_reads_the_selected_source_and_clamps_to_the_drawn_cap() 
     app.dashboard_cursor = dashboard::focus::Cursor::default();
     assert!(matches!(
         app.dashboard_confirm_message(),
-        Some(Message::ActivateCard { id, title }) if id == "stremio:arrival" && title == "stremio:arrival"
+        Some(Message::Dashboard(dashboard::Message::CardPressed { id, title })) if id == "stremio:arrival" && title == "stremio:arrival"
     ));
     app.dashboard_cursor.rail = 1;
     assert!(matches!(
         app.dashboard_confirm_message(),
-        Some(Message::ActivateConsole(42))
+        Some(Message::Dashboard(dashboard::Message::ConsolePressed(42)))
     ));
     assert_eq!(
         app.dashboard_cursor_card(),
@@ -1967,7 +2025,7 @@ fn dashboard_activation_reads_the_selected_source_and_clamps_to_the_drawn_cap() 
     let last = crate::style::DASHBOARD_RAIL_TILES - 1;
     assert!(matches!(
         app.dashboard_confirm_message(),
-        Some(Message::ActivateCard { id, .. }) if id == format!("custom:item-{last}")
+        Some(Message::Dashboard(dashboard::Message::CardPressed { id, .. })) if id == format!("custom:item-{last}")
     ));
     assert!(
         app.dashboard_cursor_card().is_none(),
@@ -2005,8 +2063,8 @@ fn source_card_identity_matches_rendered_ids_after_rails_are_inserted_or_removed
             let drawn = drawn.message.as_ref().expect("drawn action");
             match (source, drawn) {
                 (
-                    Message::ActivateCard { id, title },
-                    Message::ActivateCard {
+                    Message::Dashboard(dashboard::Message::CardPressed { id, title }),
+                    dashboard::Message::CardPressed {
                         id: drawn_id,
                         title: drawn_title,
                     },
@@ -2014,7 +2072,10 @@ fn source_card_identity_matches_rendered_ids_after_rails_are_inserted_or_removed
                     assert_eq!(&id, drawn_id);
                     assert_eq!(&title, drawn_title);
                 }
-                (Message::ActivateConsole(id), Message::ActivateConsole(drawn_id)) => {
+                (
+                    Message::Dashboard(dashboard::Message::ConsolePressed(id)),
+                    dashboard::Message::ConsolePressed(drawn_id),
+                ) => {
                     assert_eq!(&id, drawn_id)
                 }
                 _ => panic!("source and rendered actions differ at {rail}:{card}"),
@@ -2129,7 +2190,7 @@ fn a_card_id_reaches_the_launch_route_exactly_as_the_rail_carried_it() {
     assert!(
         matches!(
             shelves[0].cards[0].message,
-            Some(Message::ActivateCard { ref id, .. }) if id == "stremio:tt0111161"
+            Some(dashboard::Message::CardPressed { ref id, .. }) if id == "stremio:tt0111161"
         ),
         "the card carries the id the rail did, unparsed"
     );

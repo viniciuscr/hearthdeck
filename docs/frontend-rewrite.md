@@ -46,6 +46,10 @@ the cruft inherited from the project this started from.
   directly, without constructing artwork-bearing cards. Scroll-follow uses
   source rail kinds and counts; rendering shares the same geometry helpers.
   Visual shelves are only built for drawing.
+  Dashboard cards, top-bar actions and scroll reports emit local messages.
+  Both pointer and controller activation use these events; the dashboard App
+  adapter owns launch, navigation and scroll-animation integration. The
+  backdrop also renders with the local message type.
 - `style.rs` — shared tokens and the base button classes; `ui/` composes on top.
 
 ## Build speed
