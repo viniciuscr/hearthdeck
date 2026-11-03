@@ -31,9 +31,10 @@ the cruft inherited from the project this started from.
   RomM's `Form::update` owns input guards, approval polling decisions and
   sign-in/removal transitions. It hands credentials to a redacted request
   effect once; App runs daemon calls, keyboard focus and console invalidation.
-  Categorization and readiness views return their own messages, mapped into
+  Categorization, readiness and Stremio views return their own messages, mapped into
   App messages only by the settings page. Shared settings layout helpers work
-  with either message type; categorization rendering lives beside its state.
+  with each card's message type; categorization and Stremio rendering live
+  beside their state.
 - `style.rs` — shared tokens and the base button classes; `ui/` composes on top.
 
 ## Build speed

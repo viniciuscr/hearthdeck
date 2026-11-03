@@ -18,8 +18,7 @@ use crate::app::Message;
 use crate::fl;
 use crate::style::{
     SETTINGS_MAX_WIDTH, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, TEXT_LARGE, TEXT_TITLE,
-    content_horizontal_padding, destructive_button_class, error_text_class,
-    primary_action_button_class, standard_button_class,
+    content_horizontal_padding, error_text_class, standard_button_class,
 };
 use crate::widgets::top_bar;
 
@@ -58,7 +57,7 @@ pub fn view<'a>(
         scrollable(settings::view_column(vec![
             library_and_dashboard(),
             categorization::view(state.categorization).map(Message::Categorization),
-            stremio(state),
+            stremio_link::view(state.stremio).map(Message::Stremio),
             romm::view(state.romm),
             readiness::view(state.readiness).map(Message::Readiness)
         ]))
@@ -186,7 +185,7 @@ fn error_line<'a, M: 'a>(line: String) -> Element<'a, M> {
 
 /// A section's opening row: where things stand, with the why beneath it in the
 /// quieter style, the way COSMIC Settings describes a row.
-fn summary<'a>(status: String, intro: String) -> Element<'a, Message> {
+fn summary<'a, M: 'a>(status: String, intro: String) -> Element<'a, M> {
     let Spacing { space_xxs, .. } = theme::spacing();
     column![
         text::body(status).size(TEXT_LARGE),
@@ -201,112 +200,9 @@ fn button_row<'a, M: 'a>(buttons: impl Into<Element<'a, M>>) -> Element<'a, M> {
     container(buttons).align_right(Length::Fill).into()
 }
 
-/// The Stremio section: the account, the code being approved on another device,
-/// and the two controls that move between them.
-///
-/// Nothing here ever holds a credential - the code is approved where the user is
-/// already signed in, and the daemon keeps the session the link produces - so
-/// this section only ever says whether a session exists. Every line is the
-/// flow's own state: a status line here would be a second place guessing at what
-/// the daemon said.
-fn stremio<'a>(state: &Settings<'a>) -> Element<'a, Message> {
-    let Spacing { space_s, .. } = theme::spacing();
-    let flow = state.stremio;
-
-    let section = titled_section(fl!("stremio-heading"));
-
-    // The code replaces the status line rather than sitting under it: while a
-    // link is pending, the code is the only thing on this section worth reading.
-    let mut section = match flow.pending.as_ref() {
-        Some(pending) => section
-            .add(body_line(fl!("stremio-intro")))
-            .add(pending_block(pending)),
-        None => section.add(summary(stremio_status_line(flow), fl!("stremio-intro"))),
-    };
-
-    // The failure is the daemon's or Stremio's own words, and it sits beside the
-    // state rather than replacing it: a refused request did not change what the
-    // account is.
-    section = section.add_maybe(
-        flow.error
-            .as_deref()
-            .map(|error| error_line(fl!("stremio-failed", reason = error))),
-    );
-
-    let mut buttons = row![].spacing(space_s);
-    for action in stremio_link::actions(flow) {
-        buttons = buttons.push(action_button(
-            stremio_action_label(action),
-            stremio_action_message(action),
-            stremio_action_class(action),
-            stremio_link::pressable(action, flow),
-        ));
-    }
-
-    section.add(button_row(buttons)).into()
-}
-
-/// The code, the link that carries it, and how long is left. The code is drawn
-/// large on purpose: this is read off a television and typed into a phone, which
-/// is the whole reason the flow exists instead of a password field.
-fn pending_block<'a>(pending: &stremio_link::Pending) -> Element<'a, Message> {
-    let Spacing {
-        space_xs, space_s, ..
-    } = theme::spacing();
-    container(
-        column![
-            body_line(fl!("stremio-pending", seconds = pending.seconds_left)),
-            text::title1(pending.code.clone()).size(TEXT_TITLE),
-            caption_line(pending.link.clone()),
-        ]
-        .spacing(space_xs),
-    )
-    .padding(space_s)
-    .width(Length::Fill)
-    .class(theme::Container::Primary)
-    .into()
-}
-
-/// What the section says when no code is on screen: an account, a read in
-/// flight, an expired code, or nothing linked.
-fn stremio_status_line(flow: &stremio_link::Flow) -> String {
-    // Checking outranks the last answer: the section must not claim what the
-    // account was while it is asking what it is.
-    if flow.reading {
-        return fl!("stremio-reading");
-    }
-    // An expired code is what the user last acted on, so it is the news this
-    // line carries until the next request - "no account linked" is true but
-    // does not say what happened to the code they were typing.
-    if flow.expired {
-        return fl!("stremio-link-expired");
-    }
-    match flow.connection.as_ref() {
-        Some(connection) => fl!("stremio-linked", when = connection.linked_at.clone()),
-        None => fl!("stremio-not-linked"),
-    }
-}
-
-/// What pressing `action` asks the shell for. The decision is the flow's; this
-/// only names the request.
-fn stremio_action_message(action: stremio_link::Action) -> Message {
-    match action {
-        stremio_link::Action::Link => Message::Stremio(stremio_link::Message::LinkPressed),
-        stremio_link::Action::Unlink => Message::Stremio(stremio_link::Message::UnlinkPressed),
-    }
-}
-
-/// The control's own words.
-fn stremio_action_label(action: stremio_link::Action) -> String {
-    match action {
-        stremio_link::Action::Link => fl!("stremio-link"),
-        stremio_link::Action::Unlink => fl!("stremio-unlink"),
-    }
-}
-
 /// One action in the section's button row, so padding cannot drift apart as
 /// more are added beside it. The class is passed in rather than fixed here:
-/// each control wears the class its role earns (the two `*_action_class` maps).
+/// each control wears the class its role earns.
 ///
 /// A control the state cannot honour is drawn disabled rather than dropped: the
 /// row is the same row in every phase, so nothing moves under the user's hand.
@@ -322,13 +218,4 @@ fn action_button<'a, M: Clone + 'a>(
         .class(class)
         .on_press_maybe(enabled.then_some(message))
         .into()
-}
-
-/// The same rule for the Stremio controls: linking is the affirmative action,
-/// unlinking removes the account.
-fn stremio_action_class(action: stremio_link::Action) -> Button {
-    match action {
-        stremio_link::Action::Link => primary_action_button_class(),
-        stremio_link::Action::Unlink => destructive_button_class(),
-    }
 }

@@ -13,6 +13,9 @@
 
 use crate::providers::daemon::{StremioConnection, StremioLink};
 
+mod view;
+pub use view::view;
+
 #[derive(Clone, Debug)]
 pub enum Message {
     LinkPressed,
