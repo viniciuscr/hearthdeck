@@ -9,6 +9,9 @@
 
 use crate::providers::daemon::{CategorizationSnapshot, ModelStatus};
 
+mod view;
+pub use view::view;
+
 #[derive(Clone, Debug)]
 pub enum Message {
     SetEnabled(bool),

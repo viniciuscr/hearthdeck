@@ -1475,9 +1475,7 @@ impl App {
     fn view_settings(&self) -> Element<'_, Message> {
         container(settings::view(
             &settings::Settings {
-                categorization: self.categorization.snapshot.as_ref(),
-                capable: self.categorization.capable,
-                notice: self.categorization.notice.as_deref(),
+                categorization: &self.categorization,
                 stremio: &self.stremio,
                 romm: &self.romm,
                 readiness: &self.retro_readiness,
