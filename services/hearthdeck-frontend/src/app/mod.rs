@@ -177,25 +177,7 @@ pub enum Message {
     DetectCouchFriendly,
     /// The daemon's health reply landed: what this deployment provides at all.
     HealthLoaded(Result<crate::providers::daemon::HealthResponse, String>),
-    /// Restore default categories was pressed: every section's tabs go back to
-    /// the ones derived from the library and the console platforms.
-    /// The Stremio section's link button: ask the daemon for a code.
-    StartStremioLink,
-    /// The daemon answered the request for a code: the one to approve, or why
-    /// it could not issue one.
-    StremioLinkStarted(Result<settings::stremio_link::Pending, String>),
-    /// One poll of the pending link came back.
-    StremioLinkPolled(Result<crate::providers::daemon::StremioLink, String>),
-    /// Whether a Stremio account is linked, as the daemon reports it.
-    StremioConnectionLoaded(Result<Option<crate::providers::daemon::StremioConnection>, String>),
-    /// The Stremio section's unlink button: forget the account.
-    UnlinkStremio,
-    /// The daemon answered the unlink request.
-    StremioUnlinked(Result<(), String>),
-    /// The Stremio source was asked to refresh. The failure is all this carries:
-    /// there is nothing for the user to do about it, and the provider's own
-    /// interval will try again.
-    StremioSourceRefreshed(Result<(), String>),
+    Stremio(settings::stremio_link::Message),
     /// The console list a tab strip is built from: `(platform id, label)`.
     ConsolesLoaded(Result<Vec<crate::providers::daemon::RetroConsole>, String>),
     SelectSection(Section),
@@ -1142,30 +1124,9 @@ impl Application for App {
                 Err(error) => log::warn!("health read failed: {error}"),
             },
             Message::Romm(message) => return self.update_romm(message),
-            // The Stremio section: the flow decides what an answer means and
-            // what must happen next, and the shell only runs that. Nothing here
-            // reads a reply to decide anything itself.
-            Message::StartStremioLink => return self.start_stremio_link(),
-            Message::StremioLinkStarted(result) => {
-                let effect = self.stremio.link_started(result);
+            Message::Stremio(message) => {
+                let effect = self.stremio.update(message);
                 return self.run_stremio_effect(effect);
-            }
-            Message::StremioLinkPolled(result) => {
-                let effect = self.stremio.link_polled(result);
-                return self.run_stremio_effect(effect);
-            }
-            Message::StremioConnectionLoaded(result) => self.stremio.connection_read(result),
-            Message::UnlinkStremio => return self.unlink_stremio(),
-            Message::StremioUnlinked(result) => {
-                let effect = self.stremio.unlinked(result);
-                return self.run_stremio_effect(effect);
-            }
-            // Nothing for the user to do about a failed publish: the provider's
-            // own interval will try again, and `/v1/health` is where it shows.
-            Message::StremioSourceRefreshed(result) => {
-                if let Err(error) = result {
-                    log::warn!("could not refresh the Stremio source: {error}");
-                }
             }
             Message::OpenSearch => {
                 self.switch_page(Page::Library);

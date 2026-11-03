@@ -18,6 +18,10 @@ the cruft inherited from the project this started from.
   Grows on second use; never a per-screen copy.
 - `screens/<name>/…` — one module per screen, each owning its own state,
   `Message`, `update` and `view`.
+  The Stremio settings flow owns its messages and state transitions in
+  `screens/settings/stremio_link.rs`. `App` forwards `Message::Stremio` to the
+  flow and runs its returned effects in `app/settings_source.rs`; daemon I/O
+  and dashboard reloads stay outside the flow.
 - `style.rs` — shared tokens and the base button classes; `ui/` composes on top.
 
 ## Build speed
