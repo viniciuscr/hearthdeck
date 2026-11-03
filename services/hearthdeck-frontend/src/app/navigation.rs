@@ -274,9 +274,13 @@ impl App {
                 .as_ref()
                 .is_some_and(|details| details.disc_picker)
             {
-                return self.update(Message::DetailsToggleDiscPicker);
+                return self.update(Message::Details(
+                    crate::screens::details::Message::DiscPickerPressed,
+                ));
             }
-            return self.update(Message::CloseDetails);
+            return self.update(Message::Details(
+                crate::screens::details::Message::BackPressed,
+            ));
         }
         // The top bar is chrome rather than a surface over anything: Back steps
         // off it into the content the way it steps out of the library's ring.

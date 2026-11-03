@@ -38,6 +38,10 @@ the cruft inherited from the project this started from.
   RomM's card and sign-in dialog emit `ViewMessage`: form events plus text
   focus, blur and submit events. The settings boundary maps these to the
   existing App routes, keeping the global keyboard and Back handling intact.
+  The details screen owns its messages, controller-confirm decisions and
+  `Details::update`. Its view emits local events; App runs launch, daemon,
+  focus and page effects. Late detail reads are still dropped after leaving
+  the page, while flag replies retain their existing settlement behavior.
 - `style.rs` — shared tokens and the base button classes; `ui/` composes on top.
 
 ## Build speed

@@ -18,7 +18,7 @@ use cosmic::widget::{
     Id, button, column, container, icon, list, list::list_column, row, scrollable, space, text,
 };
 
-use crate::app::Message;
+use super::{Flag, Message};
 use crate::fl;
 use crate::screens::details::{Details, Hero, focus};
 use crate::style::{
@@ -147,7 +147,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
             fl!("back"),
             DETAILS_ACTION_WIDTH,
             details_toggle_button_class(false),
-            Message::CloseDetails,
+            Message::BackPressed,
         ),
         action_button(
             focus::Focus::Play,
@@ -155,7 +155,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
             fl!("play"),
             DETAILS_PLAY_WIDTH,
             primary_action_button_class(),
-            Message::DetailsPlay,
+            Message::PlayPressed,
         ),
         action_button(
             focus::Focus::Favorite,
@@ -163,7 +163,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
             fl!("favorite"),
             DETAILS_ACTION_WIDTH,
             details_toggle_button_class(details.favorite().unwrap_or(false)),
-            Message::DetailsToggleFavorite,
+            Message::FlagPressed(Flag::Favorite),
         ),
     ]
     .spacing(space_m)
@@ -175,7 +175,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
             fl!("disc"),
             DETAILS_ACTION_WIDTH,
             details_toggle_button_class(details.disc_picker),
-            Message::DetailsToggleDiscPicker,
+            Message::DiscPickerPressed,
         ));
     }
     action_line = action_line.push(action_button(
@@ -184,7 +184,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
         fl!("play-later"),
         DETAILS_ACTION_WIDTH,
         details_toggle_button_class(details.backlogged().unwrap_or(false)),
-        Message::DetailsToggleBacklog,
+        Message::FlagPressed(Flag::Backlog),
     ));
     let action_strip = container(action_line)
         .width(Length::Fill)
@@ -226,7 +226,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
                     .spacing(space_s)
                     .align_y(Alignment::Center),
                 )
-                .on_press(Message::DetailsSelectDisc(version.id))
+                .on_press(Message::DiscSelected(version.id))
                 .selected(cursor == focus::Focus::DiscChoice(index)),
             );
         }
@@ -342,7 +342,7 @@ pub fn view<'a>(details: &'a Details, window_width: f32) -> Element<'a, Message>
                     ContentFit::Cover,
                     1,
                     None,
-                    Some(Message::DetailsSelectScreenshot(index)),
+                    Some(Message::ScreenshotSelected(index)),
                     None,
                     TileLabel::OnArtwork,
                     selection,
