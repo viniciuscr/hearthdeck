@@ -6,7 +6,6 @@ use cosmic::theme;
 use cosmic::widget::qr_code::{self, QRCode};
 use cosmic::widget::{Id, column, container, dialog, row, text, text_input};
 
-use crate::app;
 use crate::fl;
 use crate::providers::daemon::{RommLink, RommLinkOffer, RommSettings};
 use crate::style::{
@@ -50,6 +49,14 @@ pub enum Message {
     RemovePressed,
     Loaded(Result<Option<RommSettings>, String>),
     Removed(Result<(), String>),
+}
+
+#[derive(Clone, Debug)]
+pub enum ViewMessage {
+    Form(Message),
+    TextFieldFocused(Field),
+    TextFieldBlurred(Field),
+    TextFieldSubmitted(Field),
 }
 
 impl std::fmt::Debug for Message {
@@ -376,21 +383,17 @@ impl Form {
     }
 }
 
-fn romm(message: Message) -> app::Message {
-    app::Message::Romm(message)
-}
-
-pub fn view(form: &Form) -> Element<'_, app::Message> {
+pub fn view(form: &Form) -> Element<'_, ViewMessage> {
     let spacing = theme::spacing();
     let mut url = text_input("http://127.0.0.1:8080", &form.base_url)
         .size(TEXT_BODY)
-        .on_focus(app::Message::TextFieldFocused(Field::RommUrl))
-        .on_unfocus(app::Message::TextFieldBlurred(Field::RommUrl))
+        .on_focus(ViewMessage::TextFieldFocused(Field::RommUrl))
+        .on_unfocus(ViewMessage::TextFieldBlurred(Field::RommUrl))
         // Accepting the URL puts the keyboard away; the value already applies
         // as it is typed.
-        .on_submit(|_| app::Message::TextFieldSubmitted(Field::RommUrl));
+        .on_submit(|_| ViewMessage::TextFieldSubmitted(Field::RommUrl));
     if !form.busy && !form.polling {
-        url = url.on_input(|value| romm(Message::UrlChanged(value)));
+        url = url.on_input(|value| ViewMessage::Form(Message::UrlChanged(value)));
     }
     let status = if form.busy {
         fl!("romm-working")
@@ -419,19 +422,19 @@ pub fn view(form: &Form) -> Element<'_, app::Message> {
             row![
                 super::action_button(
                     fl!("romm-connect"),
-                    romm(Message::ConnectPressed),
+                    ViewMessage::Form(Message::ConnectPressed),
                     primary_action_button_class(),
                     form.can_connect(),
                 ),
                 super::action_button(
                     fl!("romm-sign-in"),
-                    romm(Message::SignInOpened),
+                    ViewMessage::Form(Message::SignInOpened),
                     standard_button_class(),
                     !form.busy && !form.base_url.trim().is_empty(),
                 ),
                 super::action_button(
                     fl!("romm-remove"),
-                    romm(Message::RemovePressed),
+                    ViewMessage::Form(Message::RemovePressed),
                     destructive_button_class(),
                     !form.busy && !form.polling && form.connection.is_some(),
                 ),
@@ -441,7 +444,7 @@ pub fn view(form: &Form) -> Element<'_, app::Message> {
         .into()
 }
 
-fn pending_block(pending: &Pending) -> Element<'_, app::Message> {
+fn pending_block(pending: &Pending) -> Element<'_, ViewMessage> {
     let spacing = theme::spacing();
     let details = column![
         super::body_line(fl!("romm-pending", seconds = pending.seconds_left)),
@@ -461,29 +464,29 @@ fn pending_block(pending: &Pending) -> Element<'_, app::Message> {
 }
 
 /// The username/password fallback, drawn by the app as a modal dialog.
-pub fn sign_in_dialog(form: &Form) -> Option<Element<'_, app::Message>> {
+pub fn sign_in_dialog(form: &Form) -> Option<Element<'_, ViewMessage>> {
     let sign_in = form.sign_in.as_ref()?;
     let spacing = theme::spacing();
     let mut username = text_input(fl!("romm-username"), &sign_in.username)
         .size(TEXT_BODY)
         .id(USERNAME_ID.clone())
-        .on_focus(app::Message::TextFieldFocused(Field::RommUsername))
-        .on_unfocus(app::Message::TextFieldBlurred(Field::RommUsername));
+        .on_focus(ViewMessage::TextFieldFocused(Field::RommUsername))
+        .on_unfocus(ViewMessage::TextFieldBlurred(Field::RommUsername));
     let mut password = text_input(fl!("romm-password"), &sign_in.password)
         .password()
         .size(TEXT_BODY)
         .id(PASSWORD_ID.clone())
-        .on_focus(app::Message::TextFieldFocused(Field::RommPassword))
-        .on_unfocus(app::Message::TextFieldBlurred(Field::RommPassword));
+        .on_focus(ViewMessage::TextFieldFocused(Field::RommPassword))
+        .on_unfocus(ViewMessage::TextFieldBlurred(Field::RommPassword));
     if !form.busy {
         username = username
-            .on_input(|value| romm(Message::UsernameChanged(value)))
+            .on_input(|value| ViewMessage::Form(Message::UsernameChanged(value)))
             // Enter moves to the password. Nothing can walk to it, so this is
             // how the pad gets from one half of the form to the other.
-            .on_submit(|_| app::Message::TextFieldSubmitted(Field::RommUsername));
+            .on_submit(|_| ViewMessage::TextFieldSubmitted(Field::RommUsername));
         password = password
-            .on_input(|value| romm(Message::PasswordChanged(value)))
-            .on_submit(|_| app::Message::TextFieldSubmitted(Field::RommPassword));
+            .on_input(|value| ViewMessage::Form(Message::PasswordChanged(value)))
+            .on_submit(|_| ViewMessage::TextFieldSubmitted(Field::RommPassword));
     }
     let mut controls = column![username, password].spacing(spacing.space_s);
     if let Some(error) = &form.error {
@@ -499,13 +502,13 @@ pub fn sign_in_dialog(form: &Form) -> Option<Element<'_, app::Message>> {
             .control(controls)
             .primary_action(super::action_button(
                 fl!("romm-sign-in"),
-                romm(Message::SignInPressed),
+                ViewMessage::Form(Message::SignInPressed),
                 primary_action_button_class(),
                 form.can_sign_in(),
             ))
             .secondary_action(super::action_button(
                 fl!("romm-cancel"),
-                romm(Message::SignInClosed),
+                ViewMessage::Form(Message::SignInClosed),
                 standard_button_class(),
                 !form.busy,
             ))

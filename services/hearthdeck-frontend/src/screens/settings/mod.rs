@@ -27,6 +27,15 @@ pub mod readiness;
 pub mod romm;
 pub mod stremio_link;
 
+pub fn romm_message(message: romm::ViewMessage) -> Message {
+    match message {
+        romm::ViewMessage::Form(message) => Message::Romm(message),
+        romm::ViewMessage::TextFieldFocused(field) => Message::TextFieldFocused(field),
+        romm::ViewMessage::TextFieldBlurred(field) => Message::TextFieldBlurred(field),
+        romm::ViewMessage::TextFieldSubmitted(field) => Message::TextFieldSubmitted(field),
+    }
+}
+
 /// What the screen draws.
 pub struct Settings<'a> {
     pub categorization: &'a categorization::State,
@@ -58,7 +67,7 @@ pub fn view<'a>(
             library_and_dashboard(),
             categorization::view(state.categorization).map(Message::Categorization),
             stremio_link::view(state.stremio).map(Message::Stremio),
-            romm::view(state.romm),
+            romm::view(state.romm).map(romm_message),
             readiness::view(state.readiness).map(Message::Readiness)
         ]))
         .width(Length::Fill)
@@ -134,7 +143,7 @@ fn titled_section<'a, M: Clone + 'static>(title: String) -> settings::Section<'a
 /// row with no way to override it. The horizontal spacer is the same one
 /// `settings::item` puts between the two, so a wide control (an input) fills the
 /// space the label does not need.
-fn item<'a>(label: String, control: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+fn item<'a, M: 'a>(label: String, control: impl Into<Element<'a, M>>) -> Element<'a, M> {
     settings::item_row(vec![
         text::body(label).size(TEXT_LARGE).into(),
         space::horizontal().into(),
@@ -218,4 +227,49 @@ fn action_button<'a, M: Clone + 'a>(
         .class(class)
         .on_press_maybe(enabled.then_some(message))
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::text_entry::Field;
+
+    #[test]
+    fn romm_card_and_dialog_keep_the_global_text_entry_events() {
+        for field in [Field::RommUrl, Field::RommUsername, Field::RommPassword] {
+            assert!(matches!(
+                romm_message(romm::ViewMessage::TextFieldFocused(field)),
+                Message::TextFieldFocused(actual) if actual == field
+            ));
+            assert!(matches!(
+                romm_message(romm::ViewMessage::TextFieldBlurred(field)),
+                Message::TextFieldBlurred(actual) if actual == field
+            ));
+            assert!(matches!(
+                romm_message(romm::ViewMessage::TextFieldSubmitted(field)),
+                Message::TextFieldSubmitted(actual) if actual == field
+            ));
+        }
+    }
+
+    #[test]
+    fn romm_form_events_keep_credentials_redacted_through_the_page_boundary() {
+        let event =
+            romm::ViewMessage::Form(romm::Message::PasswordChanged("private-secret".into()));
+        assert!(!format!("{event:?}").contains("private-secret"));
+        let message = romm_message(event);
+        assert!(!format!("{message:?}").contains("private-secret"));
+        assert!(matches!(
+            message,
+            Message::Romm(romm::Message::PasswordChanged(password)) if password == "private-secret"
+        ));
+        assert!(matches!(
+            romm_message(romm::ViewMessage::Form(romm::Message::SignInPressed)),
+            Message::Romm(romm::Message::SignInPressed)
+        ));
+        assert!(matches!(
+            romm_message(romm::ViewMessage::Form(romm::Message::SignInClosed)),
+            Message::Romm(romm::Message::SignInClosed)
+        ));
+    }
 }

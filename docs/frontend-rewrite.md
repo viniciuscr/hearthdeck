@@ -35,6 +35,9 @@ the cruft inherited from the project this started from.
   App messages only by the settings page. Shared settings layout helpers work
   with each card's message type; categorization and Stremio rendering live
   beside their state.
+  RomM's card and sign-in dialog emit `ViewMessage`: form events plus text
+  focus, blur and submit events. The settings boundary maps these to the
+  existing App routes, keeping the global keyboard and Back handling intact.
 - `style.rs` — shared tokens and the base button classes; `ui/` composes on top.
 
 ## Build speed
