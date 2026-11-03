@@ -102,6 +102,13 @@ impl Card {
     }
 }
 
+/// The card shape that determines a rail's layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RailKind {
+    Games,
+    Consoles,
+}
+
 /// One rail: what it is called and the cards in it.
 #[derive(Clone)]
 pub struct Shelf {
@@ -114,6 +121,15 @@ pub struct Shelf {
 }
 
 impl Shelf {
+    #[must_use]
+    pub fn kind(&self) -> RailKind {
+        if self.consoles {
+            RailKind::Consoles
+        } else {
+            RailKind::Games
+        }
+    }
+
     pub fn new(consoles: bool, title: impl Into<String>, cards: Vec<Card>) -> Self {
         Self {
             consoles,
@@ -187,7 +203,7 @@ pub fn view<'a>(
         .iter()
         .enumerate()
         .map(|(index, shelf)| {
-            let (size, aspect, fit) = shelf_metrics(shelf, window_width);
+            let (size, aspect, fit) = shelf_metrics(shelf.kind(), window_width);
             let scroll = on_rail_scroll.clone();
             let rail_element: Element<'a, Message> =
                 rail(rail_id(index), shelf.title.clone(), size)
@@ -229,7 +245,11 @@ pub fn view<'a>(
 
     // The blank space at the top of the page, where the banner was: kept clear
     // so the focused title's art has a window onto the page above its rail.
-    let front = front_space(shelves.first(), window_width, window_height);
+    let front = front_space(
+        shelves.first().map(Shelf::kind),
+        window_width,
+        window_height,
+    );
     let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(rails.len() + 1);
     rows.push(
         container(text(""))
@@ -264,28 +284,27 @@ pub fn view<'a>(
 ///
 /// One home for all three, so where a card is drawn and where the scroll thinks
 /// it is cannot disagree.
-fn shelf_metrics(shelf: &Shelf, window_width: f32) -> (f32, f32, ContentFit) {
+fn shelf_metrics(kind: RailKind, window_width: f32) -> (f32, f32, ContentFit) {
     let Spacing { space_l, .. } = theme::spacing();
     let padding = content_horizontal_padding();
-    if shelf.consoles {
-        (
+    match kind {
+        RailKind::Consoles => (
             dashboard_console_tile_size(window_width, padding, space_l),
             1.0,
             ContentFit::Contain,
-        )
-    } else {
-        (
+        ),
+        RailKind::Games => (
             dashboard_tile_size(window_width, padding, space_l),
             DASHBOARD_GAME_ASPECT,
             ContentFit::Cover,
-        )
+        ),
     }
 }
 
-/// The pitch a card of `shelf` sits at: its width, and the gap beside it.
+/// A card's width and the gap beside it, without constructing its artwork.
 #[must_use]
-pub fn card_pitch(shelf: &Shelf, window_width: f32) -> (f32, f32) {
-    let (size, aspect, _) = shelf_metrics(shelf, window_width);
+pub fn card_pitch(kind: RailKind, window_width: f32) -> (f32, f32) {
+    let (size, aspect, _) = shelf_metrics(kind, window_width);
     let Spacing { space_l, .. } = theme::spacing();
     (size * aspect, f32::from(space_l))
 }
@@ -336,10 +355,10 @@ pub fn focused_label<'a>(
 /// below them - which is what the page scroll measures against to keep the
 /// focused one on screen.
 #[must_use]
-pub fn rail_heights(shelves: &[Shelf], window_width: f32, window_height: f32) -> Vec<f32> {
-    let mut heights: Vec<f32> = shelves
+pub fn rail_heights(kinds: &[RailKind], window_width: f32, window_height: f32) -> Vec<f32> {
+    let mut heights: Vec<f32> = kinds
         .iter()
-        .map(|shelf| rail_height(shelf, window_width))
+        .map(|&kind| rail_height(kind, window_width))
         .collect();
     // The blank space at the top of the page belongs to the first rail: folded
     // into its height, the page's follow pins "the first rail" into view by
@@ -347,15 +366,15 @@ pub fn rail_heights(shelves: &[Shelf], window_width: f32, window_height: f32) ->
     // snap the first rail gets: the rail at the bottom of the screen, with the
     // whole window onto the art above it, however the window is sized.
     if let Some(first) = heights.first_mut() {
-        *first += front_space(shelves.first(), window_width, window_height) + rail_gap();
+        *first += front_space(kinds.first().copied(), window_width, window_height) + rail_gap();
     }
     heights
 }
 
 /// One rail's height on the page: its title, its cards, and the name line.
-fn rail_height(shelf: &Shelf, window_width: f32) -> f32 {
+fn rail_height(kind: RailKind, window_width: f32) -> f32 {
     let Spacing { space_m, .. } = theme::spacing();
-    let (size, _, _) = shelf_metrics(shelf, window_width);
+    let (size, _, _) = shelf_metrics(kind, window_width);
     RAIL_TITLE_HEIGHT + f32::from(space_m) + size + LABEL_HEIGHT
 }
 
@@ -365,9 +384,9 @@ fn rail_height(shelf: &Shelf, window_width: f32) -> f32 {
 /// so the rail under it and the window onto the art above it are both on screen
 /// when the page sits at its top. A rail taller than that screenful leaves no
 /// space, which is right: the focused card is what has to stay visible.
-fn front_space(first: Option<&Shelf>, window_width: f32, window_height: f32) -> f32 {
+fn front_space(first: Option<RailKind>, window_width: f32, window_height: f32) -> f32 {
     let Spacing { space_l, .. } = theme::spacing();
-    let first = first.map_or(0.0, |shelf| rail_height(shelf, window_width));
+    let first = first.map_or(0.0, |kind| rail_height(kind, window_width));
     let page_viewport = window_height - top_bar::height();
     (page_viewport - f32::from(space_l) - rail_gap() - first).max(0.0)
 }
@@ -416,12 +435,41 @@ pub fn rail_viewport(window_width: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Card, RAIL_TITLE_HEIGHT, Shelf, card_selection, focus, focused_label, rail_heights,
-        rail_viewport, shelf_metrics,
+        Card, RAIL_TITLE_HEIGHT, RailKind, Shelf, card_pitch, card_selection, focus, focused_label,
+        rail_heights, rail_viewport, shelf_metrics,
     };
     use crate::style::content_horizontal_padding;
     use crate::widgets::application::{LABEL_HEIGHT, Selection};
     use cosmic::theme;
+
+    #[test]
+    fn rail_geometry_needs_only_card_kind_and_window_size() {
+        let spacing = theme::spacing();
+        let gap = f32::from(spacing.space_l);
+        for width in [640.0, 1200.0, 1920.0] {
+            let padding = content_horizontal_padding();
+            let game_size = crate::style::dashboard_tile_size(width, padding, spacing.space_l);
+            let console_size =
+                crate::style::dashboard_console_tile_size(width, padding, spacing.space_l);
+            assert_eq!(
+                card_pitch(RailKind::Games, width),
+                (game_size * crate::style::DASHBOARD_GAME_ASPECT, gap)
+            );
+            assert_eq!(card_pitch(RailKind::Consoles, width), (console_size, gap));
+            for height in [400.0, 1080.0] {
+                assert!(rail_heights(&[], width, height).is_empty());
+                let heights = rail_heights(&[RailKind::Games, RailKind::Consoles], width, height);
+                let console_height =
+                    RAIL_TITLE_HEIGHT + f32::from(spacing.space_m) + console_size + LABEL_HEIGHT;
+                assert_eq!(heights[1], console_height);
+                let game_height =
+                    RAIL_TITLE_HEIGHT + f32::from(spacing.space_m) + game_size + LABEL_HEIGHT;
+                let viewport = height - crate::widgets::top_bar::height();
+                let front = (viewport - gap - super::rail_gap() - game_height).max(0.0);
+                assert_eq!(heights[0], game_height + (front + super::rail_gap()));
+            }
+        }
+    }
     use cosmic::widget::{Id, icon};
 
     /// A cursor on a rail and a card in it.
@@ -476,12 +524,13 @@ mod tests {
     // screen.
     #[test]
     fn a_rail_reserves_room_for_the_name_line_below_its_cards() {
-        let shelves = vec![
+        let shelves = [
             Shelf::new(true, "Consoles", vec![card("Hades")]),
             Shelf::new(false, "Recently Played", vec![card("Half-Life 2")]),
         ];
-        let heights = rail_heights(&shelves, 1200.0, crate::style::WINDOW_HEIGHT);
-        let (size, _, _) = shelf_metrics(&shelves[1], 1200.0);
+        let kinds: Vec<_> = shelves.iter().map(Shelf::kind).collect();
+        let heights = rail_heights(&kinds, 1200.0, crate::style::WINDOW_HEIGHT);
+        let (size, _, _) = shelf_metrics(shelves[1].kind(), 1200.0);
 
         assert_eq!(
             heights[1],
@@ -496,7 +545,7 @@ mod tests {
     /// into view by pinning the page's own top, which is the snap it gets.
     #[test]
     fn the_first_rail_carries_the_blank_space_that_keeps_the_art_visible() {
-        let shelves = vec![
+        let shelves = [
             Shelf::new(false, "New on Stremio", vec![card("Wicker")]),
             Shelf::new(false, "Recently Played", vec![card("Half-Life 2")]),
         ];
@@ -504,10 +553,11 @@ mod tests {
         // so the blank space is whatever of *that* screenful the rail leaves
         // unused - a television is nothing like the size the app opens at.
         for window_height in [crate::style::WINDOW_HEIGHT, 1080.0] {
-            let heights = rail_heights(&shelves, 1200.0, window_height);
+            let kinds: Vec<_> = shelves.iter().map(Shelf::kind).collect();
+            let heights = rail_heights(&kinds, 1200.0, window_height);
             let plain = RAIL_TITLE_HEIGHT
                 + f32::from(theme::spacing().space_m)
-                + shelf_metrics(&shelves[1], 1200.0).0
+                + shelf_metrics(shelves[1].kind(), 1200.0).0
                 + LABEL_HEIGHT;
 
             assert_eq!(
