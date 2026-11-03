@@ -213,6 +213,18 @@ impl App {
         )
     }
 
+    pub(super) fn run_readiness_effect(
+        &self,
+        effect: settings::readiness::Effect,
+    ) -> Task<Message> {
+        match effect {
+            settings::readiness::Effect::Nothing => Task::none(),
+            settings::readiness::Effect::Load => self.load_retro_readiness(),
+            settings::readiness::Effect::Sync => self.sync_retro_bios(),
+            settings::readiness::Effect::Install => self.install_retro_cores(),
+        }
+    }
+
     /// Reads the emulator readiness report the settings card draws. Read
     /// whenever the screen is opened, for the same reason the state beside it
     /// is: a core may have been installed since the shell started.
@@ -225,7 +237,11 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::RetroReadinessLoaded(result)),
+            |result| {
+                cosmic::Action::App(Message::Readiness(settings::readiness::Message::Loaded(
+                    result,
+                )))
+            },
         )
     }
 
@@ -240,7 +256,11 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::RetroBiosSynced(result)),
+            |result| {
+                cosmic::Action::App(Message::Readiness(
+                    settings::readiness::Message::BiosSynced(result),
+                ))
+            },
         )
     }
 
@@ -256,7 +276,11 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::RetroCoresInstalled(result)),
+            |result| {
+                cosmic::Action::App(Message::Readiness(
+                    settings::readiness::Message::CoresInstalled(result),
+                ))
+            },
         )
     }
 

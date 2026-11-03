@@ -1,20 +1,38 @@
 //! The emulator-readiness card on the Settings screen: which platforms can
 //! play — core installed, BIOS in place — and the buttons that check again or
 //! fetch the missing BIOS files from the user's own BIOS source. The daemon
-//! owns the facts (`/v1/retro/readiness`); this module formats them and names
-//! the requests.
+//! owns the facts (`/v1/retro/readiness`); this module owns the card's state
+//! transitions and formats the answers. The app executes its returned effects.
 
 use cosmic::Element;
 use cosmic::cosmic_theme::Spacing;
 use cosmic::theme;
 use cosmic::widget::row;
 
-use crate::app::Message;
+use crate::app::Message as AppMessage;
 use crate::fl;
 use crate::providers::daemon::{RetroBiosSyncReport, RetroCoreInstallReport, RetroSystemReadiness};
 use crate::style::{primary_action_button_class, standard_button_class};
 
 use super::{action_button, body_line, button_row, caption_line, titled_section};
+
+#[derive(Clone, Debug)]
+pub enum Message {
+    RefreshPressed,
+    Loaded(Result<Vec<RetroSystemReadiness>, String>),
+    SyncPressed,
+    BiosSynced(Result<RetroBiosSyncReport, String>),
+    InstallPressed,
+    CoresInstalled(Result<RetroCoreInstallReport, String>),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Effect {
+    Nothing,
+    Load,
+    Sync,
+    Install,
+}
 
 /// The card's state: the daemon's answer, whether a sync is in flight, and
 /// what the last request did.
@@ -29,6 +47,73 @@ pub struct Flow {
     pub installing: bool,
     /// What the last sync did, for the card's status text.
     pub notice: Option<String>,
+}
+
+impl Flow {
+    pub fn update(&mut self, message: Message) -> Effect {
+        match message {
+            Message::RefreshPressed => Effect::Load,
+            Message::Loaded(result) => {
+                match result {
+                    Ok(readiness) => self.readiness = Some(readiness),
+                    Err(error) => log::warn!("readiness read failed: {error}"),
+                }
+                Effect::Nothing
+            }
+            Message::SyncPressed => {
+                log::info!("readiness sync requested");
+                self.syncing = true;
+                self.notice = None;
+                Effect::Sync
+            }
+            Message::InstallPressed => {
+                log::info!("core install requested");
+                self.installing = true;
+                self.notice = None;
+                Effect::Install
+            }
+            Message::CoresInstalled(result) => {
+                self.installing = false;
+                match result {
+                    Ok(report) => {
+                        let notice = install_notice(&report);
+                        if report.failed.is_empty() {
+                            log::info!("core install finished: {notice}");
+                        } else {
+                            log::warn!("core install finished: {notice}");
+                        }
+                        self.notice = Some(notice);
+                    }
+                    Err(error) => {
+                        log::warn!("core install failed: {error}");
+                        self.notice = Some(format!("core install failed: {error}"));
+                    }
+                }
+                // Installed flags belong to the daemon's readiness report.
+                Effect::Load
+            }
+            Message::BiosSynced(result) => {
+                self.syncing = false;
+                match result {
+                    Ok(report) => {
+                        let notice = sync_notice(&report);
+                        if report.failed.is_empty() {
+                            log::info!("readiness sync finished: {notice}");
+                        } else {
+                            log::warn!("readiness sync finished: {notice}");
+                        }
+                        self.readiness = Some(report.readiness);
+                        self.notice = Some(notice);
+                    }
+                    Err(error) => {
+                        log::warn!("BIOS sync failed: {error}");
+                        self.notice = Some(format!("BIOS sync failed: {error}"));
+                    }
+                }
+                Effect::Nothing
+            }
+        }
+    }
 }
 
 /// One line for the whole picture: how many platforms can play, and how many
@@ -169,7 +254,7 @@ pub fn progress_line(syncing: bool, installing: bool) -> Option<String> {
 }
 
 /// The card: the summary, one line per platform, and the check/fetch buttons.
-pub fn view<'a>(state: &Flow) -> Element<'a, Message> {
+pub fn view<'a>(state: &Flow) -> Element<'a, AppMessage> {
     let Spacing { space_s, .. } = theme::spacing();
     let section = titled_section(fl!("readiness-heading"));
 
@@ -196,19 +281,19 @@ pub fn view<'a>(state: &Flow) -> Element<'a, Message> {
     let buttons = row![
         action_button(
             fl!("readiness-check"),
-            Message::RefreshRetroReadiness,
+            AppMessage::Readiness(Message::RefreshPressed),
             standard_button_class(),
             !state.syncing && !state.installing,
         ),
         action_button(
             fl!("readiness-install"),
-            Message::InstallRetroCores,
+            AppMessage::Readiness(Message::InstallPressed),
             primary_action_button_class(),
             !state.syncing && !state.installing && !missing_packages.is_empty(),
         ),
         action_button(
             fl!("readiness-sync"),
-            Message::SyncRetroBios,
+            AppMessage::Readiness(Message::SyncPressed),
             primary_action_button_class(),
             !state.syncing && !state.installing,
         ),
@@ -220,8 +305,8 @@ pub fn view<'a>(state: &Flow) -> Element<'a, Message> {
 #[cfg(test)]
 mod tests {
     use super::{
-        install_notice, missing_core_packages, platform_missing, platform_status, progress_line,
-        summary_line, sync_notice,
+        Effect, Flow, Message, install_notice, missing_core_packages, platform_missing,
+        platform_status, progress_line, summary_line, sync_notice,
     };
     use hearthdeck_protocol::{
         RetroBiosFile, RetroBiosSyncFailure, RetroBiosSyncReport, RetroCoreInstallFailure,
@@ -250,6 +335,92 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn failed_reads_keep_the_last_readiness_answer() {
+        let mut flow = Flow::default();
+        assert_eq!(flow.update(Message::RefreshPressed), Effect::Load);
+        assert_eq!(
+            flow.update(Message::Loaded(Ok(vec![entry(true, &[])]))),
+            Effect::Nothing
+        );
+        assert_eq!(
+            flow.update(Message::Loaded(Err("offline".into()))),
+            Effect::Nothing
+        );
+        assert!(flow.readiness.as_ref().unwrap()[0].core.installed);
+        assert_eq!(
+            flow.update(Message::Loaded(Ok(Vec::new()))),
+            Effect::Nothing
+        );
+        assert!(flow.readiness.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_sync_updates_readiness_and_keeps_the_last_answer_on_failure() {
+        let mut flow = Flow {
+            notice: Some("old".into()),
+            ..Flow::default()
+        };
+        assert_eq!(flow.update(Message::SyncPressed), Effect::Sync);
+        assert!(flow.syncing);
+        assert!(flow.notice.is_none());
+        assert_eq!(
+            flow.update(Message::BiosSynced(Ok(RetroBiosSyncReport {
+                fetched: vec!["bios.bin".into()],
+                failed: vec![RetroBiosSyncFailure {
+                    filename: "missing.bin".into(),
+                    reason: "not found".into()
+                }],
+                readiness: vec![entry(true, &[])],
+            }))),
+            Effect::Nothing
+        );
+        assert!(!flow.syncing);
+        assert!(flow.readiness.as_ref().unwrap()[0].core.installed);
+        assert_eq!(
+            flow.notice.as_deref(),
+            Some("placed bios.bin · 1 could not be placed: missing.bin — not found")
+        );
+        assert_eq!(flow.update(Message::SyncPressed), Effect::Sync);
+        assert_eq!(
+            flow.update(Message::BiosSynced(Err("offline".into()))),
+            Effect::Nothing
+        );
+        assert!(!flow.syncing);
+        assert!(flow.readiness.as_ref().unwrap()[0].core.installed);
+        assert_eq!(flow.notice.as_deref(), Some("BIOS sync failed: offline"));
+    }
+
+    #[test]
+    fn installing_cores_reloads_readiness_after_success_or_failure() {
+        let mut flow = Flow::default();
+        assert_eq!(flow.update(Message::InstallPressed), Effect::Install);
+        assert!(flow.installing);
+        assert_eq!(
+            flow.update(Message::CoresInstalled(Ok(RetroCoreInstallReport {
+                installed: vec!["libretro-snes9x".into()],
+                failed: vec![RetroCoreInstallFailure {
+                    package: "libretro-mame".into(),
+                    reason: "refused".into()
+                }],
+            }))),
+            Effect::Load
+        );
+        assert!(!flow.installing);
+        assert_eq!(
+            flow.notice.as_deref(),
+            Some("installed libretro-snes9x · 1 could not be installed: libretro-mame — refused")
+        );
+        assert_eq!(flow.update(Message::InstallPressed), Effect::Install);
+        assert!(flow.notice.is_none());
+        assert_eq!(
+            flow.update(Message::CoresInstalled(Err("offline".into()))),
+            Effect::Load
+        );
+        assert!(!flow.installing);
+        assert_eq!(flow.notice.as_deref(), Some("core install failed: offline"));
     }
 
     #[test]
