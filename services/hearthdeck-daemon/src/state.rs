@@ -46,6 +46,14 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn collection_rules(&self) -> crate::collections::rules::RuleService<'_> {
+        crate::collections::rules::RuleService {
+            catalog: &self.catalog,
+            activity: &self.activity,
+            categorization: self.categorization.as_ref(),
+        }
+    }
+
     pub fn sessions(&self) -> crate::sessions::SessionService<'_> {
         crate::sessions::SessionService {
             bridge_socket: &self.config.bridge_socket_path,

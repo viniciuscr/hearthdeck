@@ -46,6 +46,12 @@ desktop-entry dispatch. The HTTP handler only loads the record, asks for a plan
 and submits it to the session service. Retro filesystem/core resolution stays
 in the retro adapter.
 
+Collection rule composition lives in `collections/rules.rs`. Its service borrows
+the catalog, activity store and optional categorizer, without HTTP or application
+state dependencies. It keeps existing owner-qualified rule dispatch and leaves
+curated items untouched. The HTTP boundary still resolves missing icons
+and isolates a failed rail so the other collections remain available.
+
 ## Platform Adaptation Rules
 
 Hearthdeck targets Linux only. Platform-specific behavior still terminates at an
