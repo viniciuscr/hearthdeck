@@ -29,6 +29,17 @@ enum Rail<'a> {
     Library,
 }
 
+impl Rail<'_> {
+    fn card_id(&self, index: usize) -> Id {
+        let name = match self {
+            Self::Collection(collection) => &collection.slug,
+            Self::Consoles => "consoles",
+            Self::Library => "library",
+        };
+        dashboard_card_id(name, index)
+    }
+}
+
 impl App {
     /// The dashboard's rails: the daemon's collections, in the order it composes
     /// them, with a consoles rail at the top when RomM is configured.
@@ -92,7 +103,7 @@ impl App {
             .enumerate()
             .map(|(index, platform)| {
                 Card::new(
-                    dashboard_card_id("consoles", index),
+                    Rail::Consoles.card_id(index),
                     platform.label.clone(),
                     crate::icon_cache::reference_handle(
                         platform.artwork.as_deref(),
@@ -119,7 +130,7 @@ impl App {
             .enumerate()
             .map(|(index, item)| {
                 Card::new(
-                    dashboard_card_id(&collection.slug, index),
+                    Rail::Collection(collection).card_id(index),
                     item.name.clone(),
                     crate::icon_cache::reference_handle(
                         item.icon.as_deref(),
@@ -155,7 +166,7 @@ impl App {
             .enumerate()
             .map(|(index, entry)| {
                 Card::new(
-                    dashboard_card_id("library", index),
+                    Rail::Library.card_id(index),
                     entry.name.clone(),
                     crate::icon_cache::entry_icon_handle(
                         &entry.icon,
@@ -174,19 +185,50 @@ impl App {
     /// the cards would resolve every card's artwork to answer.
     pub(super) fn dashboard_rail_lengths(&self) -> Vec<usize> {
         self.dashboard_rails()
-            .into_iter()
-            .map(|rail| match rail {
-                Rail::Collection(collection) => collection.items.len(),
-                Rail::Consoles => self.console_platforms.len(),
-                Rail::Library => self
-                    .catalog
-                    .iter()
-                    .filter(|entry| Section::PcGames.matches(entry))
-                    .count(),
-            })
-            .map(|cards| cards.min(DASHBOARD_RAIL_TILES))
+            .iter()
+            .map(|rail| self.dashboard_rail_length(rail))
             .filter(|&cards| cards > 0)
             .collect()
+    }
+
+    fn dashboard_rail_length(&self, rail: &Rail<'_>) -> usize {
+        let count = match rail {
+            Rail::Collection(collection) => collection.items.len(),
+            Rail::Consoles => self.console_platforms.len(),
+            Rail::Library => self
+                .catalog
+                .iter()
+                .filter(|entry| Section::PcGames.matches(entry))
+                .count(),
+        };
+        count.min(DASHBOARD_RAIL_TILES)
+    }
+
+    fn dashboard_card_id_at(&self, rail: usize, card: usize) -> Option<Id> {
+        let rails = self.dashboard_rails();
+        let rail = rails.get(rail)?;
+        (card < self.dashboard_rail_length(rail)).then(|| rail.card_id(card))
+    }
+
+    pub(super) fn dashboard_confirm_message(&self) -> Option<Message> {
+        let lengths = self.dashboard_rail_lengths();
+        let (rail, card) = dashboard::focus::confirm(self.dashboard_cursor, &lengths)?;
+        match self.dashboard_rails().get(rail)? {
+            Rail::Collection(collection) => {
+                let item = collection.items.get(card)?;
+                Some(launch_card_message(&item.item_id, &item.name))
+            }
+            Rail::Consoles => self
+                .console_platforms
+                .get(card)
+                .map(|platform| launch_console_message(platform.id)),
+            Rail::Library => self
+                .catalog
+                .iter()
+                .filter(|entry| Section::PcGames.matches(entry))
+                .nth(card)
+                .map(|entry| launch_card_message(&entry.id, &entry.name)),
+        }
     }
 
     /// Steps the dashboard's cursor, and keeps the card it lands on on screen.
@@ -271,15 +313,7 @@ impl App {
 
     /// Runs the card the dashboard's cursor is on.
     pub(super) fn confirm_dashboard(&mut self) -> Task<Message> {
-        let rails = self.dashboard_rail_lengths();
-        let message =
-            dashboard::focus::confirm(self.dashboard_cursor, &rails).and_then(|(rail, card)| {
-                self.dashboard_shelves()
-                    .get(rail)
-                    .and_then(|shelf| shelf.cards.get(card))
-                    .and_then(|card| card.message.clone())
-            });
-        match message {
+        match self.dashboard_confirm_message() {
             Some(message) => self.update(message),
             None => Task::none(),
         }
@@ -361,9 +395,7 @@ impl App {
     /// The card the pad is on, named by its own widget id: the one identity a
     /// reload cannot renumber.
     pub(super) fn dashboard_cursor_card(&self) -> Option<Id> {
-        let shelves = self.dashboard_shelves();
-        let shelf = shelves.get(self.dashboard_cursor.rail)?;
-        Some(shelf.cards.get(self.dashboard_cursor.card)?.id.clone())
+        self.dashboard_card_id_at(self.dashboard_cursor.rail, self.dashboard_cursor.card)
     }
 
     /// Puts the pad back on the card it was on after the rails changed under
@@ -377,8 +409,10 @@ impl App {
     /// cursor clamped to the new rails.
     pub(super) fn reland_dashboard(&mut self, was: Option<Id>) -> Task<Message> {
         if let Some(was) = was {
-            for (rail, shelf) in self.dashboard_shelves().iter().enumerate() {
-                if let Some(card) = shelf.cards.iter().position(|card| card.id == was) {
+            for (rail, source) in self.dashboard_rails().iter().enumerate() {
+                if let Some(card) = (0..self.dashboard_rail_length(source))
+                    .find(|&card| source.card_id(card) == was)
+                {
                     self.dashboard_cursor = dashboard::focus::Cursor {
                         rail,
                         card,

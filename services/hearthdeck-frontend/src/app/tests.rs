@@ -1918,6 +1918,111 @@ fn the_rail_lengths_the_pad_walks_are_the_cards_the_view_draws() {
     assert_eq!(app.dashboard_rail_lengths(), drawn(&app));
 }
 
+#[test]
+fn dashboard_activation_reads_the_selected_source_and_clamps_to_the_drawn_cap() {
+    let mut app = shell();
+    assert!(app.dashboard_confirm_message().is_none());
+    assert!(app.dashboard_cursor_card().is_none());
+
+    app = loaded(2);
+    app.dashboard_cursor.card = 1;
+    assert!(matches!(
+        app.dashboard_confirm_message(),
+        Some(Message::ActivateCard { id, .. }) if id == "hearthdeck:game-1"
+    ));
+    assert_eq!(
+        app.dashboard_cursor_card(),
+        Some(dashboard_card_id("library", 1))
+    );
+    let ids: Vec<String> = (0..crate::style::DASHBOARD_RAIL_TILES + 3)
+        .map(|index| format!("custom:item-{index}"))
+        .collect();
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    app.collections = vec![
+        collection("smart:empty", None, &[]),
+        collection("smart:custom", None, &ids),
+        arrivals(&["stremio:arrival"]),
+    ];
+    app.console_platforms = vec![crate::providers::daemon::RetroConsole {
+        id: 42,
+        label: "SNES".into(),
+        artwork: None,
+    }];
+    app.dashboard_cursor = dashboard::focus::Cursor::default();
+    assert!(matches!(
+        app.dashboard_confirm_message(),
+        Some(Message::ActivateCard { id, title }) if id == "stremio:arrival" && title == "stremio:arrival"
+    ));
+    app.dashboard_cursor.rail = 1;
+    assert!(matches!(
+        app.dashboard_confirm_message(),
+        Some(Message::ActivateConsole(42))
+    ));
+    assert_eq!(
+        app.dashboard_cursor_card(),
+        Some(dashboard_card_id("consoles", 0))
+    );
+    app.dashboard_cursor.rail = 2;
+    app.dashboard_cursor.card = usize::MAX;
+    let last = crate::style::DASHBOARD_RAIL_TILES - 1;
+    assert!(matches!(
+        app.dashboard_confirm_message(),
+        Some(Message::ActivateCard { id, .. }) if id == format!("custom:item-{last}")
+    ));
+    assert!(
+        app.dashboard_cursor_card().is_none(),
+        "identity lookup does not clamp"
+    );
+}
+
+#[test]
+fn source_card_identity_matches_rendered_ids_after_rails_are_inserted_or_removed() {
+    let mut app = loaded(2);
+    let was = app.dashboard_cursor_card();
+    assert_eq!(was, Some(dashboard_card_id("library", 0)));
+    app.collections = vec![collection("favorites", None, &["custom:game"])];
+    let _ = app.reland_dashboard(was);
+    assert_eq!(
+        app.dashboard_cursor_card(),
+        Some(dashboard_card_id("favorites", 0))
+    );
+    let was = app.dashboard_cursor_card();
+    app.collections.push(arrivals(&["stremio:arrival"]));
+    app.console_platforms = vec![crate::providers::daemon::RetroConsole {
+        id: 42,
+        label: "SNES".into(),
+        artwork: None,
+    }];
+    let _ = app.reland_dashboard(was);
+    assert_eq!(app.dashboard_cursor.rail, 2);
+    let shelves = app.dashboard_shelves();
+    for (rail, shelf) in shelves.iter().enumerate() {
+        for (card, drawn) in shelf.cards.iter().enumerate() {
+            app.dashboard_cursor.rail = rail;
+            app.dashboard_cursor.card = card;
+            assert_eq!(app.dashboard_cursor_card(), Some(drawn.id.clone()));
+            let source = app.dashboard_confirm_message().expect("source action");
+            let drawn = drawn.message.as_ref().expect("drawn action");
+            match (source, drawn) {
+                (
+                    Message::ActivateCard { id, title },
+                    Message::ActivateCard {
+                        id: drawn_id,
+                        title: drawn_title,
+                    },
+                ) => {
+                    assert_eq!(&id, drawn_id);
+                    assert_eq!(&title, drawn_title);
+                }
+                (Message::ActivateConsole(id), Message::ActivateConsole(drawn_id)) => {
+                    assert_eq!(&id, drawn_id)
+                }
+                _ => panic!("source and rendered actions differ at {rail}:{card}"),
+            }
+        }
+    }
+}
+
 /// The dashboard's rails are the daemon's collections - so a collection this
 /// client has never heard of, which is what a feature's own categories and so
 /// the AI's are, becomes a shelf without a change in the frontend. That is
