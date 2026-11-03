@@ -144,8 +144,15 @@ fn a_romm_sign_in_reloads_consoles_and_removal_clears_the_url() {
     let _ = app.update(Message::Romm(Romm::PasswordChanged("hunter2".into())));
     let _ = app.update(Message::Romm(Romm::SignInPressed));
     assert!(app.romm.busy);
+    assert_eq!(app.text_entry.active(), None);
+    let _ = app.update(Message::Romm(Romm::SignedIn(Err("refused".into()))));
+    assert_eq!(app.text_entry.active(), Some(Field::RommPassword));
+    assert!(!app.console.entries(&scope).is_empty());
+    let _ = app.update(Message::Romm(Romm::PasswordChanged("retry".into())));
+    let _ = app.update(Message::Romm(Romm::SignInPressed));
     let _ = app.update(Message::Romm(Romm::SignedIn(Ok(connection()))));
     assert!(app.romm.sign_in.is_none());
+    assert_eq!(app.text_entry.active(), None);
     assert!(app.console.entries(&scope).is_empty());
     assert!(app.tabs.console_games.is_empty());
     let _ = app.update(Message::Romm(Romm::Removed(Ok(()))));

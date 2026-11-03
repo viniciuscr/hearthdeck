@@ -28,6 +28,9 @@ the cruft inherited from the project this started from.
   Emulator readiness owns its messages and request-state transitions in
   `readiness::Flow`. BIOS sync replies supply the new readiness directly; core
   installation replies request a reread, even when installation fails.
+  RomM's `Form::update` owns input guards, approval polling decisions and
+  sign-in/removal transitions. It hands credentials to a redacted request
+  effect once; App runs daemon calls, keyboard focus and console invalidation.
 - `style.rs` — shared tokens and the base button classes; `ui/` composes on top.
 
 ## Build speed
