@@ -152,16 +152,7 @@ pub enum Message {
     CollectionsLoaded(Result<Vec<Collection>, String>),
     /// The daemon said something changed (or its feed came back).
     DaemonChanged(FeedEvent),
-    /// The emulator readiness report the settings card draws.
-    RefreshRetroReadiness,
-    RetroReadinessLoaded(Result<Vec<crate::providers::daemon::RetroSystemReadiness>, String>),
-    /// Places the missing BIOS files from the user's own BIOS source.
-    SyncRetroBios,
-    RetroBiosSynced(Result<crate::providers::daemon::RetroBiosSyncReport, String>),
-    /// Installs the missing libretro core packages through the daemon's
-    /// privileged helper.
-    InstallRetroCores,
-    RetroCoresInstalled(Result<crate::providers::daemon::RetroCoreInstallReport, String>),
+    Readiness(settings::readiness::Message),
     Categorization(settings::categorization::Message),
     /// The dashboard's top bar: show the settings screen.
     OpenSettings,
@@ -1004,62 +995,9 @@ impl Application for App {
                 let effect = self.categorization.update(message);
                 return self.run_categorization_effect(effect);
             }
-            Message::RefreshRetroReadiness => return self.load_retro_readiness(),
-            Message::RetroReadinessLoaded(result) => match result {
-                Ok(readiness) => self.retro_readiness.readiness = Some(readiness),
-                Err(error) => log::warn!("readiness read failed: {error}"),
-            },
-            Message::SyncRetroBios => {
-                log::info!("readiness sync requested");
-                self.retro_readiness.syncing = true;
-                self.retro_readiness.notice = None;
-                return self.sync_retro_bios();
-            }
-            Message::InstallRetroCores => {
-                log::info!("core install requested");
-                self.retro_readiness.installing = true;
-                self.retro_readiness.notice = None;
-                return self.install_retro_cores();
-            }
-            Message::RetroCoresInstalled(result) => {
-                self.retro_readiness.installing = false;
-                match result {
-                    Ok(report) => {
-                        let notice = settings::readiness::install_notice(&report);
-                        if report.failed.is_empty() {
-                            log::info!("core install finished: {notice}");
-                        } else {
-                            log::warn!("core install finished: {notice}");
-                        }
-                        self.retro_readiness.notice = Some(notice);
-                    }
-                    Err(error) => {
-                        log::warn!("core install failed: {error}");
-                        self.retro_readiness.notice = Some(format!("core install failed: {error}"));
-                    }
-                }
-                // The installed flags live in the readiness report: reread it
-                // so the rows and the button reflect what just landed.
-                return self.load_retro_readiness();
-            }
-            Message::RetroBiosSynced(result) => {
-                self.retro_readiness.syncing = false;
-                match result {
-                    Ok(report) => {
-                        let notice = settings::readiness::sync_notice(&report);
-                        if report.failed.is_empty() {
-                            log::info!("readiness sync finished: {notice}");
-                        } else {
-                            log::warn!("readiness sync finished: {notice}");
-                        }
-                        self.retro_readiness.readiness = Some(report.readiness);
-                        self.retro_readiness.notice = Some(notice);
-                    }
-                    Err(error) => {
-                        log::warn!("BIOS sync failed: {error}");
-                        self.retro_readiness.notice = Some(format!("BIOS sync failed: {error}"));
-                    }
-                }
+            Message::Readiness(message) => {
+                let effect = self.retro_readiness.update(message);
+                return self.run_readiness_effect(effect);
             }
             Message::Romm(message) => return self.update_romm(message),
             Message::Stremio(message) => {

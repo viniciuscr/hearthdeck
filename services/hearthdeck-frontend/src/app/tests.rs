@@ -2271,6 +2271,35 @@ fn a_refused_action_lands_in_the_sections_own_status_text() {
     );
 }
 
+#[test]
+fn readiness_messages_route_request_state_and_failures_to_the_card() {
+    use settings::readiness::Message as Readiness;
+    let mut app = showing(4);
+    let _ = app.update(Message::Readiness(Readiness::Loaded(Ok(Vec::new()))));
+    assert!(app.retro_readiness.readiness.as_ref().unwrap().is_empty());
+    let _ = app.update(Message::Readiness(Readiness::SyncPressed));
+    assert!(app.retro_readiness.syncing);
+    let _ = app.update(Message::Readiness(Readiness::BiosSynced(Err(
+        "offline".into()
+    ))));
+    assert!(!app.retro_readiness.syncing);
+    assert_eq!(
+        app.retro_readiness.notice.as_deref(),
+        Some("BIOS sync failed: offline")
+    );
+    let _ = app.update(Message::Readiness(Readiness::InstallPressed));
+    assert!(app.retro_readiness.installing);
+    assert!(app.retro_readiness.notice.is_none());
+    let _ = app.update(Message::Readiness(Readiness::CoresInstalled(Err(
+        "refused".into(),
+    ))));
+    assert!(!app.retro_readiness.installing);
+    assert_eq!(
+        app.retro_readiness.notice.as_deref(),
+        Some("core install failed: refused")
+    );
+}
+
 /// The Stremio section draws whatever the daemon last said about the
 /// account: a read lands it, and a successful "none" clears it - an account
 /// that is not there is a fact, not a missing one.

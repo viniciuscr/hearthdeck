@@ -25,6 +25,9 @@ the cruft inherited from the project this started from.
   Smart categorization follows the same boundary: `categorization::State`
   owns snapshots, capability and notices; its `update` returns effects for the
   app to run. Health replies pass only the categorization capability into it.
+  Emulator readiness owns its messages and request-state transitions in
+  `readiness::Flow`. BIOS sync replies supply the new readiness directly; core
+  installation replies request a reread, even when installation fails.
 - `style.rs` — shared tokens and the base button classes; `ui/` composes on top.
 
 ## Build speed
