@@ -47,10 +47,10 @@ use crate::form_factor::{self, FormFactor};
 use crate::input_ownership::{Event as InputEvent, InputOwnership};
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState, Overlay};
 use crate::motion::{Fade, Slide};
-use crate::providers::daemon::{Collection, DaemonClient, DaemonConfig, RetroDetails};
+use crate::providers::daemon::{Collection, DaemonClient, DaemonConfig};
 use crate::providers::filter::Facet;
 use crate::screens::dashboard::{self};
-use crate::screens::details::{Details as GameDetails, Flag as DetailsFlag};
+use crate::screens::details::{self as details_screen, Details as GameDetails};
 use crate::screens::library::console::{self, ConsoleScope, ConsoleScopes};
 use crate::screens::library::focus::{self, Cursors, Direction, Layout};
 use crate::screens::library::sidebar::{self, Sidebar};
@@ -225,34 +225,7 @@ pub enum Message {
     /// The pad's context button on a console game: show its details screen,
     /// seeded from the tile it was opened from.
     OpenDetails(usize),
-    /// Leave the details screen for the grid it was opened from.
-    CloseDetails,
-    /// The details screen's Play button: launch the file the screen points at.
-    DetailsPlay,
-    /// A screenshot in the details strip was pressed: make it the big image.
-    DetailsSelectScreenshot(usize),
-    /// The details screen's favorite button.
-    DetailsToggleFavorite,
-    /// The details screen's play-later button.
-    DetailsToggleBacklog,
-    /// The details screen's disc button: open or close the picker.
-    DetailsToggleDiscPicker,
-    /// A file was picked from the disc picker: point the screen at it.
-    DetailsSelectDisc(i64),
-    /// One game's detail read arrived, for the file it was started for. The
-    /// payload is boxed: `RetroDetails` is large enough that carrying it inline
-    /// would make every message carry its size.
-    DetailsLoaded {
-        rom_id: i64,
-        result: Box<Result<RetroDetails, String>>,
-    },
-    /// A favorite or play-later write settled against the daemon.
-    DetailsFlagWritten {
-        rom_id: i64,
-        flag: DetailsFlag,
-        previous: Option<bool>,
-        result: Result<bool, String>,
-    },
+    Details(details_screen::Message),
     /// A dashboard rail scrolled: remembered, so the next step can tell whether
     /// the card it lands on would leave the view.
     RailScrolled {
@@ -914,28 +887,7 @@ impl Application for App {
             }
             Message::CloseMenu => self.menu.close(),
             Message::OpenDetails(index) => return self.open_details(index),
-            Message::CloseDetails => return self.close_details(),
-            Message::DetailsPlay => return self.play_details(),
-            Message::DetailsSelectScreenshot(index) => {
-                if let Some(details) = self.details.as_mut() {
-                    details.select_shot(index);
-                }
-            }
-            Message::DetailsToggleFavorite => {
-                return self.toggle_details_flag(DetailsFlag::Favorite);
-            }
-            Message::DetailsToggleBacklog => {
-                return self.toggle_details_flag(DetailsFlag::Backlog);
-            }
-            Message::DetailsToggleDiscPicker => return self.toggle_details_disc_picker(),
-            Message::DetailsSelectDisc(rom_id) => return self.select_details_disc(rom_id),
-            Message::DetailsLoaded { rom_id, result } => return self.load_details(rom_id, *result),
-            Message::DetailsFlagWritten {
-                rom_id,
-                flag,
-                previous,
-                result,
-            } => return self.settle_details_flag(rom_id, flag, previous, result),
+            Message::Details(message) => return self.update_details(message),
             Message::RailScrolled { rail, offset } => {
                 // A report from a scroll the shell is driving describes where
                 // the travel happens to be, not where the shell sent it; taking

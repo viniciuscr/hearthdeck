@@ -7,17 +7,17 @@
 //! and the view composition. A child module of `app` sees `App`'s private
 //! fields, so the split is a move, not a widening of visibility.
 
+use cosmic::Element;
 use cosmic::app::Task;
 use cosmic::iced::widget::stack;
 use cosmic::widget::{container, space};
-use cosmic::{Application, Element};
 use log::warn;
 
 use crate::icon_cache::entry_icon_handle;
 use crate::providers::daemon::{
-    CollectionItem, DaemonClient, FAVORITES_COLLECTION, PLAY_LATER_COLLECTION, RetroDetails,
+    CollectionItem, DaemonClient, FAVORITES_COLLECTION, PLAY_LATER_COLLECTION,
 };
-use crate::screens::details::{Details, Flag, FlagWrite, Settled, focus};
+use crate::screens::details::{Details, Effect, Flag, FlagWrite, Message as DetailsMessage, focus};
 use crate::screens::library::focus::Direction;
 use crate::style::DETAILS_HERO_RASTER;
 
@@ -85,97 +85,32 @@ impl App {
         Task::batch([self.focus_task(), self.scroll_to_tile(self.cursors.tile)])
     }
 
-    /// The details screen's Play button: launch the file the screen points at,
-    /// whose id is what the launch route is keyed by.
-    pub(super) fn play_details(&mut self) -> Task<Message> {
-        let Some(details) = self.details.as_ref() else {
-            return Task::none();
-        };
-        let item_id = format!("romm:{}", details.rom_id);
-        let title = details.title.clone();
-        self.launch_managed(item_id, title)
-    }
-
-    /// Adds or removes the current file from a RomM per-user flag, and keeps
-    /// the collection the dashboard's rails are fed by in step with it.
-    pub(super) fn toggle_details_flag(&mut self, flag: Flag) -> Task<Message> {
-        let Some(details) = self.details.as_mut() else {
-            return Task::none();
-        };
-        match details.toggle_flag(flag) {
-            Some(write) => flag_write_task(self.daemon_client.clone(), write),
-            None => Task::none(),
-        }
-    }
-
-    /// Settles an optimistic flag write: on success the collections changed
-    /// with it and are re-read; on failure the state has already been put back
-    /// by [`Details::settle_flag`], and the reason is on screen.
-    pub(super) fn settle_details_flag(
-        &mut self,
-        rom_id: i64,
-        flag: Flag,
-        previous: Option<bool>,
-        result: Result<bool, String>,
-    ) -> Task<Message> {
-        let Some(details) = self.details.as_mut() else {
-            return Task::none();
-        };
-        match details.settle_flag(rom_id, flag, previous, result) {
-            Settled::Applied => self.load_collections(),
-            Settled::Reverted { reason } => {
-                warn!("details flag write failed: {reason}");
-                Task::none()
+    pub(super) fn update_details(&mut self, message: DetailsMessage) -> Task<Message> {
+        if let DetailsMessage::Loaded { rom_id, result } = &message {
+            if let Err(error) = &**result {
+                warn!("details read failed for rom {rom_id}: {error}");
             }
-            Settled::Dropped => Task::none(),
+            // The fade retains the old screen, but late reads cannot repaint it.
+            if self.page != Page::Details {
+                return Task::none();
+            }
         }
-    }
-
-    /// Opens or closes the disc picker. The cursor goes with the surface the
-    /// press just moved: into the picker, or back to the button that opened it.
-    pub(super) fn toggle_details_disc_picker(&mut self) -> Task<Message> {
         let Some(details) = self.details.as_mut() else {
             return Task::none();
         };
-        details.toggle_picker();
-        let cursor = details.cursor();
-        self.focus_details(cursor)
-    }
-
-    /// Points the screen at another file of the same game, and reads it: the
-    /// flags the picker cleared are the file's own, and only the read knows
-    /// them.
-    pub(super) fn select_details_disc(&mut self, rom_id: i64) -> Task<Message> {
-        let Some(details) = self.details.as_mut() else {
-            return Task::none();
-        };
-        details.select_disc(rom_id);
-        let cursor = details.cursor();
-        Task::batch([
-            self.focus_details(cursor),
-            details_read_task(self.daemon_client.clone(), rom_id),
-        ])
-    }
-
-    /// Applies the daemon's detail read to the screen that asked for it.
-    pub(super) fn load_details(
-        &mut self,
-        rom_id: i64,
-        result: Result<RetroDetails, String>,
-    ) -> Task<Message> {
-        if let Err(error) = &result {
-            warn!("details read failed for rom {rom_id}: {error}");
+        let effect = details.update(message);
+        match effect {
+            Effect::Nothing => Task::none(),
+            Effect::Close => self.close_details(),
+            Effect::Launch { item_id, title } => self.launch_managed(item_id, title),
+            Effect::WriteFlag(write) => flag_write_task(self.daemon_client.clone(), write),
+            Effect::ReloadCollections => self.load_collections(),
+            Effect::Focus(target) => self.focus_details(target),
+            Effect::Read { rom_id, focus } => Task::batch([
+                self.focus_details(focus),
+                details_read_task(self.daemon_client.clone(), rom_id),
+            ]),
         }
-        // A slow answer must not paint onto a screen the user has left. The
-        // state drops one for a file the screen has moved past, for the same
-        // reason.
-        if self.page != Page::Details {
-            return Task::none();
-        }
-        if let Some(details) = self.details.as_mut() {
-            details.load(rom_id, result);
-        }
-        Task::none()
     }
 
     /// Moves the details cursor one row or one control sideways.
@@ -196,20 +131,9 @@ impl App {
         let Some(details) = self.details.as_ref() else {
             return Task::none();
         };
-        match details.cursor() {
-            focus::Focus::Play => self.play_details(),
-            focus::Focus::Back => self.update(Message::CloseDetails),
-            focus::Focus::Favorite => self.toggle_details_flag(Flag::Favorite),
-            focus::Focus::PlayLater => self.toggle_details_flag(Flag::Backlog),
-            focus::Focus::Disc => self.update(Message::DetailsToggleDiscPicker),
-            focus::Focus::Screenshot(index) => self.update(Message::DetailsSelectScreenshot(index)),
-            focus::Focus::DiscChoice(index) => match details.versions.get(index) {
-                Some(version) => {
-                    let rom_id = version.id;
-                    self.update(Message::DetailsSelectDisc(rom_id))
-                }
-                None => Task::none(),
-            },
+        match details.confirm_message() {
+            Some(message) => self.update_details(message),
+            None => Task::none(),
         }
     }
 
@@ -227,7 +151,9 @@ impl App {
     /// The details screen, drawn as the whole window.
     pub(super) fn view_details(&self) -> Element<'_, Message> {
         let screen: Element<'_, Message> = match self.details.as_ref() {
-            Some(details) => crate::screens::details::view(details, self.window_width),
+            Some(details) => {
+                crate::screens::details::view(details, self.window_width).map(Message::Details)
+            }
             None => container(space::horizontal()).into(),
         };
         // A launch takes over the screen it was started from: the game is
@@ -252,10 +178,10 @@ fn details_read_task(client: DaemonClient, rom_id: i64) -> Task<Message> {
                 .map_err(|error| error.to_string())
         },
         move |result| {
-            cosmic::Action::App(Message::DetailsLoaded {
+            cosmic::Action::App(Message::Details(DetailsMessage::Loaded {
                 rom_id,
                 result: Box::new(result),
-            })
+            }))
         },
     )
 }
@@ -304,12 +230,12 @@ fn flag_write_task(client: DaemonClient, write: FlagWrite) -> Task<Message> {
             Ok(value)
         },
         move |result| {
-            cosmic::Action::App(Message::DetailsFlagWritten {
+            cosmic::Action::App(Message::Details(DetailsMessage::FlagWritten {
                 rom_id,
                 flag,
                 previous,
                 result,
-            })
+            }))
         },
     )
 }

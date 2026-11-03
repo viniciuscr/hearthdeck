@@ -26,6 +26,37 @@ use crate::providers::daemon::{RetroDetails, RetroGameDetails, RetroRomVersion};
 use crate::style::{DETAILS_HERO_RASTER, DETAILS_SHOT_RASTER};
 use crate::system_status::human_size;
 
+#[derive(Clone, Debug)]
+pub enum Message {
+    BackPressed,
+    PlayPressed,
+    ScreenshotSelected(usize),
+    FlagPressed(Flag),
+    DiscPickerPressed,
+    DiscSelected(i64),
+    Loaded {
+        rom_id: i64,
+        result: Box<Result<RetroDetails, String>>,
+    },
+    FlagWritten {
+        rom_id: i64,
+        flag: Flag,
+        previous: Option<bool>,
+        result: Result<bool, String>,
+    },
+}
+
+#[derive(Debug)]
+pub enum Effect {
+    Nothing,
+    Close,
+    Launch { item_id: String, title: String },
+    WriteFlag(FlagWrite),
+    ReloadCollections,
+    Focus(focus::Focus),
+    Read { rom_id: i64, focus: focus::Focus },
+}
+
 /// Which RomM per-user flag a write answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flag {
@@ -129,6 +160,67 @@ pub struct Details {
 }
 
 impl Details {
+    pub fn update(&mut self, message: Message) -> Effect {
+        match message {
+            Message::BackPressed => Effect::Close,
+            Message::PlayPressed => Effect::Launch {
+                item_id: format!("romm:{}", self.rom_id),
+                title: self.title.clone(),
+            },
+            Message::ScreenshotSelected(index) => {
+                self.select_shot(index);
+                Effect::Nothing
+            }
+            Message::FlagPressed(flag) => self
+                .toggle_flag(flag)
+                .map_or(Effect::Nothing, Effect::WriteFlag),
+            Message::DiscPickerPressed => {
+                self.toggle_picker();
+                Effect::Focus(self.cursor())
+            }
+            Message::DiscSelected(rom_id) => {
+                self.select_disc(rom_id);
+                Effect::Read {
+                    rom_id,
+                    focus: self.cursor(),
+                }
+            }
+            Message::Loaded { rom_id, result } => {
+                self.load(rom_id, *result);
+                Effect::Nothing
+            }
+            Message::FlagWritten {
+                rom_id,
+                flag,
+                previous,
+                result,
+            } => match self.settle_flag(rom_id, flag, previous, result) {
+                Settled::Applied => Effect::ReloadCollections,
+                Settled::Reverted { reason } => {
+                    log::warn!("details flag write failed: {reason}");
+                    Effect::Nothing
+                }
+                Settled::Dropped => Effect::Nothing,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn confirm_message(&self) -> Option<Message> {
+        match self.cursor() {
+            focus::Focus::Play => Some(Message::PlayPressed),
+            focus::Focus::Back => Some(Message::BackPressed),
+            focus::Focus::Favorite => Some(Message::FlagPressed(Flag::Favorite)),
+            focus::Focus::PlayLater => Some(Message::FlagPressed(Flag::Backlog)),
+            focus::Focus::Disc => Some(Message::DiscPickerPressed),
+            focus::Focus::Screenshot(index) => Some(Message::ScreenshotSelected(index)),
+            focus::Focus::DiscChoice(index) => self
+                .versions
+                .get(index)
+                .map(|version| Message::DiscSelected(version.id)),
+        }
+    }
+
     /// A screen seeded from the grid tile that opens it.
     #[must_use]
     pub fn new(
@@ -485,7 +577,7 @@ fn details_handle(path: &str, size: u32) -> icon::Handle {
 mod tests {
     use cosmic::widget::icon;
 
-    use super::{Details, Flag, Hero, Settled, focus};
+    use super::{Details, Effect, Flag, Hero, Message, Settled, focus};
     use crate::providers::daemon::{RetroDetails, RetroGameDetails, RetroRomVersion};
 
     fn handle() -> icon::Handle {
@@ -528,6 +620,148 @@ mod tests {
             versions(),
             7,
         )
+    }
+
+    #[test]
+    fn disc_selection_reads_the_new_file_and_launches_that_file() {
+        let mut details = seeded();
+        assert!(matches!(
+            details.update(Message::DiscPickerPressed),
+            Effect::Focus(focus::Focus::DiscChoice(0))
+        ));
+        details.move_cursor(focus::Focus::DiscChoice(1));
+        let message = details.confirm_message().expect("selected disc");
+        assert!(matches!(message, Message::DiscSelected(2)));
+        assert!(matches!(
+            details.update(message),
+            Effect::Read {
+                rom_id: 2,
+                focus: focus::Focus::Play
+            }
+        ));
+        assert!(!details.disc_picker);
+        assert!(matches!(
+            details.update(details.confirm_message().expect("play")),
+            Effect::Launch { item_id, title }
+                if item_id == "romm:2" && title == "Metal Gear Solid"
+        ));
+        assert!(matches!(
+            details.update(Message::BackPressed),
+            Effect::Close
+        ));
+    }
+
+    #[test]
+    fn flag_replies_reload_collections_only_when_applied() {
+        let mut details = seeded();
+        let Effect::WriteFlag(write) = details.update(Message::FlagPressed(Flag::Favorite)) else {
+            panic!("first toggle must write");
+        };
+        assert_eq!(write.rom_id, 1);
+        assert!(write.value);
+        assert_eq!(details.favorite(), Some(true));
+        assert!(matches!(
+            details.update(Message::FlagPressed(Flag::Backlog)),
+            Effect::Nothing
+        ));
+        assert!(matches!(
+            details.update(Message::FlagWritten {
+                rom_id: 1,
+                flag: Flag::Favorite,
+                previous: write.previous,
+                result: Err("refused".into()),
+            }),
+            Effect::Nothing
+        ));
+        assert_eq!(details.favorite(), None);
+        assert_eq!(details.write_error(), Some("refused"));
+        assert!(matches!(
+            details.update(Message::FlagPressed(Flag::Favorite)),
+            Effect::WriteFlag(_)
+        ));
+        assert!(matches!(
+            details.update(Message::FlagWritten {
+                rom_id: 1,
+                flag: Flag::Favorite,
+                previous: None,
+                result: Ok(true),
+            }),
+            Effect::ReloadCollections
+        ));
+        details.update(Message::DiscSelected(2));
+        assert!(matches!(
+            details.update(Message::FlagWritten {
+                rom_id: 1,
+                flag: Flag::Favorite,
+                previous: None,
+                result: Ok(true),
+            }),
+            Effect::Nothing
+        ));
+        assert_eq!(details.favorite(), None);
+    }
+
+    #[test]
+    fn local_reads_and_screenshot_events_preserve_the_selected_file() {
+        let mut details = shot_details(3);
+        details.update(Message::ScreenshotSelected(2));
+        assert_eq!(details.hero_shot, Some(2));
+        details.update(Message::DiscSelected(2));
+        details.update(Message::Loaded {
+            rom_id: 1,
+            result: Box::new(Err("stale".into())),
+        });
+        assert_eq!(details.error(), None);
+        details.update(Message::Loaded {
+            rom_id: 2,
+            result: Box::new(Err("unavailable".into())),
+        });
+        assert_eq!(details.error(), Some("unavailable"));
+        details.update(Message::Loaded {
+            rom_id: 2,
+            result: Box::new(Ok(loaded(info()))),
+        });
+        assert_eq!(details.error(), None);
+    }
+
+    #[test]
+    fn controller_confirm_emits_the_same_events_as_the_visible_controls() {
+        let mut details = shot_details(3);
+        for target in [
+            focus::Focus::Play,
+            focus::Focus::Back,
+            focus::Focus::Favorite,
+            focus::Focus::PlayLater,
+            focus::Focus::Screenshot(2),
+        ] {
+            details.move_cursor(target);
+            assert!(
+                matches!(
+                    (target, details.confirm_message()),
+                    (focus::Focus::Play, Some(Message::PlayPressed))
+                        | (focus::Focus::Back, Some(Message::BackPressed))
+                        | (
+                            focus::Focus::Favorite,
+                            Some(Message::FlagPressed(Flag::Favorite))
+                        )
+                        | (
+                            focus::Focus::PlayLater,
+                            Some(Message::FlagPressed(Flag::Backlog))
+                        )
+                        | (
+                            focus::Focus::Screenshot(2),
+                            Some(Message::ScreenshotSelected(2))
+                        )
+                ),
+                "target: {target:?}"
+            );
+        }
+        let mut details = seeded();
+        details.move_cursor(focus::Focus::Disc);
+        assert!(matches!(
+            details.confirm_message(),
+            Some(Message::DiscPickerPressed)
+        ));
     }
 
     fn shot_details(count: usize) -> Details {

@@ -2634,6 +2634,31 @@ fn details_back_returns_to_the_tile_that_opened_it() {
     assert_eq!(app.cursors.tile, 0, "the cursor is back on the tile");
 }
 
+#[test]
+fn details_reads_do_not_repaint_the_page_retained_for_a_fade() {
+    let mut app = showing_a_console_game(Vec::new());
+    let _ = app.update(Message::OpenDetails(0));
+    let rom_id = app.details.as_ref().expect("opened details").rom_id;
+    let _ = app.update(Message::Details(details_screen::Message::Loaded {
+        rom_id,
+        result: Box::new(Err("first failure".into())),
+    }));
+    assert_eq!(
+        app.details.as_ref().expect("details").error(),
+        Some("first failure")
+    );
+    let _ = app.update(Message::Details(details_screen::Message::BackPressed));
+    assert_eq!(app.page, Page::Library);
+    let _ = app.update(Message::Details(details_screen::Message::Loaded {
+        rom_id,
+        result: Box::new(Err("late failure".into())),
+    }));
+    assert_eq!(
+        app.details.as_ref().expect("retained during fade").error(),
+        Some("first failure")
+    );
+}
+
 /// Back closes the disc picker before it leaves the screen: the picker is a
 /// surface stacked over the page, so it unwinds first.
 #[test]
@@ -2654,7 +2679,7 @@ fn back_closes_the_disc_picker_before_leaving_the_details_screen() {
     assert_eq!(app.page, Page::Details);
 
     // Open the picker.
-    let _ = app.update(Message::DetailsToggleDiscPicker);
+    let _ = app.update(Message::Details(details_screen::Message::DiscPickerPressed));
     assert!(
         app.details
             .as_ref()
@@ -2698,9 +2723,9 @@ fn gamepad_and_pointer_disc_selection_change_the_file_that_play_targets() {
             },
         ]);
         send(&mut app, GamepadEvent::ContextMenu);
-        let _ = app.update(Message::DetailsToggleDiscPicker);
+        let _ = app.update(Message::Details(details_screen::Message::DiscPickerPressed));
         if pointer {
-            let _ = app.update(Message::DetailsSelectDisc(43));
+            let _ = app.update(Message::Details(details_screen::Message::DiscSelected(43)));
         } else {
             send(&mut app, GamepadEvent::MoveDown);
             assert_eq!(
@@ -2716,7 +2741,7 @@ fn gamepad_and_pointer_disc_selection_change_the_file_that_play_targets() {
             details.cursor(),
             crate::screens::details::focus::Focus::Play
         );
-        let _ = app.update(Message::DetailsToggleDiscPicker);
+        let _ = app.update(Message::Details(details_screen::Message::DiscPickerPressed));
         assert_eq!(
             app.details.as_ref().unwrap().cursor(),
             crate::screens::details::focus::Focus::DiscChoice(1)
