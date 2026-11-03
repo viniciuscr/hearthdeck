@@ -253,9 +253,13 @@ fn categorization<'a>(state: &Settings<'a>) -> Element<'a, Message> {
             list::button(described_item(
                 fl!("categorization-toggle"),
                 fl!("categorization-intro", size = DOWNLOAD_SIZE),
-                toggler(snapshot.enabled).on_toggle(Message::SetCategorization),
+                toggler(snapshot.enabled).on_toggle(|on| {
+                    Message::Categorization(categorization::Message::SetEnabled(on))
+                }),
             ))
-            .on_press(Message::SetCategorization(!snapshot.enabled)),
+            .on_press(Message::Categorization(
+                categorization::Message::SetEnabled(!snapshot.enabled),
+            )),
         )
         .add(body_line(status_line(snapshot)))
         .add_maybe(state.notice.map(notice_line));
@@ -451,9 +455,15 @@ fn stremio_action_class(action: stremio_link::Action) -> Button {
 /// only names the request.
 fn action_message(action: categorization::Action, snapshot: &CategorizationSnapshot) -> Message {
     match action {
-        categorization::Action::Toggle => Message::SetCategorization(!snapshot.enabled),
-        categorization::Action::PublishRails => Message::ScanCategorization,
-        categorization::Action::DetectCouch => Message::DetectCouchFriendly,
+        categorization::Action::Toggle => {
+            Message::Categorization(categorization::Message::SetEnabled(!snapshot.enabled))
+        }
+        categorization::Action::PublishRails => {
+            Message::Categorization(categorization::Message::PublishRails)
+        }
+        categorization::Action::DetectCouch => {
+            Message::Categorization(categorization::Message::DetectCouch)
+        }
     }
 }
 

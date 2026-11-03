@@ -8,9 +8,7 @@ use crate::app_group::AppLibraryConfig;
 use crate::screens::settings;
 use crate::text_entry::Field;
 
-use super::{
-    App, CategorizationAction, Message, STREMIO_LINK_POLL_INTERVAL, STREMIO_PUBLISH_SETTLE,
-};
+use super::{App, Message, STREMIO_LINK_POLL_INTERVAL, STREMIO_PUBLISH_SETTLE};
 
 impl App {
     pub(super) fn load_romm_settings(&mut self) -> Task<Message> {
@@ -204,9 +202,14 @@ impl App {
                 client
                     .categorization()
                     .await
+                    .map(Box::new)
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::CategorizationLoaded(result)),
+            |result| {
+                cosmic::Action::App(Message::Categorization(
+                    settings::categorization::Message::Loaded(result),
+                ))
+            },
         )
     }
 
@@ -266,8 +269,18 @@ impl App {
     pub(super) fn load_health(&self) -> Task<Message> {
         let client = self.daemon_client.clone();
         Task::perform(
-            async move { client.health().await.map_err(|error| error.to_string()) },
-            |result| cosmic::Action::App(Message::HealthLoaded(result)),
+            async move {
+                client
+                    .health()
+                    .await
+                    .map(|health| health.capabilities.categorization)
+                    .map_err(|error| error.to_string())
+            },
+            |result| {
+                cosmic::Action::App(Message::Categorization(
+                    settings::categorization::Message::CapabilityLoaded(result),
+                ))
+            },
         )
     }
 
@@ -413,27 +426,37 @@ impl App {
     /// No action writes to the screen's state directly: the daemon is asked, and
     /// then asked again, so what is drawn is always its answer rather than the
     /// shell's guess at it.
-    pub(super) fn categorization_action(&mut self, action: CategorizationAction) -> Task<Message> {
-        // A new action starts clean: whatever the last one left in the section's
-        // status text is about something the user has already moved past.
-        self.categorization_notice = None;
+    pub(super) fn run_categorization_effect(
+        &self,
+        effect: settings::categorization::Effect,
+    ) -> Task<Message> {
+        use settings::categorization::{Effect, Operation};
+        let operation = match effect {
+            Effect::Nothing => return Task::none(),
+            Effect::Reload => return self.load_categorization(),
+            Effect::Run(operation) => operation,
+        };
         let client = self.daemon_client.clone();
         Task::perform(
             async move {
-                match action {
-                    CategorizationAction::SetEnabled(on) => {
+                match operation {
+                    Operation::SetEnabled(on) => {
                         if on {
                             client.enable_categorization().await
                         } else {
                             client.disable_categorization().await
                         }
                     }
-                    CategorizationAction::Scan => client.start_categorization_scan().await,
-                    CategorizationAction::DetectCouch => client.detect_form_factors().await,
+                    Operation::PublishRails => client.start_categorization_scan().await,
+                    Operation::DetectCouch => client.detect_form_factors().await,
                 }
                 .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::CategorizationDone(result)),
+            |result| {
+                cosmic::Action::App(Message::Categorization(
+                    settings::categorization::Message::ActionFinished(result),
+                ))
+            },
         )
     }
 

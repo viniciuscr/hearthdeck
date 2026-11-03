@@ -152,8 +152,6 @@ pub enum Message {
     CollectionsLoaded(Result<Vec<Collection>, String>),
     /// The daemon said something changed (or its feed came back).
     DaemonChanged(FeedEvent),
-    /// The settings screen's smart-categories state, as the daemon reports it.
-    CategorizationLoaded(Result<crate::providers::daemon::CategorizationSnapshot, String>),
     /// The emulator readiness report the settings card draws.
     RefreshRetroReadiness,
     RetroReadinessLoaded(Result<Vec<crate::providers::daemon::RetroSystemReadiness>, String>),
@@ -164,19 +162,9 @@ pub enum Message {
     /// privileged helper.
     InstallRetroCores,
     RetroCoresInstalled(Result<crate::providers::daemon::RetroCoreInstallReport, String>),
-    /// A categorization action finished. The shell re-reads the state either way,
-    /// because a failed action is still news about what the daemon thinks.
-    CategorizationDone(Result<(), String>),
+    Categorization(settings::categorization::Message),
     /// The dashboard's top bar: show the settings screen.
     OpenSettings,
-    /// The smart-categories switch was flipped.
-    SetCategorization(bool),
-    /// Classify the library and publish its dashboard rails.
-    ScanCategorization,
-    /// Ask the model which applications are couch-friendly.
-    DetectCouchFriendly,
-    /// The daemon's health reply landed: what this deployment provides at all.
-    HealthLoaded(Result<crate::providers::daemon::HealthResponse, String>),
     Stremio(settings::stremio_link::Message),
     /// The console list a tab strip is built from: `(platform id, label)`.
     ConsolesLoaded(Result<Vec<crate::providers::daemon::RetroConsole>, String>),
@@ -385,16 +373,6 @@ impl Page {
     }
 }
 
-/// One thing the settings screen can ask the daemon to do.
-///
-/// A list rather than a task per button, because they all end the same way: the
-/// daemon is asked, and then asked what it now thinks.
-enum CategorizationAction {
-    SetEnabled(bool),
-    Scan,
-    DetectCouch,
-}
-
 pub struct App {
     core: Core,
     /// Which page the shell is showing.
@@ -442,20 +420,8 @@ pub struct App {
     /// feature's own categories, and so the AI's, are - appears without a
     /// frontend change.
     collections: Vec<Collection>,
-    /// The settings screen's smart-categories state, as the daemon last reported
-    /// it. `None` until the first read lands, which is what lets the screen say
-    /// it is checking rather than show a switch in a state nobody reported.
-    categorization: Option<crate::providers::daemon::CategorizationSnapshot>,
-    /// Whether the deployment provides categorization at all, from `/v1/health`.
-    /// `None` until the health reply lands: the switch is not drawn for a
-    /// feature this installation does not have, so its answer has to arrive
-    /// before the screen can decide what it is.
-    categorization_capable: Option<bool>,
-    /// What the last categorization action did, for the section's own status
-    /// text. There is no toast layer yet, so the section is where the user
-    /// reads the outcome.
-    /// Why the last categorization action was refused.
-    categorization_notice: Option<String>,
+    /// The smart-categories section's daemon snapshot, capability and notices.
+    categorization: settings::categorization::State,
     /// The Stremio link flow: the account the daemon holds, the code being
     /// approved elsewhere, and what the shell must do next. The flow is the
     /// decision layer - each answer from the daemon moves it - so nothing in
@@ -602,9 +568,7 @@ impl Application for App {
             menu: menu::State::default(),
             cur_section: Section::PcGames,
             cur_group: None,
-            categorization: None,
-            categorization_capable: None,
-            categorization_notice: None,
+            categorization: settings::categorization::State::default(),
             stremio: settings::stremio_link::Flow::default(),
             romm: settings::romm::Form::default(),
             retro_readiness: settings::readiness::Flow::default(),
@@ -1024,7 +988,7 @@ impl Application for App {
                 // was fetched at startup. A deployment that has already said it
                 // cannot run the feature is not asked for a state it has not got.
                 let mut reads = vec![self.load_health()];
-                if self.categorization_capable != Some(false) {
+                if self.categorization.capable != Some(false) {
                     reads.push(self.load_categorization());
                 }
                 // The Stremio half is not behind that check: it has something to
@@ -1036,26 +1000,10 @@ impl Application for App {
                 reads.push(self.load_retro_readiness());
                 return Task::batch(reads);
             }
-            Message::SetCategorization(on) => {
-                return self.categorization_action(CategorizationAction::SetEnabled(on));
+            Message::Categorization(message) => {
+                let effect = self.categorization.update(message);
+                return self.run_categorization_effect(effect);
             }
-            Message::ScanCategorization => {
-                return self.categorization_action(CategorizationAction::Scan);
-            }
-            Message::DetectCouchFriendly => {
-                return self.categorization_action(CategorizationAction::DetectCouch);
-            }
-            Message::CategorizationDone(result) => {
-                if let Err(error) = result {
-                    log::warn!("categorization action failed: {error}");
-                    self.categorization_notice = Some(error);
-                }
-                return self.load_categorization();
-            }
-            Message::CategorizationLoaded(result) => match result {
-                Ok(snapshot) => self.categorization = Some(snapshot),
-                Err(error) => log::warn!("categorization read failed: {error}"),
-            },
             Message::RefreshRetroReadiness => return self.load_retro_readiness(),
             Message::RetroReadinessLoaded(result) => match result {
                 Ok(readiness) => self.retro_readiness.readiness = Some(readiness),
@@ -1113,16 +1061,6 @@ impl Application for App {
                     }
                 }
             }
-            // The deployment says whether the feature exists here at all, which
-            // is the one answer that outranks everything the daemon reports.
-            Message::HealthLoaded(result) => match result {
-                Ok(health) => {
-                    self.categorization_capable = Some(health.capabilities.categorization)
-                }
-                // The last answer stands: a failed read is not news that the
-                // deployment lost the feature.
-                Err(error) => log::warn!("health read failed: {error}"),
-            },
             Message::Romm(message) => return self.update_romm(message),
             Message::Stremio(message) => {
                 let effect = self.stremio.update(message);
@@ -1599,9 +1537,9 @@ impl App {
     fn view_settings(&self) -> Element<'_, Message> {
         container(settings::view(
             &settings::Settings {
-                categorization: self.categorization.as_ref(),
-                capable: self.categorization_capable,
-                notice: self.categorization_notice.as_deref(),
+                categorization: self.categorization.snapshot.as_ref(),
+                capable: self.categorization.capable,
+                notice: self.categorization.notice.as_deref(),
                 stremio: &self.stremio,
                 romm: &self.romm,
                 readiness: &self.retro_readiness,

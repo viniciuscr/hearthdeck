@@ -1,4 +1,4 @@
-//! The smart-categories section's controls: what is on offer, and when.
+//! The smart-categories section's state transitions and controls.
 //!
 //! Kept as data rather than as buttons built in one place, because the same
 //! list decides three things that must not drift apart: what the section
@@ -8,6 +8,77 @@
 //! worse than no control.
 
 use crate::providers::daemon::{CategorizationSnapshot, ModelStatus};
+
+#[derive(Clone, Debug)]
+pub enum Message {
+    SetEnabled(bool),
+    PublishRails,
+    DetectCouch,
+    ActionFinished(Result<(), String>),
+    Loaded(Result<Box<CategorizationSnapshot>, String>),
+    CapabilityLoaded(Result<bool, String>),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Effect {
+    Nothing,
+    Run(Operation),
+    Reload,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Operation {
+    SetEnabled(bool),
+    PublishRails,
+    DetectCouch,
+}
+
+#[derive(Default)]
+pub struct State {
+    pub snapshot: Option<CategorizationSnapshot>,
+    pub capable: Option<bool>,
+    pub notice: Option<String>,
+}
+
+impl State {
+    pub fn update(&mut self, message: Message) -> Effect {
+        match message {
+            Message::SetEnabled(on) => {
+                self.notice = None;
+                Effect::Run(Operation::SetEnabled(on))
+            }
+            Message::PublishRails => {
+                self.notice = None;
+                Effect::Run(Operation::PublishRails)
+            }
+            Message::DetectCouch => {
+                self.notice = None;
+                Effect::Run(Operation::DetectCouch)
+            }
+            Message::ActionFinished(result) => {
+                if let Err(error) = result {
+                    log::warn!("categorization action failed: {error}");
+                    self.notice = Some(error);
+                }
+                Effect::Reload
+            }
+            Message::Loaded(result) => {
+                match result {
+                    Ok(snapshot) => self.snapshot = Some(*snapshot),
+                    Err(error) => log::warn!("categorization read failed: {error}"),
+                }
+                Effect::Nothing
+            }
+            Message::CapabilityLoaded(result) => {
+                match result {
+                    Ok(capable) => self.capable = Some(capable),
+                    Err(error) => log::warn!("health read failed: {error}"),
+                }
+                Effect::Nothing
+            }
+        }
+    }
+}
 
 /// What the section draws.
 pub struct Panel<'a> {
@@ -103,7 +174,7 @@ pub fn pressable(action: Action, panel: &Panel<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, Panel, Section, pressable, section};
+    use super::{Action, Effect, Message, Operation, Panel, Section, State, pressable, section};
     use crate::providers::daemon::{CategorizationPhase, CategorizationSnapshot, ModelStatus};
 
     /// A categorization answer with nothing but the switch set.
@@ -128,6 +199,64 @@ mod tests {
             bytes: 64,
             path: "/cache/model".into(),
         }
+    }
+
+    #[test]
+    fn failed_reads_keep_the_last_snapshot_and_capability() {
+        let mut state = State::default();
+        assert_eq!(
+            state.update(Message::Loaded(Ok(Box::new(snapshot(true))))),
+            Effect::Nothing
+        );
+        assert_eq!(
+            state.update(Message::CapabilityLoaded(Ok(true))),
+            Effect::Nothing
+        );
+        assert_eq!(
+            state.update(Message::Loaded(Err("offline".into()))),
+            Effect::Nothing
+        );
+        assert_eq!(
+            state.update(Message::CapabilityLoaded(Err("offline".into()))),
+            Effect::Nothing
+        );
+        assert!(
+            state
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.enabled)
+        );
+        assert_eq!(state.capable, Some(true));
+        assert_eq!(
+            state.update(Message::CapabilityLoaded(Ok(false))),
+            Effect::Nothing
+        );
+        assert_eq!(state.capable, Some(false));
+    }
+
+    #[test]
+    fn actions_clear_old_notices_and_reread_after_success_or_failure() {
+        let mut state = State::default();
+        assert_eq!(
+            state.update(Message::ActionFinished(Err("refused".into()))),
+            Effect::Reload
+        );
+        assert_eq!(state.notice.as_deref(), Some("refused"));
+        for (message, operation) in [
+            (Message::SetEnabled(true), Operation::SetEnabled(true)),
+            (Message::SetEnabled(false), Operation::SetEnabled(false)),
+            (Message::PublishRails, Operation::PublishRails),
+            (Message::DetectCouch, Operation::DetectCouch),
+        ] {
+            state.notice = Some("old refusal".into());
+            assert_eq!(state.update(message), Effect::Run(operation));
+            assert!(state.notice.is_none());
+        }
+        assert_eq!(
+            state.update(Message::ActionFinished(Ok(()))),
+            Effect::Reload
+        );
+        assert!(state.notice.is_none());
     }
 
     fn panel<'a>(capable: Option<bool>, snapshot: Option<&'a CategorizationSnapshot>) -> Panel<'a> {

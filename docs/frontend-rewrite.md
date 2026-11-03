@@ -22,6 +22,9 @@ the cruft inherited from the project this started from.
   `screens/settings/stremio_link.rs`. `App` forwards `Message::Stremio` to the
   flow and runs its returned effects in `app/settings_source.rs`; daemon I/O
   and dashboard reloads stay outside the flow.
+  Smart categorization follows the same boundary: `categorization::State`
+  owns snapshots, capability and notices; its `update` returns effects for the
+  app to run. Health replies pass only the categorization capability into it.
 - `style.rs` — shared tokens and the base button classes; `ui/` composes on top.
 
 ## Build speed
