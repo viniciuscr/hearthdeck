@@ -11,8 +11,7 @@ use cosmic::iced::ContentFit;
 use cosmic::iced::Length;
 use cosmic::iced::widget::stack;
 
-use crate::app::Message;
-use crate::screens::dashboard::Shelf;
+use crate::screens::dashboard::{Message, Shelf};
 use crate::style::backdrop_faded;
 
 /// What the background is showing: the card whose art fills the window.

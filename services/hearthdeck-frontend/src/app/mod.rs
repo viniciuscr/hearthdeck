@@ -40,7 +40,7 @@ use cosmic::theme;
 use cosmic::widget::{Id, button, column, container, context_drawer, icon, row, space, text};
 use cosmic::{Application, Element};
 
-use crate::app::animation::{ScrollTarget, Scrolls, section_direction, tab_direction};
+use crate::app::animation::{Scrolls, section_direction, tab_direction};
 use crate::app_group::{AppLibraryConfig, RommFacet, Section, Sections, section_facets};
 use crate::fl;
 use crate::form_factor::{self, FormFactor};
@@ -172,16 +172,7 @@ pub enum Message {
     /// The dashboard's top bar: show the library with the caret in its search
     /// box, which is what this app's search means.
     OpenSearch,
-    /// A dashboard card was pressed: launch the item it names.
-    ActivateCard {
-        /// The item's id, sent exactly as the rail carried it.
-        id: String,
-        /// What the launch overlay shows while it starts.
-        title: String,
-    },
-    /// A console was selected from the dashboard's consoles rail: switch to
-    /// the Console Games section and select that platform's tab.
-    ActivateConsole(i64),
+    Dashboard(dashboard::Message),
     SelectGroup(Option<usize>),
     InputChanged(String),
     /// A text field took the caret. The on-screen keyboard follows that focus -
@@ -226,16 +217,6 @@ pub enum Message {
     /// seeded from the tile it was opened from.
     OpenDetails(usize),
     Details(details_screen::Message),
-    /// A dashboard rail scrolled: remembered, so the next step can tell whether
-    /// the card it lands on would leave the view.
-    RailScrolled {
-        rail: usize,
-        offset: f32,
-    },
-    /// The dashboard page scrolled, remembered for the same reason a rail's
-    /// offset is: the follow needs to know whether the focused rail would leave
-    /// the view.
-    PageScrolled(f32),
     /// The dashboard's slow poll elapsed while it is on screen: its rails are
     /// read again, whatever the change feed is doing.
     DashboardTick,
@@ -790,17 +771,7 @@ impl Application for App {
                 ));
                 return Task::none();
             }
-            Message::ActivateConsole(platform_id) => {
-                self.switch_page(Page::Library);
-                self.bar_cursor = None;
-                // A platform with no tab yet opens the "all consoles" tab.
-                let group = self
-                    .tabs
-                    .console_games
-                    .iter()
-                    .position(|group| group.romm_platform_id() == Some(platform_id));
-                return self.apply_section_with_group(Section::ConsoleGames, group);
-            }
+            Message::Dashboard(message) => return self.update_dashboard(message),
             Message::SelectGroup(group) => {
                 // Re-selecting the tab already showing would be motion for its own
                 // sake, so it applies at once.
@@ -864,9 +835,6 @@ impl Application for App {
                 return self.list_replaced();
             }
             Message::Activate(index) => return self.activate(index),
-            // A card carries the id the daemon composed the rail with, exactly
-            // as it came: what that names is the daemon's side of the wire.
-            Message::ActivateCard { id, title } => return self.launch_managed(id, title),
             Message::ToggleControllerCompatibility(index) => {
                 // Keyed on the entry's id rather than its tile index: the flag
                 // belongs to the application, so it must survive the list being
@@ -888,20 +856,6 @@ impl Application for App {
             Message::CloseMenu => self.menu.close(),
             Message::OpenDetails(index) => return self.open_details(index),
             Message::Details(message) => return self.update_details(message),
-            Message::RailScrolled { rail, offset } => {
-                // A report from a scroll the shell is driving describes where
-                // the travel happens to be, not where the shell sent it; taking
-                // it would make the next follow measure from the wrong place
-                // and visibly correct.
-                if !self.scrolls.is_moving(ScrollTarget::Rail(rail)) {
-                    self.set_rail_offset(rail, offset);
-                }
-            }
-            Message::PageScrolled(offset) => {
-                if !self.scrolls.is_moving(ScrollTarget::Page) {
-                    self.page_offset = offset;
-                }
-            }
             Message::DashboardTick => return self.dashboard_ticked(),
             Message::TabsScrolled(offset) => self.tabs_offset = offset,
             Message::OpenDashboard => {
@@ -1384,10 +1338,8 @@ impl App {
             &self.top_bar(top_bar::Destination::Dashboard),
             self.window_width,
             self.window_height,
-            navigate,
-            |rail, offset| Message::RailScrolled { rail, offset },
-            Message::PageScrolled,
-        );
+        )
+        .map(Message::Dashboard);
         // A launch is a layer over whatever page is behind it, the dashboard
         // included.
         let screen: Element<'_, Message> = if let Some(overlay) = self.launch_state.overlay() {
@@ -1400,7 +1352,7 @@ impl App {
         // feed sent no art, this draws nothing and the wallpaper shows.
         let screen: Element<'_, Message> =
             match dashboard::backdrop::view(&shelves, self.backdrop_motion()) {
-                Some(art) => stack![art, screen].into(),
+                Some(art) => stack![art.map(Message::Dashboard), screen].into(),
                 None => screen,
             };
         // The dashboard wears the desktop: whatever cosmic-bg is showing is
@@ -1753,26 +1705,6 @@ fn navigate(destination: top_bar::Destination) -> Message {
 /// rails around it change.
 fn dashboard_card_id(slug: &str, index: usize) -> Id {
     Id::new(format!("dashboard-card-{slug}-{index}"))
-}
-
-/// What pressing a dashboard card does: launch the item it names.
-///
-/// The card carries the id the daemon composed the rail with, and it goes out
-/// exactly as it came - this client never parses a prefix to choose a route.
-/// The lookup against its own catalog that used to decide whether a card did
-/// anything is what left every film and console game dead: media records are
-/// not in the application library at all. Which ids this daemon can launch,
-/// and what that means, is decided on the other side of the wire.
-fn launch_card_message(id: &str, title: &str) -> Message {
-    Message::ActivateCard {
-        id: id.to_owned(),
-        title: title.to_owned(),
-    }
-}
-
-/// Creates a message to activate a console from the dashboard's consoles rail.
-fn launch_console_message(platform_id: i64) -> Message {
-    Message::ActivateConsole(platform_id)
 }
 
 /// Puts the renderer's focus on one widget.

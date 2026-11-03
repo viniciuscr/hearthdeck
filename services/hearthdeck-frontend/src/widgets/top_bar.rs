@@ -18,7 +18,6 @@ use cosmic::iced::{Alignment, Length};
 use cosmic::theme;
 use cosmic::widget::{Id, button, column, container, icon, row, text, tooltip};
 
-use crate::app::Message;
 use crate::fl;
 use crate::style::{ICON_BODY, ICON_LARGE, TEXT_BODY, TEXT_CAPTION, TEXT_HEADER, nav_button_class};
 use crate::system_status::SystemStatus;
@@ -150,7 +149,7 @@ pub struct TopBar<'a> {
 
 /// The bar, with `on_navigate` called for whichever destination is pressed.
 #[must_use]
-pub fn view<'a>(bar: &TopBar, on_navigate: fn(Destination) -> Message) -> Element<'a, Message> {
+pub fn view<'a, M: Clone + 'a>(bar: &TopBar, on_navigate: fn(Destination) -> M) -> Element<'a, M> {
     let Spacing {
         space_xxs,
         space_xs,
@@ -177,7 +176,7 @@ pub fn view<'a>(bar: &TopBar, on_navigate: fn(Destination) -> Message) -> Elemen
     // One builder for every destination, so the buttons cannot drift apart.
     // Each wears a widget id, so the cursor can be pointed at it, and its name
     // as a tooltip below it, so the button says what it is.
-    let nav = |destination: Destination| -> Element<'a, Message> {
+    let nav = |destination: Destination| -> Element<'a, M> {
         let button = button::custom(
             icon::icon(icon::from_name(destination.icon_name()).into()).size(ICON_BODY),
         )
@@ -202,7 +201,7 @@ pub fn view<'a>(bar: &TopBar, on_navigate: fn(Destination) -> Message) -> Elemen
     // The system status on the right: the time, then Wi-Fi and Bluetooth, each
     // with its state as a tooltip. A service that could not be read at all says
     // so with the same mark the old shell used, rather than disappearing.
-    let status_icon = |icon_name: &'static str, label: String| -> Element<'a, Message> {
+    let status_icon = |icon_name: &'static str, label: String| -> Element<'a, M> {
         tooltip(
             icon::icon(icon::from_name(icon_name).into()).size(ICON_BODY),
             text::body(label).size(TEXT_BODY),

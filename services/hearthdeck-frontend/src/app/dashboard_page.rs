@@ -17,10 +17,7 @@ use crate::style::{
 };
 use crate::widgets::top_bar;
 
-use super::{
-    App, Message, Page, dashboard_card_id, launch_card_message, launch_console_message, navigate,
-    widget_focus,
-};
+use super::{App, Message, Page, dashboard_card_id, navigate, widget_focus};
 
 /// One dashboard rail, named by what it is drawn from.
 enum Rail<'a> {
@@ -48,6 +45,38 @@ impl Rail<'_> {
 }
 
 impl App {
+    pub(super) fn update_dashboard(&mut self, message: dashboard::Message) -> Task<Message> {
+        match message {
+            dashboard::Message::CardPressed { id, title } => self.launch_managed(id, title),
+            dashboard::Message::ConsolePressed(platform_id) => {
+                self.switch_page(Page::Library);
+                self.bar_cursor = None;
+                let group = self
+                    .tabs
+                    .console_games
+                    .iter()
+                    .position(|group| group.romm_platform_id() == Some(platform_id));
+                self.apply_section_with_group(Section::ConsoleGames, group)
+            }
+            dashboard::Message::DestinationPressed(destination) => {
+                self.update(navigate(destination))
+            }
+            dashboard::Message::RailScrolled { rail, offset } => {
+                // The next pad step measures from the target, not an intermediate animation frame.
+                if !self.scrolls.is_moving(ScrollTarget::Rail(rail)) {
+                    self.set_rail_offset(rail, offset);
+                }
+                Task::none()
+            }
+            dashboard::Message::PageScrolled(offset) => {
+                if !self.scrolls.is_moving(ScrollTarget::Page) {
+                    self.page_offset = offset;
+                }
+                Task::none()
+            }
+        }
+    }
+
     /// The dashboard's rails: the daemon's collections, in the order it composes
     /// them, with a consoles rail at the top when RomM is configured.
     ///
@@ -119,7 +148,7 @@ impl App {
                         // there is nothing to turn.
                         crate::icon_cache::Orientation::AsIs,
                     ),
-                    Some(launch_console_message(platform.id)),
+                    Some(dashboard::Message::ConsolePressed(platform.id)),
                 )
             })
             .collect();
@@ -146,7 +175,7 @@ impl App {
                         // turned to fill it.
                         crate::icon_cache::Orientation::Portrait,
                     ),
-                    Some(launch_card_message(&item.item_id, &item.name)),
+                    Some(dashboard::Message::card_pressed(&item.item_id, &item.name)),
                 )
                 .with_background(item.background.as_deref().map(|background| {
                     crate::icon_cache::reference_handle(
@@ -180,7 +209,7 @@ impl App {
                         size as u32,
                         crate::icon_cache::Orientation::Portrait,
                     ),
-                    Some(launch_card_message(&entry.id, &entry.name)),
+                    Some(dashboard::Message::card_pressed(&entry.id, &entry.name)),
                 )
             })
             .collect();
@@ -220,22 +249,23 @@ impl App {
     pub(super) fn dashboard_confirm_message(&self) -> Option<Message> {
         let lengths = self.dashboard_rail_lengths();
         let (rail, card) = dashboard::focus::confirm(self.dashboard_cursor, &lengths)?;
-        match self.dashboard_rails().get(rail)? {
+        let message = match self.dashboard_rails().get(rail)? {
             Rail::Collection(collection) => {
                 let item = collection.items.get(card)?;
-                Some(launch_card_message(&item.item_id, &item.name))
+                Some(dashboard::Message::card_pressed(&item.item_id, &item.name))
             }
             Rail::Consoles => self
                 .console_platforms
                 .get(card)
-                .map(|platform| launch_console_message(platform.id)),
+                .map(|platform| dashboard::Message::ConsolePressed(platform.id)),
             Rail::Library => self
                 .catalog
                 .iter()
                 .filter(|entry| Section::PcGames.matches(entry))
                 .nth(card)
-                .map(|entry| launch_card_message(&entry.id, &entry.name)),
-        }
+                .map(|entry| dashboard::Message::card_pressed(&entry.id, &entry.name)),
+        }?;
+        Some(Message::Dashboard(message))
     }
 
     /// Steps the dashboard's cursor, and keeps the card it lands on on screen.

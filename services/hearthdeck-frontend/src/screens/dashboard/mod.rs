@@ -21,7 +21,6 @@ use cosmic::iced::{ContentFit, Length};
 use cosmic::theme;
 use cosmic::widget::{Id, column, container, icon, scrollable, text};
 
-use crate::app::Message;
 use crate::fl;
 use crate::providers::daemon::{
     CONTINUE_WATCHING_COLLECTION, Collection, FAVORITES_COLLECTION, LAST_PLAYED_COLLECTION,
@@ -38,6 +37,25 @@ use crate::widgets::top_bar;
 /// The page's own scrollable. Held here because the page is its widget, and this
 /// module is what knows the page scrolls vertically and nothing else.
 static PAGE_ID: LazyLock<Id> = LazyLock::new(|| Id::new("dashboard"));
+
+#[derive(Clone, Debug)]
+pub enum Message {
+    CardPressed { id: String, title: String },
+    ConsolePressed(i64),
+    DestinationPressed(top_bar::Destination),
+    RailScrolled { rail: usize, offset: f32 },
+    PageScrolled(f32),
+}
+
+impl Message {
+    #[must_use]
+    pub fn card_pressed(id: &str, title: &str) -> Self {
+        Self::CardPressed {
+            id: id.to_owned(),
+            title: title.to_owned(),
+        }
+    }
+}
 
 /// What one card shows and what pressing it does.
 #[derive(Clone)]
@@ -170,15 +188,7 @@ pub fn rail_title(collection: &Collection) -> String {
 /// The page: the shared top bar, then every shelf as a rail, stacked and
 /// scrolled.
 ///
-/// `on_navigate` belongs to the bar, which every top-level destination wears. The
-/// two scroll callbacks belong to the shell, because only it can remember an
-/// offset: a rail needs its own, and the page the focused rail's place in the
-/// stack, to know whether the cursor would leave the view.
-// The eight arguments are the page's own composition: the shelves and the
-// cursor, the bar, the window's geometry, and the three messages its chrome
-// and its scrollables send. They are all supplied inline at the one call
-// site, so a spec struct would only move the same list somewhere else.
-#[allow(clippy::too_many_arguments)]
+/// Scroll reports are mapped by the shell, which remembers each offset.
 #[must_use]
 pub fn view<'a>(
     shelves: &[Shelf],
@@ -186,9 +196,6 @@ pub fn view<'a>(
     bar: &top_bar::TopBar<'_>,
     window_width: f32,
     window_height: f32,
-    on_navigate: fn(top_bar::Destination) -> Message,
-    on_rail_scroll: impl Fn(usize, f32) -> Message + Clone + 'a,
-    on_page_scroll: impl Fn(f32) -> Message + 'a,
 ) -> Element<'a, Message> {
     let Spacing {
         space_l, space_xl, ..
@@ -204,7 +211,6 @@ pub fn view<'a>(
         .enumerate()
         .map(|(index, shelf)| {
             let (size, aspect, fit) = shelf_metrics(shelf.kind(), window_width);
-            let scroll = on_rail_scroll.clone();
             let rail_element: Element<'a, Message> =
                 rail(rail_id(index), shelf.title.clone(), size)
                     .items(shelf.cards.iter().enumerate().map(|(card_index, card)| {
@@ -233,7 +239,10 @@ pub fn view<'a>(
                             )),
                         )
                     }))
-                    .on_scroll(move |viewport| scroll(index, viewport.absolute_offset().x))
+                    .on_scroll(move |viewport| Message::RailScrolled {
+                        rail: index,
+                        offset: viewport.absolute_offset().x,
+                    })
                     .into();
             column![
                 rail_element,
@@ -265,14 +274,15 @@ pub fn view<'a>(
             .padding([space_l, padding, space_xl, padding]),
     )
     .id(PAGE_ID.clone())
-    .on_scroll(move |viewport| on_page_scroll(viewport.absolute_offset().y))
+    .on_scroll(move |viewport| Message::PageScrolled(viewport.absolute_offset().y))
     .width(Length::Fill)
     .height(Length::Fill)
     .scrollbar_width(0)
     .scroller_width(0);
 
     column![
-        container(top_bar::view(bar, on_navigate)).padding([space_l, padding, 0, padding]),
+        container(top_bar::view(bar, Message::DestinationPressed))
+            .padding([space_l, padding, 0, padding]),
         page,
     ]
     .width(Length::Fill)
@@ -399,7 +409,7 @@ pub fn rail_gap() -> f32 {
 
 /// Scrolls the page to a vertical offset, leaving the rails where they are
 /// horizontally.
-pub fn scroll_to_page(offset: f32) -> cosmic::app::Task<Message> {
+pub fn scroll_to_page<M: 'static>(offset: f32) -> cosmic::app::Task<M> {
     scroll_to(
         PAGE_ID.clone(),
         AbsoluteOffset {
