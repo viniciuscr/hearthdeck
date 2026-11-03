@@ -13,6 +13,17 @@
 
 use crate::providers::daemon::{StremioConnection, StremioLink};
 
+#[derive(Clone, Debug)]
+pub enum Message {
+    LinkPressed,
+    LinkStarted(Result<Pending, String>),
+    LinkPolled(Result<StremioLink, String>),
+    ConnectionLoaded(Result<Option<StremioConnection>, String>),
+    UnlinkPressed,
+    Unlinked(Result<(), String>),
+    SourceRefreshed(Result<(), String>),
+}
+
 /// The link a user is in the middle of approving: the code they are typing
 /// elsewhere, the link that already carries it, and how long both have left.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +41,8 @@ pub struct Pending {
 pub enum Effect {
     /// The answer settled nothing that needs the shell.
     Nothing,
+    StartLink,
+    Unlink,
     /// The code is still being approved: ask the daemon again in a moment.
     Poll,
     /// The account is linked: ask the daemon to publish its rows now, and
@@ -104,12 +117,38 @@ pub fn pressable(action: Action, flow: &Flow) -> bool {
 }
 
 impl Flow {
+    pub fn update(&mut self, message: Message) -> Effect {
+        match message {
+            Message::LinkPressed => {
+                self.begin_link();
+                Effect::StartLink
+            }
+            Message::LinkStarted(result) => self.link_started(result),
+            Message::LinkPolled(result) => self.link_polled(result),
+            Message::ConnectionLoaded(result) => {
+                self.connection_read(result);
+                Effect::Nothing
+            }
+            Message::UnlinkPressed => {
+                self.begin_unlink();
+                Effect::Unlink
+            }
+            Message::Unlinked(result) => self.unlinked(result),
+            Message::SourceRefreshed(result) => {
+                if let Err(error) = result {
+                    log::warn!("could not refresh the Stremio source: {error}");
+                }
+                Effect::Nothing
+            }
+        }
+    }
+
     /// The link button: ask the daemon for a code. The request is in flight
     /// until the daemon answers with one.
     ///
     /// A new request starts from a clean slate: the last failure and the last
     /// expiry both describe a code that is no longer the one being asked for.
-    pub fn begin_link(&mut self) {
+    fn begin_link(&mut self) {
         self.busy = true;
         self.error = None;
         self.expired = false;
@@ -122,7 +161,7 @@ impl Flow {
     /// issued. An issued code queues the first poll: the wait belongs to the
     /// phone in somebody's hand, so the flow keeps asking until the daemon
     /// stops saying the link is pending.
-    pub fn link_started(&mut self, result: Result<Pending, String>) -> Effect {
+    fn link_started(&mut self, result: Result<Pending, String>) -> Effect {
         self.busy = false;
         let pending = match result {
             Ok(pending) => pending,
@@ -139,7 +178,7 @@ impl Flow {
     }
 
     /// One poll of the pending link came back.
-    pub fn link_polled(&mut self, result: Result<StremioLink, String>) -> Effect {
+    fn link_polled(&mut self, result: Result<StremioLink, String>) -> Effect {
         // Still deciding: the countdown is the daemon's to say, so the code on
         // screen follows its answer rather than counting down locally past what
         // the daemon believes.
@@ -197,7 +236,7 @@ impl Flow {
     }
 
     /// The unlink button: forget the linked account.
-    pub fn begin_unlink(&mut self) {
+    fn begin_unlink(&mut self) {
         self.busy = true;
         self.error = None;
     }
@@ -207,7 +246,7 @@ impl Flow {
     /// The account and the code go in one stroke, so nothing about the old
     /// session is left to draw. A refusal keeps the account: a failed request
     /// is never a reason to tell the user their account is gone.
-    pub fn unlinked(&mut self, result: Result<(), String>) -> Effect {
+    fn unlinked(&mut self, result: Result<(), String>) -> Effect {
         self.busy = false;
         match result {
             Ok(()) => {
@@ -238,7 +277,7 @@ impl Flow {
     /// expiry news — the daemon has spoken again, which is newer than the code
     /// the user lost. A failed read says why and leaves the last known answer
     /// alone rather than inventing one.
-    pub fn connection_read(&mut self, result: Result<Option<StremioConnection>, String>) {
+    fn connection_read(&mut self, result: Result<Option<StremioConnection>, String>) {
         self.reading = false;
         match result {
             Ok(connection) => {
@@ -256,7 +295,7 @@ impl Flow {
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, Effect, Flow, Pending, actions, pressable};
+    use super::{Action, Effect, Flow, Message, Pending, actions, pressable};
     use crate::providers::daemon::{StremioConnection, StremioLink};
 
     fn connection() -> StremioConnection {
@@ -271,6 +310,61 @@ mod tests {
             link: "https://link.stremio.com/#/ABCD".to_owned(),
             seconds_left: 120,
         }
+    }
+
+    #[test]
+    fn link_messages_own_the_busy_state_and_schedule_the_next_step() {
+        let mut flow = Flow::default();
+
+        assert_eq!(flow.update(Message::LinkPressed), Effect::StartLink);
+        assert!(flow.busy);
+        assert_eq!(flow.update(Message::LinkStarted(Ok(code()))), Effect::Poll);
+        assert!(!flow.busy);
+        assert_eq!(
+            flow.pending.as_ref().map(|pending| pending.code.as_str()),
+            Some("ABCD")
+        );
+        assert_eq!(
+            flow.update(Message::LinkPolled(Ok(StremioLink::Linked {
+                connection: connection(),
+            }))),
+            Effect::Publish
+        );
+        assert!(flow.pending.is_none());
+        assert!(flow.connection.is_some());
+        assert_eq!(
+            flow.update(Message::SourceRefreshed(Err("offline".to_owned()))),
+            Effect::Nothing
+        );
+        assert!(
+            flow.connection.is_some(),
+            "a failed refresh does not unlink the account"
+        );
+    }
+
+    #[test]
+    fn connection_and_unlink_messages_preserve_the_account_on_failure() {
+        let mut flow = Flow::default();
+        flow.begin_read();
+        assert_eq!(
+            flow.update(Message::ConnectionLoaded(Ok(Some(connection())))),
+            Effect::Nothing
+        );
+        assert!(!flow.reading);
+        assert_eq!(flow.update(Message::UnlinkPressed), Effect::Unlink);
+        assert!(flow.busy);
+        assert_eq!(
+            flow.update(Message::Unlinked(Err("offline".to_owned()))),
+            Effect::Nothing
+        );
+        assert!(!flow.busy);
+        assert!(flow.connection.is_some());
+        assert_eq!(flow.error.as_deref(), Some("offline"));
+
+        assert_eq!(flow.update(Message::UnlinkPressed), Effect::Unlink);
+        assert_eq!(flow.update(Message::Unlinked(Ok(()))), Effect::Nothing);
+        assert!(flow.connection.is_none());
+        assert!(flow.error.is_none());
     }
 
     /// A started link shows its code and queues the first poll: the code is

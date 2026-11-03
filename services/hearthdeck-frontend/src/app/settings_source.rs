@@ -286,7 +286,11 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::StremioConnectionLoaded(result)),
+            |result| {
+                cosmic::Action::App(Message::Stremio(
+                    settings::stremio_link::Message::ConnectionLoaded(result),
+                ))
+            },
         )
     }
 
@@ -295,8 +299,7 @@ impl App {
     /// The code is approved on a device where the user is already signed in,
     /// which is why this screen asks for no password: there is no secret here
     /// for it to collect.
-    pub(super) fn start_stremio_link(&mut self) -> Task<Message> {
-        self.stremio.begin_link();
+    fn start_stremio_link(&self) -> Task<Message> {
         let client = self.daemon_client.clone();
         Task::perform(
             async move {
@@ -310,7 +313,11 @@ impl App {
                     })
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::StremioLinkStarted(result)),
+            |result| {
+                cosmic::Action::App(Message::Stremio(
+                    settings::stremio_link::Message::LinkStarted(result),
+                ))
+            },
         )
     }
 
@@ -329,7 +336,11 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::StremioLinkPolled(result)),
+            |result| {
+                cosmic::Action::App(Message::Stremio(
+                    settings::stremio_link::Message::LinkPolled(result),
+                ))
+            },
         )
     }
 
@@ -346,13 +357,16 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::StremioSourceRefreshed(result)),
+            |result| {
+                cosmic::Action::App(Message::Stremio(
+                    settings::stremio_link::Message::SourceRefreshed(result),
+                ))
+            },
         )
     }
 
     /// Forgets the linked account, and the rows it published.
-    pub(super) fn unlink_stremio(&mut self) -> Task<Message> {
-        self.stremio.begin_unlink();
+    fn unlink_stremio(&self) -> Task<Message> {
         let client = self.daemon_client.clone();
         Task::perform(
             async move {
@@ -361,7 +375,11 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::StremioUnlinked(result)),
+            |result| {
+                cosmic::Action::App(Message::Stremio(settings::stremio_link::Message::Unlinked(
+                    result,
+                )))
+            },
         )
     }
 
@@ -377,6 +395,8 @@ impl App {
         use crate::screens::settings::stremio_link::Effect;
         match effect {
             Effect::Nothing => Task::none(),
+            Effect::StartLink => self.start_stremio_link(),
+            Effect::Unlink => self.unlink_stremio(),
             Effect::Poll => self.poll_stremio_link(STREMIO_LINK_POLL_INTERVAL),
             // Both halves go together: the publish is what fills the rows, and
             // the delayed read is what makes the rail holding them appear.

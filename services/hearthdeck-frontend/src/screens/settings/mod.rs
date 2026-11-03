@@ -394,8 +394,8 @@ fn stremio_status_line(flow: &stremio_link::Flow) -> String {
 /// only names the request.
 fn stremio_action_message(action: stremio_link::Action) -> Message {
     match action {
-        stremio_link::Action::Link => Message::StartStremioLink,
-        stremio_link::Action::Unlink => Message::UnlinkStremio,
+        stremio_link::Action::Link => Message::Stremio(stremio_link::Message::LinkPressed),
+        stremio_link::Action::Unlink => Message::Stremio(stremio_link::Message::UnlinkPressed),
     }
 }
 

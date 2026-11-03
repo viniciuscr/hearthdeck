@@ -2251,9 +2251,9 @@ fn a_refused_action_lands_in_the_sections_own_status_text() {
 fn a_stremio_connection_read_lands_the_account_the_section_draws() {
     let mut app = showing(4);
 
-    let _ = app.update(Message::StremioConnectionLoaded(Ok(
-        Some(stremio_account()),
-    )));
+    let _ = app.update(Message::Stremio(
+        settings::stremio_link::Message::ConnectionLoaded(Ok(Some(stremio_account()))),
+    ));
 
     assert_eq!(
         app.stremio
@@ -2268,7 +2268,9 @@ fn a_stremio_connection_read_lands_the_account_the_section_draws() {
         "the answer ends the checking state the request started"
     );
 
-    let _ = app.update(Message::StremioConnectionLoaded(Ok(None)));
+    let _ = app.update(Message::Stremio(
+        settings::stremio_link::Message::ConnectionLoaded(Ok(None)),
+    ));
 
     assert!(
         app.stremio.connection.is_none(),
@@ -2282,11 +2284,13 @@ fn a_stremio_connection_read_lands_the_account_the_section_draws() {
 #[test]
 fn unlinking_takes_the_account_off_the_section_once_it_is_answered() {
     let mut app = showing(4);
-    let _ = app.update(Message::StremioConnectionLoaded(Ok(
-        Some(stremio_account()),
-    )));
+    let _ = app.update(Message::Stremio(
+        settings::stremio_link::Message::ConnectionLoaded(Ok(Some(stremio_account()))),
+    ));
 
-    let _ = app.update(Message::UnlinkStremio);
+    let _ = app.update(Message::Stremio(
+        settings::stremio_link::Message::UnlinkPressed,
+    ));
 
     assert!(app.stremio.busy, "the request is in flight");
     assert!(
@@ -2294,7 +2298,9 @@ fn unlinking_takes_the_account_off_the_section_once_it_is_answered() {
         "a request in flight owns the section"
     );
 
-    let _ = app.update(Message::StremioUnlinked(Ok(())));
+    let _ = app.update(Message::Stremio(settings::stremio_link::Message::Unlinked(
+        Ok(()),
+    )));
 
     assert!(app.stremio.connection.is_none(), "the account is gone");
     assert!(!app.stremio.busy, "and the buttons come back");
@@ -2305,12 +2311,16 @@ fn unlinking_takes_the_account_off_the_section_once_it_is_answered() {
 #[test]
 fn a_refused_unlink_keeps_the_account_and_says_why() {
     let mut app = showing(4);
-    let _ = app.update(Message::StremioConnectionLoaded(Ok(
-        Some(stremio_account()),
-    )));
-    let _ = app.update(Message::UnlinkStremio);
+    let _ = app.update(Message::Stremio(
+        settings::stremio_link::Message::ConnectionLoaded(Ok(Some(stremio_account()))),
+    ));
+    let _ = app.update(Message::Stremio(
+        settings::stremio_link::Message::UnlinkPressed,
+    ));
 
-    let _ = app.update(Message::StremioUnlinked(Err("daemon is down".to_owned())));
+    let _ = app.update(Message::Stremio(settings::stremio_link::Message::Unlinked(
+        Err("daemon is down".to_owned()),
+    )));
 
     assert!(
         app.stremio.connection.is_some(),
@@ -2334,11 +2344,15 @@ fn a_started_link_locks_the_section_and_then_shows_its_code() {
         "idle, linking is the way in"
     );
 
-    let _ = app.update(Message::StartStremioLink);
+    let _ = app.update(Message::Stremio(
+        settings::stremio_link::Message::LinkPressed,
+    ));
 
     assert!(app.stremio.busy, "the code is being asked for");
 
-    let _ = app.update(Message::StremioLinkStarted(Ok(stremio_code())));
+    let _ = app.update(Message::Stremio(
+        settings::stremio_link::Message::LinkStarted(Ok(stremio_code())),
+    ));
 
     assert!(!app.stremio.busy, "the answer releases the buttons");
     assert_eq!(
@@ -2350,13 +2364,15 @@ fn a_started_link_locks_the_section_and_then_shows_its_code() {
         "the code the daemon issued is the one on screen"
     );
 
-    let _ = app.update(Message::StremioLinkPolled(Ok(
-        crate::providers::daemon::StremioLink::Waiting {
-            code: "ABCD".to_owned(),
-            link: "https://link.stremio.com/#/ABCD".to_owned(),
-            seconds_left: 98,
-        },
-    )));
+    let _ = app.update(Message::Stremio(
+        settings::stremio_link::Message::LinkPolled(Ok(
+            crate::providers::daemon::StremioLink::Waiting {
+                code: "ABCD".to_owned(),
+                link: "https://link.stremio.com/#/ABCD".to_owned(),
+                seconds_left: 98,
+            },
+        )),
+    ));
 
     assert_eq!(
         app.stremio
