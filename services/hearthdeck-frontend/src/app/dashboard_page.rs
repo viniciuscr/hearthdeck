@@ -30,6 +30,13 @@ enum Rail<'a> {
 }
 
 impl Rail<'_> {
+    fn kind(&self) -> dashboard::RailKind {
+        match self {
+            Self::Consoles => dashboard::RailKind::Consoles,
+            Self::Collection(_) | Self::Library => dashboard::RailKind::Games,
+        }
+    }
+
     fn card_id(&self, index: usize) -> Id {
         let name = match self {
             Self::Collection(collection) => &collection.slug,
@@ -326,24 +333,27 @@ impl App {
     /// rule the grid follows and for the same reason: a row that slid on every
     /// step reads as the row moving rather than the selection.
     pub(super) fn focus_dashboard_card(&mut self) -> Task<Message> {
-        let shelves = self.dashboard_shelves();
-        let Some(shelf) = shelves.get(self.dashboard_cursor.rail) else {
+        let rails = self.dashboard_rails();
+        let Some(source) = rails.get(self.dashboard_cursor.rail) else {
             return Task::none();
         };
-        let Some(card) = shelf.cards.get(self.dashboard_cursor.card) else {
+        let count = self.dashboard_rail_length(source);
+        if self.dashboard_cursor.card >= count {
             return Task::none();
-        };
-        let mut tasks = vec![widget_focus(card.id.clone())];
+        }
+        let kind = source.kind();
+        let kinds: Vec<_> = rails.iter().map(Rail::kind).collect();
+        let mut tasks = vec![widget_focus(source.card_id(self.dashboard_cursor.card))];
 
         // The rail follows the cursor sideways: it moves only when the card
         // would leave the visible width, and then it pins that card to the
         // nearest edge.
-        let (card_width, gap) = dashboard::card_pitch(shelf, self.window_width);
+        let (card_width, gap) = dashboard::card_pitch(kind, self.window_width);
         let rail = self.dashboard_cursor.rail;
         let rail_offset = self.rail_offsets.get(rail).copied().unwrap_or(0.0);
         if let Some(offset) = dashboard::focus::rail_scroll_target(
             self.dashboard_cursor.card,
-            shelf.cards.len(),
+            count,
             rail_offset,
             dashboard::rail_viewport(self.window_width),
             card_width,
@@ -360,7 +370,7 @@ impl App {
         // rule a third time: rails of unequal height rather than cards of equal
         // width. The dashboard fills the content column, so the page's viewport
         // is the window's height.
-        let heights = dashboard::rail_heights(&shelves, self.window_width, self.window_height);
+        let heights = dashboard::rail_heights(&kinds, self.window_width, self.window_height);
         // The page sits below the top bar, so its viewport is the window's height
         // less the bar rather than the whole window.
         let page_viewport = self.window_height - top_bar::height();
