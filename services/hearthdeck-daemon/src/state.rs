@@ -51,6 +51,7 @@ impl AppState {
             catalog: &self.catalog,
             activity: &self.activity,
             categorization: self.categorization.as_ref(),
+            settings: &self.settings,
         }
     }
 

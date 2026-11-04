@@ -10,7 +10,6 @@ use axum::{
     routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
-use futures_util::{StreamExt, stream};
 use hearthdeck_ai::categorization::ScanReport;
 use hearthdeck_protocol::{
     ApplicationSession, BridgeErrorCode, BridgeRequest, BridgeResponse, CategorizationSnapshot,
@@ -21,7 +20,7 @@ use hearthdeck_protocol::{
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -38,8 +37,6 @@ use crate::{
     state::SharedState,
     stremio::{self, LinkOffer, LinkPoll, StremioConnection},
 };
-
-use crate::collections::rules::ENTRY_ID_PREFIX;
 
 pub fn router(state: SharedState) -> Router {
     Router::new()
@@ -1459,84 +1456,12 @@ async fn list_collections(
         // Last, once every rail holds the items it will serve: an item stored
         // without an icon is given the one its id names, so a client can draw
         // every card in a rail the same way.
-        collection.items = with_item_icons(&state, std::mem::take(&mut collection.items)).await;
+        collection.items = state
+            .collection_rules()
+            .with_item_icons(std::mem::take(&mut collection.items))
+            .await;
     }
     Ok(Json(collections))
-}
-
-/// How many icons one rail resolves at a time.
-///
-/// A lookup is either a local database read or a request to the user's own RomM,
-/// so the bound is not about a shared remote service: it keeps a long favourites
-/// list from opening one socket per item at once.
-const ITEM_ICON_CONCURRENCY: usize = 8;
-
-/// The same items, each carrying an icon.
-///
-/// A curated item is stored exactly as the client added it, and the clients that
-/// curate send no icon at all - they draw a card from data they already hold, so
-/// they had no reason to store one. A rail drawn from the collection alone
-/// therefore had nothing to draw with, which is why every favourite and Play
-/// later card showed the same generic mark. The icon is resolved per request
-/// rather than written back, so a cover RomM learns about later, or one the
-/// catalog picks up on its next scan, shows up without the item being rewritten.
-async fn with_item_icons(state: &SharedState, items: Vec<CollectionItem>) -> Vec<CollectionItem> {
-    stream::iter(items)
-        .map(|mut item| {
-            let state = state.clone();
-            async move {
-                if item.icon.is_none() {
-                    item.icon = stored_item_icon(&state, &item.item_id).await;
-                }
-                item
-            }
-        })
-        .buffered(ITEM_ICON_CONCURRENCY)
-        .collect()
-        .await
-}
-
-/// The icon an item id names, as this daemon knows it.
-///
-/// Two kinds of id reach a stored item: one of the catalog's, which is what the
-/// model's rails and every favourite of an application carry, and one of RomM's,
-/// which is what a favourite or a backlogged rom carries. Neither is stored on
-/// the item, and either may since have gone - an uninstalled program, a rom
-/// removed from the library - which is not an error: that card draws its generic
-/// mark, and the rest of the rail is worth having either way.
-async fn stored_item_icon(state: &SharedState, item_id: &str) -> Option<String> {
-    if let Some(rom_id) = rom_id_from_item(item_id) {
-        return match romm::rom(&state.settings, rom_id).await {
-            Ok(game) => RetroGame::from(&game).cover_path,
-            Err(error) => {
-                debug!(?error, rom_id, "could not resolve a rail item's RomM cover");
-                None
-            }
-        };
-    }
-    let catalog_id = catalog_id_from_item(item_id)?;
-    match state.catalog.get(catalog_id).await {
-        Ok(item) => item.and_then(|item| item.icon),
-        Err(error) => {
-            debug!(
-                ?error,
-                item_id, "could not resolve a rail item's catalog icon"
-            );
-            None
-        }
-    }
-}
-
-/// The catalog id an item id wears, when it wears one.
-fn catalog_id_from_item(item_id: &str) -> Option<&str> {
-    item_id
-        .strip_prefix(ENTRY_ID_PREFIX)
-        .filter(|id| !id.is_empty())
-}
-
-/// The RomM rom an item id names, when it names one.
-fn rom_id_from_item(item_id: &str) -> Option<i64> {
-    item_id.strip_prefix("romm:")?.parse().ok()
 }
 
 /// Which launch an item id names: the two shapes an id can carry.
@@ -1553,10 +1478,10 @@ enum ItemLaunch<'a> {
 /// the single launch route decides from the id: a client that posts ids never
 /// parses a prefix itself.
 fn item_launch(item_id: &str) -> ItemLaunch<'_> {
-    if let Some(rom_id) = rom_id_from_item(item_id) {
+    if let Some(rom_id) = crate::collections::rules::rom_id_from_item(item_id) {
         return ItemLaunch::Retro(rom_id);
     }
-    ItemLaunch::Catalog(catalog_id_from_item(item_id).unwrap_or(item_id))
+    ItemLaunch::Catalog(crate::collections::rules::catalog_id_from_item(item_id).unwrap_or(item_id))
 }
 
 #[derive(Deserialize)]
@@ -3687,16 +3612,31 @@ mod tests {
     #[test]
     fn an_item_id_is_read_back_as_the_thing_it_names() {
         assert_eq!(
-            super::catalog_id_from_item("hearthdeck:desktop:org.example.App"),
+            crate::collections::rules::catalog_id_from_item("hearthdeck:desktop:org.example.App"),
             Some("desktop:org.example.App")
         );
-        assert_eq!(super::catalog_id_from_item("hearthdeck:"), None);
-        assert_eq!(super::catalog_id_from_item("romm:4014"), None);
+        assert_eq!(
+            crate::collections::rules::catalog_id_from_item("hearthdeck:"),
+            None
+        );
+        assert_eq!(
+            crate::collections::rules::catalog_id_from_item("romm:4014"),
+            None
+        );
 
-        assert_eq!(super::rom_id_from_item("romm:4014"), Some(4014));
-        assert_eq!(super::rom_id_from_item("romm:"), None);
-        assert_eq!(super::rom_id_from_item("romm:not-a-number"), None);
-        assert_eq!(super::rom_id_from_item("hearthdeck:romm:4014"), None);
+        assert_eq!(
+            crate::collections::rules::rom_id_from_item("romm:4014"),
+            Some(4014)
+        );
+        assert_eq!(crate::collections::rules::rom_id_from_item("romm:"), None);
+        assert_eq!(
+            crate::collections::rules::rom_id_from_item("romm:not-a-number"),
+            None
+        );
+        assert_eq!(
+            crate::collections::rules::rom_id_from_item("hearthdeck:romm:4014"),
+            None
+        );
     }
 
     /// The single route's whole decision from the id alone: the two shapes a

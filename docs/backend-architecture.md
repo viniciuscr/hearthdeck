@@ -48,9 +48,10 @@ in the retro adapter.
 
 Collection rule composition lives in `collections/rules.rs`. Its service borrows
 the catalog, activity store and optional categorizer, without HTTP or application
-state dependencies. It keeps existing owner-qualified rule dispatch and leaves
-curated items untouched. The HTTP boundary still resolves missing icons
-and isolates a failed rail so the other collections remain available.
+state dependencies. It keeps existing owner-qualified rule dispatch, resolves
+missing icons for curated and rule items, and leaves curated-item write rules
+unchanged. The HTTP boundary now only isolates a failed rail so the other
+collections remain available.
 
 ## Platform Adaptation Rules
 
