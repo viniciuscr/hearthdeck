@@ -38,8 +38,8 @@ serde_json.workspace = true
 ron = "0.12"
 
 # Logging
-pretty_env_logger = "0.5"
-log = "0.4"
+hearthdeck-observability = { path = "../hearthdeck-observability" }
+tracing.workspace = true
 chrono.workspace = true
 
 # i18n

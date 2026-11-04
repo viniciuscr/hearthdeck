@@ -28,7 +28,7 @@ use cosmic_protocols::toplevel_info::v1::client::{
 use cosmic_protocols::toplevel_management::v1::client::zcosmic_toplevel_manager_v1::{
     Event as ManagerEvent, ZcosmicToplevelManagerV1,
 };
-use log::{debug, info};
+use tracing::{debug, info};
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_registry::{Event as RegistryEvent, WlRegistry};
 use wayland_client::{Connection, Dispatch, QueueHandle};
@@ -132,7 +132,7 @@ pub fn fullscreen_when_it_appears(hint: WindowHint) {
         .name("hearthdeck-toplevel".to_owned())
         .spawn(|| {
             if let Err(error) = watch() {
-                debug!("stopped watching windows: {error}");
+                debug!(%error, "stopped watching windows");
             }
             WATCHING.store(false, Ordering::SeqCst);
         });
@@ -217,7 +217,7 @@ impl Watcher {
             // Not every window belongs to a launch: a dialog, or an app the user
             // started elsewhere. Worth a line, since it is the only clue when a
             // window a launch did produce fails to match.
-            debug!("window {app_id:?} {title:?} is not one a launch is waiting for");
+            debug!(?app_id, ?title, "window is not one a launch is waiting for");
             return;
         };
         let (hint, _) = pending.remove(index);
@@ -227,8 +227,8 @@ impl Watcher {
         // the only sensible choice for a TV with one display.
         manager.set_fullscreen(&cosmic, None);
         info!(
-            "asked the compositor to fullscreen {app_id:?} {title:?}, launched as {}",
-            hint.label
+            ?app_id, ?title, launch = %hint.label,
+            "asked the compositor to fullscreen"
         );
         self.asked.push(cosmic);
     }
@@ -332,7 +332,7 @@ impl Dispatch<ZcosmicToplevelManagerV1, ()> for Watcher {
                 .chunks_exact(4)
                 .map(|chunk| u32::from_ne_bytes(chunk.try_into().unwrap_or_default()))
                 .collect();
-            debug!("compositor window-management capabilities: {announced:?}");
+            debug!(capabilities = ?announced, "compositor window-management capabilities");
         }
     }
 }

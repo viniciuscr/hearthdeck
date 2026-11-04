@@ -139,7 +139,7 @@ impl Flow {
             Message::Unlinked(result) => self.unlinked(result),
             Message::SourceRefreshed(result) => {
                 if let Err(error) = result {
-                    log::warn!("could not refresh the Stremio source: {error}");
+                    tracing::warn!(%error, "could not refresh the Stremio source");
                 }
                 Effect::Nothing
             }
@@ -169,7 +169,7 @@ impl Flow {
         let pending = match result {
             Ok(pending) => pending,
             Err(error) => {
-                log::warn!("could not start the Stremio link: {error}");
+                tracing::warn!(%error, "could not start the Stremio link");
                 self.error = Some(error);
                 return Effect::Nothing;
             }
@@ -208,7 +208,7 @@ impl Flow {
                 self.error = None;
                 self.expired = false;
                 self.connection = Some(connection);
-                log::info!("stremio account linked");
+                tracing::info!("stremio account linked");
                 Effect::Publish
             }
             // The window closed while the user was still deciding: the dead
@@ -230,7 +230,7 @@ impl Flow {
             // Polling a daemon that is not answering would go on forever: the
             // flow ends, the code goes, and the section says why.
             Err(error) => {
-                log::warn!("could not poll the Stremio link: {error}");
+                tracing::warn!(%error, "could not poll the Stremio link");
                 self.pending = None;
                 self.error = Some(error);
                 Effect::Nothing
@@ -257,11 +257,11 @@ impl Flow {
                 self.pending = None;
                 self.error = None;
                 self.expired = false;
-                log::info!("stremio account unlinked");
+                tracing::info!("stremio account unlinked");
                 Effect::Nothing
             }
             Err(error) => {
-                log::warn!("could not unlink the Stremio account: {error}");
+                tracing::warn!(%error, "could not unlink the Stremio account");
                 self.error = Some(error);
                 Effect::Nothing
             }
@@ -289,7 +289,7 @@ impl Flow {
                 self.expired = false;
             }
             Err(error) => {
-                log::warn!("could not read the Stremio connection: {error}");
+                tracing::warn!(%error, "could not read the Stremio connection");
                 self.error = Some(error);
             }
         }

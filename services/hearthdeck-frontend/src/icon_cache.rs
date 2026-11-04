@@ -399,7 +399,7 @@ pub fn entry_icon_handle(source: &IconSource, size: u32, orientation: Orientatio
         return handle;
     }
     if icons.queued.insert(key.clone()) && JOBS.0.unbounded_send(key).is_err() {
-        log::warn!("icon worker is gone; icons stay generic");
+        tracing::warn!("icon worker is gone; icons stay generic");
     }
     drop(icons);
     picture
@@ -418,7 +418,7 @@ pub fn rendered_icons() -> Subscription<()> {
         stream::channel(1, async move |mut output| {
             let taken = JOBS.1.lock().unwrap_or_else(|e| e.into_inner()).take();
             let Some(mut jobs) = taken else {
-                log::warn!("icon worker started twice; the first one keeps the queue");
+                tracing::warn!("icon worker started twice; the first one keeps the queue");
                 return;
             };
             while let Some(first) = jobs.next().await {
@@ -443,7 +443,7 @@ pub fn rendered_icons() -> Subscription<()> {
                             icons.insert(key, handle);
                         }
                     }
-                    Err(error) => log::warn!("icon worker failed: {error}"),
+                    Err(error) => tracing::warn!(%error, "icon worker failed"),
                 }
                 if output.send(()).await.is_err() {
                     return;

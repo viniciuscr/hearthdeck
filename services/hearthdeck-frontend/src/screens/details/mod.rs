@@ -197,7 +197,7 @@ impl Details {
             } => match self.settle_flag(rom_id, flag, previous, result) {
                 Settled::Applied => Effect::ReloadCollections,
                 Settled::Reverted { reason } => {
-                    log::warn!("details flag write failed: {reason}");
+                    tracing::warn!(error = %reason, "details flag write failed");
                     Effect::Nothing
                 }
                 Settled::Dropped => Effect::Nothing,

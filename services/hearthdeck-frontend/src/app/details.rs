@@ -11,7 +11,7 @@ use cosmic::Element;
 use cosmic::app::Task;
 use cosmic::iced::widget::stack;
 use cosmic::widget::{container, space};
-use log::warn;
+use tracing::warn;
 
 use crate::icon_cache::entry_icon_handle;
 use crate::providers::daemon::{
@@ -38,7 +38,7 @@ impl App {
             .strip_prefix("romm:")
             .and_then(|id| id.parse::<i64>().ok())
         else {
-            warn!("details requested for a non-RomM entry: {}", entry.id);
+            warn!(item_id = %entry.id, "details requested for a non-RomM entry");
             return Task::none();
         };
         // The details screen's hero is a wide backdrop, not a card: it takes the
@@ -88,7 +88,7 @@ impl App {
     pub(super) fn update_details(&mut self, message: DetailsMessage) -> Task<Message> {
         if let DetailsMessage::Loaded { rom_id, result } = &message {
             if let Err(error) = &**result {
-                warn!("details read failed for rom {rom_id}: {error}");
+                warn!(rom_id, %error, "details read failed");
             }
             // The fade retains the old screen, but late reads cannot repaint it.
             if self.page != Page::Details {

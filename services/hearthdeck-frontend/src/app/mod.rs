@@ -586,7 +586,7 @@ impl Application for App {
                 let mut entries = match result {
                     Ok(entries) => entries,
                     Err(error) => {
-                        log::error!("catalog fetch failed: {error}");
+                        tracing::error!(%error, "catalog fetch failed");
                         return self.catalog_failed();
                     }
                 };
@@ -613,7 +613,7 @@ impl Application for App {
                 let platforms = match result {
                     Ok(platforms) => platforms,
                     Err(error) => {
-                        log::error!("console list fetch failed: {error}");
+                        tracing::error!(%error, "console list fetch failed");
                         return self.consoles_failed();
                     }
                 };
@@ -672,7 +672,7 @@ impl Application for App {
                     }
                     Err(error) => {
                         if self.console.failed(&scope, generation) {
-                            log::error!("console fetch failed: {error}");
+                            tracing::error!(%error, "console fetch failed");
                         }
                     }
                 }
@@ -723,14 +723,14 @@ impl Application for App {
                         return self.reland_dashboard(was);
                     }
                     Err(error) => {
-                        log::warn!("collection fetch failed: {error}");
+                        tracing::warn!(%error, "collection fetch failed");
                         return self.collections_failed();
                     }
                 }
             }
             Message::FacetsLoaded(result) => {
                 let facets = result.unwrap_or_else(|error| {
-                    log::error!("facet fetch failed: {error}");
+                    tracing::error!(%error, "facet fetch failed");
                     Vec::new()
                 });
                 self.filters.load_console_facets(facets);
@@ -826,7 +826,7 @@ impl Application for App {
             Message::RestoreDashboard => return self.restore_dashboard(),
             Message::ModelRailsRemoved(result) => {
                 if let Err(error) = result {
-                    log::warn!("could not remove the model's dashboard rails: {error}");
+                    tracing::warn!(%error, "could not remove the model's dashboard rails");
                 }
                 return self.load_collections();
             }
@@ -926,7 +926,7 @@ impl Application for App {
                         self.launch_state.update(LaunchEvent::Accepted)
                     }
                     Err(error) => {
-                        log::error!("daemon launch failed: {error}");
+                        tracing::error!(%error, "daemon launch failed");
                         self.input_ownership.update(InputEvent::LaunchFailed);
                         self.launch_state.update(LaunchEvent::Failed(error))
                     }
@@ -955,7 +955,7 @@ impl Application for App {
                         .input_ownership
                         .update(InputEvent::SessionObserved(active)),
                     Err(error) => {
-                        log::warn!("active session check failed: {error}");
+                        tracing::warn!(%error, "active session check failed");
                         self.input_ownership.update(InputEvent::SessionCheckFailed);
                     }
                 }
@@ -1543,7 +1543,7 @@ impl App {
             // A failed write does not undo the change - the in-memory state is
             // still what the user asked for - but it must not be silent, or a
             // restart looks like it lost their work.
-            log::warn!("config write failed: {error}");
+            tracing::warn!(%error, "config write failed");
         }
     }
     /// Reads the home filesystem's free space, and schedules the next read.

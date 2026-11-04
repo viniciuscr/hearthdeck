@@ -133,7 +133,7 @@ fn get<T: DeserializeOwned>(config: &Config, key: &str) -> Option<T> {
     match config.get(key) {
         Ok(value) => Some(value),
         Err(error) => {
-            log::debug!("cosmic background key {key} unreadable: {error:?}");
+            tracing::debug!(key, ?error, "cosmic background key unreadable");
             None
         }
     }

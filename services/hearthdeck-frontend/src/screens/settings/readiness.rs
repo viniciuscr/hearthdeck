@@ -55,18 +55,18 @@ impl Flow {
             Message::Loaded(result) => {
                 match result {
                     Ok(readiness) => self.readiness = Some(readiness),
-                    Err(error) => log::warn!("readiness read failed: {error}"),
+                    Err(error) => tracing::warn!(%error, "readiness read failed"),
                 }
                 Effect::Nothing
             }
             Message::SyncPressed => {
-                log::info!("readiness sync requested");
+                tracing::info!("readiness sync requested");
                 self.syncing = true;
                 self.notice = None;
                 Effect::Sync
             }
             Message::InstallPressed => {
-                log::info!("core install requested");
+                tracing::info!("core install requested");
                 self.installing = true;
                 self.notice = None;
                 Effect::Install
@@ -77,14 +77,14 @@ impl Flow {
                     Ok(report) => {
                         let notice = install_notice(&report);
                         if report.failed.is_empty() {
-                            log::info!("core install finished: {notice}");
+                            tracing::info!(%notice, "core install finished");
                         } else {
-                            log::warn!("core install finished: {notice}");
+                            tracing::warn!(%notice, "core install finished");
                         }
                         self.notice = Some(notice);
                     }
                     Err(error) => {
-                        log::warn!("core install failed: {error}");
+                        tracing::warn!(%error, "core install failed");
                         self.notice = Some(format!("core install failed: {error}"));
                     }
                 }
@@ -97,15 +97,15 @@ impl Flow {
                     Ok(report) => {
                         let notice = sync_notice(&report);
                         if report.failed.is_empty() {
-                            log::info!("readiness sync finished: {notice}");
+                            tracing::info!(%notice, "readiness sync finished");
                         } else {
-                            log::warn!("readiness sync finished: {notice}");
+                            tracing::warn!(%notice, "readiness sync finished");
                         }
                         self.readiness = Some(report.readiness);
                         self.notice = Some(notice);
                     }
                     Err(error) => {
-                        log::warn!("BIOS sync failed: {error}");
+                        tracing::warn!(%error, "BIOS sync failed");
                         self.notice = Some(format!("BIOS sync failed: {error}"));
                     }
                 }
