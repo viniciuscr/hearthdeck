@@ -7,15 +7,17 @@
 //! waits for it, and reads the report back. The heavy state lives in a
 //! process that exits.
 //!
-//! Two things this module deliberately does *not* do:
+//! The job service runs on demand:
 //!
 //! * It never runs on its own. There is no scan at boot. A scan happens because
 //!   the user turned smart categorization on, and the first one fetches the
 //!   checkpoint as part of loading the engine — which is why the status has a
 //!   "downloading" phase that the daemon, not the child, works out.
-//! * It never decides *whether* categorization is wanted. The user's answer lives
-//!   in the settings table with the rest of their preferences, and the API layer
-//!   reads it; this module just runs the job it is asked to run.
+//! * It does not decide *whether* categorization is wanted. The user's answer lives
+//!   in the settings table with the rest of their preferences. [`control`] owns
+//!   that policy; the job service runs the work it is asked to run.
+
+pub(crate) mod control;
 
 use std::{
     collections::HashMap,
@@ -1012,6 +1014,7 @@ fn profile_from_item(item: &CatalogItem) -> AppProfile {
 
 #[cfg(test)]
 mod tests {
+    use super::control::{Control, ControlError};
     use super::{
         CategorizationPhase, CategorizationService, CategorizerSettings, ModelStatus,
         ProcessScanRunner, ScanEngine, ScanModel, ScanRequest, ScanRunner, TraitRun, model_status,
@@ -1019,7 +1022,9 @@ mod tests {
     };
     use crate::{
         catalog::{CatalogItem, CatalogRecord, CatalogStore},
+        collections::{CollectionStore, OWNER_LAYA, OwnedCollection},
         database::Database,
+        settings::SettingsRepository,
         state::ServerEvent,
     };
     use async_trait::async_trait;
@@ -1027,6 +1032,157 @@ mod tests {
     use hearthdeck_ai::categorization::{CategoryProposal, Section};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn control_preserves_unavailable_guards_and_allows_cleanup_without_a_runner() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("control.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let settings = SettingsRepository::new(database.pool().clone());
+        let collections = CollectionStore::new(database.pool().clone());
+        let control = Control {
+            service: None,
+            settings: &settings,
+            collections: &collections,
+        };
+        assert!(matches!(
+            control.snapshot().await,
+            Err(ControlError::Unavailable)
+        ));
+        assert!(matches!(
+            control.enable().await,
+            Err(ControlError::Unavailable)
+        ));
+        assert!(matches!(
+            control.detect_form_factors().await,
+            Err(ControlError::Unavailable)
+        ));
+        assert!(matches!(
+            control.publish_collections().await,
+            Err(ControlError::Unavailable)
+        ));
+        settings.set_categorization_enabled(true).await.unwrap();
+        collections
+            .replace_owned(
+                OWNER_LAYA,
+                &[OwnedCollection {
+                    slug: "laya:watch".into(),
+                    name: None,
+                    rule: "laya:watch".into(),
+                }],
+            )
+            .await
+            .unwrap();
+        control.remove_collections().await;
+        assert!(
+            settings.get().await.unwrap().categorization_enabled,
+            "restore does not disable"
+        );
+        assert!(
+            !collections
+                .list()
+                .await
+                .unwrap()
+                .iter()
+                .any(|rail| rail.owner == OWNER_LAYA)
+        );
+        control.disable().await.unwrap();
+        assert!(!settings.get().await.unwrap().categorization_enabled);
+        assert!(collections.collection("favorites").await.unwrap().is_some());
+        database.pool().close().await;
+        assert!(matches!(
+            control.disable().await,
+            Err(ControlError::Storage(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn control_owns_enable_snapshot_and_job_guards() {
+        let runner = Arc::new(FixedRunner::succeeding());
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture_with(runner.clone(), |settings| {
+            settings.model_path = settings.work_dir.parent().map(ToOwned::to_owned);
+        })
+        .await;
+        let settings = SettingsRepository::new(service.inner.store.pool.clone());
+        let control = Control {
+            service: Some(&service),
+            settings: &settings,
+            collections: &service.inner.collections,
+        };
+        settings.set_categorization_enabled(false).await.unwrap();
+        assert!(matches!(
+            control.detect_form_factors().await,
+            Err(ControlError::Disabled)
+        ));
+        assert!(matches!(
+            control.publish_collections().await,
+            Err(ControlError::Disabled)
+        ));
+        control.enable().await.unwrap();
+        let snapshot = control.snapshot().await.unwrap();
+        assert!(snapshot.enabled);
+        assert!(!snapshot.status.running);
+        assert!(snapshot.report.is_none());
+        assert_eq!(
+            runner.calls.load(Ordering::SeqCst),
+            0,
+            "enable does not classify"
+        );
+        assert!(service.claim(false).await);
+        assert!(matches!(
+            control.detect_form_factors().await,
+            Err(ControlError::Busy)
+        ));
+        control.publish_collections().await.unwrap();
+        control.disable().await.unwrap();
+        assert!(service.inner.state.lock().await.discard);
+        assert!(!settings.get().await.unwrap().categorization_enabled);
+        service.release(None, false).await;
+        service.inner.store.pool.close().await;
+        assert!(matches!(
+            control.snapshot().await,
+            Err(ControlError::Storage(_))
+        ));
+        assert!(matches!(
+            control.enable().await,
+            Err(ControlError::Storage(_))
+        ));
+        assert!(matches!(
+            control.publish_collections().await,
+            Err(ControlError::Storage(_))
+        ));
+        assert!(matches!(
+            control.detect_form_factors().await,
+            Err(ControlError::Storage(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn control_refuses_detection_when_the_model_is_absent() {
+        let Fixture {
+            service,
+            _directory,
+            ..
+        } = fixture(Arc::new(FixedRunner::succeeding())).await;
+        let settings = SettingsRepository::new(service.inner.store.pool.clone());
+        settings.set_categorization_enabled(true).await.unwrap();
+        let control = Control {
+            service: Some(&service),
+            settings: &settings,
+            collections: &service.inner.collections,
+        };
+        assert!(matches!(
+            control.detect_form_factors().await,
+            Err(ControlError::ModelAbsent)
+        ));
+        assert!(!service.status().await.running);
+    }
 
     fn report() -> ScanReport {
         ScanReport {
@@ -1538,7 +1694,28 @@ mod tests {
             .unwrap();
         service.classify_pending().await.unwrap();
 
-        assert_eq!(service.clear_traits().await.unwrap(), 1);
+        let settings = SettingsRepository::new(service.inner.store.pool.clone());
+        let control = Control {
+            service: Some(&service),
+            settings: &settings,
+            collections: &service.inner.collections,
+        };
+        settings.set_categorization_enabled(true).await.unwrap();
+        control.remove_collections().await;
+        assert!(settings.get().await.unwrap().categorization_enabled);
+        assert!(
+            catalog
+                .get("kodi")
+                .await
+                .unwrap()
+                .unwrap()
+                .metadata
+                .get("form_factor")
+                .is_some(),
+            "restoring the dashboard keeps model verdicts"
+        );
+        control.disable().await.unwrap();
+        assert_eq!(service.clear_traits().await.unwrap(), 0);
 
         let served = catalog.get("kodi").await.unwrap().unwrap();
         assert!(served.metadata.get("form_factor").is_none());
