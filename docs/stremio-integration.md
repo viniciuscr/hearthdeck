@@ -298,14 +298,11 @@ authoritative would drop usable fields:
    stream chosen, which is the user's step in Stremio's own UI, and this is the
    deliberate stopping point. A record with no video id launches the plain application
    instead, so a rail keeps working for anything published before the ids existed.
-9. **The QR image is produced by the daemon from a link URL it already holds**, and
-   served through the same authenticated asset path the frontend already renders
-   RomM artwork from. The four-character code and the link are always shown as text
-   as well, so the screen is useful even if the image fails.
-   **Not implemented yet.** The daemon can either generate the image (a `qrcode`
-   dependency) or proxy the PNG Stremio already returns for the link, and the second
-   needs no new crate. The screen currently ships the code and the link only, which
-   is the half that makes the flow work without typing.
+9. **Daemon-served QR rendering is planned, not implemented.** The screen
+   currently shows the code and link as text; no daemon QR route exists.
+   The planned image would be generated from the link or proxied from Stremio
+   through an authenticated daemon route. The code and link remain visible
+   even if the image fails. This plan is not a current transport contract.
 10. **Unlinking removes both the credential and the catalog rows** that source
     owns, so a stale rail cannot outlive the account it came from.
 
@@ -348,7 +345,7 @@ existing `collections` table upgrade does.
 - **`POST /v1/stremio/link`** → starts a session: `{code, link, expires_in}`.
 - **`GET /v1/stremio/link`** → `{status: "pending" | "linked"}`, never the key.
 - **`DELETE /v1/stremio/settings`** → unlink, per decision 10.
-- **`GET /v1/stremio/qr`** → the QR image (decision 9).
+- **QR image:** no `/v1/stremio/qr` route exists; see the proposal in decision 9.
 - **Refresh** reuses `POST /v1/discovery/stremio/refresh`, which already exists.
 - **`CatalogRecord` mapping** (implemented): `id: "stremio:<imdbid>"` (namespaced,
   as the provider contract requires), `title: name`, `icon: poster` with the size
@@ -396,9 +393,7 @@ existing `collections` table upgrade does.
 6. **Is `datastoreMeta` callable per-collection, or does it always return the
    whole store?** It returned all 62 records when asked about `libraryItem`, so
    treat its output as store-wide.
-7. **`docs/code-review-roadmap.md` is referenced from three places but does not
-   exist.** Unrelated to this feature, but the docs map should stop pointing at
-   a missing file.
+7. **Docs-map follow-up resolved:** removed the missing review-roadmap links.
 8. **Does `stremio:///detail/series/<tt>` open the show's page?** The film form and
    the episode form were verified on hardware; the bare-id series form is what the
    arrivals banner needs, and it is the same route with its episode segment
@@ -454,12 +449,10 @@ Each phase is scoped to be doable in one sitting and independently useful.
   round trip on the daemon's side and reading it straight away would find the row still
   empty.
 
-  Two pieces remain, both small. The **QR image**: decision 9 called for the daemon to
-  produce it, which means either a `qrcode` dependency in the daemon plus a route, or
-  proxying the PNG Stremio already returns through a daemon route — the second adds no
-  crate. Until one of them lands, the screen shows the code and the link, which is what
-  makes the flow work without typing at all. And the **progress affordance**: the cards
-  are name and artwork only, because `CollectionItem` carries no progress and neither
+  Two pieces remain. The **QR image** is still a proposal (decision 9), not a
+  daemon endpoint. The screen shows the code and link today. The **progress
+  affordance**: the cards are name and artwork only, because `CollectionItem`
+  carries no progress and neither
   does the shelf's card type. "23 min left" therefore needs the value to reach the card
   — either by extending `CollectionItem` (the daemon already has it in the catalog
   record's metadata) or by correlating the card with the catalog item on the client.

@@ -11,8 +11,8 @@ docs carry the *why* the code cannot.
 - **Decision first, then why, then traps.** Lead with what we do and the reason.
   Do not restate code; link the file when the reader needs the detail.
 - **No unmaintained "current state" or "next step" sections.** They rot. Forward
-  work lives only in `code-review-roadmap.md` (findings, debt) and
-  `retroarch-integration.md` (phased roadmap). Delete a stale line rather than
+  work belongs in tracked issues or an explicitly maintained integration roadmap,
+  such as `retroarch-integration.md`. Delete a stale line rather than
   keeping it "just in case".
 - **Prefer the short form.** A trap that cost an afternoon is worth five lines, not
   a page. If a section does not change a decision, it does not belong here.
@@ -29,8 +29,9 @@ docs carry the *why* the code cannot.
 | --- | --- |
 | [`frontend-animations.md`](frontend-animations.md) | iced's animation model, the three transitions, motion tokens, the renderer layer-order trap |
 | [`frontend-library.md`](frontend-library.md) | The library grid: RomM scopes, prefetch, display order, counts, virtualization, artwork path |
+| [`frontend-rewrite.md`](frontend-rewrite.md) | COSMIC frontend boundaries, shared widgets, screen state and design decisions |
 | [`backend-architecture.md`](backend-architecture.md) | Daemon/bridge shape, discovery providers, catalog flow, API, trust boundaries |
-| [`kiosk-session.md`](kiosk-session.md) | Session topology, autologin, launch model, the full incident writeup and the do-not list |
+| [`kiosk-session.md`](kiosk-session.md) | Retired Gamescope session incident history; not the current session topology |
 | [`units-and-logs.md`](units-and-logs.md) | systemd user-unit traps, the logging pipeline, runbooks |
 | [`observability.md`](observability.md) | Logging model, events, investigation order |
 | [`metadata-enrichment.md`](metadata-enrichment.md) | Metadata sources, priority, freshness |
@@ -42,13 +43,12 @@ docs carry the *why* the code cannot.
 | --- | --- |
 | [`retroarch-integration.md`](retroarch-integration.md) | RomM/RetroArch decisions, `romm.service` startup, open questions, phased roadmap |
 | [`stremio-integration.md`](stremio-integration.md) | Stremio account linking, the verified `api.strem.io` shapes, Continue Watching rail, credential storage decision |
-| [`code-review-roadmap.md`](code-review-roadmap.md) | Phased review findings and known debt |
 
 ## Reference and process
 
 | Doc | Owns |
 | --- | --- |
-| [`arch-package.md`](arch-package.md) | Arch package contents and troubleshooting |
+| [`arch-package.md`](arch-package.md) | Current minimal COSMIC session, Arch package contents and troubleshooting |
 | [`linux-acceptance.md`](linux-acceptance.md) | Manual acceptance checklist |
 | [`immich-backup.md`](immich-backup.md) | Phone photo/video backup: Podman Quadlet stack, external SSD layout, upgrades, restore |
 | [`cloudflare-tunnel.md`](cloudflare-tunnel.md) | Public HTTPS access to Immich: Cloudflare Tunnel Quadlet, token handling, boot behaviour |
