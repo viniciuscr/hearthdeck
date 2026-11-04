@@ -5,7 +5,7 @@
 ```text
 Paired frontend client (Linux)
     |
-    | HTTPS + bearer token, WebSocket events
+    | paired HTTP(S) + bearer token, WebSocket events
     v
 hearthdeck-daemon
     |
@@ -245,22 +245,29 @@ flows. It is not included in the public API contract.
 
 ## Deployment
 
-Install and enable `hearthdeck.target` from the systemd **user** units in
-`deploy/systemd/`. A user service owns graphical application launches. The
-Hearthdeck Kiosk session's script execs Gamescope directly on the DRM/KMS seat
-with the frontend as its only child; there is no separate desktop
-compositor in front of it. The bridge launches registered desktop
-applications and RetroArch games as direct clients of that same session
-(confirmed on real hardware that a second Gamescope process joining it as a
-peer is never shown - see `docs/kiosk-session.md`); Heroic is the one
-exception, kept in its own nested Gamescope instance so its games can still
-get their own internal resolution/upscaling.
-Configure LAN TLS through
-`~/.config/hearthdeck/daemon.env`; see `deploy/systemd/daemon.env.example`.
+The packaged [session script](../packaging/arch/hearthdeck-session) starts
+`hearthdeck.target` as a systemd **user** target, waits for the daemon and bridge
+socket with bounded waits, then runs `cosmic-comp` with the frontend as its
+client. RomM startup is not a compositor-readiness gate. The script starts the
+overlay and optional cosmic-osk services; their restart policies handle the
+initial display-environment race. This is a minimal COSMIC session, not
+`cosmic-session` or the retired Gamescope kiosk.
+
+The bridge launches desktop applications, RetroArch and Heroic through transient
+systemd user services in the active display session. It does not impose a nested
+Gamescope wrapper; Heroic's own per-game launch settings remain authoritative.
+See [arch-package.md](arch-package.md#hearthdeck-session) for the current session
+and [kiosk-session.md](kiosk-session.md) for historical incident notes.
+
+Source-checkout units live in [deploy/systemd](../deploy/systemd/); packaged units
+live in [packaging/arch](../packaging/arch/). `just install-services` currently
+copies and enables checkout units; that developer workflow is distinct from the
+packaged session's explicit target start.
+Configure LAN TLS through `~/.config/hearthdeck/daemon.env`; see
+[daemon.env.example](../deploy/systemd/daemon.env.example).
 
 ## Where work is tracked
 
-This doc owns the current shape only. Forward work lives in
-[`code-review-roadmap.md`](code-review-roadmap.md) (review findings and known
-debt) and [`retroarch-integration.md`](retroarch-integration.md) (the
-RomM/RetroArch roadmap). See [`README.md`](README.md) for the full doc map.
+This doc owns the current shape only. Track review follow-ups in issues;
+[`retroarch-integration.md`](retroarch-integration.md) owns the RomM/RetroArch
+roadmap. See [`README.md`](README.md) for the full doc map.

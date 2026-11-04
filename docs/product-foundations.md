@@ -227,28 +227,21 @@ and managed RetroArch launch; it does not materialize those games into
 the Rust frontend merges only the selected console's live pages into its
 Console Games surface.
 
-Search filters the catalog the frontend has already loaded from the daemon.
-The former Flutter client also issued a live, debounced
-query against `GET /v1/retro/roms?q=...` and merged console games into its
-results; that client-side merge was removed with the Flutter client. The Rust
-frontend instead browses console games through the Console Games section.
+Local-section search filters the catalog the frontend has already loaded.
+Console Games search instead issues a debounced query against
+`GET /v1/retro/roms?q=...`; each platform/search/facet scope has its own cached
+pages, so switching scopes never mixes their records.
 `platform_id` on `/v1/retro/roms` stays optional so a query can span every
 console at once, forwarded to RomM's own `search_term`, rather than requiring
 the client to page through every console's full library to filter locally.
 
-The Console Games filter sidebar is the same kind of client-side projection. Its
-facets (genre, decade, region) come from the RomM metadata already carried on
-each loaded record, and a filter only narrows what has been loaded, so an active
-filter keeps pulling pages until RomM runs out - the rule search already
-follows. Opening the sidebar does *not* pull anything: it reads the pages already
-loaded, because forcing the whole library through the grid just to fill a filter
-control rebuilt every tile and icon. The sidebar shows one compact stepper row
-per facet (name, current value, change arrows) rather than listing every value,
-and it renders in COSMIC's right-hand context drawer (`context_drawer`), the
-native sidebar surface. Filtering in the daemon instead means forwarding RomM's
-own `genres`/`regions`/`tags` parameters, which belongs to the
-`RemoteLibraryAdapter` work described in `docs/retroarch-integration.md`; a
-daemon-side facet query would also be what makes the option lists complete.
+Console facet options come from `GET /v1/retro/facets`, not the loaded page.
+Genre and region selections re-query the source; there is no decade facet.
+The same drawer derives local Store/Source options from the catalog for other
+sections. It owns its selection and emits a refilter effect; the shell chooses
+local filtering or a console query. The compact stepper rows render in COSMIC's
+right-hand `context_drawer`. See [frontend-library.md](frontend-library.md)
+and [frontend-rewrite.md](frontend-rewrite.md) for scope caching and ownership.
 
 ## Service Architecture
 
@@ -264,7 +257,7 @@ hearthdeck-daemon
 hearthdeck-bridge (Linux, socket activated)
   desktop-entry discovery, validation, supervised launch/session control
        |
-host desktop entries, transient systemd user services, direct-connect or (Heroic only) nested Gamescope
+host desktop entries, transient systemd user services, active COSMIC display session
 ```
 
 The daemon owns the public contract, persistent state, and background work. It
@@ -274,8 +267,10 @@ through fixed, read-only `systemctl show` and `journalctl` calls, so it can
 report a broken bridge, and it runs its own `hearthdeck-ai` worker in a
 capped, lowest-priority `systemd-run --scope`. The bridge owns Linux
 integration and re-discovers an item before launch; it receives typed IDs, not
-shell commands or `Exec` strings. The frontend depends on the daemon's typed
-API, not on a provider, transport, Linux API, or database schema.
+shell commands or `Exec` strings. The frontend depends on the daemon's typed API
+for catalog and managed launches, not on provider internals or the database schema.
+Local input, desktop settings and compositor adapters remain frontend integration
+boundaries.
 
 On Linux, `hearthdeck.target` starts the daemon and owns the bridge socket. The
 socket has a user-only `0600` mode and activates the bridge only when the daemon
@@ -283,10 +278,13 @@ needs it. PipeWire/WirePlumber, NetworkManager, and BlueZ remain independent
 host services. Any future host integration gets its own typed adapter boundary
 and socket/service pair rather than becoming a privileged daemon feature.
 
-In Kiosk mode, the outer Gamescope process is the only compositor beneath
-Hearthdeck. A managed desktop application runs in a separate, on-demand nested
-Gamescope session. The outer kiosk must not gain a desktop shell just to launch
-an application.
+The packaged Hearthdeck session runs `cosmic-comp` with the frontend as its
+client, without `cosmic-session` or a full desktop shell. Managed applications
+connect to that display through bridge-owned transient systemd user services;
+Hearthdeck does not wrap them in a second compositor. Heroic retains control of
+its own per-game wrappers. The overlay and optional cosmic-osk are separate
+session clients. See [arch-package.md](arch-package.md#hearthdeck-session);
+[kiosk-session.md](kiosk-session.md) preserves the retired Gamescope history.
 
 ### Refresh And Failure Model
 
