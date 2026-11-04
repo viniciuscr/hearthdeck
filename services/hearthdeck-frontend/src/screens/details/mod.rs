@@ -13,6 +13,7 @@
 pub mod focus;
 mod view;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use cosmic::desktop::fde::IconSource;
@@ -146,9 +147,8 @@ pub struct Details {
     favorite: Option<bool>,
     /// RomM's per-user "play later" flag, same unknown-state handling.
     backlogged: Option<bool>,
-    /// A favorite or play-later write is in flight: stops a second press from
-    /// racing the first.
-    state_pending: bool,
+    /// Files with a favorite or play-later write in flight.
+    pending_files: BTreeSet<i64>,
     /// The daemon's detail read. `None` while it is still in flight.
     info: Option<RetroGameDetails>,
     /// Failure text from that read, shown in place of the detail rows.
@@ -242,7 +242,7 @@ impl Details {
             hero_shot: None,
             favorite: None,
             backlogged: None,
-            state_pending: false,
+            pending_files: BTreeSet::new(),
             info: None,
             error: None,
             write_error: None,
@@ -385,13 +385,12 @@ impl Details {
     /// so the button answers the press. The write it asks the shell to perform
     /// settles it; a press while one is already in flight is ignored.
     pub fn toggle_flag(&mut self, flag: Flag) -> Option<FlagWrite> {
-        if self.state_pending {
+        if !self.pending_files.insert(self.rom_id) {
             return None;
         }
         let previous = self.flag_state(flag);
         let value = !previous.unwrap_or(false);
         self.set_flag_state(flag, Some(value));
-        self.state_pending = true;
         self.write_error = None;
         Some(FlagWrite {
             rom_id: self.rom_id,
@@ -412,10 +411,10 @@ impl Details {
         previous: Option<bool>,
         result: Result<bool, String>,
     ) -> Settled {
+        self.pending_files.remove(&rom_id);
         if self.rom_id != rom_id {
             return Settled::Dropped;
         }
-        self.state_pending = false;
         match result {
             Ok(state) => {
                 self.set_flag_state(flag, Some(state));
@@ -913,6 +912,48 @@ mod tests {
         let settled = details.settle_flag(1, Flag::Favorite, None, Ok(true));
         assert_eq!(settled, Settled::Dropped);
         assert_eq!(details.favorite, None, "a stale answer changes nothing");
+    }
+
+    #[test]
+    fn a_write_for_another_disc_does_not_lock_the_current_discs_flags() {
+        let mut details = seeded();
+        let first = details
+            .toggle_flag(Flag::Favorite)
+            .expect("first disc write");
+        details.select_disc(2);
+        let second = details
+            .toggle_flag(Flag::Backlog)
+            .expect("second disc write");
+        assert_eq!(second.rom_id, 2);
+        assert_eq!(
+            details.settle_flag(first.rom_id, first.flag, first.previous, Ok(true)),
+            Settled::Dropped
+        );
+        assert!(
+            details.toggle_flag(Flag::Favorite).is_none(),
+            "disc two is still writing"
+        );
+        assert_eq!(
+            details.settle_flag(second.rom_id, second.flag, second.previous, Ok(true)),
+            Settled::Applied
+        );
+        assert!(details.toggle_flag(Flag::Favorite).is_some());
+    }
+
+    #[test]
+    fn returning_to_a_disc_waits_for_its_original_write() {
+        let mut details = seeded();
+        let first = details
+            .toggle_flag(Flag::Favorite)
+            .expect("first disc write");
+        details.select_disc(2);
+        details.select_disc(1);
+        assert!(details.toggle_flag(Flag::Backlog).is_none());
+        assert_eq!(
+            details.settle_flag(first.rom_id, first.flag, first.previous, Ok(true)),
+            Settled::Applied
+        );
+        assert!(details.toggle_flag(Flag::Backlog).is_some());
     }
 
     #[test]
