@@ -92,6 +92,9 @@ the cruft inherited from the project this started from.
 - **Console facet replies carry their platform.** Only a reply for the current
   console tab may update the drawer. Late replies cannot replace another tab's
   facets or local catalog facets; failed reads keep the last matching answer.
+- **Details writes belong to a disc.** Pending favorite/play-later writes block
+  only their own file. Switching discs does not lock the new file's controls;
+  returning to a still-pending file cannot start a competing write.
 - **Library menu actions are not widgets.** `screens/library/context_menu.rs`
   defines ordered actions and their labels. Rendering, controller row counts
   and confirmation share the same actions; counting or confirming does not
