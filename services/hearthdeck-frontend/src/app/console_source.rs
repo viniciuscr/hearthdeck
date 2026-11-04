@@ -162,7 +162,12 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::FacetsLoaded(result)),
+            move |result| {
+                cosmic::Action::App(Message::FacetsLoaded {
+                    platform: platform_id,
+                    result,
+                })
+            },
         )
     }
 

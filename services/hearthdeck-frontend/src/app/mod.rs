@@ -147,7 +147,10 @@ pub enum Message {
         result: Result<console::Page, String>,
     },
     /// The filter facets the current console scope offers, from the daemon.
-    FacetsLoaded(Result<Vec<Facet>, String>),
+    FacetsLoaded {
+        platform: Option<i64>,
+        result: Result<Vec<Facet>, String>,
+    },
     /// The dashboard's collections arrived, which is what its rails are made of.
     CollectionsLoaded(Result<Vec<Collection>, String>),
     /// The daemon said something changed (or its feed came back).
@@ -743,11 +746,19 @@ impl Application for App {
                     }
                 }
             }
-            Message::FacetsLoaded(result) => {
-                let facets = result.unwrap_or_else(|error| {
-                    tracing::error!(%error, "facet fetch failed");
-                    Vec::new()
-                });
+            Message::FacetsLoaded { platform, result } => {
+                if self.cur_section != Section::ConsoleGames
+                    || platform != self.console_platform_id()
+                {
+                    return Task::none();
+                }
+                let facets = match result {
+                    Ok(facets) => facets,
+                    Err(error) => {
+                        tracing::error!(?platform, %error, "facet fetch failed");
+                        return Task::none();
+                    }
+                };
                 self.filters.load_console_facets(facets);
                 // The drawer's rows changed with them, so its cursor may be
                 // pointing past the end of the new list.
