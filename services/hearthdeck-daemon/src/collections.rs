@@ -10,6 +10,8 @@
 
 use std::collections::HashMap;
 
+pub(crate) mod rules;
+
 use anyhow::{Context, Result};
 use sqlx::{Row, SqlitePool};
 

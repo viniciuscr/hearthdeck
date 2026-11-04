@@ -11,7 +11,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream};
-use hearthdeck_ai::categorization::{ScanReport, Taxonomy, rail_app_ids};
+use hearthdeck_ai::categorization::ScanReport;
 use hearthdeck_protocol::{
     ApplicationSession, BridgeErrorCode, BridgeRequest, BridgeResponse, CategorizationSnapshot,
     Collection, CollectionItem, HealthResponse, HostCapabilities, InputProfile, ProviderHealth,
@@ -39,7 +39,7 @@ use crate::{
     stremio::{self, LinkOffer, LinkPoll, StremioConnection},
 };
 
-use crate::discovery::providers::stremio_arrivals;
+use crate::collections::rules::ENTRY_ID_PREFIX;
 
 pub fn router(state: SharedState) -> Router {
     Router::new()
@@ -1439,15 +1439,9 @@ struct ApiError {
     settings: Option<UserSettings>,
 }
 
-/// How many items a rule collection may contribute to a rail. Rails are a
-/// handful of tiles wide, so this is generous on purpose: the client decides
-/// what fits, not the daemon.
-const COLLECTION_RULE_ITEM_LIMIT: u32 = 20;
-
 /// The dashboard's collections, in composition order.
 ///
-/// Rule collections are resolved here rather than stored: the daemon is the only
-/// place that knows where each rule's data lives.
+/// The rule service composes derived items; HTTP adds icons and isolates failed rails.
 async fn list_collections(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<Collection>>, ApiError> {
@@ -1455,29 +1449,12 @@ async fn list_collections(
     for collection in &mut collections {
         // A rail that cannot be resolved is an empty rail, not a failed
         // dashboard: one broken source used to take every other rail down with it.
-        let resolved = if collection.owner == collections::OWNER_LAYA {
-            Some(modeled_rail_items(&state, collection).await)
-        } else if collection.owner == collections::OWNER_STREMIO
-            && collection.rule.as_deref() == Some(collections::RULE_CONTINUE_WATCHING)
-        {
-            Some(continue_watching_items(&state).await)
-        } else if collection.owner == collections::OWNER_STREMIO
-            && collection.rule.as_deref() == Some(collections::RULE_NEW_ARRIVALS)
-        {
-            Some(new_arrival_items(&state).await)
-        } else if collection.owner == collections::OWNER_SYSTEM
-            && collection.rule.as_deref() == Some(collections::RULE_LAST_PLAYED)
-        {
-            Some(last_played_items(&state).await)
-        } else {
-            None
-        };
-        match resolved {
-            Some(Ok(items)) => collection.items = items,
-            Some(Err(error)) => {
-                warn!(slug = %collection.slug, error = %error.message, "rail could not be resolved");
+        match state.collection_rules().resolve(collection).await {
+            Ok(Some(items)) => collection.items = items,
+            Err(error) => {
+                warn!(slug = %collection.slug, %error, "rail could not be resolved");
             }
-            None => {}
+            Ok(None) => {}
         }
         // Last, once every rail holds the items it will serve: an item stored
         // without an icon is given the one its id names, so a client can draw
@@ -1580,181 +1557,6 @@ fn item_launch(item_id: &str) -> ItemLaunch<'_> {
         return ItemLaunch::Retro(rom_id);
     }
     ItemLaunch::Catalog(catalog_id_from_item(item_id).unwrap_or(item_id))
-}
-
-/// The entry-id prefix a client draws its items with. The daemon echoes it for
-/// the items it composes, so a rail a feature created and a rail the client
-/// curated are addressed the same way.
-const ENTRY_ID_PREFIX: &str = "hearthdeck:";
-
-/// The items of a rail the model's scan implied.
-///
-/// Resolved from the stored report, because that is where the decision lives —
-/// the collection only says *which* rail it is. The name and icon come from the
-/// catalog when the item is still in it, so a client can draw the card without
-/// having that application loaded.
-async fn modeled_rail_items(
-    state: &SharedState,
-    collection: &Collection,
-) -> Result<Vec<CollectionItem>, ApiError> {
-    let Some(rail_id) = collection
-        .rule
-        .as_deref()
-        .and_then(|rule| collections::owned_rule_id(collections::OWNER_LAYA, rule))
-    else {
-        return Ok(Vec::new());
-    };
-    let Some(categorization) = state.categorization.as_ref() else {
-        return Ok(Vec::new());
-    };
-    let Some(report) = categorization
-        .latest_report()
-        .await
-        .map_err(ApiError::internal)?
-    else {
-        return Ok(Vec::new());
-    };
-
-    let mut items = Vec::new();
-    for app_id in rail_app_ids(&report, &Taxonomy::baseline(), rail_id) {
-        let (name, icon) = match state.catalog.get(&app_id).await {
-            Ok(Some(item)) => (item.title, item.icon),
-            // Gone from the catalog since the scan: the client resolves the id
-            // against what it has, which is why the id is sent either way.
-            _ => (String::new(), None),
-        };
-        items.push(CollectionItem {
-            item_id: format!("{ENTRY_ID_PREFIX}{app_id}"),
-            name,
-            icon,
-            background: None,
-            logo: None,
-            description: None,
-            played: None,
-        });
-    }
-    Ok(items)
-}
-
-/// One play, as a collection item.
-///
-/// The record rides along whole, exactly as the activity endpoint sends it, so a
-/// rail composed from the collection draws the card the same way whether the
-/// client asked for the play or for the collection it landed in. The duplicate
-/// name and icon are for curated items' sake: every item carries those two, and a
-/// client should not have to know which kind of collection it is looking at.
-fn played_collection_item(play: RecentActivity) -> CollectionItem {
-    CollectionItem {
-        item_id: play.entry.id.clone(),
-        name: play.entry.title.clone(),
-        icon: play.entry.icon.clone(),
-        background: None,
-        logo: None,
-        description: None,
-        played: Some(play),
-    }
-}
-
-/// The dashboard's "Recently Played" rail: the most recently played games.
-///
-/// Games are what the games sections play — a Heroic PC game or a RomM console
-/// game — so a launched application and a Stremio film or series are plays the
-/// activity endpoint serves but not cards this rail holds.
-async fn last_played_items(state: &SharedState) -> Result<Vec<CollectionItem>, ApiError> {
-    Ok(state
-        .activity
-        .recent_games(COLLECTION_RULE_ITEM_LIMIT)
-        .await
-        .map_err(ApiError::internal)?
-        .into_iter()
-        .map(played_collection_item)
-        .collect())
-}
-
-/// The Stremio account's unfinished titles, as rail items.
-///
-/// Read from the records the Stremio provider published rather than from the
-/// account: the provider has already applied Stremio's own rule for what belongs in
-/// this row, so all that is left is the order and the two fields a card draws with.
-///
-/// The ids carry the same `hearthdeck:` prefix the model's rails use. That prefix is
-/// what makes a card launchable: the client strips it and hands the remainder to
-/// `/v1/launch/{id}`, which resolves it against the catalog to find the Stremio
-/// desktop entry the record carries. Sending the bare catalog id instead leaves the
-/// client's own launch gate refusing it, and the card does nothing when pressed.
-///
-/// Nothing an account is not linked to is here: an unlinked account has published no
-/// records, and a link that was removed took its records with it.
-///
-/// Only movies and series belong on the "Continue Watching" rail. The Stremio
-/// provider may publish other types (e.g. channels), which are filtered out here.
-async fn continue_watching_items(state: &SharedState) -> Result<Vec<CollectionItem>, ApiError> {
-    let records = state
-        .catalog
-        .list_source(stremio::SOURCE_ID, COLLECTION_RULE_ITEM_LIMIT as usize)
-        .await
-        .map_err(ApiError::internal)?;
-    debug!(
-        source_id = stremio::SOURCE_ID,
-        items = records.len(),
-        "continue watching rail composed"
-    );
-    Ok(records
-        .into_iter()
-        .filter(|record| {
-            // Only movies and series belong on the Continue Watching rail.
-            // The catalog's `kind` field carries the Stremio type ("movie", "series", "other").
-            matches!(record.kind.as_str(), "movie" | "series")
-        })
-        .map(|record| CollectionItem {
-            item_id: format!("{ENTRY_ID_PREFIX}{}", record.id),
-            name: record.title,
-            icon: record.icon,
-            background: None,
-            logo: None,
-            description: None,
-            played: None,
-        })
-        .collect())
-}
-
-/// What has just arrived on Stremio, as the hero banner's slides.
-///
-/// The records the arrivals provider published, newest release first — the same
-/// order the provider wrote them in, since it dates each record by its release.
-/// The banner's art rides on each item: these are the records that hold a wide
-/// background and the title's own wordmark, which a rail card has no use for.
-async fn new_arrival_items(state: &SharedState) -> Result<Vec<CollectionItem>, ApiError> {
-    let records = state
-        .catalog
-        .list_source(
-            stremio_arrivals::SOURCE_ID,
-            COLLECTION_RULE_ITEM_LIMIT as usize,
-        )
-        .await
-        .map_err(ApiError::internal)?;
-    Ok(records
-        .into_iter()
-        .map(|record| {
-            let art = |key: &str| {
-                record
-                    .metadata
-                    .get("discovery")
-                    .and_then(|metadata| metadata.get(key))
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            };
-            CollectionItem {
-                item_id: format!("{ENTRY_ID_PREFIX}{}", record.id),
-                name: record.title,
-                icon: record.icon,
-                background: art("background"),
-                logo: art("logo"),
-                description: art("description"),
-                played: None,
-            }
-        })
-        .collect())
 }
 
 #[derive(Deserialize)]
@@ -2079,12 +1881,22 @@ mod tests {
     use super::{local_router, redact_provider_error, router};
     use crate::{
         catalog::CatalogRecord,
-        collections::CollectionItem,
+        collections::{self, CollectionItem},
         config::Config,
         database::Database,
         discovery::{DiscoveryProvider, DiscoveryService},
         state::{AppState, ProviderHealth, ProviderKind, ProviderStatus, SharedState},
     };
+
+    async fn resolve_rule(state: &SharedState, slug: &str) -> Vec<CollectionItem> {
+        let collection = state.collections.collection(slug).await.unwrap().unwrap();
+        state
+            .collection_rules()
+            .resolve(&collection)
+            .await
+            .expect("rule resolves")
+            .expect("known rule")
+    }
 
     #[test]
     fn health_redacts_provider_error_strings() {
@@ -2966,12 +2778,7 @@ mod tests {
             .await
             .unwrap();
 
-        // `ApiError` carries no `Debug`, so a failure is reported by its message
-        // rather than unwrapped.
-        let items = match super::continue_watching_items(&state).await {
-            Ok(items) => items,
-            Err(error) => panic!("the rail should have composed: {}", error.message),
-        };
+        let items = resolve_rule(&state, collections::RULE_CONTINUE_WATCHING).await;
         let ids: Vec<&str> = items.iter().map(|item| item.item_id.as_str()).collect();
         // Prefixed, because that prefix is what the client's launch gate strips
         // before handing the catalog id back to the daemon.
@@ -2990,13 +2797,7 @@ mod tests {
             .replace_source("stremio", Vec::new())
             .await
             .unwrap();
-        let empty = match super::continue_watching_items(&state).await {
-            Ok(items) => items,
-            Err(error) => panic!(
-                "an unlinked account composes an empty rail: {}",
-                error.message
-            ),
-        };
+        let empty = resolve_rule(&state, collections::RULE_CONTINUE_WATCHING).await;
         assert!(empty.is_empty());
     }
 
@@ -3074,10 +2875,7 @@ mod tests {
             .await
             .unwrap();
 
-        let items = match super::new_arrival_items(&state).await {
-            Ok(items) => items,
-            Err(error) => panic!("the banner should have composed: {}", error.message),
-        };
+        let items = resolve_rule(&state, collections::RULE_NEW_ARRIVALS).await;
         let ids: Vec<&str> = items.iter().map(|item| item.item_id.as_str()).collect();
         assert_eq!(
             ids,
@@ -3810,36 +3608,6 @@ mod tests {
         assert!(game.sibling_roms.is_empty());
     }
 
-    #[test]
-    fn a_resolved_play_rides_along_with_its_collection_item() {
-        use crate::activity::{ActivityEntry, RecentActivity};
-
-        let item = super::played_collection_item(RecentActivity {
-            entry: ActivityEntry {
-                id: "romm:7".into(),
-                title: "Chrono Trigger".into(),
-                icon: Some("/covers/chrono.png".into()),
-                categories: vec!["Game".into()],
-                kind: Some("game".into()),
-                source: "romm".into(),
-                metadata: serde_json::json!({"release_year": 1995}),
-            },
-            last_launched_at: "2026-09-23T10:00:00Z".into(),
-            launch_count: 3,
-        });
-
-        // The two fields every item carries, so a client can draw it without
-        // knowing which kind of collection it came from...
-        assert_eq!(item.item_id, "romm:7");
-        assert_eq!(item.name, "Chrono Trigger");
-        // ...and the play, so it can classify and launch it the way it already
-        // does for a play it fetched from the activity endpoint.
-        let played = item.played.expect("the play travels with the item");
-        assert_eq!(played.entry.kind.as_deref(), Some("game"));
-        assert_eq!(played.entry.source, "romm");
-        assert_eq!(played.launch_count, 3);
-    }
-
     /// The dashboard's "Recently Played" rail is composed from the games a person
     /// played, not from every launch: the application is still a play, and it is
     /// not a card on this rail.
@@ -3852,6 +3620,7 @@ mod tests {
             .await
             .unwrap();
         database.migrate().await.unwrap();
+        let pool = database.pool().clone();
         let state: SharedState = Arc::new(AppState::new(
             Config {
                 bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
@@ -3893,12 +3662,23 @@ mod tests {
                 .unwrap();
         }
 
-        let items = super::last_played_items(&state)
-            .await
-            .map_err(|error| error.message)
-            .expect("the recently played rail composes");
+        let items = resolve_rule(&state, "last-played").await;
         let ids: Vec<&str> = items.iter().map(|item| item.item_id.as_str()).collect();
         assert_eq!(ids, vec!["romm:7"], "the rail holds the game and no app");
+
+        sqlx::query("DROP TABLE library_items")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let axum::Json(rails) = super::list_collections(axum::extract::State(state))
+            .await
+            .map_err(|error| error.message)
+            .expect("catalog rule failures leave other rails available");
+        let recent = rails
+            .iter()
+            .find(|rail| rail.slug == "last-played")
+            .unwrap();
+        assert_eq!(recent.items[0].item_id, "romm:7");
     }
 
     /// The two id shapes a stored rail item can carry are read back as the thing
