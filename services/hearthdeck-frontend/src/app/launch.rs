@@ -30,7 +30,12 @@ impl App {
         }
         // Only the catalog's applications have a form; a console game is always
         // driven by the pad, so its profile is the explicit toggle alone.
-        let wants_desktop_input = match self.catalog.iter().find(|entry| entry.id == item_id) {
+        let wants_desktop_input = match self
+            .catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.id == item_id)
+        {
             Some(entry) => self.config.desktop_input_for(entry),
             None => self.config.desktop_input_enabled(&item_id),
         };
@@ -63,6 +68,7 @@ impl App {
     pub(super) fn launch_window_hint(&self, app_id: &str, title: &str) -> WindowHint {
         let wm_class = self
             .catalog
+            .entries()
             .iter()
             .find(|entry| entry.id == app_id)
             .and_then(|entry| entry.wm_class.clone());

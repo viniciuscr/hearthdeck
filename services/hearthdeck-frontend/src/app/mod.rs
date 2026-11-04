@@ -42,7 +42,7 @@ use cosmic::{Application, Element};
 use crate::app::animation::{Scrolls, section_direction, tab_direction};
 use crate::app_group::{AppLibraryConfig, Section, Sections};
 use crate::fl;
-use crate::form_factor::{self, FormFactor};
+use crate::form_factor::FormFactor;
 use crate::input_ownership::{Event as InputEvent, InputOwnership};
 use crate::launch_state::{Effect as LaunchEffect, Event as LaunchEvent, LaunchState, Overlay};
 use crate::motion::{Fade, Slide};
@@ -50,6 +50,7 @@ use crate::providers::daemon::{Collection, DaemonClient, DaemonConfig};
 use crate::providers::filter::Facet;
 use crate::screens::dashboard::{self};
 use crate::screens::details::{self as details_screen, Details as GameDetails};
+use crate::screens::library::catalog::Catalog;
 use crate::screens::library::console::{self, ConsoleScope, ConsoleScopes};
 use crate::screens::library::focus::{self, Cursors, Direction, Layout};
 use crate::screens::library::sidebar::{self, Sidebar};
@@ -364,8 +365,8 @@ pub struct App {
     /// write to, which is also what keeps a test off the real config file.
     config_store: Option<Config>,
     daemon_client: DaemonClient,
-    /// The full catalog as the daemon reported it (PC games and applications).
-    catalog: Vec<Arc<LibraryItem>>,
+    /// Local source records and their form projection (PC games and applications).
+    catalog: Catalog,
     /// Every console scope's records, a page at a time, as the daemon reports
     /// them, cached per scope with the cursor that extends them.
     console: ConsoleScopes,
@@ -517,7 +518,7 @@ impl Application for App {
             tabs: Sections::default(),
             config_store,
             daemon_client,
-            catalog: Vec::new(),
+            catalog: Catalog::default(),
             console: ConsoleScopes::default(),
             console_platforms: Vec::new(),
             visible: Vec::new(),
@@ -599,7 +600,7 @@ impl Application for App {
             Message::CatalogLoaded(result) => {
                 // A failed read leaves the library as it was: an empty catalog
                 // would also prune the tabs its entries imply, and persist that.
-                let mut entries = match result {
+                let entries = match result {
                     Ok(entries) => entries,
                     Err(error) => {
                         tracing::error!(%error, "catalog fetch failed");
@@ -607,21 +608,19 @@ impl Application for App {
                     }
                 };
                 self.retries.catalog = false;
-                self.config.apply_form_overrides(&mut entries);
                 // The feed re-reads on every library event, and most change
                 // nothing; replacing the list would throw the cursor to the top.
-                if entries == self.catalog {
+                if !self.catalog.replace(entries, &self.config) {
                     return Task::none();
                 }
-                self.catalog = entries;
                 // The local sections' tabs are the ones their entries imply: a
                 // store or category nothing installed carries is not a tab. The
                 // catalog the grid draws is therefore what the strip is built
                 // from. Console Games is the exception - its tabs are the
                 // platforms the daemon reported (see `ConsolesLoaded`).
-                self.tabs.sync_category_groups(&self.catalog);
+                self.tabs.sync_category_groups(self.catalog.entries());
                 self.filters
-                    .load_local_facets(self.cur_section, &self.catalog);
+                    .load_local_facets(self.cur_section, self.catalog.entries());
                 self.refilter();
                 return self.list_replaced();
             }
@@ -1399,7 +1398,7 @@ impl App {
                 self.cur_section,
                 self.cur_group,
                 &self.search_value,
-                &self.catalog,
+                self.catalog.entries(),
                 self.filters.selected(),
             );
         }
@@ -1537,17 +1536,15 @@ impl App {
             return Task::none();
         };
         self.config.set_form_override(&id, form);
-        if let Some(entry) = self.catalog.iter_mut().find(|entry| entry.id == id) {
-            form_factor::set(Arc::make_mut(entry), form);
-        }
-        self.tabs.sync_category_groups(&self.catalog);
+        self.catalog.project(&self.config);
+        self.tabs.sync_category_groups(self.catalog.entries());
         self.persist_config();
         let tabs = self.tabs.get(self.cur_section).len();
         if self.cur_group.is_some_and(|group| group >= tabs) {
             self.cur_group = None;
         }
         self.filters
-            .load_local_facets(self.cur_section, &self.catalog);
+            .load_local_facets(self.cur_section, self.catalog.entries());
         self.refilter();
         self.focus_task()
     }

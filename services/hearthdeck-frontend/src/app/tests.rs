@@ -30,7 +30,7 @@ fn shell() -> App {
             base_url: String::new(),
             token: String::new(),
         }),
-        catalog: Vec::new(),
+        catalog: Catalog::default(),
         console: ConsoleScopes::default(),
         console_platforms: Vec::new(),
         visible: Vec::new(),
@@ -288,7 +288,7 @@ fn a_failed_catalog_read_keeps_the_library_and_its_tabs() {
 
     let _ = app.update(Message::CatalogLoaded(Err("daemon down".to_owned())));
 
-    assert_eq!(app.catalog.len(), 1);
+    assert_eq!(app.catalog.entries().len(), 1);
     assert_eq!(tabs(&app, Section::PcGames), ["Steam"]);
 }
 
@@ -2527,6 +2527,30 @@ fn a_live_form_override_moves_the_tiles() {
         tabs(&app, Section::Applications).is_empty(),
         "nothing wants a desktop, so there is no Desktop tab"
     );
+}
+
+#[test]
+fn removing_a_live_form_override_restores_the_daemons_form() {
+    let mut app = shell();
+    app.cur_section = Section::Applications;
+    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
+        "writer",
+        &["Office"],
+    )])));
+    let mut saved = app.config.clone();
+    saved
+        .form_overrides
+        .insert("writer".into(), FormFactor::Couch);
+    let _ = app.update(Message::AppConfigLoaded(saved));
+    assert_eq!(app.visible.len(), 1);
+
+    let _ = app.update(Message::AppConfigLoaded(AppLibraryConfig::default()));
+
+    assert!(
+        app.visible.is_empty(),
+        "removal must restore the source form without a refetch"
+    );
+    assert_eq!(tabs(&app, Section::Applications), ["Desktop"]);
 }
 
 /// A refused categorization action lands in the section's own status text,

@@ -447,10 +447,10 @@ impl App {
             self.config.form_overrides = config.form_overrides;
             // The couch filter reads each entry's form, so an override moves
             // its tiles between the lists at once.
-            self.config.apply_form_overrides(&mut self.catalog);
+            self.catalog.project(&self.config);
             // The Desktop tab is there only while something wants a desktop.
             let before = self.tabs.get(self.cur_section).clone();
-            self.tabs.sync_category_groups(&self.catalog);
+            self.tabs.sync_category_groups(self.catalog.entries());
             if self.tabs.get(self.cur_section) != &before {
                 return self.apply_group(None);
             }
