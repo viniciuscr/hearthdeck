@@ -29,10 +29,13 @@ use crate::{
     collections, diagnostics, readiness,
     retro::RetroLaunchError,
     romm::{self, RommGame, RommPlatform, RommQueryError},
-    romm_link::{self, DeviceOffer, DevicePoll},
+    romm_link::{
+        DeviceOffer,
+        control::{ControlError as RommControlError, LinkStatus as RommLinkResponse},
+    },
     sessions::LaunchError,
     settings::{
-        self, BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
+        BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
     },
     state::SharedState,
     stremio::{self, LinkOffer, LinkPoll, StremioConnection},
@@ -525,11 +528,11 @@ async fn get_romm_settings(
     State(state): State<SharedState>,
 ) -> Result<Json<Option<RommSettings>>, ApiError> {
     state
-        .settings
-        .romm()
+        .romm_connection()
+        .settings()
         .await
         .map(Json)
-        .map_err(ApiError::internal)
+        .map_err(ApiError::from)
 }
 
 async fn update_romm_settings(
@@ -537,20 +540,19 @@ async fn update_romm_settings(
     Json(request): Json<UpdateRommSettingsRequest>,
 ) -> Result<Json<RommSettings>, ApiError> {
     state
-        .settings
-        .save_romm(&request.base_url, &request.token)
+        .romm_connection()
+        .save(&request.base_url, &request.token)
         .await
         .map(Json)
-        .map_err(ApiError::invalid_romm_settings)
+        .map_err(ApiError::from)
 }
 
 async fn clear_romm_settings(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
-    state.romm_link.cancel().await;
     state
-        .settings
-        .clear_romm()
+        .romm_connection()
+        .clear()
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::from)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -562,76 +564,35 @@ async fn romm_login(
     State(state): State<SharedState>,
     Json(request): Json<RommLoginRequest>,
 ) -> Result<Json<RommSettings>, ApiError> {
-    let base_url =
-        settings::normalize_romm_url(&request.base_url).map_err(ApiError::invalid_romm_settings)?;
-    let token = romm_link::mint_token(&base_url, &request.username, &request.password)
+    state
+        .romm_connection()
+        .login(&request.base_url, &request.username, &request.password)
         .await
-        .map_err(ApiError::romm_link)?;
-    state.romm_link.cancel().await;
-    let saved = state
-        .settings
-        .save_romm(&base_url, &token)
-        .await
-        .map_err(ApiError::internal)?;
-    info!("romm connected with a password sign-in");
-    Ok(Json(saved))
-}
-
-/// The pending RomM approval's answer; like Stremio's, it never carries the token.
-#[derive(Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-enum RommLinkResponse {
-    Idle,
-    Expired,
-    Denied,
-    Waiting {
-        code: String,
-        link: String,
-        seconds_left: u64,
-    },
-    Linked {
-        settings: RommSettings,
-    },
+        .map(Json)
+        .map_err(ApiError::from)
 }
 
 async fn start_romm_link(
     State(state): State<SharedState>,
     Json(request): Json<StartRommLinkRequest>,
 ) -> Result<Json<DeviceOffer>, ApiError> {
-    let base_url =
-        settings::normalize_romm_url(&request.base_url).map_err(ApiError::invalid_romm_settings)?;
-    let offer = state
-        .romm_link
-        .start(&base_url)
+    state
+        .romm_connection()
+        .start_link(&request.base_url)
         .await
-        .map_err(ApiError::romm_link)?;
-    info!(code = %offer.code, "romm device approval started");
-    Ok(Json(offer))
+        .map(Json)
+        .map_err(ApiError::from)
 }
 
 async fn poll_romm_link(
     State(state): State<SharedState>,
 ) -> Result<Json<RommLinkResponse>, ApiError> {
-    let response = match state.romm_link.poll().await.map_err(ApiError::romm_link)? {
-        DevicePoll::Idle => RommLinkResponse::Idle,
-        DevicePoll::Expired => RommLinkResponse::Expired,
-        DevicePoll::Denied => RommLinkResponse::Denied,
-        DevicePoll::Waiting(offer, seconds_left) => RommLinkResponse::Waiting {
-            code: offer.code,
-            link: offer.link,
-            seconds_left,
-        },
-        DevicePoll::Linked { base_url, token } => {
-            let settings = state
-                .settings
-                .save_romm(&base_url, &token)
-                .await
-                .map_err(ApiError::internal)?;
-            info!("romm connected by device approval");
-            RommLinkResponse::Linked { settings }
-        }
-    };
-    Ok(Json(response))
+    state
+        .romm_connection()
+        .poll_link()
+        .await
+        .map(Json)
+        .map_err(ApiError::from)
 }
 
 /// The pending-link poll's answer.
@@ -1459,6 +1420,16 @@ impl From<ControlError> for ApiError {
     }
 }
 
+impl From<RommControlError> for ApiError {
+    fn from(error: RommControlError) -> Self {
+        match error {
+            RommControlError::InvalidSettings(error) => Self::invalid_romm_settings(error),
+            RommControlError::Link(error) => Self::romm_link(error),
+            RommControlError::Storage(error) => Self::internal(error),
+        }
+    }
+}
+
 impl ApiError {
     fn unauthorized() -> Self {
         Self {
@@ -1739,6 +1710,31 @@ mod tests {
         )));
         assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!error.message.contains("private path"));
+    }
+
+    #[test]
+    fn romm_connection_errors_keep_existing_http_responses() {
+        for (error, status, message) in [
+            (
+                super::RommControlError::InvalidSettings(anyhow::anyhow!("invalid settings")),
+                StatusCode::BAD_REQUEST,
+                "invalid settings",
+            ),
+            (
+                super::RommControlError::Link(anyhow::anyhow!("RomM refused sign-in")),
+                StatusCode::BAD_GATEWAY,
+                "RomM refused sign-in",
+            ),
+            (
+                super::RommControlError::Storage(anyhow::anyhow!("private path")),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal error",
+            ),
+        ] {
+            let error = super::ApiError::from(error);
+            assert_eq!(error.status, status);
+            assert_eq!(error.message, message);
+        }
     }
 
     #[test]
