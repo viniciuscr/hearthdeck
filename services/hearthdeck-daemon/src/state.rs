@@ -46,6 +46,14 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn categorization_control(&self) -> crate::categorizer::control::Control<'_> {
+        crate::categorizer::control::Control {
+            service: self.categorization.as_ref(),
+            settings: &self.settings,
+            collections: &self.collections,
+        }
+    }
+
     pub fn collection_rules(&self) -> crate::collections::rules::RuleService<'_> {
         crate::collections::rules::RuleService {
             catalog: &self.catalog,

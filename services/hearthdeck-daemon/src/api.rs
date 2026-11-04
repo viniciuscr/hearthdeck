@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 use crate::{
     activity::{ActivityEntry, RecentActivity},
-    categorizer::{ModelStatus, ScanRequest},
+    categorizer::control::ControlError,
     collections, diagnostics, readiness,
     retro::RetroLaunchError,
     romm::{self, RommGame, RommPlatform, RommQueryError},
@@ -751,41 +751,22 @@ async fn rescan_library(State(state): State<SharedState>) -> Result<StatusCode, 
 async fn categorization(
     State(state): State<SharedState>,
 ) -> Result<Json<CategorizationSnapshot<ScanReport>>, ApiError> {
-    let service = state
-        .categorization
-        .as_ref()
-        .ok_or_else(ApiError::service_unavailable)?;
-    let enabled = state
-        .settings
-        .get()
+    state
+        .categorization_control()
+        .snapshot()
         .await
-        .map_err(ApiError::internal)?
-        .categorization_enabled;
-    let status = service.status().await;
-    let report = service.latest_report().await.map_err(ApiError::internal)?;
-    Ok(Json(CategorizationSnapshot {
-        enabled,
-        status,
-        report,
-    }))
+        .map(Json)
+        .map_err(ApiError::from)
 }
 
 /// Turns smart categorization on, which only fetches the checkpoint. Nothing is
 /// classified until a button asks for it.
 async fn enable_categorization(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
-    let service = state
-        .categorization
-        .as_ref()
-        .ok_or_else(ApiError::service_unavailable)?;
     state
-        .settings
-        .set_categorization_enabled(true)
+        .categorization_control()
+        .enable()
         .await
-        .map_err(ApiError::internal)?;
-    match service.request_download().await {
-        ScanRequest::Started => info!("categorization enabled; model is ready or downloading"),
-        ScanRequest::AlreadyRunning => info!("categorization enabled; a job is already running"),
-    }
+        .map_err(ApiError::from)?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -794,38 +775,11 @@ async fn enable_categorization(State(state): State<SharedState>) -> Result<Statu
 /// kept, so turning it back on does not fetch it again.
 async fn disable_categorization(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
     state
-        .settings
-        .set_categorization_enabled(false)
+        .categorization_control()
+        .disable()
         .await
-        .map_err(ApiError::internal)?;
-    remove_laya_collections(&state).await;
-    if let Some(categorization) = state.categorization.as_ref() {
-        match categorization.clear_traits().await {
-            Ok(0) => {}
-            Ok(count) => info!(count, "categorization verdicts removed"),
-            Err(error) => warn!(%error, "could not remove the categorization verdicts"),
-        }
-    }
-    info!("categorization disabled");
+        .map_err(ApiError::from)?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// The rails the feature created, and whatever the running job would still
-/// write. A person's collections and the built-in ones are not this feature's
-/// to touch.
-async fn remove_laya_collections(state: &SharedState) {
-    if let Some(categorization) = state.categorization.as_ref() {
-        categorization.discard_running().await;
-    }
-    match state
-        .collections
-        .remove_owned(collections::OWNER_LAYA)
-        .await
-    {
-        Ok(0) => {}
-        Ok(count) => info!(count, "categorization rails removed"),
-        Err(error) => warn!(%error, "could not remove the categorization rails"),
-    }
 }
 
 /// Restore dashboard: drops the rails the model published, whether or not the
@@ -833,7 +787,7 @@ async fn remove_laya_collections(state: &SharedState) {
 async fn remove_categorization_collections(
     State(state): State<SharedState>,
 ) -> Result<StatusCode, ApiError> {
-    remove_laya_collections(&state).await;
+    state.categorization_control().remove_collections().await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -841,33 +795,11 @@ async fn remove_categorization_collections(
 /// no current verdict for. Answers `202`; the result arrives as a library change.
 /// Refused with `409` while the model is missing or another job holds it.
 async fn detect_form_factors(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
-    let service = state
-        .categorization
-        .as_ref()
-        .ok_or_else(ApiError::service_unavailable)?
-        .clone();
-    if !state
-        .settings
-        .get()
+    state
+        .categorization_control()
+        .detect_form_factors()
         .await
-        .map_err(ApiError::internal)?
-        .categorization_enabled
-    {
-        return Err(ApiError::conflict("categorization is not enabled"));
-    }
-    let status = service.status().await;
-    if status.running {
-        return Err(ApiError::conflict("another categorization job is running"));
-    }
-    if status.model == ModelStatus::Absent {
-        return Err(ApiError::conflict("the model is not downloaded yet"));
-    }
-    tokio::spawn(async move {
-        match service.classify_pending().await {
-            Ok(run) => info!(?run, "form-factor detection finished"),
-            Err(error) => warn!(%error, "form-factor detection failed"),
-        }
-    });
+        .map_err(ApiError::from)?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -875,29 +807,12 @@ async fn detect_form_factors(State(state): State<SharedState>) -> Result<StatusC
 /// rails that implies. Answers `202`; the result arrives on the event stream.
 /// Requesting one while another job runs is not an error: it coalesces.
 async fn start_categorization(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
-    let service = state
-        .categorization
-        .as_ref()
-        .ok_or_else(ApiError::service_unavailable)?;
-    if !state
-        .settings
-        .get()
+    state
+        .categorization_control()
+        .publish_collections()
         .await
-        .map_err(ApiError::internal)?
-        .categorization_enabled
-    {
-        return Err(ApiError::conflict("categorization is not enabled"));
-    }
-    match service.request_scan().await {
-        ScanRequest::Started => {
-            info!("categorization scan started");
-            Ok(StatusCode::ACCEPTED)
-        }
-        ScanRequest::AlreadyRunning => {
-            info!("categorization scan coalesced");
-            Ok(StatusCode::ACCEPTED)
-        }
-    }
+        .map_err(ApiError::from)?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 async fn get_settings(State(state): State<SharedState>) -> Result<Json<UserSettings>, ApiError> {
@@ -1532,6 +1447,18 @@ impl From<collections::CurationError> for ApiError {
     }
 }
 
+impl From<ControlError> for ApiError {
+    fn from(error: ControlError) -> Self {
+        match error {
+            ControlError::Unavailable => Self::service_unavailable(),
+            ControlError::Disabled | ControlError::Busy | ControlError::ModelAbsent => {
+                Self::conflict(error.to_string())
+            }
+            ControlError::Storage(error) => Self::internal(error),
+        }
+    }
+}
+
 impl ApiError {
     fn unauthorized() -> Self {
         Self {
@@ -1812,6 +1739,37 @@ mod tests {
         )));
         assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!error.message.contains("private path"));
+    }
+
+    #[test]
+    fn categorization_control_errors_keep_existing_http_responses() {
+        for (error, message) in [
+            (
+                super::ControlError::Disabled,
+                "categorization is not enabled",
+            ),
+            (
+                super::ControlError::Busy,
+                "another categorization job is running",
+            ),
+            (
+                super::ControlError::ModelAbsent,
+                "the model is not downloaded yet",
+            ),
+        ] {
+            let error = super::ApiError::from(error);
+            assert_eq!(error.status, StatusCode::CONFLICT);
+            assert_eq!(error.message, message);
+        }
+        assert_eq!(
+            super::ApiError::from(super::ControlError::Unavailable).status,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let error = super::ApiError::from(super::ControlError::Storage(anyhow::anyhow!(
+            "private path"
+        )));
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.message, "internal error");
     }
 
     #[test]
@@ -2952,7 +2910,7 @@ mod tests {
         let before = state.collections.list().await.unwrap();
         assert!(before.iter().any(|row| row.slug == "laya:watch"));
 
-        super::remove_laya_collections(&state).await;
+        state.categorization_control().remove_collections().await;
 
         let after = state.collections.list().await.unwrap();
         assert!(

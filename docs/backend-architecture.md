@@ -59,6 +59,13 @@ Curated edits go through `CollectionStore::add_curated_item` and
 the stored snapshot. HTTP only maps typed missing/read-only/storage errors to
 responses. Raw membership writes remain available for development seeding.
 
+`categorizer/control.rs` owns the categorization feature's enable/disable,
+snapshot, detection, rail publication and dashboard-reset operations. It borrows
+settings, collections and the optional job service, not AppState. HTTP maps typed
+availability, job-precondition and storage errors. Disabling still discards
+running results and removes model-owned rails and verdicts; reset removes only
+rails. Cleanup failures retain the existing warning-and-continue behavior.
+
 ## Platform Adaptation Rules
 
 Hearthdeck targets Linux only. Platform-specific behavior still terminates at an
