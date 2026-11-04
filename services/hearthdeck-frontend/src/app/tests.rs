@@ -336,14 +336,14 @@ fn showing_a_filter() -> App {
             })
             .collect(),
     };
-    let _ = app.update(Message::FacetsLoaded(Ok(vec![
+    app.filters.load_console_facets(vec![
         facet(
             "store",
             "Store",
             ["hearthdeck-store:Steam", "hearthdeck-store:GOG"],
         ),
         facet("category", "Category", ["Utility", "Development"]),
-    ])));
+    ]);
     app
 }
 
@@ -387,6 +387,75 @@ fn showing_console_tabs() -> App {
         vec![entry("romm:snes", &["Game", "hearthdeck-console:7"])],
     );
     app
+}
+
+#[test]
+fn console_facets_cannot_replace_the_local_sections_facets() {
+    let mut app = showing_a_filter();
+    let before = app.filters.facets().to_vec();
+    let _ = app.update(Message::FacetsLoaded {
+        platform: None,
+        result: Ok(vec![Facet {
+            id: "genre".into(),
+            label: "Genre".into(),
+            options: Vec::new(),
+        }]),
+    });
+    assert_eq!(app.filters.facets(), before.as_slice());
+}
+
+#[test]
+fn console_facets_follow_the_platform_that_requested_them() {
+    let mut app = showing_console_tabs();
+    let facets = || {
+        vec![Facet {
+            id: "genre".into(),
+            label: "Genre".into(),
+            options: vec![FacetOption {
+                value: "rpg".into(),
+                label: "RPG".into(),
+            }],
+        }]
+    };
+    let _ = app.update(Message::FacetsLoaded {
+        platform: Some(7),
+        result: Ok(facets()),
+    });
+    assert_eq!(app.filters.facets()[0].options[0].value, "rpg");
+    let _ = app.apply_group(Some(1));
+    assert!(app.filters.facets().is_empty());
+    for platform in [None, Some(7)] {
+        let _ = app.update(Message::FacetsLoaded {
+            platform,
+            result: Ok(facets()),
+        });
+        assert!(
+            app.filters.facets().is_empty(),
+            "late reply for {platform:?} cannot paint PlayStation"
+        );
+    }
+    let _ = app.update(Message::FacetsLoaded {
+        platform: Some(9),
+        result: Ok(facets()),
+    });
+    let before = app.filters.facets().to_vec();
+    let _ = app.update(Message::FacetsLoaded {
+        platform: Some(9),
+        result: Err("offline".into()),
+    });
+    assert_eq!(
+        app.filters.facets(),
+        before.as_slice(),
+        "a failed read keeps the last answer"
+    );
+    let _ = app.update(Message::FacetsLoaded {
+        platform: Some(9),
+        result: Ok(Vec::new()),
+    });
+    assert!(
+        app.filters.facets().is_empty(),
+        "an empty successful answer replaces the old facets"
+    );
 }
 
 /// Feeds the console grid one page the way a daemon answer would, for the
