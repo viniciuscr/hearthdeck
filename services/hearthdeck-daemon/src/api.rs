@@ -1438,30 +1438,12 @@ struct ApiError {
 
 /// The dashboard's collections, in composition order.
 ///
-/// The rule service composes items and icons; HTTP isolates failed rails.
+/// The service composes items and icons while isolating failed rails.
 async fn list_collections(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<Collection>>, ApiError> {
-    let mut collections = state.collections.list().await.map_err(ApiError::internal)?;
-    for collection in &mut collections {
-        // A rail that cannot be resolved is an empty rail, not a failed
-        // dashboard: one broken source used to take every other rail down with it.
-        match state.collection_rules().resolve(collection).await {
-            Ok(Some(items)) => collection.items = items,
-            Err(error) => {
-                warn!(slug = %collection.slug, %error, "rail could not be resolved");
-            }
-            Ok(None) => {}
-        }
-        // Last, once every rail holds the items it will serve: an item stored
-        // without an icon is given the one its id names, so a client can draw
-        // every card in a rail the same way.
-        collection.items = state
-            .collection_rules()
-            .with_item_icons(std::mem::take(&mut collection.items))
-            .await;
-    }
-    Ok(Json(collections))
+    let collections = state.collections.list().await.map_err(ApiError::internal)?;
+    Ok(Json(state.collection_rules().compose(collections).await))
 }
 
 /// Which launch an item id names: the two shapes an id can carry.
