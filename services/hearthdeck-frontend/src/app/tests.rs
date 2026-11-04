@@ -465,7 +465,7 @@ fn switching_back_to_a_loaded_console_tab_paints_its_pages_at_once() {
 fn typing_a_console_search_keeps_the_grid_while_the_query_is_not_settled() {
     let mut app = showing_console_tabs();
 
-    let _ = app.update(Message::InputChanged("zeld".to_owned()));
+    let _ = app.update(header::Message::SearchChanged("zeld".to_owned()).into());
 
     assert_eq!(
         drawn(&app),
@@ -494,7 +494,7 @@ fn typing_a_console_search_keeps_the_grid_while_the_query_is_not_settled() {
 fn clearing_a_console_search_shows_the_unfiltered_scope_again() {
     let mut app = showing_console_tabs();
 
-    let _ = app.update(Message::InputChanged("zeld".to_owned()));
+    let _ = app.update(header::Message::SearchChanged("zeld".to_owned()).into());
     let _ = app.update(Message::ConsoleSearchSettled("zeld".to_owned()));
     console_page(
         &mut app,
@@ -502,7 +502,7 @@ fn clearing_a_console_search_shows_the_unfiltered_scope_again() {
     );
     assert_eq!(drawn(&app), ["romm:z"]);
 
-    let _ = app.update(Message::InputChanged(String::new()));
+    let _ = app.update(header::Message::SearchChanged(String::new()).into());
     let _ = app.update(Message::ConsoleSearchSettled(String::new()));
 
     assert_eq!(
@@ -511,6 +511,48 @@ fn clearing_a_console_search_shows_the_unfiltered_scope_again() {
         "the cleared search is still showing the searched games: {:?}",
         drawn(&app)
     );
+}
+
+#[test]
+fn header_search_events_use_the_shared_caret_contract() {
+    let mut app = showing(12);
+
+    let _ = app.update(header::Message::SearchFocused.into());
+    assert_eq!(app.text_entry.active(), Some(Field::Search));
+
+    let _ = app.update(header::Message::SearchSubmitted.into());
+    assert!(!app.text_entry.is_active());
+    assert_eq!(app.page, Page::Library);
+
+    let _ = app.update(header::Message::SearchFocused.into());
+    let _ = app.update(header::Message::SearchBlurred.into());
+    assert!(!app.text_entry.is_active());
+
+    let _ = app.update(Message::TextFieldFocused(Field::RommPassword));
+    let _ = app.update(header::Message::SearchBlurred.into());
+    assert_eq!(app.text_entry.active(), Some(Field::RommPassword));
+}
+
+#[test]
+fn header_controls_use_the_existing_library_routes() {
+    let mut app = showing_console_tabs();
+
+    let _ = app.update(header::Message::TabsScrolled(120.0).into());
+    assert_eq!(app.tabs_offset, 120.0);
+
+    let _ = app.update(header::Message::FilterToggled.into());
+    assert!(app.filters.is_open());
+    let _ = app.update(header::Message::FilterToggled.into());
+    assert!(!app.filters.is_open());
+
+    let _ = app.update(header::Message::GroupSelected(Some(1)).into());
+    assert_eq!(app.cur_group, Some(0), "the tab still waits for its slide");
+    settle(&mut app);
+    assert_eq!(app.cur_group, Some(1));
+
+    let _ = app.update(header::Message::GroupSelected(None).into());
+    settle(&mut app);
+    assert_eq!(app.cur_group, None);
 }
 
 /// A page that warms a tab in the background lands in that tab's cache and

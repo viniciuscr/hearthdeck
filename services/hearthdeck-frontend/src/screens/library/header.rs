@@ -3,9 +3,8 @@
 //!
 //! Tabs are read-only: a title, a search field and a row of category buttons.
 //!
-//! Tied to [`crate::app::Message`] — the new app's own message — not made
-//! generic, because it emits several distinct messages and threading a closure
-//! per message reads worse than naming them here.
+//! Emits local events; the shell maps them to search, navigation and caret
+//! handling.
 
 use std::sync::LazyLock;
 
@@ -17,8 +16,6 @@ use cosmic::iced::alignment::Vertical;
 use cosmic::theme::{self, TextInput};
 use cosmic::widget::{Id, button, column, container, row, scrollable, space, text, text_input};
 
-use super::filters;
-use crate::app::Message;
 use crate::app_group::{AppGroup, Section, SectionUi};
 use crate::fl;
 use crate::style::{
@@ -26,12 +23,22 @@ use crate::style::{
     TEXT_TITLE, accent_bar, content_width, control_button_class, filter_button_height, passthrough,
     search_icon_padding, tab_button_class, tab_height, tab_underline_height, tab_width,
 };
-use crate::text_entry::Field;
 use crate::ui;
 
 static SEARCH_ID: LazyLock<Id> = LazyLock::new(|| Id::new("search"));
 static STRIP_ID: LazyLock<Id> = LazyLock::new(|| Id::new("tab-strip"));
 static SEARCH_PLACEHOLDER: LazyLock<String> = LazyLock::new(|| fl!("search-placeholder"));
+
+#[derive(Clone, Debug)]
+pub enum Message {
+    SearchChanged(String),
+    SearchFocused,
+    SearchBlurred,
+    SearchSubmitted,
+    GroupSelected(Option<usize>),
+    TabsScrolled(f32),
+    FilterToggled,
+}
 
 /// The widget id of the search box, which the navigation puts the cursor on.
 pub fn search_id() -> Id {
@@ -160,14 +167,14 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
         space::horizontal().width(Length::FillPortion(1)),
         container(
             text_input(SEARCH_PLACEHOLDER.as_str(), header.search_value)
-                .on_input(Message::InputChanged)
+                .on_input(Message::SearchChanged)
                 // The keyboard follows the caret, so a focused box means the
                 // pad belongs to the keyboard until it is dismissed. Enter is
                 // how the field accepts what was typed; the shell decides what
                 // that means for a search box.
-                .on_focus(Message::TextFieldFocused(Field::Search))
-                .on_unfocus(Message::TextFieldBlurred(Field::Search))
-                .on_submit(|_| Message::TextFieldSubmitted(Field::Search))
+                .on_focus(Message::SearchFocused)
+                .on_unfocus(Message::SearchBlurred)
+                .on_submit(|_| Message::SearchSubmitted)
                 .style(TextInput::Search)
                 .width(Length::Fixed(SEARCH_WIDTH))
                 .size(TEXT_HEADER)
@@ -224,7 +231,7 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
         0,
         header.section.all_name(),
         header.selected_group.is_none(),
-        Message::SelectGroup(None),
+        Message::GroupSelected(None),
     )]
     .spacing(space_m)
     .align_y(Alignment::Center);
@@ -233,7 +240,7 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
             index + 1,
             group.name(),
             header.selected_group == Some(index),
-            Message::SelectGroup(Some(index)),
+            Message::GroupSelected(Some(index)),
         ));
     }
 
@@ -286,7 +293,7 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
         .width(Length::Fixed(FILTER_BUTTON_MIN_WIDTH))
         .class(control_button_class(header.filter_active > 0))
         .id(filter_button_id())
-        .on_press(Message::Filters(filters::Message::Toggle));
+        .on_press(Message::FilterToggled);
 
         controls = controls.push(filter_button);
     }

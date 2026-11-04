@@ -76,6 +76,11 @@ the cruft inherited from the project this started from.
   hand-roll a button per screen.
 - **Privileged widgets — use COSMIC.** `context_drawer`, `dialog`, `tooltip`,
   `Toasts`, `text_input`, `scrollable`.
+- **Library header emits local events.** Search edits, caret events, tab picks,
+  scroll reports and the filter button belong to `screens/library/header.rs`.
+  The shell maps them to its existing search, navigation, text-entry and filter
+  routes; the view does not depend on the App message enum. Controller routes
+  and global Back stay shared.
 - **The source defines the facets.** The console grid's filter options come from
   the daemon (`/v1/retro/facets`, backed by RomM's `/api/roms/filters`), not
   from the loaded page, and selecting one re-queries the daemon. The old

@@ -271,6 +271,20 @@ pub enum Message {
     Animate(Instant),
 }
 
+impl From<header::Message> for Message {
+    fn from(message: header::Message) -> Self {
+        match message {
+            header::Message::SearchChanged(value) => Self::InputChanged(value),
+            header::Message::SearchFocused => Self::TextFieldFocused(Field::Search),
+            header::Message::SearchBlurred => Self::TextFieldBlurred(Field::Search),
+            header::Message::SearchSubmitted => Self::TextFieldSubmitted(Field::Search),
+            header::Message::GroupSelected(group) => Self::SelectGroup(group),
+            header::Message::TabsScrolled(offset) => Self::TabsScrolled(offset),
+            header::Message::FilterToggled => Self::Filters(filters::Message::Toggle),
+        }
+    }
+}
+
 /// Which page the shell is showing.
 ///
 /// The dashboard is where the app opens, matching the inherited app: a front
@@ -1170,7 +1184,8 @@ impl App {
                 search_value: &self.search_value,
                 filter_active: self.filters.selected().len(),
                 show_filter: !self.filters.facets().is_empty(),
-            });
+            })
+            .map(Message::from);
 
             let body: Element<'_, Message> = if self.visible.is_empty() {
                 container(space::horizontal())
