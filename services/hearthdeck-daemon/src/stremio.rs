@@ -19,6 +19,8 @@ use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 use tokio::sync::Mutex;
 
+pub(crate) mod control;
+
 /// The link service, which turns "somebody who is logged in elsewhere" into a
 /// session on this machine without this machine ever seeing a password.
 const LINK_URL: &str = "https://link.stremio.com/api";
