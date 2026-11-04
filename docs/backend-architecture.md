@@ -66,6 +66,15 @@ availability, job-precondition and storage errors. Disabling still discards
 running results and removes model-owned rails and verdicts; reset removes only
 rails. Cleanup failures retain the existing warning-and-continue behavior.
 
+`romm_link/control.rs` owns the RomM connection lifecycle: settings, password
+sign-in, device approval and disconnect. It borrows settings and pending-link
+state; HTTP only maps requests, credential-free responses and typed errors.
+Loopback URL validation happens before contacting RomM. Password sign-in cancels
+pending approval only after minting a client token; disconnect cancels it before
+clearing settings. Direct token saves retain pending approval and their existing
+bad-request error mapping. The underlying device flow still owns poll throttling
+and expiry; this boundary does not change its concurrent-request semantics.
+
 ## Platform Adaptation Rules
 
 Hearthdeck targets Linux only. Platform-specific behavior still terminates at an

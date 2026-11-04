@@ -12,6 +12,8 @@
 //!
 //! Both need RomM 4.8 or newer, where client tokens were introduced.
 
+pub(crate) mod control;
+
 use std::net::{IpAddr, UdpSocket};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};

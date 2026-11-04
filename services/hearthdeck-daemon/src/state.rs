@@ -46,6 +46,13 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn romm_connection(&self) -> crate::romm_link::control::Control<'_> {
+        crate::romm_link::control::Control {
+            settings: &self.settings,
+            link: &self.romm_link,
+        }
+    }
+
     pub fn categorization_control(&self) -> crate::categorizer::control::Control<'_> {
         crate::categorizer::control::Control {
             service: self.categorization.as_ref(),
