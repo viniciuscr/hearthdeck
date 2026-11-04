@@ -196,6 +196,7 @@ impl App {
     fn library_shelf(&self, size: f32) -> Option<Shelf> {
         let cards: Vec<Card> = self
             .catalog
+            .entries()
             .iter()
             .filter(|entry| Section::PcGames.matches(entry))
             .take(DASHBOARD_RAIL_TILES)
@@ -233,6 +234,7 @@ impl App {
             Rail::Consoles => self.console_platforms.len(),
             Rail::Library => self
                 .catalog
+                .entries()
                 .iter()
                 .filter(|entry| Section::PcGames.matches(entry))
                 .count(),
@@ -260,6 +262,7 @@ impl App {
                 .map(|platform| dashboard::Message::ConsolePressed(platform.id)),
             Rail::Library => self
                 .catalog
+                .entries()
                 .iter()
                 .filter(|entry| Section::PcGames.matches(entry))
                 .nth(card)

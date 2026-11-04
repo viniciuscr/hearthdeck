@@ -85,6 +85,10 @@ the cruft inherited from the project this started from.
   reports belong to `screens/library/grid.rs`; the shell maps them to shared
   launch/menu/paging routes. Scroll tasks are message-generic widget operations,
   so the grid no longer imports the App message enum.
+- **Local catalog keeps source records.** `screens/library/catalog.rs` owns the
+  daemon snapshot and its effective form projection. Local moves, live config
+  changes and catalog refreshes use the same projection; removing an override
+  restores the latest daemon form without waiting for another refresh.
 - **Library menu actions are not widgets.** `screens/library/context_menu.rs`
   defines ordered actions and their labels. Rendering, controller row counts
   and confirmation share the same actions; counting or confirming does not

@@ -166,7 +166,7 @@ impl App {
             Task::batch([self.ensure_console_scope(), self.load_facets()])
         } else {
             self.filters
-                .load_local_facets(self.cur_section, &self.catalog);
+                .load_local_facets(self.cur_section, self.catalog.entries());
             self.refilter();
             self.list_replaced()
         };
@@ -186,7 +186,7 @@ impl App {
             Task::batch([self.ensure_console_scope(), self.load_facets()])
         } else {
             self.filters
-                .load_local_facets(self.cur_section, &self.catalog);
+                .load_local_facets(self.cur_section, self.catalog.entries());
             self.refilter();
             self.list_replaced()
         };
