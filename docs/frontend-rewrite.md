@@ -81,6 +81,12 @@ the cruft inherited from the project this started from.
   The shell maps them to its existing search, navigation, text-entry and filter
   routes; the view does not depend on the App message enum. Controller routes
   and global Back stay shared.
+- **Library menu actions are not widgets.** `screens/library/context_menu.rs`
+  defines ordered actions and their labels. Rendering, controller row counts
+  and confirmation share the same actions; counting or confirming does not
+  build translated rows. The shell maps actions to launch/config routes, while
+  the shared menu widget keeps its open target and highlight. Global Back is
+  unchanged.
 - **The source defines the facets.** The console grid's filter options come from
   the daemon (`/v1/retro/facets`, backed by RomM's `/api/roms/filters`), not
   from the loaded page, and selecting one re-queries the daemon. The old
