@@ -7,7 +7,7 @@ pub const QUEUE: usize = 32;
 
 #[must_use]
 pub fn broker_enabled() -> bool {
-    std::env::var("HEARTHDECK_INPUT_MODE").as_deref() == Ok("broker")
+    std::env::var("HEARTHDECK_INPUT_MODE").as_deref() != Ok("legacy")
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
@@ -157,6 +157,55 @@ pub mod transport {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn broker_is_default_and_legacy_requires_an_explicit_override() {
+            const CHILD: &str = "HEARTHDECK_INPUT_DEFAULT_TEST";
+            if let Ok(expected) = std::env::var(CHILD) {
+                assert_eq!(crate::input::broker_enabled(), expected == "broker");
+                return;
+            }
+            for (mode, expected) in [
+                (None, "broker"),
+                (Some("broker"), "broker"),
+                (Some("legacy"), "legacy"),
+            ] {
+                let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                command
+                    .args([
+                        "--exact",
+                        "input::transport::tests::broker_is_default_and_legacy_requires_an_explicit_override",
+                    ])
+                    .env(CHILD, expected)
+                    .env_remove("HEARTHDECK_INPUT_MODE");
+                if let Some(mode) = mode {
+                    command.env("HEARTHDECK_INPUT_MODE", mode);
+                }
+                assert!(command.status().unwrap().success(), "mode: {mode:?}");
+            }
+        }
+
+        #[test]
+        fn session_and_service_defaults_enable_the_same_broker() {
+            for unit in [
+                include_str!("../../../deploy/systemd/hearthdeck-input.service"),
+                include_str!("../../../deploy/systemd/hearthdeck-bridge.service"),
+                include_str!("../../../packaging/arch/hearthdeck-input.service"),
+                include_str!("../../../packaging/arch/hearthdeck-bridge.service"),
+                include_str!("../../../packaging/arch/hearthdeck-overlay.service"),
+            ] {
+                assert!(unit.contains("Environment=HEARTHDECK_INPUT_MODE=broker"));
+                assert!(unit.contains("EnvironmentFile=-%h/.config/hearthdeck/input.env"));
+            }
+            assert!(
+                include_str!("../../../packaging/arch/hearthdeck-session")
+                    .contains("export HEARTHDECK_INPUT_MODE=broker")
+            );
+            assert!(
+                include_str!("../../../packaging/arch/input.env.example")
+                    .contains("HEARTHDECK_INPUT_MODE=broker")
+            );
+        }
 
         #[tokio::test]
         async fn frames_keep_boundaries_and_reject_oversized_input() {

@@ -11,7 +11,7 @@ PartOf=hearthdeck.target
 
 [Service]
 Type=exec
-Environment=HEARTHDECK_INPUT_MODE=legacy
+Environment=HEARTHDECK_INPUT_MODE=broker
 EnvironmentFile=-%h/.config/hearthdeck/input.env
 ExecStart=/usr/lib/hearthdeck/hearthdeck-overlay
 # cosmic-comp only imports WAYLAND_DISPLAY/DISPLAY into the systemd --user

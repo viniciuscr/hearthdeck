@@ -30,7 +30,7 @@ export XDG_SESSION_DESKTOP=hearthdeck
 export XDG_SESSION_TYPE=wayland
 
 # One selection for the direct frontend child and all systemd-owned readers.
-export HEARTHDECK_INPUT_MODE=legacy
+export HEARTHDECK_INPUT_MODE=broker
 export HEARTHDECK_GAMEPAD_OSK_ADAPTER=
 input_env="$HOME/.config/hearthdeck/input.env"
 if [[ -f "$input_env" ]]; then

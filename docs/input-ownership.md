@@ -1,8 +1,9 @@
 # Input ownership and host acceptance
 
-Status: **implemented as an opt-in; hardware acceptance pending**. Implementation
-was authorized on 2026-11-04. Legacy mode remains the default. The checks below
-must pass on the Linux host before changing that default.
+Status: **broker enabled by default; hardware acceptance pending**. The user
+authorized default enablement on 2026-11-04 for host testing. Set
+`HEARTHDECK_INPUT_MODE=legacy` explicitly to roll back. An existing input.env
+with that value still overrides the new default.
 
 ## Why change it
 
@@ -132,10 +133,11 @@ be verified on the host; no adapter is invented or enabled by default.
 3. **Review and implement local transport and lifecycle.** Define authenticated
    client roles, acknowledgments, reconnect and bounded delivery. Review systemd
    changes explicitly. No production capture or dual-reader switch yet.
-4. **Migrate consumers together behind an explicit opt-in.** Disable their old
+4. **Migrate consumers together.** Disable their old
    device readers in broker mode; preserve one coherent legacy mode for rollback.
    Do not add a fourth production reader as a permanent bridge.
-5. **Run Linux acceptance below.** Only then consider broker mode the default.
+5. **Run Linux acceptance below.** Default enablement was authorized before
+   hardware acceptance; this is not evidence that these checks passed.
    Remove legacy readers after the rollback requirement is explicitly retired.
 
 ## Linux acceptance gate
@@ -167,7 +169,7 @@ kernel, compositor and tested commit; untested combinations remain unaccepted.
 
 Implementation approval: granted 2026-11-04. Hardware validation: delegated by
 the user to a host agent; acceptance evidence is still pending. Broker mode is
-not the release default.
+the release default by explicit user request, not by hardware validation.
 
 ## Host-agent runbook
 
@@ -198,7 +200,7 @@ restart an active game just to run the checklist.
 6. Run every acceptance item above. Record commit, hardware, actual app IDs,
    commands, observed results and journal excerpts (without credentials).
    Mark each item PASS/FAIL/BLOCKED, including keyboard-adapter absence as
-   BLOCKED, never PASS. Check the default legacy path in a separate session.
+   BLOCKED, never PASS. Check the explicit legacy rollback in a separate session.
 
 Rollback: restore the saved input environment or set
 `HEARTHDECK_INPUT_MODE=legacy`, remove the adapter setting, and restart the entire

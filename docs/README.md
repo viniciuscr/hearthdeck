@@ -41,7 +41,7 @@ docs carry the *why* the code cannot.
 
 | Doc | Owns |
 | --- | --- |
-| [`input-ownership.md`](input-ownership.md) | Opt-in controller broker, keyboard handoff, host acceptance and rollback |
+| [`input-ownership.md`](input-ownership.md) | Default controller broker, keyboard handoff, host acceptance and legacy rollback |
 | [`retroarch-integration.md`](retroarch-integration.md) | RomM/RetroArch decisions, `romm.service` startup, open questions, phased roadmap |
 | [`stremio-integration.md`](stremio-integration.md) | Stremio account linking, the verified `api.strem.io` shapes, Continue Watching rail, credential storage decision |
 
