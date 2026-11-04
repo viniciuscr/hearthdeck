@@ -3381,11 +3381,16 @@ fn moving_an_application_to_the_couch_takes_it_off_the_desktop_tab() {
     app.refilter();
     assert_eq!(app.visible.len(), 1, "the Desktop tab shows it");
 
-    let _ = app.update(Message::MoveToForm(
-        0,
-        crate::form_factor::FormFactor::Couch,
-    ));
+    let _ = app.update(Message::TileContext(0));
+    assert_eq!(app.menu_rows(), 3);
+    send(&mut app, GamepadEvent::MoveUp);
+    assert_eq!(app.menu.selected(), 2);
+    send(&mut app, GamepadEvent::Confirm);
 
+    assert!(
+        !app.menu.is_open(),
+        "moving closes the menu before refiltering"
+    );
     assert!(tabs(&app, Section::Applications).is_empty());
     assert_eq!(app.cur_group, None, "the tab it was on is gone");
     assert_eq!(app.visible.len(), 1, "the default view shows it now");

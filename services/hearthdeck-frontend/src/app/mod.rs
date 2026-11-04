@@ -53,7 +53,7 @@ use crate::screens::details::{self as details_screen, Details as GameDetails};
 use crate::screens::library::console::{self, ConsoleScope, ConsoleScopes};
 use crate::screens::library::focus::{self, Cursors, Direction, Layout};
 use crate::screens::library::sidebar::{self, Sidebar};
-use crate::screens::library::{filters, grid, header};
+use crate::screens::library::{context_menu, filters, grid, header};
 use crate::screens::settings;
 use crate::style::{
     DIVIDER_WIDTH, ICON_LARGE, SECTION_TRANSITION_DURATION, TAB_TRANSITION_DURATION, WINDOW_HEIGHT,
@@ -1446,42 +1446,23 @@ impl App {
     }
     /// How many rows the open menu holds.
     ///
-    /// Counted from the same list the view draws, so the two cannot disagree
-    /// about how far the pad can walk.
+    /// Counted from the actions the view draws, without building labels.
     fn menu_rows(&self) -> usize {
-        self.menu_target()
-            .map_or(0, |target| self.menu_rows_for(target).len())
+        self.menu_target().map_or(0, |target| {
+            context_menu::actions(self.cur_section, &self.visible[target]).count()
+        })
     }
     /// The rows the menu shows for the tile at `index`.
     ///
-    /// This is the only place they are defined: the navigation counts them and
-    /// the view draws them, so a row cannot appear in one and be missing from
-    /// the other.
-    ///
-    /// A row is a label and the message it sends, so a switch carries its state
-    /// in the label - there is no tick to draw beside it.
+    /// The library owns the actions and labels; the shell supplies their target
+    /// and maps them to its effect routes.
     fn menu_rows_for(&self, index: usize) -> Vec<Row<Message>> {
         let Some(entry) = self.visible.get(index) else {
             return Vec::new();
         };
-        let compatibility = if self.config.desktop_input_for(entry) {
-            fl!("disable-controller-compatibility")
-        } else {
-            fl!("enable-controller-compatibility")
-        };
-        let mut rows = vec![
-            Row::new(fl!("run"), Message::Activate(index)),
-            Row::new(compatibility, Message::ToggleControllerCompatibility(index)),
-        ];
-        if self.cur_section == Section::Applications {
-            let other = form_factor::of(entry).other();
-            let label = match other {
-                FormFactor::Couch => fl!("move-to-couch"),
-                FormFactor::Desktop => fl!("move-to-desktop"),
-            };
-            rows.push(Row::new(label, Message::MoveToForm(index, other)));
-        }
-        rows
+        context_menu::rows(self.cur_section, entry, &self.config)
+            .map(|row| Row::new(row.label, menu_message(index, row.message)))
+            .collect()
     }
     /// Runs the row the open menu has highlighted.
     ///
@@ -1494,10 +1475,10 @@ impl App {
             return Task::none();
         };
         let selected = self.menu.selected();
-        let action = self.menu_rows_for(target).into_iter().nth(selected);
+        let action = context_menu::actions(self.cur_section, &self.visible[target]).nth(selected);
         self.menu.close();
         match action {
-            Some(row) => self.update(row.message),
+            Some(action) => self.update(menu_message(target, action)),
             None => Task::none(),
         }
     }
@@ -1611,6 +1592,16 @@ impl App {
             },
             |config| cosmic::Action::App(Message::AppConfigLoaded(config)),
         )
+    }
+}
+
+fn menu_message(target: usize, action: context_menu::Action) -> Message {
+    match action {
+        context_menu::Action::Run => Message::Activate(target),
+        context_menu::Action::ToggleControllerCompatibility => {
+            Message::ToggleControllerCompatibility(target)
+        }
+        context_menu::Action::MoveToForm(form) => Message::MoveToForm(target, form),
     }
 }
 
