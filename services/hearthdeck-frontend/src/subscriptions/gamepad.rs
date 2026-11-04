@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{self, UnboundedSender};
 use gilrs::{Axis, Button, Event, EventType, Gamepad, GamepadId, GilrsBuilder};
-use log::{info, warn};
+use tracing::{info, warn};
 
 use cosmic::iced::Subscription;
 
@@ -278,7 +278,7 @@ fn gilrs_loop(tx: UnboundedSender<GamepadEvent>) {
             gilrs
         }
         Err(err) => {
-            warn!("Gamepad support disabled: {err}");
+            warn!(error = %err, "Gamepad support disabled");
             return;
         }
     };

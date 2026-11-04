@@ -108,7 +108,7 @@ pub struct Pending {
 impl Pending {
     fn new(code: String, link: String, seconds_left: u64) -> Self {
         let qr = qr_code::Data::new(link.as_bytes())
-            .inspect_err(|error| log::warn!("RomM link QR code failed: {error}"))
+            .inspect_err(|error| tracing::warn!(%error, "RomM link QR code failed"))
             .ok();
         Self {
             code,
@@ -378,7 +378,7 @@ impl Form {
     }
 
     fn failed(&mut self, error: String) {
-        log::warn!("RomM settings request failed: {error}");
+        tracing::warn!(%error, "RomM settings request failed");
         self.error = Some(error);
     }
 }

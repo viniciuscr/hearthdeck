@@ -453,7 +453,7 @@ impl AppLibraryConfig {
             .map(|store| {
                 Self::get_entry(store).unwrap_or_else(|(errors, config)| {
                     for error in errors {
-                        log::error!("{error:?}");
+                        tracing::error!(?error, "config entry could not be read");
                     }
                     config
                 })

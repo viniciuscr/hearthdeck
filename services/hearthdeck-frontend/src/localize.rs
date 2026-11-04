@@ -47,6 +47,6 @@ pub fn localize() {
     let requested_languages = i18n_embed::DesktopLanguageRequester::requested_languages();
 
     if let Err(error) = localizer.select(&requested_languages) {
-        log::error!("could not load the requested language: {error}");
+        tracing::error!(%error, "could not load the requested language");
     }
 }

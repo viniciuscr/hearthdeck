@@ -215,7 +215,7 @@ impl DaemonClient {
             .timeout(DAEMON_REQUEST_TIMEOUT)
             .build()
             .unwrap_or_else(|error| {
-                log::error!("daemon client built without a timeout: {error}");
+                tracing::error!(%error, "daemon client built without a timeout");
                 reqwest::Client::new()
             });
         Self {
@@ -659,10 +659,9 @@ impl DaemonClient {
                                     let background =
                                         client.resolve_icon(item.background.as_deref()).await;
                                     if background.is_none() {
-                                        log::warn!(
-                                            "the wide art for {} could not be fetched; the \
-                                             background falls back to the wallpaper",
-                                            item.name
+                                        tracing::warn!(
+                                            item_name = %item.name,
+                                            "wide art could not be fetched; background falls back to wallpaper"
                                         );
                                     }
                                     item.background = background;
@@ -985,7 +984,10 @@ impl DaemonClient {
     pub async fn fetch_library_items(&self) -> Result<Vec<LibraryItem>, DaemonError> {
         let items = self.fetch_library().await?;
 
-        log::info!("fetched {} catalog items from daemon", items.len());
+        tracing::info!(
+            record_count = items.len(),
+            "fetched catalog items from daemon"
+        );
 
         let items = join_all(items.into_iter().map(|mut item| async move {
             item.icon = self.resolve_icon(item.icon.as_deref()).await;

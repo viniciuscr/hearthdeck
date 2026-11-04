@@ -47,7 +47,7 @@ pub fn daemon_events(client: DaemonClient) -> Subscription<FeedEvent> {
                                 Ok(Frame::Close(_)) => break,
                                 Ok(_) => continue,
                                 Err(error) => {
-                                    log::warn!("daemon event feed dropped: {error}");
+                                    tracing::warn!(%error, "daemon event feed dropped");
                                     break;
                                 }
                             };
@@ -57,11 +57,11 @@ pub fn daemon_events(client: DaemonClient) -> Subscription<FeedEvent> {
                                         return;
                                     }
                                 }
-                                Err(error) => log::warn!("unreadable daemon event: {error}"),
+                                Err(error) => tracing::warn!(%error, "unreadable daemon event"),
                             }
                         }
                     }
-                    Err(error) => log::warn!("daemon event feed unavailable: {error}"),
+                    Err(error) => tracing::warn!(%error, "daemon event feed unavailable"),
                 }
                 tokio::time::sleep(retry).await;
                 retry = (retry * 2).min(LAST_RETRY);

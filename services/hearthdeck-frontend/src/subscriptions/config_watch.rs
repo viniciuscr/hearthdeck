@@ -24,7 +24,7 @@ pub fn config_watch(name: &'static str, version: u64) -> Subscription<Vec<String
             let config = match Config::new(name, version) {
                 Ok(config) => config,
                 Err(error) => {
-                    log::warn!("config source {name} unavailable: {error:?}");
+                    tracing::warn!(source = name, ?error, "config source unavailable");
                     return;
                 }
             };
@@ -39,7 +39,7 @@ pub fn config_watch(name: &'static str, version: u64) -> Subscription<Vec<String
                 // the underlying watch open.
                 Ok(watcher) => watcher,
                 Err(error) => {
-                    log::warn!("config source {name} could not be watched: {error:?}");
+                    tracing::warn!(source = name, ?error, "config source could not be watched");
                     return;
                 }
             };

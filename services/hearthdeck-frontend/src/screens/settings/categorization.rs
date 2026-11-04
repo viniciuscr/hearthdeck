@@ -60,7 +60,7 @@ impl State {
             }
             Message::ActionFinished(result) => {
                 if let Err(error) = result {
-                    log::warn!("categorization action failed: {error}");
+                    tracing::warn!(%error, "categorization action failed");
                     self.notice = Some(error);
                 }
                 Effect::Reload
@@ -68,14 +68,14 @@ impl State {
             Message::Loaded(result) => {
                 match result {
                     Ok(snapshot) => self.snapshot = Some(*snapshot),
-                    Err(error) => log::warn!("categorization read failed: {error}"),
+                    Err(error) => tracing::warn!(%error, "categorization read failed"),
                 }
                 Effect::Nothing
             }
             Message::CapabilityLoaded(result) => {
                 match result {
                     Ok(capable) => self.capable = Some(capable),
-                    Err(error) => log::warn!("health read failed: {error}"),
+                    Err(error) => tracing::warn!(%error, "health read failed"),
                 }
                 Effect::Nothing
             }
