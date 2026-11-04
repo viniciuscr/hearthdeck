@@ -75,6 +75,15 @@ clearing settings. Direct token saves retain pending approval and their existing
 bad-request error mapping. The underlying device flow still owns poll throttling
 and expiry; this boundary does not change its concurrent-request semantics.
 
+`stremio/control.rs` owns connection reads, link creation, approved-session
+persistence and unlink sequencing. It borrows the session repository, pending link
+and catalog; HTTP only maps credential-free responses and typed errors. Unlink
+cancels pending approval, clears the session, then removes account-owned
+`stremio` rows. Public `stremio-arrivals` rows remain. Link completion retains
+its existing gateway-error mapping even for persistence failures; settings and
+unlink failures remain internal errors. Link codes are not logged. The underlying
+link state still owns expiry and polling, with unchanged concurrency semantics.
+
 ## Platform Adaptation Rules
 
 Hearthdeck targets Linux only. Platform-specific behavior still terminates at an

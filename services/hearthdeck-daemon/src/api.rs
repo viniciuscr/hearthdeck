@@ -38,7 +38,10 @@ use crate::{
         BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
     },
     state::SharedState,
-    stremio::{self, LinkOffer, LinkPoll, StremioConnection},
+    stremio::{
+        LinkOffer, StremioConnection,
+        control::{ControlError as StremioControlError, LinkStatus as StremioLinkResponse},
+    },
 };
 
 pub fn router(state: SharedState) -> Router {
@@ -595,103 +598,39 @@ async fn poll_romm_link(
         .map_err(ApiError::from)
 }
 
-/// The pending-link poll's answer.
-///
-/// Tagged by `status`, so a client cannot read the fields of the wrong case, and
-/// carrying the session key in none of them: a linked account says that it
-/// linked, and the credential stays inside the daemon.
-#[derive(Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-enum StremioLinkResponse {
-    /// No link is pending: never asked for, or already resolved.
-    Idle,
-    /// The window closed while the user was still deciding.
-    Expired,
-    /// Waiting on the user, who is approving the code on another device.
-    Waiting {
-        code: String,
-        link: String,
-        qr: String,
-        seconds_left: u64,
-    },
-    /// Linked and stored. The connection is the credential-free view of it.
-    Linked { connection: StremioConnection },
-}
-
-/// Asks Stremio for a link code and holds it as the pending link.
-///
-/// The user approves the code on a device where they are already signed in, which
-/// is why no endpoint here accepts a password: there is nothing to encrypt but the
-/// key that comes back, and nothing to store but that key.
 async fn start_stremio_link(State(state): State<SharedState>) -> Result<Json<LinkOffer>, ApiError> {
-    let offer = stremio::request_link()
+    state
+        .stremio_connection()
+        .start_link()
         .await
-        .map_err(ApiError::stremio_link)?;
-    info!(code = %offer.code, "stremio link code issued");
-    state.stremio_link.start(offer.clone()).await;
-    Ok(Json(offer))
+        .map(Json)
+        .map_err(ApiError::from)
 }
 
-/// One poll of the pending link.
-///
-/// The session key is stored here and goes no further: the response reports that
-/// the account linked, and says nothing about the credential.
 async fn poll_stremio_link(
     State(state): State<SharedState>,
 ) -> Result<Json<StremioLinkResponse>, ApiError> {
-    let response = match state
-        .stremio_link
-        .poll()
+    state
+        .stremio_connection()
+        .poll_link()
         .await
-        .map_err(ApiError::stremio_link)?
-    {
-        LinkPoll::Idle => StremioLinkResponse::Idle,
-        LinkPoll::Expired => StremioLinkResponse::Expired,
-        LinkPoll::Waiting(offer, seconds_left) => StremioLinkResponse::Waiting {
-            code: offer.code,
-            link: offer.link,
-            qr: offer.qr,
-            seconds_left,
-        },
-        LinkPoll::Linked(auth_key) => {
-            let connection = state
-                .stremio
-                .save_session(&auth_key)
-                .await
-                .map_err(ApiError::stremio_link)?;
-            info!("stremio account linked");
-            StremioLinkResponse::Linked { connection }
-        }
-    };
-    Ok(Json(response))
+        .map(Json)
+        .map_err(ApiError::from)
 }
 
 async fn get_stremio_settings(
     State(state): State<SharedState>,
 ) -> Result<Json<Option<StremioConnection>>, ApiError> {
     state
-        .stremio
-        .connection()
+        .stremio_connection()
+        .settings()
         .await
         .map(Json)
-        .map_err(ApiError::internal)
+        .map_err(ApiError::from)
 }
 
-/// Unlinks the account, and takes the catalog rows with it.
-///
-/// Both halves matter. A session that is gone while its rows survive would leave a
-/// Continue Watching rail listing somebody's unfinished films on a box where
-/// nobody is linked — so the pending link is dropped first, then the session, then
-/// the source's rows (the decision recorded in `docs/stremio-integration.md`).
 async fn unlink_stremio(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
-    state.stremio_link.cancel().await;
-    state.stremio.clear().await.map_err(ApiError::internal)?;
-    state
-        .catalog
-        .replace_source(stremio::SOURCE_ID, Vec::new())
-        .await
-        .map_err(ApiError::internal)?;
-    info!("stremio account unlinked");
+    state.stremio_connection().clear().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1430,6 +1369,16 @@ impl From<RommControlError> for ApiError {
     }
 }
 
+impl From<StremioControlError> for ApiError {
+    fn from(error: StremioControlError) -> Self {
+        match error {
+            StremioControlError::Link(error) => Self::stremio_link(error),
+            StremioControlError::Storage(error) => Self::internal(error),
+            StremioControlError::Catalog(error) => Self::internal(error),
+        }
+    }
+}
+
 impl ApiError {
     fn unauthorized() -> Self {
         Self {
@@ -1710,6 +1659,31 @@ mod tests {
         )));
         assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!error.message.contains("private path"));
+    }
+
+    #[test]
+    fn stremio_connection_errors_keep_existing_http_responses() {
+        for (error, status, message) in [
+            (
+                super::StremioControlError::Link(anyhow::anyhow!("link failed")),
+                StatusCode::BAD_GATEWAY,
+                "link failed",
+            ),
+            (
+                super::StremioControlError::Storage(anyhow::anyhow!("private path")),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal error",
+            ),
+            (
+                super::StremioControlError::Catalog(sqlx::Error::PoolClosed),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal error",
+            ),
+        ] {
+            let error = super::ApiError::from(error);
+            assert_eq!(error.status, status);
+            assert_eq!(error.message, message);
+        }
     }
 
     #[test]

@@ -46,6 +46,14 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn stremio_connection(&self) -> crate::stremio::control::Control<'_> {
+        crate::stremio::control::Control {
+            session: &self.stremio,
+            link: &self.stremio_link,
+            catalog: &self.catalog,
+        }
+    }
+
     pub fn romm_connection(&self) -> crate::romm_link::control::Control<'_> {
         crate::romm_link::control::Control {
             settings: &self.settings,
