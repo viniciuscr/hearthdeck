@@ -3564,10 +3564,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "evdev",
+ "hearthdeck-observability",
  "hearthdeck-protocol",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -3588,11 +3588,11 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "hearthdeck-client",
+ "hearthdeck-observability",
  "libcosmic",
  "reqwest 0.12.28",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "xkbcommon 0.9.0",
 ]
 

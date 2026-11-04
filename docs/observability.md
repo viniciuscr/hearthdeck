@@ -2,8 +2,9 @@
 
 ## Logging Model
 
-Services use Rust `tracing`, not ad hoc prints. Daemon, bridge, AI and frontend
-use `hearthdeck-observability` for logging setup. Each writes one event per line;
+Services use Rust `tracing`, not ad hoc prints. Daemon, bridge, AI, frontend,
+input and overlay use `hearthdeck-observability` for logging setup.
+Each writes one event per line;
 systemd captures service output in the user journal.
 
 `hearthdeck-log.service` also writes the current session's daemon, bridge,
@@ -17,6 +18,10 @@ is truncated when `hearthdeck.target` starts so it stays scoped to one session.
   catalog counts and error fields. For debug output use
   `RUST_LOG=hearthdeck_frontend=debug`. JSON and pretty output use the same
   `HEARTHDECK_LOG_FORMAT` setting as the backend.
+- Input and overlay use the same JSON/pretty formats. Without `RUST_LOG`,
+  input retains its error-only filter and overlay retains
+  `warn,hearthdeck_overlay=info` (debug device rescans stay off). The packaged
+  input service already sets `RUST_LOG=hearthdeck_input=info`.
 - Service identity: systemd assigns `SYSLOG_IDENTIFIER` as `hearthdeck-daemon` or
   `hearthdeck-bridge`.
 

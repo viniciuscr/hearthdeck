@@ -15,7 +15,6 @@ use tokio::net::UnixDatagram;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
-use tracing_subscriber::EnvFilter;
 
 use crate::mapping::{Control, Mapper, OutputEvent, OutputKey};
 
@@ -48,9 +47,7 @@ enum DeviceMessage {
 }
 
 pub async fn run() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    init_logging();
 
     let socket_path = paths::input_socket_path().context("XDG_RUNTIME_DIR is not set")?;
     let socket = bind_control_socket(&socket_path)?;
@@ -140,6 +137,10 @@ pub async fn run() -> Result<()> {
     emit(&mut output, mapper.set_active(false))?;
     let _ = std::fs::remove_file(socket_path);
     Ok(())
+}
+
+fn init_logging() {
+    hearthdeck_observability::init("hearthdeck-input", "error");
 }
 
 fn osk_chord(
@@ -440,6 +441,55 @@ mod tests {
     use evdev::KeyCode;
 
     use super::{AxisRange, normalize_centered, normalize_trigger, osk_chord};
+
+    #[test]
+    fn shared_logging_preserves_filters_and_supports_both_formats() {
+        const CHILD: &str = "HEARTHDECK_INPUT_LOGGING_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            super::init_logging();
+            tracing::error!(probe = true, "input error probe");
+            tracing::info!("input info probe");
+            return;
+        }
+        for (format, filter, info_visible) in [
+            ("default", None, false),
+            ("json", Some("hearthdeck_input=info"), true),
+            ("pretty", Some("hearthdeck_input=info"), true),
+        ] {
+            let mut command =
+                std::process::Command::new(std::env::current_exe().expect("test executable"));
+            command
+                .args([
+                    "--exact",
+                    "linux::tests::shared_logging_preserves_filters_and_supports_both_formats",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env_remove("RUST_LOG")
+                .env_remove("HEARTHDECK_LOG_FORMAT");
+            if format != "default" {
+                command.env("HEARTHDECK_LOG_FORMAT", format);
+            }
+            if let Some(filter) = filter {
+                command.env("RUST_LOG", filter);
+            }
+            let output = command.output().expect("logging child");
+            assert!(output.status.success(), "{format}: {output:?}");
+            let logs = String::from_utf8(output.stdout).expect("UTF-8 logs");
+            assert!(logs.contains("input error probe"), "{format}: {logs}");
+            assert_eq!(logs.contains("input info probe"), info_visible, "{logs}");
+            if format == "pretty" {
+                assert!(!logs.lines().any(|line| line.starts_with('{')), "{logs}");
+            } else {
+                let event = logs
+                    .lines()
+                    .find(|line| line.starts_with('{') && line.contains("input error probe"))
+                    .expect("JSON probe");
+                assert!(event.contains("\"probe\":true"), "{event}");
+                assert!(event.contains("\"level\":\"ERROR\""), "{event}");
+            }
+        }
+    }
 
     #[test]
     fn guide_and_x_toggle_the_osk_only_when_enabled() {
