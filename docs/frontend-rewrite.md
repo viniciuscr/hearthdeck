@@ -81,6 +81,10 @@ the cruft inherited from the project this started from.
   The shell maps them to its existing search, navigation, text-entry and filter
   routes; the view does not depend on the App message enum. Controller routes
   and global Back stay shared.
+- **Library grid emits local events.** Tile presses, context presses and viewport
+  reports belong to `screens/library/grid.rs`; the shell maps them to shared
+  launch/menu/paging routes. Scroll tasks are message-generic widget operations,
+  so the grid no longer imports the App message enum.
 - **Library menu actions are not widgets.** `screens/library/context_menu.rs`
   defines ordered actions and their labels. Rendering, controller row counts
   and confirmation share the same actions; counting or confirming does not
