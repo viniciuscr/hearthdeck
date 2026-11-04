@@ -219,6 +219,7 @@ pub enum Message {
     /// A navigation event, from the pad or from the keyboard - both speak this
     /// one vocabulary, so there is a single place that moves the cursor.
     GamepadEvent(GamepadEvent),
+    BrokerInput(hearthdeck_protocol::input::Event),
     /// Walk the chrome one stop forward or back, which is the keyboard's way to
     /// what the pad reaches by a button.
     ChromeNext,
@@ -474,6 +475,7 @@ pub struct App {
     launch_state: LaunchState,
     /// Who owns input: the frontend, a launch in flight, or a running session.
     input_ownership: InputOwnership,
+    broker_error: Option<String>,
     /// The console game's details screen. Seeded when it opens, and kept until
     /// its fade out of view has run: the fade draws the page it is leaving, so
     /// the state outlives the page by exactly that long.
@@ -557,6 +559,8 @@ impl Application for App {
             grid_restore_pending: false,
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
+            broker_error: hearthdeck_protocol::input::broker_enabled()
+                .then(|| "Connecting to controller broker...".into()),
             details: None,
             retries: refresh::Retries::default(),
         };
@@ -899,6 +903,21 @@ impl Application for App {
                 // draws - so the page has to be the library first.
                 return self.focus_search();
             }
+            Message::BrokerInput(event) => {
+                use hearthdeck_protocol::input::Event;
+                match event {
+                    Event::Ready => self.broker_error = None,
+                    Event::Failed(error) => {
+                        tracing::warn!(%error, "controller broker failure");
+                        self.broker_error = Some(error);
+                    }
+                    Event::Action(action) => {
+                        if let Some(event) = crate::subscriptions::broker::navigation(action) {
+                            return self.update(Message::GamepadEvent(event));
+                        }
+                    }
+                }
+            }
             Message::GamepadEvent(event) => {
                 // A text field owns the caret, so the on-screen keyboard is up
                 // and the pad is how its keys get pressed. Nothing else reaches
@@ -1050,6 +1069,12 @@ impl Application for App {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
+        if let Some(error) = &self.broker_error {
+            return cosmic::widget::column(Vec::new())
+                .push(cosmic::widget::text::body(error))
+                .push(self.view_page(self.page))
+                .into();
+        }
         // A fade-through draws both sides: the page being left until the
         // midpoint, the page being arrived at from there. `PageTransition` paints
         // only the near side of the swap each frame.
@@ -1074,7 +1099,24 @@ impl Application for App {
         // vocabulary: a step is a step whichever made it. Neither is acted on
         // while something else owns the screen - the update arm drops events
         // then - so there is nothing to gate here.
-        let navigation = gamepad_events().map(Message::GamepadEvent);
+        let navigation = if hearthdeck_protocol::input::broker_enabled() {
+            use hearthdeck_protocol::input::Delivery;
+            let delivery = if self.text_entry.is_active() {
+                Delivery::TextEntry
+            } else if self.input_ownership.frontend_has_control() || self.romm.sign_in.is_some() {
+                Delivery::Frontend
+            } else if matches!(
+                self.input_ownership,
+                InputOwnership::Launching | InputOwnership::Checking
+            ) {
+                Delivery::Handoff
+            } else {
+                Delivery::Observe
+            };
+            crate::subscriptions::broker::events(delivery).map(Message::BrokerInput)
+        } else {
+            gamepad_events().map(Message::GamepadEvent)
+        };
         let daemon = daemon_events(self.daemon_client.clone()).map(Message::DaemonChanged);
         // Only the primary window drives the layout; dialogs are separate
         // surfaces and must not overwrite the width.

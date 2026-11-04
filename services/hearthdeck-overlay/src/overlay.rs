@@ -7,7 +7,6 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use cosmic::Element;
 use cosmic::app::{Core, Settings, Task};
 use cosmic::cctk::sctk::shell::wlr_layer::Layer;
 use cosmic::iced::futures::channel::mpsc::Sender;
@@ -22,6 +21,7 @@ use cosmic::iced::stream;
 use cosmic::iced::{Alignment, Color, Length, Subscription, window};
 use cosmic::surface::action::{LiveSettings, app_layer_shell};
 use cosmic::widget::{column, container, list, list_column, text};
+use cosmic::{Application, Element};
 use futures_util::SinkExt;
 use tokio::net::UnixDatagram;
 use tracing::{error, info, warn};
@@ -191,6 +191,7 @@ fn init_logging() {
 
 #[derive(Debug, Clone)]
 enum Message {
+    BrokerInput(hearthdeck_protocol::input::Event),
     ToggleOverlay,
     NavigateUp,
     NavigateDown,
@@ -237,6 +238,8 @@ struct Overlay {
     window_id: window::Id,
     state: OverlayState,
     client: hearthdeck_client::Client,
+    broker_requested: bool,
+    broker_error: Option<String>,
 }
 
 impl cosmic::Application for Overlay {
@@ -259,25 +262,37 @@ impl cosmic::Application for Overlay {
             window_id: window::Id::unique(),
             state: OverlayState::default(),
             client,
+            broker_requested: false,
+            broker_error: None,
         };
         (app, Task::none())
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
+        let controller = if hearthdeck_protocol::input::broker_enabled() {
+            crate::broker_input::subscription(self.broker_requested).map(Message::BrokerInput)
+        } else {
             input::subscription(self.state.visible).map(|event| match event {
                 input::GamepadEvent::ToggleOverlay => Message::ToggleOverlay,
                 input::GamepadEvent::NavigateUp => Message::NavigateUp,
                 input::GamepadEvent::NavigateDown => Message::NavigateDown,
                 input::GamepadEvent::Activate => Message::Activate,
-            }),
+            })
+        };
+        Subscription::batch([
+            controller,
             toggle_subscription().map(|()| Message::ToggleOverlay),
         ])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::BrokerInput(event) => self.broker_input(event),
             Message::ToggleOverlay => {
+                if hearthdeck_protocol::input::broker_enabled() && !self.state.visible {
+                    self.broker_requested = !self.broker_requested;
+                    return Task::none();
+                }
                 let effect = self.state.update(Event::Toggle);
                 self.apply_effect(effect)
             }
@@ -357,52 +372,65 @@ impl cosmic::Application for Overlay {
         let cosmic = theme.cosmic();
         let spacing = cosmic.spacing;
 
-        let menu: Element<'_, Message> = match self.state.status {
-            Status::Menu => {
-                let mut items = list_column();
-                for (index, (label, message)) in MENU_ITEMS.iter().enumerate() {
-                    items = items.add(
-                        list::button(text::body(*label))
-                            .on_press(message.clone())
-                            .selected(index == self.state.selected),
-                    );
+        let menu: Element<'_, Message> = if let Some(error) = &self.broker_error {
+            column(vec![
+                text::title2("Controller input unavailable").into(),
+                text::body(error).into(),
+                list_column()
+                    .add(
+                        list::button(text::body("Dismiss with keyboard or mouse"))
+                            .on_press(Message::ResumeApp),
+                    )
+                    .into(),
+            ])
+        } else {
+            match self.state.status {
+                Status::Menu => {
+                    let mut items = list_column();
+                    for (index, (label, message)) in MENU_ITEMS.iter().enumerate() {
+                        items = items.add(
+                            list::button(text::body(*label))
+                                .on_press(message.clone())
+                                .selected(index == self.state.selected),
+                        );
+                    }
+                    column(vec![text::title2("Hearthdeck").into(), items.into()])
                 }
-                column(vec![text::title2("Hearthdeck").into(), items.into()])
-            }
-            // No menu while closing or logging out: the pending action is
-            // already committed to whatever was active when it was pressed,
-            // and navigating/activating here wouldn't affect it either way.
-            Status::Closing => column(vec![text::title2("Closing app\u{2026}").into()]),
-            Status::LoggingOut => column(vec![text::title2("Logging out\u{2026}").into()]),
-            Status::CloseFailed => {
-                let mut items = list_column();
-                for (index, (label, message)) in CLOSE_FAILED_ITEMS.iter().enumerate() {
-                    items = items.add(
-                        list::button(text::body(*label))
-                            .on_press(message.clone())
-                            .selected(index == self.state.selected),
-                    );
+                // No menu while closing or logging out: the pending action is
+                // already committed to whatever was active when it was pressed,
+                // and navigating/activating here wouldn't affect it either way.
+                Status::Closing => column(vec![text::title2("Closing app\u{2026}").into()]),
+                Status::LoggingOut => column(vec![text::title2("Logging out\u{2026}").into()]),
+                Status::CloseFailed => {
+                    let mut items = list_column();
+                    for (index, (label, message)) in CLOSE_FAILED_ITEMS.iter().enumerate() {
+                        items = items.add(
+                            list::button(text::body(*label))
+                                .on_press(message.clone())
+                                .selected(index == self.state.selected),
+                        );
+                    }
+                    column(vec![
+                        text::title2("Could not close app").into(),
+                        text::body("The app is still running.").into(),
+                        items.into(),
+                    ])
                 }
-                column(vec![
-                    text::title2("Could not close app").into(),
-                    text::body("The app is still running.").into(),
-                    items.into(),
-                ])
-            }
-            Status::LogOutFailed => {
-                let mut items = list_column();
-                for (index, (label, message)) in LOG_OUT_FAILED_ITEMS.iter().enumerate() {
-                    items = items.add(
-                        list::button(text::body(*label))
-                            .on_press(message.clone())
-                            .selected(index == self.state.selected),
-                    );
+                Status::LogOutFailed => {
+                    let mut items = list_column();
+                    for (index, (label, message)) in LOG_OUT_FAILED_ITEMS.iter().enumerate() {
+                        items = items.add(
+                            list::button(text::body(*label))
+                                .on_press(message.clone())
+                                .selected(index == self.state.selected),
+                        );
+                    }
+                    column(vec![
+                        text::title2("Could not log out").into(),
+                        text::body("The session is still running.").into(),
+                        items.into(),
+                    ])
                 }
-                column(vec![
-                    text::title2("Could not log out").into(),
-                    text::body("The session is still running.").into(),
-                    items.into(),
-                ])
             }
         }
         // A small, theme-scaled gap between the heading and the list, rather
@@ -599,11 +627,50 @@ fn is_session_client(exe: &Path) -> bool {
 }
 
 impl Overlay {
+    fn broker_input(&mut self, event: hearthdeck_protocol::input::Event) -> Task<Message> {
+        use hearthdeck_protocol::input::{Action, Event as BrokerEvent};
+        match event {
+            BrokerEvent::Ready if self.broker_requested && !self.state.visible => {
+                self.broker_error = None;
+                let effect = self.state.update(Event::Toggle);
+                self.apply_effect(effect)
+            }
+            BrokerEvent::Ready => Task::none(),
+            BrokerEvent::Failed(error) => {
+                warn!(%error, "controller broker failure");
+                let was_requested = self.broker_requested;
+                self.broker_requested = false;
+                self.broker_error = Some(error);
+                if !self.state.visible && was_requested {
+                    let effect = self.state.update(Event::Toggle);
+                    self.apply_effect(effect)
+                } else {
+                    Task::none()
+                }
+            }
+            BrokerEvent::Action(Action::ToggleOverlay) => self.update(Message::ToggleOverlay),
+            BrokerEvent::Action(action) if self.broker_requested && self.broker_error.is_none() => {
+                match action {
+                    Action::MoveUp => self.update(Message::NavigateUp),
+                    Action::MoveDown => self.update(Message::NavigateDown),
+                    Action::Confirm => self.update(Message::Activate),
+                    Action::Back => self.update(Message::ResumeApp),
+                    _ => Task::none(),
+                }
+            }
+            BrokerEvent::Action(_) => Task::none(),
+        }
+    }
+
     fn apply_effect(&mut self, effect: Effect) -> Task<Message> {
         match effect {
             Effect::None => Task::none(),
             Effect::Show => self.show(),
-            Effect::Hide => self.hide(),
+            Effect::Hide => {
+                self.broker_requested = false;
+                self.broker_error = None;
+                self.hide()
+            }
             Effect::StopApplication => {
                 let client = self.client.clone();
                 cosmic::task::future(async move {
@@ -661,6 +728,35 @@ mod tests {
         SESSION_CLIENTS, TOGGLE_MESSAGE, is_session_client, is_toggle_message, send_toggle_to,
         wayland_socket_path,
     };
+
+    #[test]
+    fn broker_capture_is_acknowledged_before_showing_an_interactive_menu() {
+        use cosmic::app::Core;
+        use cosmic::iced::window;
+        use hearthdeck_protocol::input::{Action, Event};
+        let mut overlay = super::Overlay {
+            core: Core::default(),
+            window_id: window::Id::unique(),
+            state: crate::state::OverlayState::default(),
+            client: hearthdeck_client::Client::new(
+                reqwest::Client::new(),
+                String::new(),
+                String::new(),
+                "test",
+            ),
+            broker_requested: true,
+            broker_error: None,
+        };
+        assert!(!overlay.state.visible);
+        let _ = overlay.broker_input(Event::Ready);
+        assert!(overlay.state.visible);
+        let selected = overlay.state.selected;
+        let _ = overlay.broker_input(Event::Failed("grab failed".into()));
+        assert!(!overlay.broker_requested);
+        assert_eq!(overlay.broker_error.as_deref(), Some("grab failed"));
+        let _ = overlay.broker_input(Event::Action(Action::MoveDown));
+        assert_eq!(overlay.state.selected, selected);
+    }
 
     #[test]
     fn shared_logging_preserves_filters_and_supports_both_formats() {

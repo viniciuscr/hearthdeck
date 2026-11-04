@@ -62,6 +62,7 @@ fn shell() -> App {
         grid_restore_pending: false,
         launch_state: LaunchState::default(),
         input_ownership: InputOwnership::default(),
+        broker_error: None,
         details: None,
         retries: super::refresh::Retries::default(),
     }
@@ -783,6 +784,24 @@ fn back_dismisses_the_keyboard_even_when_the_window_lost_focus() {
         Page::Library,
         "dismissing the keyboard also left the page"
     );
+}
+
+#[test]
+fn broker_back_uses_global_back_and_failure_is_visible_until_reconnected() {
+    use hearthdeck_protocol::input::{Action, Event};
+    let mut app = showing(12);
+    app.input_ownership
+        .update(InputEvent::SessionObserved(false));
+    let _ = app.update(Message::TextFieldFocused(Field::RommPassword));
+    let _ = app.update(Message::BrokerInput(Event::Action(Action::Back)));
+    assert!(!app.text_entry.is_active());
+    assert_eq!(app.page, Page::Library);
+    let _ = app.update(Message::BrokerInput(Event::Failed(
+        "test broker failure".into(),
+    )));
+    assert_eq!(app.broker_error.as_deref(), Some("test broker failure"));
+    let _ = app.update(Message::BrokerInput(Event::Ready));
+    assert_eq!(app.broker_error, None);
 }
 
 /// A blur names its field: the one the user already left cannot take the caret
