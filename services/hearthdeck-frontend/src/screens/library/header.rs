@@ -17,6 +17,7 @@ use cosmic::iced::alignment::Vertical;
 use cosmic::theme::{self, TextInput};
 use cosmic::widget::{Id, button, column, container, row, scrollable, space, text, text_input};
 
+use super::filters;
 use crate::app::Message;
 use crate::app_group::{AppGroup, Section, SectionUi};
 use crate::fl;
@@ -285,7 +286,7 @@ pub fn view(header: Header<'_>) -> Element<'_, Message> {
         .width(Length::Fixed(FILTER_BUTTON_MIN_WIDTH))
         .class(control_button_class(header.filter_active > 0))
         .id(filter_button_id())
-        .on_press(Message::ToggleFilterPanel);
+        .on_press(Message::Filters(filters::Message::Toggle));
 
         controls = controls.push(filter_button);
     }

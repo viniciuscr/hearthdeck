@@ -7,10 +7,9 @@ use cosmic::widget::text_input;
 
 use crate::app::animation::ScrollTarget;
 use crate::app_group::{Section, SectionUi};
-use crate::providers::filter::cycle;
 use crate::screens::dashboard;
 use crate::screens::library::focus::{Chrome, Confirm, Direction, Outcome};
-use crate::screens::library::{focus, grid, header, sidebar};
+use crate::screens::library::{filters, focus, grid, header, sidebar};
 use crate::screens::settings::romm;
 use crate::subscriptions::gamepad::GamepadEvent;
 use crate::text_entry::Field;
@@ -73,7 +72,7 @@ impl App {
             GamepadEvent::NextTab => self.switch_tab(1),
             // The drawer is a surface over the grid rather than a place in it,
             // so it has its own button instead of being walked to.
-            GamepadEvent::FilterPanel => self.update(Message::ToggleFilterPanel),
+            GamepadEvent::FilterPanel => self.update_filters(filters::Message::Toggle),
         }
     }
 
@@ -121,7 +120,9 @@ impl App {
             }
             // Sideways on a row is that row's own control: the value steps and
             // the cursor stays where the user is looking.
-            Outcome::FilterValue { row, delta } => self.cycle_facet(row, delta),
+            Outcome::FilterValue { row, delta } => {
+                self.update_filters(filters::Message::Cycle { row, delta })
+            }
             Outcome::Stayed => Task::none(),
         }
     }
@@ -150,7 +151,9 @@ impl App {
             Confirm::Tile(index) => self.update(Message::Activate(index)),
             // A pad whose left and right do not work still has to be able to
             // change a facet, so confirming a row steps it forward.
-            Confirm::Filter { row } => self.cycle_facet(row, 1),
+            Confirm::Filter { row } => {
+                self.update_filters(filters::Message::Cycle { row, delta: 1 })
+            }
             Confirm::Chrome(chrome) => self.activate_chrome(chrome),
             Confirm::Nothing => Task::none(),
         }
@@ -170,24 +173,8 @@ impl App {
             // which is the numbering the header and the ring share.
             Chrome::Tab(index) => self.update(Message::SelectGroup(index.checked_sub(1))),
             Chrome::Search => self.focus_search(),
-            Chrome::FilterButton => self.update(Message::ToggleFilterPanel),
+            Chrome::FilterButton => self.update_filters(filters::Message::Toggle),
         }
-    }
-
-    /// Steps the facet drawn on `row` through its values, which is what the
-    /// drawer's own arrows do.
-    pub(super) fn cycle_facet(&mut self, row: usize, delta: i32) -> Task<Message> {
-        let Some(facet) = self.facets.get(row) else {
-            return Task::none();
-        };
-        let current = self.facet_selection.get(&facet.id).map(String::as_str);
-        let value = cycle(facet, current, delta);
-        // The same message the drawer's arrows send, so a pad-driven selection
-        // and a clicked one cannot drift apart.
-        self.update(Message::SelectFacet {
-            facet: facet.id.clone(),
-            value,
-        })
     }
 
     /// The X button: what the user can do with what the cursor is on.
@@ -208,8 +195,8 @@ impl App {
         // clear every facet without travelling to a button for it. The clear
         // action is deliberately not a cursor row, so the cursor never has to
         // walk to it.
-        if self.filter_open {
-            return self.update(Message::ClearFilters);
+        if self.filters.is_open() {
+            return self.update_filters(filters::Message::Clear);
         }
         // A console game's own screen answers "what can I do with this": Run,
         // favorite, play later and every file of a multi-disc game live there,
@@ -262,8 +249,8 @@ impl App {
         // grid behind it, and the pad goes back to the tile it left - which the
         // cursors kept, because the drawer has a row of its own rather than
         // being a place in the grid.
-        if self.filter_open {
-            return self.update(Message::CloseFilterPanel);
+        if self.filters.is_open() {
+            return self.update_filters(filters::Message::Close);
         }
         // The details screen is a place of its own, over the grid it was opened
         // from: Back leaves it for that grid rather than past it, and closes
@@ -404,7 +391,7 @@ impl App {
     /// dashboard remembers each rail's offset.
     pub(super) fn reveal_tab(&mut self, index: usize) -> Task<Message> {
         let widths = header::tab_widths(self.cur_section, self.tabs.get(self.cur_section));
-        let viewport = header::tab_viewport(self.window_width, !self.facets.is_empty());
+        let viewport = header::tab_viewport(self.window_width, !self.filters.facets().is_empty());
         let from = self.tabs_offset;
         let Some(offset) = header::tab_scroll_target(&widths, index, from, viewport) else {
             return Task::none();

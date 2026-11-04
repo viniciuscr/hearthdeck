@@ -86,8 +86,13 @@ the cruft inherited from the project this started from.
   catalog they already hold, and filter in memory (`filtered_by_facets`); the
   console grid filters through the daemon query. Same `Facet` type, same
   `screens/library/filters.rs` sidebar (opened by the header's Filter button via
-  `context_drawer`, one `◀ value ▶` row per facet) same `facet_selection` map —
-  the source is the only thing that differs. The filter surface is a button +
+  `context_drawer`, one `◀ value ▶` row per facet) and one selection map.
+  The drawer owns its facets, selection, open state and messages in
+  `screens/library/filters.rs`; clicks and controller steps use the same update.
+  It requests a refilter, and the shell chooses local filtering or a console
+  query. Section/tab changes reset the drawer; a connection change clears its
+  source without changing its open state. Back still closes it through the
+  global handler. The filter surface is a button +
   sidebar, matching the old console drawer, not a strip under the tabs.
 - **A filter dimension has to be a choice, not a filing cabinet.** Applications
   filter by *where they were installed* — Flatpak / Snap / Nix / System / Local,

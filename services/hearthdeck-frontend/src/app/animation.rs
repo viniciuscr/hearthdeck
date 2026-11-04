@@ -155,9 +155,7 @@ impl App {
         self.cur_section = section;
         self.cur_group = group;
         self.search_value.clear();
-        self.facet_selection.clear();
-        self.facets.clear();
-        self.filter_open = false;
+        self.filters.reset();
         // The strip holds a different section's tabs now, so it goes back to its
         // start rather than keeping the offset of a strip that no longer exists.
         let strip = self.reset_tab_strip();
@@ -167,7 +165,8 @@ impl App {
             self.refilter();
             Task::batch([self.ensure_console_scope(), self.load_facets()])
         } else {
-            self.rebuild_local_facets();
+            self.filters
+                .load_local_facets(self.cur_section, &self.catalog);
             self.refilter();
             self.list_replaced()
         };
@@ -181,14 +180,13 @@ impl App {
     /// [`App::apply_section`].
     pub(super) fn apply_group(&mut self, group: Option<usize>) -> Task<Message> {
         self.cur_group = group;
-        self.facet_selection.clear();
-        self.facets.clear();
-        self.filter_open = false;
+        self.filters.reset();
         let listed = if self.cur_section == Section::ConsoleGames {
             self.refilter();
             Task::batch([self.ensure_console_scope(), self.load_facets()])
         } else {
-            self.rebuild_local_facets();
+            self.filters
+                .load_local_facets(self.cur_section, &self.catalog);
             self.refilter();
             self.list_replaced()
         };

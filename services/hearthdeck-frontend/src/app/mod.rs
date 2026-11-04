@@ -22,7 +22,6 @@ mod navigation;
 mod refresh;
 mod settings_source;
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -41,7 +40,7 @@ use cosmic::widget::{Id, button, column, container, context_drawer, icon, row, s
 use cosmic::{Application, Element};
 
 use crate::app::animation::{Scrolls, section_direction, tab_direction};
-use crate::app_group::{AppLibraryConfig, RommFacet, Section, Sections, section_facets};
+use crate::app_group::{AppLibraryConfig, Section, Sections};
 use crate::fl;
 use crate::form_factor::{self, FormFactor};
 use crate::input_ownership::{Event as InputEvent, InputOwnership};
@@ -188,17 +187,7 @@ pub enum Message {
     /// keyboard, including the on-screen one. The shell decides what accepting
     /// means for each field, so no screen has to know the next step.
     TextFieldSubmitted(Field),
-    /// A filter chip was pressed: set (or clear) one facet's value.
-    SelectFacet {
-        facet: String,
-        value: Option<String>,
-    },
-    /// Open or close the filter sidebar.
-    ToggleFilterPanel,
-    /// The filter sidebar's own close control was used.
-    CloseFilterPanel,
-    /// Drop every facet selection.
-    ClearFilters,
+    Filters(filters::Message),
     /// A tile was pressed: launch the entry it names.
     Activate(usize),
     /// The menu's controller-compatibility row: turn the per-application
@@ -358,8 +347,8 @@ pub struct App {
     /// `fetch_console_page`); every other section is filtered in memory. Kept
     /// in state so `view` stays pure.
     visible: Vec<Arc<LibraryItem>>,
-    /// The facets the current source offers, and the selection keyed by facet id.
-    facets: Vec<Facet>,
+    /// The library drawer's facets, selection and local decisions.
+    filters: filters::State,
     /// The daemon's collections, in the order it composes them. The dashboard's
     /// rails are these, so a collection nobody wrote code for - which is what a
     /// feature's own categories, and so the AI's, are - appears without a
@@ -375,9 +364,6 @@ pub struct App {
     romm: settings::romm::Form,
     /// The emulator-readiness card's state.
     retro_readiness: settings::readiness::Flow,
-    facet_selection: BTreeMap<String, String>,
-    /// Whether the filter sidebar is open.
-    filter_open: bool,
     /// Which text field owns the caret, if one does, which is also what says
     /// the on-screen keyboard is up: focusing a field is what activates the
     /// input method. While a field has it the pad belongs to the keyboard -
@@ -505,10 +491,8 @@ impl Application for App {
             console: ConsoleScopes::default(),
             console_platforms: Vec::new(),
             visible: Vec::new(),
-            facets: Vec::new(),
+            filters: filters::State::default(),
             collections: Vec::new(),
-            facet_selection: BTreeMap::new(),
-            filter_open: false,
             text_entry: TextEntry::default(),
             menu: menu::State::default(),
             cur_section: Section::PcGames,
@@ -606,7 +590,8 @@ impl Application for App {
                 // from. Console Games is the exception - its tabs are the
                 // platforms the daemon reported (see `ConsolesLoaded`).
                 self.tabs.sync_category_groups(&self.catalog);
-                self.rebuild_local_facets();
+                self.filters
+                    .load_local_facets(self.cur_section, &self.catalog);
                 self.refilter();
                 return self.list_replaced();
             }
@@ -734,18 +719,7 @@ impl Application for App {
                     log::error!("facet fetch failed: {error}");
                     Vec::new()
                 });
-                // The daemon reports the facet ids; the labels are ours so they
-                // follow the locale, falling back to the source's own label for
-                // an id we do not know.
-                self.facets = facets
-                    .into_iter()
-                    .map(|mut facet| {
-                        if let Some(known) = RommFacet::from_id(&facet.id) {
-                            facet.label = known.name();
-                        }
-                        facet
-                    })
-                    .collect();
+                self.filters.load_console_facets(facets);
                 // The drawer's rows changed with them, so its cursor may be
                 // pointing past the end of the new list.
                 self.cursors = focus::clamp(self.cursors, self.layout());
@@ -802,38 +776,7 @@ impl Application for App {
             Message::TextFieldFocused(field) => self.text_entry.focus(field),
             Message::TextFieldBlurred(field) => self.text_entry.blur(field),
             Message::TextFieldSubmitted(field) => return self.submit_text_field(field),
-            Message::SelectFacet { facet, value } => {
-                match value {
-                    Some(value) => {
-                        self.facet_selection.insert(facet, value);
-                    }
-                    None => {
-                        self.facet_selection.remove(&facet);
-                    }
-                }
-                // The console grid is filtered by the source, so a selection
-                // re-queries; a locally-loaded section re-filters in memory.
-                if self.cur_section == Section::ConsoleGames {
-                    return self.ensure_console_scope();
-                }
-                self.refilter();
-                return self.list_replaced();
-            }
-            Message::ToggleFilterPanel => {
-                // The drawer is a surface over the grid, not a place in it:
-                // opening it gives it the pad, and closing it gives the pad back
-                // to the tile the user was on, because the cursors kept it.
-                self.filter_open = !self.filter_open;
-            }
-            Message::CloseFilterPanel => self.filter_open = false,
-            Message::ClearFilters => {
-                self.facet_selection.clear();
-                if self.cur_section == Section::ConsoleGames {
-                    return self.ensure_console_scope();
-                }
-                self.refilter();
-                return self.list_replaced();
-            }
+            Message::Filters(message) => return self.update_filters(message),
             Message::Activate(index) => return self.activate(index),
             Message::ToggleControllerCompatibility(index) => {
                 // Keyed on the entry's id rather than its tile index: the flag
@@ -1225,8 +1168,8 @@ impl App {
                 selected_group: self.cur_group,
                 groups: self.tabs.get(self.cur_section),
                 search_value: &self.search_value,
-                filter_active: self.facet_selection.len(),
-                show_filter: !self.facets.is_empty(),
+                filter_active: self.filters.selected().len(),
+                show_filter: !self.filters.facets().is_empty(),
             });
 
             let body: Element<'_, Message> = if self.visible.is_empty() {
@@ -1274,19 +1217,20 @@ impl App {
             // The filters live in a sidebar the header's own button toggles, the
             // way the console drawer did - one filter surface for every section,
             // driven by whatever facets the source reported, not a strip.
-            if self.filter_open && !self.facets.is_empty() {
+            if self.filters.is_open() && !self.filters.facets().is_empty() {
                 context_drawer(
                     Some(fl!("filter").into()),
                     None,
                     None,
                     None,
-                    Message::CloseFilterPanel,
+                    Message::Filters(filters::Message::Close),
                     page,
                     filters::view(filters::Filters {
-                        facets: &self.facets,
-                        selected: &self.facet_selection,
-                        cursor: self.filter_open.then_some(self.cursors.filter_row),
-                    }),
+                        facets: self.filters.facets(),
+                        selected: self.filters.selected(),
+                        cursor: self.filters.is_open().then_some(self.cursors.filter_row),
+                    })
+                    .map(Message::Filters),
                     filter_drawer_width(self.window_width),
                 )
                 .into()
@@ -1424,7 +1368,7 @@ impl App {
                 self.cur_group,
                 &self.search_value,
                 &self.catalog,
-                &self.facet_selection,
+                self.filters.selected(),
             );
         }
         // A menu belongs to a tile, and the tile it was opened on may no longer
@@ -1468,9 +1412,9 @@ impl App {
         Layout {
             sections: Section::ALL.len(),
             tabs: self.tabs.get(self.cur_section).len() + 1,
-            filter_button: !self.facets.is_empty(),
-            facets: self.facets.len(),
-            drawer_open: self.filter_open && !self.facets.is_empty(),
+            filter_button: !self.filters.facets().is_empty(),
+            facets: self.filters.facets().len(),
+            drawer_open: self.filters.is_open() && !self.filters.facets().is_empty(),
             tiles: self.visible.len(),
             columns: grid::metrics(self.window_width).columns,
         }
@@ -1558,11 +1502,16 @@ impl App {
         }
         Task::none()
     }
-    /// The locally-loaded sections derive their facets from the catalog they
-    /// show; only the console grid's come from the daemon.
-    fn rebuild_local_facets(&mut self) {
-        if self.cur_section != Section::ConsoleGames {
-            self.facets = section_facets(self.cur_section, &self.catalog);
+    fn update_filters(&mut self, message: filters::Message) -> Task<Message> {
+        match self.filters.update(message) {
+            filters::Effect::None => Task::none(),
+            filters::Effect::Refilter => {
+                if self.cur_section == Section::ConsoleGames {
+                    return self.ensure_console_scope();
+                }
+                self.refilter();
+                self.list_replaced()
+            }
         }
     }
     /// Puts the application at tile `index` in `form`, and remembers the choice.
@@ -1584,7 +1533,8 @@ impl App {
         if self.cur_group.is_some_and(|group| group >= tabs) {
             self.cur_group = None;
         }
-        self.rebuild_local_facets();
+        self.filters
+            .load_local_facets(self.cur_section, &self.catalog);
         self.refilter();
         self.focus_task()
     }
