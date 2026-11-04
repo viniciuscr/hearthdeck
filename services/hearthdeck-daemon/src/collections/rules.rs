@@ -1,3 +1,4 @@
+use futures_util::{StreamExt, stream};
 use hearthdeck_ai::categorization::{Taxonomy, rail_app_ids};
 use tracing::debug;
 
@@ -7,16 +8,20 @@ use crate::{
     catalog::CatalogStore,
     categorizer::CategorizationService,
     discovery::providers::stremio_arrivals,
+    romm,
+    settings::SettingsRepository,
     stremio,
 };
 
 pub(crate) const ENTRY_ID_PREFIX: &str = "hearthdeck:";
 const ITEM_LIMIT: u16 = 20;
+const ITEM_ICON_CONCURRENCY: usize = 8;
 
 pub(crate) struct RuleService<'a> {
     pub catalog: &'a CatalogStore,
     pub activity: &'a ActivityStore,
     pub categorization: Option<&'a CategorizationService>,
+    pub settings: &'a SettingsRepository,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -158,6 +163,42 @@ impl RuleService<'_> {
             })
             .collect())
     }
+
+    pub async fn with_item_icons(&self, items: Vec<CollectionItem>) -> Vec<CollectionItem> {
+        stream::iter(items)
+            .map(|mut item| async move {
+                if item.icon.is_none() {
+                    item.icon = self.stored_item_icon(&item.item_id).await;
+                }
+                item
+            })
+            .buffered(ITEM_ICON_CONCURRENCY)
+            .collect()
+            .await
+    }
+
+    async fn stored_item_icon(&self, item_id: &str) -> Option<String> {
+        if let Some(rom_id) = rom_id_from_item(item_id) {
+            return match romm::rom(self.settings, rom_id).await {
+                Ok(game) => hearthdeck_protocol::RetroGame::from(&game).cover_path,
+                Err(error) => {
+                    debug!(?error, rom_id, "could not resolve a rail item's RomM cover");
+                    None
+                }
+            };
+        }
+        let catalog_id = catalog_id_from_item(item_id)?;
+        match self.catalog.get(catalog_id).await {
+            Ok(item) => item.and_then(|item| item.icon),
+            Err(error) => {
+                debug!(
+                    ?error,
+                    item_id, "could not resolve a rail item's catalog icon"
+                );
+                None
+            }
+        }
+    }
 }
 
 fn played_collection_item(play: RecentActivity) -> CollectionItem {
@@ -172,10 +213,20 @@ fn played_collection_item(play: RecentActivity) -> CollectionItem {
     }
 }
 
+pub(crate) fn catalog_id_from_item(item_id: &str) -> Option<&str> {
+    item_id
+        .strip_prefix(ENTRY_ID_PREFIX)
+        .filter(|id| !id.is_empty())
+}
+
+pub(crate) fn rom_id_from_item(item_id: &str) -> Option<i64> {
+    item_id.strip_prefix("romm:")?.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{activity::ActivityEntry, database::Database};
+    use crate::{activity::ActivityEntry, database::Database, settings::SettingsRepository};
 
     #[test]
     fn a_resolved_play_rides_along_with_its_collection_item() {
@@ -210,10 +261,12 @@ mod tests {
         let catalog = CatalogStore::new(database.pool().clone());
         let activity = ActivityStore::new(database.pool().clone());
         let store = super::super::CollectionStore::new(database.pool().clone());
+        let settings = SettingsRepository::new(database.pool().clone());
         let service = RuleService {
             catalog: &catalog,
             activity: &activity,
             categorization: None,
+            settings: &settings,
         };
         let mut collection = store.collection("favorites").await.unwrap().unwrap();
         assert!(service.resolve(&collection).await.unwrap().is_none());
@@ -248,6 +301,7 @@ mod tests {
         let catalog = CatalogStore::new(database.pool().clone());
         let activity = ActivityStore::new(database.pool().clone());
         let store = super::super::CollectionStore::new(database.pool().clone());
+        let settings = SettingsRepository::new(database.pool().clone());
         let collection = store
             .collection(super::super::RULE_NEW_ARRIVALS)
             .await
@@ -259,6 +313,7 @@ mod tests {
             catalog: &catalog,
             activity: &activity,
             categorization: None,
+            settings: &settings,
         };
         assert!(matches!(
             service.resolve(&collection).await,
