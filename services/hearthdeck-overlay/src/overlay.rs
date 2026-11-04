@@ -186,21 +186,7 @@ fn socket_path() -> PathBuf {
 }
 
 fn init_logging() {
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::{EnvFilter, fmt};
-
-    // `hearthdeck_overlay=info`, not `=debug`: the Guide-button rescan runs every
-    // few seconds and would otherwise write a line to the session log on every
-    // pass. `RUST_LOG=hearthdeck_overlay=debug` turns the detail back on when it is
-    // actually wanted.
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(format!("warn,{}=info", env!("CARGO_CRATE_NAME"))));
-
-    tracing_subscriber::registry()
-        .with(fmt::layer().with_target(false))
-        .with(filter)
-        .init();
+    hearthdeck_observability::init("hearthdeck-overlay", "warn,hearthdeck_overlay=info");
 }
 
 #[derive(Debug, Clone)]
@@ -675,6 +661,63 @@ mod tests {
         SESSION_CLIENTS, TOGGLE_MESSAGE, is_session_client, is_toggle_message, send_toggle_to,
         wayland_socket_path,
     };
+
+    #[test]
+    fn shared_logging_preserves_filters_and_supports_both_formats() {
+        const CHILD: &str = "HEARTHDECK_OVERLAY_LOGGING_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            super::init_logging();
+            tracing::info!(probe = true, "overlay info probe");
+            tracing::debug!("overlay debug probe");
+            tracing::info!(target: "other_component", "other info probe");
+            tracing::warn!(target: "other_component", "other warning probe");
+            return;
+        }
+        for (format, filter, debug_visible) in [
+            ("default", None, false),
+            ("json", Some("warn,hearthdeck_overlay=debug"), true),
+            ("pretty", Some("warn,hearthdeck_overlay=debug"), true),
+        ] {
+            let mut command =
+                std::process::Command::new(std::env::current_exe().expect("test executable"));
+            command
+                .args([
+                    "--exact",
+                    "overlay::tests::shared_logging_preserves_filters_and_supports_both_formats",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env_remove("RUST_LOG")
+                .env_remove("HEARTHDECK_LOG_FORMAT");
+            if format != "default" {
+                command.env("HEARTHDECK_LOG_FORMAT", format);
+            }
+            if let Some(filter) = filter {
+                command.env("RUST_LOG", filter);
+            }
+            let output = command.output().expect("logging child");
+            assert!(output.status.success(), "{format}: {output:?}");
+            let logs = String::from_utf8(output.stdout).expect("UTF-8 logs");
+            assert!(logs.contains("overlay info probe"), "{format}: {logs}");
+            assert_eq!(
+                logs.contains("overlay debug probe"),
+                debug_visible,
+                "{logs}"
+            );
+            assert!(!logs.contains("other info probe"), "{logs}");
+            assert!(logs.contains("other warning probe"), "{logs}");
+            if format == "pretty" {
+                assert!(!logs.lines().any(|line| line.starts_with('{')), "{logs}");
+            } else {
+                let event = logs
+                    .lines()
+                    .find(|line| line.starts_with('{') && line.contains("overlay info probe"))
+                    .expect("JSON probe");
+                assert!(event.contains("\"probe\":true"), "{event}");
+                assert!(event.contains("\"level\":\"INFO\""), "{event}");
+            }
+        }
+    }
 
     #[test]
     fn toggle_command_reaches_the_overlay_control_socket() {

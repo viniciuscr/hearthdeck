@@ -10,6 +10,6 @@ anyhow.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = { version = "0.13", features = ["tokio"] }
 hearthdeck-protocol = { path = "../hearthdeck-protocol" }
+hearthdeck-observability = { path = "../hearthdeck-observability" }
 tokio.workspace = true
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing.workspace = true

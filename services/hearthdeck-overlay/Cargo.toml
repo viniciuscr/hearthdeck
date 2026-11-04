@@ -19,6 +19,7 @@ evdev = { version = "0.13", features = ["tokio"] }
 futures-channel = "0.3"
 futures-util = "0.3"
 hearthdeck-client = { path = "../hearthdeck-client" }
+hearthdeck-observability = { path = "../hearthdeck-observability" }
 reqwest.workspace = true
 # Bare URL, deliberately: cargo treats "git+URL" and "git+URL?rev=..." as different
 # sources, and cosmic-app-list-config requires this same bare URL. Any rev here
@@ -30,6 +31,5 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
   "tokio",
 ] }
 tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing.workspace = true
 xkbcommon = "0.9"
