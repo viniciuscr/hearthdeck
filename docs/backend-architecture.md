@@ -50,8 +50,9 @@ Collection rule composition lives in `collections/rules.rs`. Its service borrows
 the catalog, activity store and optional categorizer, without HTTP or application
 state dependencies. It keeps existing owner-qualified rule dispatch, resolves
 missing icons for curated and rule items, and leaves curated-item write rules
-unchanged. The HTTP boundary now only isolates a failed rail so the other
-collections remain available.
+unchanged. Its composition operation isolates failed rails, preserves collection
+order and fills missing icons after resolving each rule. HTTP loads the stored
+collections and returns the composed result; it no longer owns rail policy.
 
 Curated edits go through `CollectionStore::add_curated_item` and
 `remove_curated_item`: the store checks editability, writes membership and returns

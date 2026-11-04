@@ -1,6 +1,6 @@
 use futures_util::{StreamExt, stream};
 use hearthdeck_ai::categorization::{Taxonomy, rail_app_ids};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::{Collection, CollectionItem};
 use crate::{
@@ -35,6 +35,22 @@ pub(crate) enum RuleError {
 }
 
 impl RuleService<'_> {
+    pub async fn compose(&self, mut collections: Vec<Collection>) -> Vec<Collection> {
+        for collection in &mut collections {
+            match self.resolve(collection).await {
+                Ok(Some(items)) => collection.items = items,
+                Err(error) => {
+                    warn!(slug = %collection.slug, %error, "rail could not be resolved");
+                }
+                Ok(None) => {}
+            }
+            collection.items = self
+                .with_item_icons(std::mem::take(&mut collection.items))
+                .await;
+        }
+        collections
+    }
+
     pub async fn resolve(
         &self,
         collection: &Collection,
@@ -164,7 +180,7 @@ impl RuleService<'_> {
             .collect())
     }
 
-    pub async fn with_item_icons(&self, items: Vec<CollectionItem>) -> Vec<CollectionItem> {
+    async fn with_item_icons(&self, items: Vec<CollectionItem>) -> Vec<CollectionItem> {
         stream::iter(items)
             .map(|mut item| async move {
                 if item.icon.is_none() {
@@ -227,6 +243,91 @@ pub(crate) fn rom_id_from_item(item_id: &str) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::{activity::ActivityEntry, database::Database, settings::SettingsRepository};
+
+    #[tokio::test]
+    async fn composition_preserves_order_supplied_art_and_other_rails_after_a_rule_fails() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("composition.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let catalog = CatalogStore::new(database.pool().clone());
+        let activity = ActivityStore::new(database.pool().clone());
+        let settings = SettingsRepository::new(database.pool().clone());
+        let store = super::super::CollectionStore::new(database.pool().clone());
+        catalog
+            .replace_source(
+                stremio_arrivals::SOURCE_ID,
+                vec![crate::catalog::CatalogRecord {
+                    id: "arrival".into(),
+                    title: "Arrival".into(),
+                    kind: "movie".into(),
+                    launch_id: None,
+                    icon: Some("fresh-cover".into()),
+                    metadata: serde_json::Value::Null,
+                    updated_at: "2026-01-01T00:00:00Z".into(),
+                }],
+            )
+            .await
+            .unwrap();
+        let service = RuleService {
+            catalog: &catalog,
+            activity: &activity,
+            categorization: None,
+            settings: &settings,
+        };
+        let curated = |id: &str, icon: Option<&str>| CollectionItem {
+            item_id: id.into(),
+            name: id.into(),
+            icon: icon.map(str::to_owned),
+            background: None,
+            logo: None,
+            description: None,
+            played: None,
+        };
+        let mut favorites = store.collection("favorites").await.unwrap().unwrap();
+        favorites.items = vec![
+            curated("hearthdeck:arrival", None),
+            curated("hearthdeck:arrival", Some("chosen-cover")),
+            curated("hearthdeck:missing", None),
+        ];
+        let arrivals = store
+            .collection(super::super::RULE_NEW_ARRIVALS)
+            .await
+            .unwrap()
+            .unwrap();
+        let composed = service
+            .compose(vec![favorites.clone(), arrivals.clone()])
+            .await;
+        assert_eq!(
+            composed
+                .iter()
+                .map(|rail| rail.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["favorites", super::super::RULE_NEW_ARRIVALS]
+        );
+        assert_eq!(
+            composed[0]
+                .items
+                .iter()
+                .map(|item| item.icon.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("fresh-cover"), Some("chosen-cover"), None]
+        );
+        assert_eq!(composed[1].items[0].item_id, "hearthdeck:arrival");
+        assert_eq!(composed[1].items[0].icon.as_deref(), Some("fresh-cover"));
+
+        sqlx::query("DROP TABLE library_items")
+            .execute(database.pool())
+            .await
+            .unwrap();
+        let composed = service.compose(vec![arrivals, favorites]).await;
+        assert_eq!(composed[0].slug, super::super::RULE_NEW_ARRIVALS);
+        assert!(composed[0].items.is_empty(), "failed rule stays empty");
+        assert_eq!(composed[1].slug, "favorites");
+        assert_eq!(composed[1].items.len(), 3);
+        assert_eq!(composed[1].items[1].icon.as_deref(), Some("chosen-cover"));
+    }
 
     #[test]
     fn a_resolved_play_rides_along_with_its_collection_item() {
