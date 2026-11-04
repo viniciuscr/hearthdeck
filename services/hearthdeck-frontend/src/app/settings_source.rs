@@ -114,8 +114,7 @@ impl App {
         self.tabs.sync_console_groups(&[]);
         if self.cur_section == crate::app_group::Section::ConsoleGames {
             self.cur_group = None;
-            self.facets.clear();
-            self.facet_selection.clear();
+            self.filters.clear_source();
             self.refilter();
         }
         if self.romm.connection.is_some() {

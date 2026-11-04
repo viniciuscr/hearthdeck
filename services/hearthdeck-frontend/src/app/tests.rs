@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::*;
 use crate::app_group::{AppGroup, FilterType, SectionUi};
 use crate::providers::daemon::RetroRomVersion;
@@ -32,10 +34,8 @@ fn shell() -> App {
         console: ConsoleScopes::default(),
         console_platforms: Vec::new(),
         visible: Vec::new(),
-        facets: Vec::new(),
+        filters: filters::State::default(),
         collections: Vec::new(),
-        facet_selection: BTreeMap::new(),
-        filter_open: false,
         text_entry: TextEntry::default(),
         menu: menu::State::default(),
         cur_section: Section::PcGames,
@@ -622,7 +622,7 @@ fn the_pad_belongs_to_the_keyboard_while_a_text_field_has_the_caret() {
         "a button moved the screen behind the keys"
     );
     assert!(
-        !app.filter_open,
+        !app.filters.is_open(),
         "Select opened the drawer under the keyboard"
     );
     assert!(
@@ -935,7 +935,7 @@ fn the_select_button_opens_the_drawer_and_back_gives_the_pad_back() {
 
     send(&mut app, GamepadEvent::FilterPanel);
 
-    assert!(app.filter_open, "select opens the drawer");
+    assert!(app.filters.is_open(), "select opens the drawer");
     assert_eq!(
         app.cursors.filter_row, 0,
         "and its cursor starts at the top"
@@ -949,7 +949,7 @@ fn the_select_button_opens_the_drawer_and_back_gives_the_pad_back() {
 
     send(&mut app, GamepadEvent::Back);
 
-    assert!(!app.filter_open);
+    assert!(!app.filters.is_open());
     assert_eq!(app.cursors.tile, 5, "and the pad is back on that tile");
 }
 
@@ -1020,7 +1020,7 @@ fn showing_a_long_tab_strip() -> App {
 /// the way the follow measures it.
 fn tab_is_on_screen(app: &App, index: usize) -> bool {
     let widths = header::tab_widths(app.cur_section, app.tabs.get(app.cur_section));
-    let viewport = header::tab_viewport(app.window_width, !app.facets.is_empty());
+    let viewport = header::tab_viewport(app.window_width, !app.filters.facets().is_empty());
     let gap = f32::from(theme::spacing().space_m);
     let start = widths.iter().take(index).sum::<f32>() + index as f32 * gap;
     start >= app.tabs_offset - 0.5 && start + widths[index] <= app.tabs_offset + viewport + 0.5
@@ -1128,16 +1128,59 @@ fn the_search_button_leaves_the_pad_where_it_is() {
 #[test]
 fn the_context_button_clears_the_filters_inside_the_drawer() {
     let mut app = showing_a_filter();
-    let _ = app.update(Message::SelectFacet {
+    let _ = app.update(Message::Filters(filters::Message::Select {
         facet: "store".to_owned(),
         value: Some("hearthdeck-store:Steam".to_owned()),
-    });
-    let _ = app.update(Message::ToggleFilterPanel);
-    assert_eq!(app.facet_selection.len(), 1);
+    }));
+    let _ = app.update(Message::Filters(filters::Message::Toggle));
+    assert_eq!(app.filters.selected().len(), 1);
 
     send(&mut app, GamepadEvent::ContextMenu);
 
-    assert!(app.facet_selection.is_empty(), "X clears every facet");
+    assert!(app.filters.selected().is_empty(), "X clears every facet");
+}
+
+#[test]
+fn local_filter_messages_narrow_the_grid_and_clear_restores_it() {
+    let mut app = navigable();
+    let _ = app.update(Message::CatalogLoaded(Ok(vec![
+        entry("steam-game", &["Game", "hearthdeck-store:Steam"]),
+        entry("gog-game", &["Game", "hearthdeck-store:GOG"]),
+    ])));
+    let _ = app.update(Message::Filters(filters::Message::Select {
+        facet: "store".into(),
+        value: Some("hearthdeck-store:Steam".into()),
+    }));
+    assert_eq!(drawn(&app), ["steam-game"]);
+    assert_eq!(app.cursors.tile, 0);
+
+    let _ = app.update(Message::Filters(filters::Message::Clear));
+    assert_eq!(drawn(&app), ["steam-game", "gog-game"]);
+}
+
+#[test]
+fn console_filter_messages_switch_scopes_instead_of_filtering_cached_rows() {
+    let mut app = showing_a_console_game(Vec::new());
+    let original = app.console_scope();
+    let _ = app.update(Message::Filters(filters::Message::Select {
+        facet: "genre".into(),
+        value: Some("Action".into()),
+    }));
+    assert_eq!(
+        app.console_scope().facets.get("genre").map(String::as_str),
+        Some("Action")
+    );
+    assert!(app.visible.is_empty());
+    assert_eq!(app.console.entries(&original)[0].id, "romm:42");
+
+    console_page(
+        &mut app,
+        vec![entry("romm:99", &["Game", "hearthdeck-console:7"])],
+    );
+    assert_eq!(drawn(&app), ["romm:99"]);
+    let _ = app.update(Message::Filters(filters::Message::Clear));
+    assert_eq!(app.console_scope(), original);
+    assert_eq!(drawn(&app), ["romm:42"]);
 }
 
 /// The sidebar's footer reads the last figure the poll produced. A poll that

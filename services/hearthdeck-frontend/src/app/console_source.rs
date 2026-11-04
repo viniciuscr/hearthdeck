@@ -23,7 +23,7 @@ impl App {
         ConsoleScope {
             platform: self.console_platform_id(),
             search: self.search_value.clone(),
-            facets: self.facet_selection.clone(),
+            facets: self.filters.selected().clone(),
         }
     }
 
