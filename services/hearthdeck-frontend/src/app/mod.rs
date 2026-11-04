@@ -285,6 +285,22 @@ impl From<header::Message> for Message {
     }
 }
 
+impl From<grid::Message> for Message {
+    fn from(message: grid::Message) -> Self {
+        match message {
+            grid::Message::TilePressed(index) => Self::Activate(index),
+            grid::Message::TileContextPressed(index) => Self::TileContext(index),
+            grid::Message::Scrolled {
+                offset,
+                viewport_height,
+            } => Self::GridScrolled {
+                offset,
+                viewport_height,
+            },
+        }
+    }
+}
+
 /// Which page the shell is showing.
 ///
 /// The dashboard is where the app opens, matching the inherited app: a front
@@ -1202,6 +1218,7 @@ impl App {
                     // and the label land on one tile together.
                     focused_tile: focus::focused_tile(self.cursors, self.layout()),
                 })
+                .map(Message::from)
             };
 
             // A tab change slides the grid sideways, under the cover: the strip

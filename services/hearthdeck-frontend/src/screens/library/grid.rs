@@ -24,9 +24,15 @@ use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
 use cosmic::theme;
 use cosmic::widget::{Id, column, container, row, scrollable, space};
 
-use crate::app::Message;
 use crate::style::{GRID_OVERSCAN_ROWS, grid_columns, grid_gap, grid_tile_height, tile_width};
 use crate::widgets::application::{Selection, TileLabel, app_tile};
+
+#[derive(Clone, Debug)]
+pub enum Message {
+    TilePressed(usize),
+    TileContextPressed(usize),
+    Scrolled { offset: f32, viewport_height: f32 },
+}
 
 /// The grid's scrollable. Held here because it is the grid's own widget, and
 /// this module is what knows when a new list has to be drawn from the top.
@@ -181,7 +187,7 @@ pub fn tile_id(entry: &LibraryItem) -> Id {
 /// Scrolls the grid to an absolute vertical offset.
 ///
 /// The grid only scrolls vertically, so the horizontal offset stays where it is.
-pub fn scroll_to_offset(offset: f32) -> cosmic::app::Task<Message> {
+pub fn scroll_to_offset<Message: 'static>(offset: f32) -> cosmic::app::Task<Message> {
     scroll_to(
         GRID_SCROLLABLE_ID.clone(),
         AbsoluteOffset {
@@ -194,7 +200,7 @@ pub fn scroll_to_offset(offset: f32) -> cosmic::app::Task<Message> {
 /// Sends the grid back to the top, for when the list it shows is replaced: a new
 /// list is read from its first row, not from wherever the list before it
 /// happened to be scrolled to.
-pub fn scroll_to_top() -> cosmic::app::Task<Message> {
+pub fn scroll_to_top<Message: 'static>() -> cosmic::app::Task<Message> {
     scroll_to_offset(0.0)
 }
 
@@ -242,8 +248,8 @@ pub fn view(grid: Grid<'_>) -> Element<'_, Message> {
                 metrics.tile_height,
                 tile_fit(),
                 1,
-                Some(Message::TileContext(index)),
-                Some(Message::Activate(index)),
+                Some(Message::TileContextPressed(index)),
+                Some(Message::TilePressed(index)),
                 None,
                 TileLabel::OnArtwork,
                 tile_selection(grid.focused_tile, index),
@@ -274,7 +280,7 @@ pub fn view(grid: Grid<'_>) -> Element<'_, Message> {
     .id(GRID_SCROLLABLE_ID.clone())
     // Where the grid is scrolled to feeds two things: which rows to build, and
     // whether the console source has a page left to append.
-    .on_scroll(|viewport| Message::GridScrolled {
+    .on_scroll(|viewport| Message::Scrolled {
         offset: viewport.absolute_offset().y,
         viewport_height: viewport.bounds().height,
     })

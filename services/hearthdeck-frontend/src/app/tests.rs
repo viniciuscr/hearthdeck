@@ -1422,6 +1422,29 @@ fn confirm_runs_the_row_the_menu_is_open_on() {
     );
 }
 
+#[test]
+fn grid_events_keep_tile_targets_and_scroll_measurements() {
+    let mut app = showing(4);
+    let _ = app.update(grid::Message::TileContextPressed(2).into());
+    assert_eq!(app.menu.target(), Some(2));
+    let _ = app.update(
+        grid::Message::Scrolled {
+            offset: 120.0,
+            viewport_height: 600.0,
+        }
+        .into(),
+    );
+    assert_eq!(app.grid_scroll_offset, 120.0);
+    assert_eq!(app.grid_viewport_height, 600.0);
+    let _ = app.update(grid::Message::TilePressed(2).into());
+    assert_eq!(
+        app.launch_state,
+        LaunchState::Launching {
+            title: "hearthdeck:game-2".to_owned()
+        }
+    );
+}
+
 /// A menu belongs to a tile, and a list that drops that tile closes it -
 /// otherwise a menu would sit open over an entry that is no longer there.
 #[test]
