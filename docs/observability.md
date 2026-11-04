@@ -13,6 +13,10 @@ is truncated when `hearthdeck.target` starts so it stays scoped to one session.
 
 - Production default: newline-delimited JSON (`HEARTHDECK_LOG_FORMAT=json`).
 - Development: readable output (`HEARTHDECK_LOG_FORMAT=pretty`).
+- Unknown format values warn and use the same JSON setup as the default. The
+  initialization event reports the active format, not the rejected value.
+- A repeated initialization logs an error through the existing subscriber and
+  leaves it in place; it does not emit another successful initialization event.
 - Filtering: `RUST_LOG`, for example `RUST_LOG=hearthdeck_daemon=debug,tower_http=info`.
 - Frontend default: `hearthdeck_frontend=info`, with structured startup identity,
   catalog counts and error fields. For debug output use
