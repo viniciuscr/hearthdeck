@@ -5,6 +5,8 @@ PartOf=hearthdeck.target
 [Service]
 Type=exec
 Environment=RUST_LOG=hearthdeck_input=info
+Environment=HEARTHDECK_INPUT_MODE=legacy
+EnvironmentFile=-%h/.config/hearthdeck/input.env
 ExecStart=%h/.local/bin/hearthdeck-input
 Restart=on-failure
 RestartSec=2

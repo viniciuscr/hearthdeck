@@ -445,7 +445,12 @@ async fn launch_session(
     let _transition = session_transition.lock().await;
     let prepared = async {
         stop_other_active_sessions(source_id, sessions, session_directory).await?;
-        input::set_input_profile(input_profile, source_id == sources::RETROARCH).await
+        input::set_session_input_profile(
+            input_profile,
+            source_id == sources::RETROARCH,
+            Some(application_id),
+        )
+        .await
     };
     if let Err(error) = prepared.await {
         warn!(source_id, application_id, %error, "application launch rejected");
@@ -501,7 +506,12 @@ async fn sync_managed_input(managed: Option<&ManagedSession>) -> Result<()> {
         .map(|managed| managed.input_profile)
         .unwrap_or_default();
     let retro_osk = managed.is_some_and(|managed| managed.session.source_id == sources::RETROARCH);
-    input::set_input_profile(profile, retro_osk).await
+    input::set_session_input_profile(
+        profile,
+        retro_osk,
+        managed.map(|managed| managed.session.application_id.as_str()),
+    )
+    .await
 }
 
 async fn active_managed_session(

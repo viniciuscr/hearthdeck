@@ -5,6 +5,8 @@
 //
 // Linux-only because it uses Wayland layer-shell.
 #[cfg(target_os = "linux")]
+mod broker_input;
+#[cfg(target_os = "linux")]
 mod input;
 #[cfg(target_os = "linux")]
 mod overlay;

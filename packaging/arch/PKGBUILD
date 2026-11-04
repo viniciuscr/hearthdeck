@@ -79,6 +79,8 @@ package() {
   install -Dm644 deploy/systemd/romm.path "$pkgdir/usr/lib/systemd/user/romm.path"
   install -Dm644 deploy/systemd/daemon.env.example "$pkgdir/usr/share/doc/hearthdeck/daemon.env.example"
   install -Dm644 deploy/systemd/romm.env.example "$pkgdir/usr/share/doc/hearthdeck/romm.env.example"
+  install -Dm644 packaging/arch/input.env.example "$pkgdir/usr/share/doc/hearthdeck/input.env.example"
+  install -Dm644 docs/input-ownership.md "$pkgdir/usr/share/doc/hearthdeck/input-ownership.md"
   install -Dm644 deploy/70-hearthdeck-uinput.rules "$pkgdir/usr/lib/udev/rules.d/70-hearthdeck-uinput.rules"
   install -Dm644 deploy/hearthdeck-uinput.conf "$pkgdir/usr/lib/modules-load.d/hearthdeck-uinput.conf"
   install -Dm644 packaging/arch/hearthdeck-pacman-repo.conf "$pkgdir/etc/pacman.d/hearthdeck.conf"

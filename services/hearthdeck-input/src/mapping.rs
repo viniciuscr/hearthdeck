@@ -2,6 +2,12 @@ use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Control {
+    Other(u16),
+    Guide,
+    PointerLeft,
+    PointerRight,
+    PointerUp,
+    PointerDown,
     South,
     East,
     West,
@@ -181,6 +187,12 @@ const DEADZONE: i32 = 350;
 
 fn output_for(control: Control) -> Option<OutputKey> {
     Some(match control {
+        Control::Other(_)
+        | Control::Guide
+        | Control::PointerLeft
+        | Control::PointerRight
+        | Control::PointerUp
+        | Control::PointerDown => return None,
         Control::South | Control::Start => OutputKey::Enter,
         Control::East => OutputKey::Escape,
         Control::West => OutputKey::Space,

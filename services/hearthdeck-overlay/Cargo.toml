@@ -19,6 +19,7 @@ evdev = { version = "0.13", features = ["tokio"] }
 futures-channel = "0.3"
 futures-util = "0.3"
 hearthdeck-client = { path = "../hearthdeck-client" }
+hearthdeck-protocol = { path = "../hearthdeck-protocol" }
 hearthdeck-observability = { path = "../hearthdeck-observability" }
 reqwest.workspace = true
 # Bare URL, deliberately: cargo treats "git+URL" and "git+URL?rev=..." as different
