@@ -1438,7 +1438,7 @@ struct ApiError {
 
 /// The dashboard's collections, in composition order.
 ///
-/// The rule service composes derived items; HTTP adds icons and isolates failed rails.
+/// The rule service composes items and icons; HTTP isolates failed rails.
 async fn list_collections(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<Collection>>, ApiError> {
@@ -1504,7 +1504,6 @@ async fn add_collection_item(
     Path(slug): Path<String>,
     Json(request): Json<CollectionItemRequest>,
 ) -> Result<Json<Collection>, ApiError> {
-    ensure_curated(&state, &slug).await?;
     let item = CollectionItem {
         item_id: request.item_id,
         name: request.name,
@@ -1516,13 +1515,13 @@ async fn add_collection_item(
         description: None,
         played: None,
     };
-    state
+    let collection = state
         .collections
-        .add_item(&slug, &item)
+        .add_curated_item(&slug, &item)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::from)?;
     info!(slug, item_id = %item.item_id, "collection item added");
-    curated_collection(&state, &slug).await
+    Ok(Json(collection))
 }
 
 /// Removes an item from a curated collection, answering with the collection as it
@@ -1533,37 +1532,22 @@ async fn remove_collection_item(
     Path(slug): Path<String>,
     Json(request): Json<CollectionItemRef>,
 ) -> Result<Json<Collection>, ApiError> {
-    ensure_curated(&state, &slug).await?;
     state
         .collections
-        .remove_item(&slug, &request.item_id)
+        .remove_curated_item(&slug, &request.item_id)
         .await
-        .map_err(ApiError::internal)?;
-    curated_collection(&state, &slug).await
-}
-
-/// Rejects a slug that is unknown or whose contents are derived.
-async fn ensure_curated(state: &SharedState, slug: &str) -> Result<(), ApiError> {
-    match state
-        .collections
-        .accepts_items(slug)
-        .await
-        .map_err(ApiError::internal)?
-    {
-        None => Err(ApiError::not_found()),
-        Some(false) => Err(ApiError::derived_collection()),
-        Some(true) => Ok(()),
-    }
-}
-
-async fn curated_collection(state: &SharedState, slug: &str) -> Result<Json<Collection>, ApiError> {
-    state
-        .collections
-        .collection(slug)
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(ApiError::not_found)
+        .map_err(ApiError::from)
         .map(Json)
+}
+
+impl From<collections::CurationError> for ApiError {
+    fn from(error: collections::CurationError) -> Self {
+        match error {
+            collections::CurationError::NotFound => Self::not_found(),
+            collections::CurationError::ReadOnly => Self::derived_collection(),
+            collections::CurationError::Storage(error) => Self::internal(error),
+        }
+    }
 }
 
 impl ApiError {
@@ -1821,6 +1805,31 @@ mod tests {
             .await
             .expect("rule resolves")
             .expect("known rule")
+    }
+
+    #[test]
+    fn curation_errors_keep_existing_http_status_and_messages() {
+        for (error, status, message) in [
+            (
+                collections::CurationError::NotFound,
+                StatusCode::NOT_FOUND,
+                "resource not found",
+            ),
+            (
+                collections::CurationError::ReadOnly,
+                StatusCode::BAD_REQUEST,
+                "collection contents are derived and cannot be edited",
+            ),
+        ] {
+            let error = super::ApiError::from(error);
+            assert_eq!(error.status, status);
+            assert_eq!(error.message, message);
+        }
+        let error = super::ApiError::from(collections::CurationError::Storage(anyhow::anyhow!(
+            "private path"
+        )));
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!error.message.contains("private path"));
     }
 
     #[test]

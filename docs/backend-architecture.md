@@ -53,6 +53,11 @@ missing icons for curated and rule items, and leaves curated-item write rules
 unchanged. The HTTP boundary now only isolates a failed rail so the other
 collections remain available.
 
+Curated edits go through `CollectionStore::add_curated_item` and
+`remove_curated_item`: the store checks editability, writes membership and returns
+the stored snapshot. HTTP only maps typed missing/read-only/storage errors to
+responses. Raw membership writes remain available for development seeding.
+
 ## Platform Adaptation Rules
 
 Hearthdeck targets Linux only. Platform-specific behavior still terminates at an

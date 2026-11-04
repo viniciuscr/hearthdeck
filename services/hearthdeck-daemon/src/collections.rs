@@ -192,6 +192,16 @@ pub struct CollectionStore {
     pool: SqlitePool,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CurationError {
+    #[error("collection not found")]
+    NotFound,
+    #[error("collection contents are derived and cannot be edited")]
+    ReadOnly,
+    #[error("collection storage failed: {0:#}")]
+    Storage(#[from] anyhow::Error),
+}
+
 impl CollectionStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
@@ -275,6 +285,38 @@ impl CollectionStore {
             row.get::<String, _>("kind") == KIND_MEMBERSHIP
                 && row.get::<String, _>("owner") == OWNER_USER
         }))
+    }
+
+    pub async fn add_curated_item(
+        &self,
+        slug: &str,
+        item: &CollectionItem,
+    ) -> std::result::Result<Collection, CurationError> {
+        self.ensure_curated(slug).await?;
+        self.add_item(slug, item).await?;
+        self.curated_snapshot(slug).await
+    }
+
+    pub async fn remove_curated_item(
+        &self,
+        slug: &str,
+        item_id: &str,
+    ) -> std::result::Result<Collection, CurationError> {
+        self.ensure_curated(slug).await?;
+        self.remove_item(slug, item_id).await?;
+        self.curated_snapshot(slug).await
+    }
+
+    async fn ensure_curated(&self, slug: &str) -> std::result::Result<(), CurationError> {
+        match self.accepts_items(slug).await? {
+            None => Err(CurationError::NotFound),
+            Some(false) => Err(CurationError::ReadOnly),
+            Some(true) => Ok(()),
+        }
+    }
+
+    async fn curated_snapshot(&self, slug: &str) -> std::result::Result<Collection, CurationError> {
+        self.collection(slug).await?.ok_or(CurationError::NotFound)
     }
 
     /// Replaces everything `owner` owns with `replace_with`, in one transaction.
@@ -607,5 +649,87 @@ mod tests {
             Some(false)
         );
         assert_eq!(store.accepts_items("nope").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn curated_edits_return_stored_snapshots_and_preserve_order() {
+        let (store, _directory) = store().await;
+        store
+            .add_curated_item("favorites", &item("one", "First"))
+            .await
+            .unwrap();
+        store
+            .add_curated_item("favorites", &item("two", "Second"))
+            .await
+            .unwrap();
+        let updated = store
+            .add_curated_item("favorites", &item("one", "Renamed"))
+            .await
+            .unwrap();
+        assert_eq!(
+            updated
+                .items
+                .iter()
+                .map(|item| (item.item_id.as_str(), item.name.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("one", "Renamed"), ("two", "Second")]
+        );
+        let unchanged = store
+            .remove_curated_item("favorites", "absent")
+            .await
+            .unwrap();
+        assert_eq!(unchanged.items.len(), 2);
+        let remaining = store.remove_curated_item("favorites", "one").await.unwrap();
+        assert_eq!(remaining.items.len(), 1);
+        assert_eq!(remaining.items[0].item_id, "two");
+        assert!(remaining.items[0].played.is_none());
+    }
+
+    #[tokio::test]
+    async fn curated_edits_reject_unknown_and_read_only_collections_without_writing() {
+        let (store, _directory) = store().await;
+        store
+            .replace_owned(
+                OWNER_LAYA,
+                &[OwnedCollection {
+                    slug: "laya:watch".into(),
+                    name: None,
+                    rule: "laya:watch".into(),
+                }],
+            )
+            .await
+            .unwrap();
+        for slug in ["last-played", "laya:watch", "nope"] {
+            for result in [
+                store.add_curated_item(slug, &item("one", "First")).await,
+                store.remove_curated_item(slug, "one").await,
+            ] {
+                match (slug, result) {
+                    ("nope", Err(super::CurationError::NotFound)) => {}
+                    ("last-played" | "laya:watch", Err(super::CurationError::ReadOnly)) => {}
+                    (slug, result) => panic!("unexpected edit result for {slug}: {result:?}"),
+                }
+            }
+        }
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM collection_items")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn curated_edits_preserve_storage_errors() {
+        let (store, _directory) = store().await;
+        store.pool.close().await;
+        for result in [
+            store
+                .add_curated_item("favorites", &item("one", "First"))
+                .await,
+            store.remove_curated_item("favorites", "one").await,
+        ] {
+            assert!(matches!(result, Err(super::CurationError::Storage(error))
+                if matches!(error.downcast_ref::<sqlx::Error>(), Some(sqlx::Error::PoolClosed))));
+        }
     }
 }
