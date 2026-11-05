@@ -2066,6 +2066,30 @@ fn the_first_rail_snaps_the_page_to_the_top() {
     }
 }
 
+/// Stepping off the arrivals brings the rail below to the top of the view: the
+/// page follows the pad all the way to where that rail takes over the screen,
+/// rather than stopping short with the arrivals still on top of it.
+#[test]
+fn stepping_down_from_the_arrivals_brings_the_next_rail_to_the_top_of_the_view() {
+    let mut app = shell();
+    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+        collection("favorites", None, &["hearthdeck:game-0"]),
+    ])));
+
+    let _ = app.step_dashboard(Direction::Down);
+
+    let kinds = [dashboard::RailKind::Games, dashboard::RailKind::Games];
+    let heights = dashboard::rail_heights(&kinds, app.window_width, app.window_height);
+    let snap = heights[0] + dashboard::rail_gap();
+    assert!(
+        (app.page_offset - snap).abs() < 1.0,
+        "the next rail lands at the top of the view ({snap}), not clamped short \
+         with the arrivals still on screen: {}",
+        app.page_offset,
+    );
+}
+
 /// A report from a scroll the shell is driving describes where the travel
 /// happens to be, not where the shell sent it: taking it would leave the next
 /// follow measuring from the wrong place, which reads as the screen snapping

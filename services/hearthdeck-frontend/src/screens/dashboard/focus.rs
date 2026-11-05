@@ -153,11 +153,12 @@ pub fn rail_scroll_target(
 /// visible height. A rail half-on is pinned to the edge it left through; a rail
 /// wholly out of the view brings its top to the top of the view, so it lands in
 /// the same place whichever direction the pad came from. Clamped to the
-/// page's own extent, so the last rail stops at the end instead of scrolling past
-/// it.
+/// page's extent, so the snap's scroll is one the page can actually make - and
+/// the last rail stops at the end instead of scrolling past it.
 ///
-/// `rail_heights` is each rail's height in order and `gap` the space between two
-/// of them, which together are the stack's geometry.
+/// `rail_heights` is each rail's height in order, `gap` the space between two
+/// of them and `content` what the page measures end to end, which together are
+/// the stack's geometry and the page's own extent.
 #[must_use]
 pub fn page_scroll_target(
     rail_heights: &[f32],
@@ -165,6 +166,7 @@ pub fn page_scroll_target(
     gap: f32,
     offset: f32,
     viewport: f32,
+    content: f32,
 ) -> Option<f32> {
     let height = *rail_heights.get(index)?;
     let top = rail_top(rail_heights, index, gap);
@@ -187,7 +189,6 @@ pub fn page_scroll_target(
     } else {
         return None;
     };
-    let content = rail_top(rail_heights, rail_heights.len(), gap) - gap;
     let target = target.clamp(0.0, (content - viewport).max(0.0));
     // Already where a follow would send it - which is every refocus of a rail
     // too tall to fit - so the page is left alone rather than sent to where it
@@ -355,29 +356,42 @@ mod tests {
         // the furthest it scrolls is 140.
         let rails = [200.0, 200.0, 200.0];
         let (gap, viewport) = (20.0, 500.0);
+        let content = 640.0;
 
         // The first two are inside the page as it opens (0..200 and 220..420).
-        assert_eq!(page_scroll_target(&rails, 0, gap, 0.0, viewport), None);
-        assert_eq!(page_scroll_target(&rails, 1, gap, 0.0, viewport), None);
+        assert_eq!(
+            page_scroll_target(&rails, 0, gap, 0.0, viewport, content),
+            None
+        );
+        assert_eq!(
+            page_scroll_target(&rails, 1, gap, 0.0, viewport, content),
+            None
+        );
 
         // The third leaves through the bottom (440..640), and the page stops at
         // the end of its own content rather than past it.
         assert_eq!(
-            page_scroll_target(&rails, 2, gap, 0.0, viewport),
+            page_scroll_target(&rails, 2, gap, 0.0, viewport, content),
             Some(140.0)
         );
 
         // Stepping back up pins the rail to the top, not to the bottom, so it
         // stays just inside the view.
         assert_eq!(
-            page_scroll_target(&rails, 0, gap, 140.0, viewport),
+            page_scroll_target(&rails, 0, gap, 140.0, viewport, content),
             Some(0.0)
         );
         // And a rail already in view leaves the page where it is.
-        assert_eq!(page_scroll_target(&rails, 1, gap, 140.0, viewport), None);
+        assert_eq!(
+            page_scroll_target(&rails, 1, gap, 140.0, viewport, content),
+            None
+        );
 
         // A rail there is no such thing as has nowhere to scroll to.
-        assert_eq!(page_scroll_target(&rails, 3, gap, 0.0, viewport), None);
+        assert_eq!(
+            page_scroll_target(&rails, 3, gap, 0.0, viewport, content),
+            None
+        );
     }
 
     /// A rail that starts below the fold brings its top to the top of the view,
@@ -388,11 +402,13 @@ mod tests {
         // Rails of 200 in a 400-tall page: rail 1 starts at 520, below the fold.
         let rails = [500.0, 200.0, 200.0];
         let (gap, viewport) = (20.0, 400.0);
+        let content = 940.0;
 
-        let down = page_scroll_target(&rails, 1, gap, 0.0, viewport).expect("the page moves to it");
+        let down = page_scroll_target(&rails, 1, gap, 0.0, viewport, content)
+            .expect("the page moves to it");
         assert_eq!(down, 520.0);
         assert_eq!(
-            page_scroll_target(&rails, 1, gap, 800.0, viewport),
+            page_scroll_target(&rails, 1, gap, 800.0, viewport, content),
             Some(520.0),
             "the way back lands in the same place"
         );
@@ -409,13 +425,17 @@ mod tests {
         // real geometry, where the row is taller than the page's viewport.
         let rails = [621.0, 200.0, 200.0];
         let (gap, viewport) = (48.0, 594.0);
+        let content = 1117.0;
 
         // Focusing it pins its top, wherever the page was.
-        let target =
-            page_scroll_target(&rails, 0, gap, 27.0, viewport).expect("the page moves to it");
+        let target = page_scroll_target(&rails, 0, gap, 27.0, viewport, content)
+            .expect("the page moves to it");
         assert_eq!(target, 0.0);
         // And from where that sends the page, focusing it again must not walk
         // the page back down to its other edge.
-        assert_eq!(page_scroll_target(&rails, 0, gap, target, viewport), None);
+        assert_eq!(
+            page_scroll_target(&rails, 0, gap, target, viewport, content),
+            None
+        );
     }
 }

@@ -259,7 +259,7 @@ pub fn view<'a>(
         window_width,
         window_height,
     );
-    let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(rails.len() + 1);
+    let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(rails.len() + 2);
     rows.push(
         container(text(""))
             .width(Length::Fill)
@@ -267,6 +267,18 @@ pub fn view<'a>(
             .into(),
     );
     rows.extend(rails);
+    // The blank space at the end of the page, below the last rail: the room
+    // the follow needs for that rail to rise to the top of the view.
+    rows.push(
+        container(text(""))
+            .width(Length::Fill)
+            .height(Length::Fixed(tail_space(
+                shelves.last().map(Shelf::kind),
+                window_width,
+                window_height,
+            )))
+            .into(),
+    );
 
     let page = scrollable(
         column(rows)
@@ -371,12 +383,17 @@ pub fn rail_heights(kinds: &[RailKind], window_width: f32, window_height: f32) -
         .map(|&kind| rail_height(kind, window_width))
         .collect();
     // The blank space at the top of the page belongs to the first rail: folded
-    // into its height, the page's follow pins "the first rail" into view by
-    // pinning the blank space's top - which is the page's own top. That is the
-    // snap the first rail gets: the rail at the bottom of the screen, with the
-    // whole window onto the art above it, however the window is sized.
+    // into its height - with the page's own top padding and the gap under the
+    // blank - the heights measure the very offsets the renderer scrolls, and
+    // the page's follow pins "the first rail" into view by pinning the blank
+    // space's top - which is the page's own top. That is the snap the first
+    // rail gets: the rail at the bottom of the screen, with the whole window
+    // onto the art above it, however the window is sized.
     if let Some(first) = heights.first_mut() {
-        *first += front_space(kinds.first().copied(), window_width, window_height) + rail_gap();
+        let Spacing { space_l, .. } = theme::spacing();
+        *first += front_space(kinds.first().copied(), window_width, window_height)
+            + rail_gap()
+            + f32::from(space_l);
     }
     heights
 }
@@ -399,6 +416,30 @@ fn front_space(first: Option<RailKind>, window_width: f32, window_height: f32) -
     let first = first.map_or(0.0, |kind| rail_height(kind, window_width));
     let page_viewport = window_height - top_bar::height();
     (page_viewport - f32::from(space_l) - rail_gap() - first).max(0.0)
+}
+
+/// The blank space at the end of the dashboard, below the last rail.
+///
+/// The mirror of [`front_space`]: the follow's snap brings a rail below the
+/// fold to the top of the view, so the page has to extend far enough for the
+/// last one to make that scroll - its top at the top of the view, with the gap
+/// and the page's own bottom padding filling out the screenful under it.
+fn tail_space(last: Option<RailKind>, window_width: f32, window_height: f32) -> f32 {
+    let Spacing { space_xl, .. } = theme::spacing();
+    let last = last.map_or(0.0, |kind| rail_height(kind, window_width));
+    let page_viewport = window_height - top_bar::height();
+    (page_viewport - rail_gap() - f32::from(space_xl) - last).max(0.0)
+}
+
+/// What the page's content measures end to end: the rails and the gaps between
+/// them, the blank at each end, and the page's own padding - which is what the
+/// page's scroll is clamped against.
+#[must_use]
+pub fn page_extent(kinds: &[RailKind], window_width: f32, window_height: f32) -> f32 {
+    let Spacing { space_xl, .. } = theme::spacing();
+    let heights = rail_heights(kinds, window_width, window_height);
+    let stack: f32 = heights.iter().sum::<f32>() + heights.len() as f32 * rail_gap();
+    stack + tail_space(kinds.last().copied(), window_width, window_height) + f32::from(space_xl)
 }
 
 /// The gap between two rails on the page.
@@ -446,7 +487,7 @@ pub fn rail_viewport(window_width: f32) -> f32 {
 mod tests {
     use super::{
         Card, RAIL_TITLE_HEIGHT, RailKind, Shelf, card_pitch, card_selection, focus, focused_label,
-        rail_heights, rail_viewport, shelf_metrics,
+        page_extent, rail_heights, rail_viewport, shelf_metrics,
     };
     use crate::style::content_horizontal_padding;
     use crate::widgets::application::{LABEL_HEIGHT, Selection};
@@ -476,7 +517,12 @@ mod tests {
                     RAIL_TITLE_HEIGHT + f32::from(spacing.space_m) + game_size + LABEL_HEIGHT;
                 let viewport = height - crate::widgets::top_bar::height();
                 let front = (viewport - gap - super::rail_gap() - game_height).max(0.0);
-                assert_eq!(heights[0], game_height + (front + super::rail_gap()));
+                assert_eq!(
+                    heights[0],
+                    game_height + front + super::rail_gap() + gap,
+                    "the first rail carries the blank above it, the gap under it \
+                     and the page's top padding",
+                );
             }
         }
     }
@@ -579,11 +625,41 @@ mod tests {
                 "the blank space rides on the first: {heights:?}"
             );
             assert_eq!(
-                heights[0] + f32::from(theme::spacing().space_l),
+                heights[0],
                 window_height - crate::widgets::top_bar::height(),
                 "the blank space is whatever of the first screenful the rail leaves unused: \
                  {heights:?}"
             );
+        }
+    }
+
+    /// Every rail can make the snap's scroll: a rail below the fold brings its
+    /// top to the top of the view, and the page extends far enough for the last
+    /// one to make that scroll rather than stopping short with the rails above
+    /// still on screen.
+    #[test]
+    fn every_rail_can_reach_the_top_of_the_view() {
+        for window_height in [crate::style::WINDOW_HEIGHT, 1080.0] {
+            for kinds in [
+                vec![RailKind::Games],
+                vec![RailKind::Games, RailKind::Games],
+                vec![RailKind::Games, RailKind::Consoles, RailKind::Games],
+            ] {
+                let heights = rail_heights(&kinds, 1200.0, window_height);
+                let gap = super::rail_gap();
+                let extent = page_extent(&kinds, 1200.0, window_height);
+                let viewport = window_height - crate::widgets::top_bar::height();
+                for index in 1..heights.len() {
+                    let top: f32 = heights.iter().take(index).sum::<f32>() + index as f32 * gap;
+                    let landed =
+                        focus::page_scroll_target(&heights, index, gap, 0.0, viewport, extent)
+                            .expect("the page moves to it");
+                    assert!(
+                        (landed - top).abs() < 1.0,
+                        "rail {index} of {kinds:?} lands at the top of the view ({top}): {landed}",
+                    );
+                }
+            }
         }
     }
 

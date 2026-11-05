@@ -414,6 +414,7 @@ impl App {
             dashboard::rail_gap(),
             self.page_offset,
             page_viewport,
+            dashboard::page_extent(&kinds, self.window_width, self.window_height),
         ) {
             let from = self.page_offset;
             // The same reason the rail remembers its target: the page's next
