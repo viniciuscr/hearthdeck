@@ -41,7 +41,7 @@ docs carry the *why* the code cannot.
 
 | Doc | Owns |
 | --- | --- |
-| [`input-ownership.md`](input-ownership.md) | Proposed controller/keyboard ownership contract, approval gates and Linux acceptance plan; not implemented |
+| [`input-ownership.md`](input-ownership.md) | Default controller broker, keyboard handoff, host acceptance and legacy rollback |
 | [`retroarch-integration.md`](retroarch-integration.md) | RomM/RetroArch decisions, `romm.service` startup, open questions, phased roadmap |
 | [`stremio-integration.md`](stremio-integration.md) | Stremio account linking, the verified `api.strem.io` shapes, Continue Watching rail, credential storage decision |
 
@@ -51,7 +51,8 @@ docs carry the *why* the code cannot.
 | --- | --- |
 | [`arch-package.md`](arch-package.md) | Current minimal COSMIC session, Arch package contents and troubleshooting |
 | [`linux-acceptance.md`](linux-acceptance.md) | Manual acceptance checklist |
-| [`immich-backup.md`](immich-backup.md) | Phone photo/video backup: Podman Quadlet stack, external SSD layout, upgrades, restore |
+| [`immich-backup.md`](immich-backup.md) | Phone photo/video backup: Podman Quadlet stack, external SSD layout, upgrades, restore, reinstall |
+| [`romm-backup.md`](romm-backup.md) | RomM database dump, external SSD layout, machine-wipe restore, disk-loss limits |
 | [`cloudflare-tunnel.md`](cloudflare-tunnel.md) | Public HTTPS access to Immich: Cloudflare Tunnel Quadlet, token handling, boot behaviour |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md), [`../DEVELOPER_QUICKSTART.md`](../DEVELOPER_QUICKSTART.md), [`../PRE_PUSH_WORKFLOW.md`](../PRE_PUSH_WORKFLOW.md) | Build, dev, and PR flow |
 | [`../.github/copilot-instructions.md`](../.github/copilot-instructions.md) | Project map and the summary style for changes |

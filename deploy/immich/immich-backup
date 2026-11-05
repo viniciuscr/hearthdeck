@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# immich-backup - mirror Immich's database dumps, and optionally the originals,
+# from the library SSD to the second disk.
+#
+# Runs as the desktop user, which only needs read access to /mnt/immich/data
+# (membership in the "immich" group). The destination is exFAT, so rsync uses
+# -rlt instead of -a: exFAT cannot store Unix ownership or permissions.
+#
+# Configuration (environment, normally from ~/.config/immich-backup.env):
+#   IMMICH_DATA_DIR         source data directory   (default /mnt/immich/data)
+#   IMMICH_BACKUP_DIR       destination directory   (default /mnt/external/immich)
+#   IMMICH_BACKUP_MOUNT     mount that must be up   (default /mnt/external)
+#   IMMICH_BACKUP_ORIGINALS 1 to mirror upload/, profile/ and library/
+#   IMMICH_BACKUP_DRY_RUN   1 to print what rsync would do, without writing
+set -euo pipefail
+
+SRC=${IMMICH_DATA_DIR:-/mnt/immich/data}
+DEST=${IMMICH_BACKUP_DIR:-/mnt/external/immich}
+EXTERNAL=${IMMICH_BACKUP_MOUNT:-/mnt/external}
+ORIGINALS=${IMMICH_BACKUP_ORIGINALS:-0}
+DRY_RUN=${IMMICH_BACKUP_DRY_RUN:-0}
+
+die() { echo "immich-backup: $*" >&2; exit 1; }
+
+[[ -d $SRC/backups ]] || die "no dump directory at $SRC/backups"
+mountpoint -q "$EXTERNAL" \
+  || die "$EXTERNAL is not mounted; refusing to write onto the root filesystem"
+
+FSTYPE=$(findmnt -no FSTYPE "$EXTERNAL")
+case $FSTYPE in
+  exfat|vfat|ext4|xfs|btrfs) ;;
+  *) die "$EXTERNAL is $FSTYPE; refusing an unexpected filesystem" ;;
+esac
+
+# One run at a time: an overlapping timer must not race the --delete mirror.
+LOCK_DIR=${XDG_RUNTIME_DIR:-$HOME/.cache}
+mkdir -p "$LOCK_DIR"
+exec 9>"$LOCK_DIR/immich-backup.lock"
+flock -n 9 || { echo "immich-backup: another run is active; skipping"; exit 0; }
+
+mkdir -p "$DEST/backups"
+DEST_MOUNT=$(findmnt -no TARGET -T "$DEST")
+[[ $DEST_MOUNT == "$EXTERNAL" ]] \
+  || die "$DEST is on $DEST_MOUNT, not on the guarded mount $EXTERNAL"
+
+# Prove the newest dump is complete before it is mirrored: a truncated gzip is
+# worse than a missing one because it looks like a backup.
+latest=$(find "$SRC/backups" -maxdepth 1 -type f -name '*.sql.gz' \
+  -printf '%T@ %p\n' | sort -n | tail -n1 | cut -d' ' -f2-)
+[[ -n $latest ]] || die "no database dump in $SRC/backups"
+gzip -t "$latest" || die "newest dump is corrupt: $latest"
+
+# A stale "latest" means Immich's dump job stopped; copying it again would
+# report success while the backup silently ages.
+[[ -z $(find "$latest" -mmin +2880 -print -quit) ]] \
+  || die "newest dump is older than 48 hours: $latest"
+
+RSYNC_OPTS=(-rlt --delete --info=stats1)
+if [[ $DRY_RUN == 1 ]]; then
+  RSYNC_OPTS+=(--dry-run)
+  echo "immich-backup: dry run; rsync will not write"
+fi
+
+echo "immich-backup: mirroring dumps ($(basename "$latest")) to $DEST/backups"
+rsync "${RSYNC_OPTS[@]}" "$SRC/backups/" "$DEST/backups/"
+
+if [[ $ORIGINALS == 1 ]]; then
+  # --delete against an empty source would erase the mirror. The mount guard
+  # above rules out a missing disk; this rules out an empty library.
+  [[ -n $(find "$SRC/upload" -type f -print -quit 2>/dev/null) ]] \
+    || die "refusing to mirror an empty upload directory"
+
+  echo "immich-backup: mirroring originals to $DEST/data"
+  # rsync creates the final directory, not every missing parent.
+  mkdir -p "$DEST/data"
+  for dir in upload profile library; do
+    [[ -d $SRC/$dir ]] || continue
+    rsync "${RSYNC_OPTS[@]}" "$SRC/$dir/" "$DEST/data/$dir/"
+  done
+fi

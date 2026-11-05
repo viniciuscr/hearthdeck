@@ -3563,11 +3563,17 @@ name = "hearthdeck-input"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cosmic-client-toolkit",
+ "cosmic-protocols",
  "evdev",
  "hearthdeck-observability",
  "hearthdeck-protocol",
+ "serde_json",
+ "smithay-client-toolkit",
  "tokio",
  "tracing",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]
@@ -3590,6 +3596,7 @@ dependencies = [
  "futures-util",
  "hearthdeck-client",
  "hearthdeck-observability",
+ "hearthdeck-protocol",
  "libcosmic",
  "reqwest 0.12.28",
  "tokio",
@@ -3605,6 +3612,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]

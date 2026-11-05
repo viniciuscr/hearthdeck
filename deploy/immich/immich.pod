@@ -1,0 +1,7 @@
+[Pod]
+PodName=immich
+PublishPort=2283:2283
+ShmSize=128m
+
+[Install]
+WantedBy=default.target

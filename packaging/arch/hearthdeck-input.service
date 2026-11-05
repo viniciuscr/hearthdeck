@@ -5,6 +5,8 @@ PartOf=hearthdeck.target
 [Service]
 Type=exec
 Environment=RUST_LOG=hearthdeck_input=info
+Environment=HEARTHDECK_INPUT_MODE=broker
+EnvironmentFile=-%h/.config/hearthdeck/input.env
 ExecStart=/usr/lib/hearthdeck/hearthdeck-input
 Restart=on-failure
 RestartSec=2

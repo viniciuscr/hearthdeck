@@ -11,13 +11,13 @@
 //!   projections, such as event kinds or the categorization report summary, let
 //!   clients ignore payloads they do not need.
 //!
-//! The dependency list stays deliberately small, so every process can link this
-//! crate without pulling in a transport or UI stack.
+//! The local input transport uses Tokio on Unix; this crate has no UI dependency.
 
 use serde::{Deserialize, Serialize};
 
 pub mod categorization;
 pub mod classification;
+pub mod input;
 pub use classification::{CatalogClassification, FormFactor};
 pub mod paths;
 pub mod sources;
@@ -140,7 +140,7 @@ pub enum InputProfile {
 
 /// A mode change the bridge sends to the `hearthdeck-input` broker as one
 /// datagram on [`paths::input_socket_path`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct InputMode {
     pub profile: InputProfile,
     pub retro_osk: bool,

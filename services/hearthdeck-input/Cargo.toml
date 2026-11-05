@@ -6,10 +6,16 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+hearthdeck-protocol = { path = "../hearthdeck-protocol" }
+serde_json.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = { version = "0.13", features = ["tokio"] }
-hearthdeck-protocol = { path = "../hearthdeck-protocol" }
 hearthdeck-observability = { path = "../hearthdeck-observability" }
 tokio.workspace = true
 tracing.workspace = true
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "32283d7" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "32283d7", features = ["client"] }
+sctk = { package = "smithay-client-toolkit", version = "0.20.0" }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }

@@ -23,9 +23,15 @@ const SCAN_INTERVAL: Duration = Duration::from_secs(2);
 const MOUSE_INTERVAL: Duration = Duration::from_millis(16);
 
 #[derive(Clone, Copy)]
-struct AxisRange {
+pub(crate) struct AxisRange {
     minimum: i32,
     maximum: i32,
+}
+
+impl AxisRange {
+    pub(crate) fn new(minimum: i32, maximum: i32) -> Self {
+        Self { minimum, maximum }
+    }
 }
 
 enum DeviceMessage {
@@ -173,7 +179,7 @@ async fn toggle_virtual_keyboard() {
     }
 }
 
-fn bind_control_socket(path: &Path) -> Result<UnixDatagram> {
+pub(crate) fn bind_control_socket(path: &Path) -> Result<UnixDatagram> {
     if let Err(error) = std::fs::remove_file(path)
         && error.kind() != std::io::ErrorKind::NotFound
     {
@@ -184,7 +190,7 @@ fn bind_control_socket(path: &Path) -> Result<UnixDatagram> {
     Ok(socket)
 }
 
-fn create_virtual_device() -> Result<VirtualDevice> {
+pub(crate) fn create_virtual_device() -> Result<VirtualDevice> {
     let keys = [
         KeyCode::KEY_ENTER,
         KeyCode::KEY_ESC,
@@ -212,7 +218,7 @@ fn create_virtual_device() -> Result<VirtualDevice> {
         .build()?)
 }
 
-fn gamepad_devices() -> Vec<(PathBuf, Device)> {
+pub(crate) fn gamepad_devices() -> Vec<(PathBuf, Device)> {
     evdev::enumerate()
         .filter(|(_, device)| {
             device.name() != Some(DEVICE_NAME)
@@ -296,7 +302,12 @@ async fn watch_device(
         .await;
 }
 
-fn map_key(mapper: &mut Mapper, device: u64, code: KeyCode, value: i32) -> Vec<OutputEvent> {
+pub(crate) fn map_key(
+    mapper: &mut Mapper,
+    device: u64,
+    code: KeyCode,
+    value: i32,
+) -> Vec<OutputEvent> {
     let control = match code {
         KeyCode::BTN_SOUTH => Control::South,
         KeyCode::BTN_EAST => Control::East,
@@ -317,7 +328,7 @@ fn map_key(mapper: &mut Mapper, device: u64, code: KeyCode, value: i32) -> Vec<O
     mapper.button(device, control, value != 0)
 }
 
-fn map_axis(
+pub(crate) fn map_axis(
     mapper: &mut Mapper,
     device: u64,
     code: AbsoluteAxisCode,
@@ -371,7 +382,7 @@ fn map_axis(
     }
 }
 
-fn normalize_centered(value: i32, range: Option<AxisRange>) -> i32 {
+pub(crate) fn normalize_centered(value: i32, range: Option<AxisRange>) -> i32 {
     let Some(range) = range else {
         return value.clamp(-1, 1) * 1000;
     };
@@ -383,7 +394,7 @@ fn normalize_centered(value: i32, range: Option<AxisRange>) -> i32 {
     (((i64::from(value) - center) * 1000 / half_range).clamp(-1000, 1000)) as i32
 }
 
-fn normalize_trigger(value: i32, range: Option<AxisRange>) -> i32 {
+pub(crate) fn normalize_trigger(value: i32, range: Option<AxisRange>) -> i32 {
     let Some(range) = range else {
         return i32::from(value > 0) * 1000;
     };
@@ -394,7 +405,10 @@ fn normalize_trigger(value: i32, range: Option<AxisRange>) -> i32 {
     (((i64::from(value) - i64::from(range.minimum)) * 1000 / width).clamp(0, 1000)) as i32
 }
 
-fn emit(device: &mut VirtualDevice, events: impl IntoIterator<Item = OutputEvent>) -> Result<()> {
+pub(crate) fn emit(
+    device: &mut VirtualDevice,
+    events: impl IntoIterator<Item = OutputEvent>,
+) -> Result<()> {
     let events = events
         .into_iter()
         .flat_map(|event| match event {

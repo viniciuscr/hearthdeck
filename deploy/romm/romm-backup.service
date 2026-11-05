@@ -1,0 +1,9 @@
+[Unit]
+Description=Dump the RomM database to the external disk
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/romm-backup.env
+ExecStart=%h/.local/bin/romm-backup
+Nice=10
+IOSchedulingClass=idle
