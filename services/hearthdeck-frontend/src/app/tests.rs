@@ -2032,6 +2032,50 @@ fn the_background_follows_the_pad_across_the_rail() {
     assert_eq!(app.backdrop_motion().fading, None);
 }
 
+/// The page keeps its place in the dashboard's widget tree wherever the pad is:
+/// the background's art comes and goes as the pad walks, and a layer that comes
+/// and goes re-mounts the page below it - which takes the scroll position with
+/// it, so the page snaps back to the top as the pad steps off the arrivals.
+#[test]
+fn the_pages_place_under_the_background_does_not_depend_on_what_it_shows() {
+    use cosmic::iced::core::widget::tree::Tree;
+
+    /// A tree's structure: every node's state tag and its children.
+    fn shape(tree: &Tree) -> String {
+        let children: Vec<String> = tree.children.iter().map(shape).collect();
+        format!("{:?}{children:?}", tree.tag)
+    }
+
+    /// How many layers the dashboard draws, and the shape of the page below
+    /// them - the layer the scroll position lives in.
+    fn layers(app: &App) -> (usize, String) {
+        let tree = Tree::new(app.view().as_widget());
+        let page = tree.children.last().expect("the page is drawn");
+        (tree.children.len(), shape(page))
+    }
+
+    let mut app = shell();
+    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+        collection("favorites", None, &["hearthdeck:game-0"]),
+    ])));
+
+    // On the arrivals, whose cards carry the wide art the background draws...
+    app.backdrop_at = dashboard::backdrop::At { rail: 0, card: 0 };
+    app.backdrop_fade = None;
+    let on_art = layers(&app);
+
+    // ...and on the rail below, whose cards carry none, so the background has
+    // nothing to draw and the wallpaper shows through.
+    app.backdrop_at = dashboard::backdrop::At { rail: 1, card: 0 };
+    let on_wallpaper = layers(&app);
+
+    assert!(
+        on_art == on_wallpaper,
+        "the page keeps its place below the background, and its scroll with it",
+    );
+}
+
 /// The first rail snaps the page to its top: the blank space above it is kept
 /// for the art and comes with the rail into view - the rail at the bottom of
 /// the screen and the window onto the art filling everything above it, at

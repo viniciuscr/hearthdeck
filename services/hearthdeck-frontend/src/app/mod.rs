@@ -1376,26 +1376,27 @@ impl App {
         };
         // The focused title's wide art fills the window behind the page,
         // cross-fading as the pad walks; wherever the pad is on a card whose
-        // feed sent no art, this draws nothing and the wallpaper shows.
-        let screen: Element<'_, Message> =
-            match dashboard::backdrop::view(&shelves, self.backdrop_motion()) {
-                Some(art) => stack![art.map(Message::Dashboard), screen].into(),
-                None => screen,
-            };
+        // feed sent no art, it draws nothing and the wallpaper shows. Both
+        // background layers stay in the tree whatever they are showing - an
+        // empty layer stands in for what there is nothing to draw - because a
+        // layer that comes and goes remounts the page below it, and the page
+        // loses where it is scrolled to with it: the arrivals' art handing back
+        // to the wallpaper as the pad steps down would snap the page back to
+        // the top.
+        let art: Element<'_, Message> = dashboard::backdrop::view(&shelves, self.backdrop_motion())
+            .map_or_else(empty_layer, |art| art.map(Message::Dashboard));
         // The dashboard wears the desktop: whatever cosmic-bg is showing is
         // drawn full-bleed as the page, over the theme's own background - which
         // shows through where the image does not reach, and stands in for it
         // when there is no image at all. The library keeps the plain surface:
         // its grid is dense art already.
-        let page: Element<'_, Message> = match self.wallpaper.as_ref() {
-            Some(wallpaper) => stack![
-                backdrop_fit(&wallpaper.handle, wallpaper.fit, Length::Fill, Length::Fill),
-                screen
-            ]
-            .into(),
-            None => screen,
-        };
-        container(page)
+        let wallpaper: Element<'_, Message> = self
+            .wallpaper
+            .as_ref()
+            .map_or_else(empty_layer, |wallpaper| {
+                backdrop_fit(&wallpaper.handle, wallpaper.fit, Length::Fill, Length::Fill)
+            });
+        container(stack![wallpaper, art, screen])
             .width(Length::Fill)
             .height(Length::Fill)
             .class(theme::Container::Custom(Box::new(root_background)))
@@ -1731,6 +1732,18 @@ fn dashboard_card_id(slug: &str, index: usize) -> Id {
 
 /// Puts the renderer's focus on one widget.
 ///
+/// A layer that draws nothing.
+///
+/// The dashboard draws its background layers whatever they show, so the page
+/// below them keeps its place in the widget tree - and, with it, the position
+/// it is scrolled to.
+fn empty_layer<'a>() -> Element<'a, Message> {
+    container(text(""))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
 /// The shell's cursor decides what the user is on; this only reproduces it in
 /// iced, which is where a button's `focused` style flag - and so the design
 /// system's focus ring - comes from.
