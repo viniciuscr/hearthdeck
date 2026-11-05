@@ -78,7 +78,7 @@ impl App {
     }
 
     /// The dashboard's rails: the daemon's collections, in the order it composes
-    /// them, with a consoles rail at the top when RomM is configured.
+    /// them, with a consoles rail closing the page when RomM is configured.
     ///
     /// Drawn from the collections rather than from a list of known shelves, so a
     /// collection nobody wrote frontend code for - which is what a feature's own
@@ -106,8 +106,9 @@ impl App {
     ///
     /// What has just arrived on Stremio comes first, in the banner's old place:
     /// it is a collection rail like every other, drawn on top with the wide art
-    /// that fills the window behind the page. Then the RomM consoles, then the
-    /// rest of the daemon's collections in the order it composes them.
+    /// that fills the window behind the page. Then the rest of the daemon's
+    /// collections in the order it composes them, and the RomM consoles last -
+    /// secondary navigation, so it closes the page rather than opening it.
     fn dashboard_rails(&self) -> Vec<Rail<'_>> {
         let (arrivals, rest): (Vec<_>, Vec<_>) = self
             .collections
@@ -115,10 +116,10 @@ impl App {
             .filter(|collection| !collection.items.is_empty())
             .partition(|collection| collection.slug == NEW_ARRIVALS_COLLECTION);
         let mut rails: Vec<Rail<'_>> = arrivals.into_iter().map(Rail::Collection).collect();
+        rails.extend(rest.into_iter().map(Rail::Collection));
         if !self.console_platforms.is_empty() {
             rails.push(Rail::Consoles);
         }
-        rails.extend(rest.into_iter().map(Rail::Collection));
         if rails.is_empty() {
             rails.push(Rail::Library);
         }
@@ -444,12 +445,12 @@ impl App {
     /// Puts the pad back on the card it was on after the rails changed under
     /// it, and lands the page under it.
     ///
-    /// Rails arrive late - the RomM consoles insert themselves below the
-    /// arrivals once the server answers - and empty ones drop out, so a rail's
-    /// number is not its identity: an insert above the pad renumbers every rail
-    /// below it. The card's own id names its collection and its place in it, so
-    /// the pad goes back to the card it chose; a card that is gone leaves the
-    /// cursor clamped to the new rails.
+    /// Rails arrive late - the RomM consoles append themselves at the end once
+    /// the server answers - and empty ones drop out, so a rail's number is not
+    /// its identity: a rail that moves renumbers every rail past the pad. The
+    /// card's own id names its collection and its place in it, so the pad goes
+    /// back to the card it chose; a card that is gone leaves the cursor clamped
+    /// to the new rails.
     pub(super) fn reland_dashboard(&mut self, was: Option<Id>) -> Task<Message> {
         if let Some(was) = was {
             for (rail, source) in self.dashboard_rails().iter().enumerate() {

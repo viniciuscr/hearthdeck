@@ -644,10 +644,9 @@ impl Application for App {
                 if platforms.is_empty() {
                     return Task::none();
                 }
-                // Store the consoles for the dashboard rail. The rail inserts
-                // itself below the arrivals and renumbers the rails under the
-                // pad, so the pad is named by the card it was on and put back
-                // on it once the list is rebuilt.
+                // Store the consoles for the dashboard rail. The rail appends
+                // itself at the end of the page, so the pad is named by the
+                // card it was on and put back on it once the list is rebuilt.
                 let was = self.dashboard_cursor_card();
                 self.console_platforms = platforms.clone();
                 let platform_tuples: Vec<(i64, String)> =

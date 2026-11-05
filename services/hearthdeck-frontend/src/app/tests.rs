@@ -1849,8 +1849,8 @@ fn a_rail_below_the_fold_still_follows_the_cursor_sideways() {
 }
 
 /// A rail that arrives late - the RomM consoles, whose server is still loading -
-/// is inserted under the cursor's feet. The pad stays on the rail it chose and
-/// the page stays under it: no snap back to the top.
+/// is appended past the pad. The pad stays on the rail it chose and the page
+/// stays under it: no snap back to the top.
 #[test]
 fn a_rail_that_arrives_late_does_not_snap_the_page_back_to_the_top() {
     let mut app = shell();
@@ -1866,8 +1866,8 @@ fn a_rail_that_arrives_late_does_not_snap_the_page_back_to_the_top() {
     assert!(landed > 0.0, "the page moved down to the rail: {landed}");
     assert_eq!(app.dashboard_cursor.rail, 1);
 
-    // The consoles arrive: a rail is inserted right below the arrivals, under
-    // the cursor's feet.
+    // The consoles arrive: a rail is appended at the end of the page, past
+    // the pad.
     let _ = app.update(Message::ConsolesLoaded(Ok(vec![
         crate::providers::daemon::RetroConsole {
             id: 1,
@@ -1877,7 +1877,7 @@ fn a_rail_that_arrives_late_does_not_snap_the_page_back_to_the_top() {
     ])));
 
     assert_eq!(
-        app.dashboard_cursor.rail, 2,
+        app.dashboard_cursor.rail, 1,
         "the cursor stays on the rail it chose"
     );
     assert!(
@@ -2202,7 +2202,7 @@ fn two_rails() -> App {
 /// The pad walks the rails by their lengths alone, counted without building a
 /// card, so each count must be the number of cards the view draws: an empty
 /// dashboard, the library fallback, a rail past the tile cap, and consoles
-/// between the arrivals and the rest.
+/// closing the page.
 #[test]
 fn the_rail_lengths_the_pad_walks_are_the_cards_the_view_draws() {
     fn drawn(app: &App) -> Vec<usize> {
@@ -2240,7 +2240,7 @@ fn the_rail_lengths_the_pad_walks_are_the_cards_the_view_draws() {
     ])));
     assert_eq!(
         app.dashboard_rail_lengths(),
-        vec![1, 1, crate::style::DASHBOARD_RAIL_TILES]
+        vec![1, crate::style::DASHBOARD_RAIL_TILES, 1]
     );
     assert_eq!(app.dashboard_rail_lengths(), drawn(&app));
 }
@@ -2281,15 +2281,6 @@ fn dashboard_activation_reads_the_selected_source_and_clamps_to_the_drawn_cap() 
         Some(Message::Dashboard(dashboard::Message::CardPressed { id, title })) if id == "stremio:arrival" && title == "stremio:arrival"
     ));
     app.dashboard_cursor.rail = 1;
-    assert!(matches!(
-        app.dashboard_confirm_message(),
-        Some(Message::Dashboard(dashboard::Message::ConsolePressed(42)))
-    ));
-    assert_eq!(
-        app.dashboard_cursor_card(),
-        Some(dashboard_card_id("consoles", 0))
-    );
-    app.dashboard_cursor.rail = 2;
     app.dashboard_cursor.card = usize::MAX;
     let last = crate::style::DASHBOARD_RAIL_TILES - 1;
     assert!(matches!(
@@ -2299,6 +2290,16 @@ fn dashboard_activation_reads_the_selected_source_and_clamps_to_the_drawn_cap() 
     assert!(
         app.dashboard_cursor_card().is_none(),
         "identity lookup does not clamp"
+    );
+    app.dashboard_cursor.rail = 2;
+    app.dashboard_cursor.card = 0;
+    assert!(matches!(
+        app.dashboard_confirm_message(),
+        Some(Message::Dashboard(dashboard::Message::ConsolePressed(42)))
+    ));
+    assert_eq!(
+        app.dashboard_cursor_card(),
+        Some(dashboard_card_id("consoles", 0))
     );
 }
 
@@ -2321,7 +2322,10 @@ fn source_card_identity_matches_rendered_ids_after_rails_are_inserted_or_removed
         artwork: None,
     }];
     let _ = app.reland_dashboard(was);
-    assert_eq!(app.dashboard_cursor.rail, 2);
+    assert_eq!(
+        app.dashboard_cursor.rail, 1,
+        "the pad is back on the card it chose, wherever the rails moved it"
+    );
     let shelves = app.dashboard_shelves();
     for (rail, shelf) in shelves.iter().enumerate() {
         for (card, drawn) in shelf.cards.iter().enumerate() {
@@ -2373,6 +2377,37 @@ fn the_dashboards_rails_are_the_daemons_collections() {
     assert_eq!(shelves[1].title, "Action picks");
     // And the pad walks what the view draws.
     assert_eq!(app.dashboard_rail_lengths(), vec![1, 1]);
+}
+
+/// The consoles rail closes the page: console navigation is secondary, so it
+/// is the last rail rather than the one under the arrivals.
+#[test]
+fn the_consoles_rail_is_the_last_rail_on_the_page() {
+    let mut app = shell();
+    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
+        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+        collection("favorites", None, &["hearthdeck:game-0"]),
+    ])));
+    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
+        crate::providers::daemon::RetroConsole {
+            id: 1,
+            label: "Mega Drive".to_owned(),
+            artwork: None,
+        },
+    ])));
+
+    let shelves = app.dashboard_shelves();
+    assert_eq!(
+        shelves.len(),
+        3,
+        "the arrivals, one collection and consoles"
+    );
+    assert_eq!(shelves[0].title, fl!("new-arrivals"));
+    assert_eq!(
+        shelves.last().expect("a shelf").title,
+        fl!("consoles"),
+        "the consoles rail is last, not the one under the arrivals"
+    );
 }
 
 /// A collection with neither a known slug nor a name falls back to its slug
