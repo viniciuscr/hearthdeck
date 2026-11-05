@@ -23,6 +23,11 @@ impl App {
     /// The pad and the keyboard both arrive here, so there is one place that
     /// knows what a step, a confirm and Back mean - and no control that decides
     /// it for itself.
+    ///
+    /// The events are two tiers. A step, a confirm, Back and search are the
+    /// shell's, with one meaning on every screen. A chord belongs to one
+    /// screen, and [`Self::navigate_chord`] hands it to that screen - or drops
+    /// it, when the screen showing has no such chord.
     pub(super) fn navigate(&mut self, event: GamepadEvent) -> Task<Message> {
         // The details screen owns the whole surface while it is up: it moves
         // its own cursor and runs its own actions, and the chords belong to the
@@ -62,17 +67,49 @@ impl App {
             // box has it, the keyboard takes the pad (see the gamepad arm of
             // `update`).
             GamepadEvent::Keyboard => self.update(Message::OpenSearch),
-            GamepadEvent::ContextMenu => self.context_action(),
-            // The shoulder buttons switch section and the triggers switch tab.
-            // They are chords rather than places on the screen, so they wrap
-            // where a step stops at the end of the grid.
-            GamepadEvent::PrevGroup => self.switch_section(-1),
-            GamepadEvent::NextGroup => self.switch_section(1),
-            GamepadEvent::PrevTab => self.switch_tab(-1),
-            GamepadEvent::NextTab => self.switch_tab(1),
-            // The drawer is a surface over the grid rather than a place in it,
-            // so it has its own button instead of being walked to.
-            GamepadEvent::FilterPanel => self.update_filters(filters::Message::Toggle),
+            GamepadEvent::ContextMenu
+            | GamepadEvent::PrevGroup
+            | GamepadEvent::NextGroup
+            | GamepadEvent::PrevTab
+            | GamepadEvent::NextTab
+            | GamepadEvent::FilterPanel => self.navigate_chord(event),
+        }
+    }
+
+    /// What a chord means, and on which screen.
+    ///
+    /// The shoulders' section switch, the triggers' tab switch, Select's
+    /// drawer and X's tile menu are the library's own navigation - the chords
+    /// belong to it the way they belong to it under the details screen. On a
+    /// sibling page they would move a screen the user is not looking at:
+    /// switching section is what opened the library out of nowhere from the
+    /// dashboard. A screen that has not claimed a chord gets nothing, so a new
+    /// screen starts inert instead of inheriting the library's chords.
+    fn navigate_chord(&mut self, event: GamepadEvent) -> Task<Message> {
+        match self.page {
+            Page::Library => match event {
+                // The shoulder buttons switch section and the triggers switch
+                // tab. They are chords rather than places on the screen, so
+                // they wrap where a step stops at the end of the grid.
+                GamepadEvent::PrevGroup => self.switch_section(-1),
+                GamepadEvent::NextGroup => self.switch_section(1),
+                GamepadEvent::PrevTab => self.switch_tab(-1),
+                GamepadEvent::NextTab => self.switch_tab(1),
+                // The drawer is a surface over the grid rather than a place in
+                // it, so it has its own button instead of being walked to.
+                GamepadEvent::FilterPanel => self.update_filters(filters::Message::Toggle),
+                GamepadEvent::ContextMenu => self.context_action(),
+                // The tier above owns the steps, the confirm, Back and search.
+                GamepadEvent::MoveUp
+                | GamepadEvent::MoveDown
+                | GamepadEvent::MoveLeft
+                | GamepadEvent::MoveRight
+                | GamepadEvent::Confirm
+                | GamepadEvent::Back
+                | GamepadEvent::Search
+                | GamepadEvent::Keyboard => Task::none(),
+            },
+            Page::Dashboard | Page::Settings | Page::Details => Task::none(),
         }
     }
 
@@ -178,17 +215,16 @@ impl App {
     }
 
     /// The X button: what the user can do with what the cursor is on.
+    ///
+    /// Only the library reaches here: the menu belongs to its grid - on a
+    /// sibling page it would open over a tile the screen does not show, and
+    /// from then on the pad would walk that invisible menu instead of the page
+    /// in front of it - so the chord tier keeps the button on that screen.
     pub(super) fn context_action(&mut self) -> Task<Message> {
         // An open menu takes the button back: it is the innermost surface, so
         // the press closes it before it reaches anything behind it.
         if self.menu.is_open() {
             self.menu.close();
-            return Task::none();
-        }
-        // The menu belongs to the library grid: on a sibling page it would open
-        // over a tile the screen does not show, and from then on the pad would
-        // walk that invisible menu instead of the page in front of it.
-        if self.page != Page::Library {
             return Task::none();
         }
         // Inside the drawer, X is the one thing a drawer cannot do for itself:
@@ -376,9 +412,12 @@ impl App {
         let tabs = self.tabs.get(self.cur_section).len() as i32 + 1;
         let current = self.cur_group.map_or(0, |group| group as i32 + 1);
         let next = (current + delta).rem_euclid(tabs);
-        self.update(Message::SelectGroup(
-            next.checked_sub(1).map(|group| group as usize),
-        ))
+        // The strip numbers the "all" tab 0 and the groups after it
+        // (`header::tab_index`), so a group is its position minus one - and the
+        // subtraction happens as a `usize`: on the `i32` position, 0 - 1 is a
+        // representable -1, which named `usize::MAX`'s tab instead of the "all"
+        // tab at the head of the strip.
+        self.update(Message::SelectGroup((next as usize).checked_sub(1)))
     }
 
     /// Scrolls the tab strip so the tab at `index` is on screen.

@@ -930,6 +930,77 @@ fn the_pad_never_leaves_the_content() {
     );
 }
 
+/// The library's chords - the shoulders' section switch, the triggers' tab
+/// switch and Select's drawer - belong to the library. What the user
+/// complained about, pinned: off that page they move nothing at all, least of
+/// all the library the screen is not showing.
+#[test]
+fn the_librarys_chords_do_nothing_off_the_library() {
+    let events = [
+        GamepadEvent::PrevGroup,
+        GamepadEvent::NextGroup,
+        GamepadEvent::PrevTab,
+        GamepadEvent::NextTab,
+        GamepadEvent::FilterPanel,
+        GamepadEvent::ContextMenu,
+    ];
+    for page in [Page::Dashboard, Page::Settings, Page::Details] {
+        let mut app = showing(12);
+        app.page = page;
+        // A tab to switch to, so a leaking chord has somewhere to go.
+        add_pc_tab(&mut app, "Favorites");
+        let before = (
+            app.page,
+            app.cur_section,
+            app.cur_group,
+            app.filters.is_open(),
+        );
+        for event in events {
+            send(&mut app, event);
+            settle(&mut app);
+            assert_eq!(
+                (
+                    app.page,
+                    app.cur_section,
+                    app.cur_group,
+                    app.filters.is_open(),
+                ),
+                before,
+                "{page:?} + {event:?}"
+            );
+        }
+    }
+}
+
+/// The same chords are the library's own, and there they keep the behavior
+/// the unification gave them: the shoulders switch section, the triggers
+/// switch tab, and Select opens the drawer. Scoping must not undo this.
+#[test]
+fn the_library_keeps_its_section_tab_and_drawer_chords() {
+    let mut app = showing(12);
+    add_pc_tab(&mut app, "Favorites");
+
+    send(&mut app, GamepadEvent::NextGroup);
+    settle(&mut app);
+    assert_eq!(app.page, Page::Library, "NextGroup stays on the library");
+    assert_eq!(app.cur_section, Section::ConsoleGames, "NextGroup");
+
+    send(&mut app, GamepadEvent::PrevGroup);
+    settle(&mut app);
+    assert_eq!(app.cur_section, Section::PcGames, "PrevGroup");
+
+    send(&mut app, GamepadEvent::NextTab);
+    settle(&mut app);
+    assert_eq!(app.cur_group, Some(0), "NextTab lands on the first tab");
+
+    send(&mut app, GamepadEvent::PrevTab);
+    settle(&mut app);
+    assert_eq!(app.cur_group, None, "PrevTab is back on the all tab");
+
+    send(&mut app, GamepadEvent::FilterPanel);
+    assert!(app.filters.is_open(), "FilterPanel opens the drawer");
+}
+
 /// The remembered column: stepping down out of a row that ends early does
 /// not drag the cursor to the first column, and stepping back up returns to
 /// the column the user came down in.
@@ -972,7 +1043,8 @@ fn confirm_launches_the_tile_the_cursor_is_on() {
 }
 
 /// A shell whose section offers two tabs: the "all" tab, plus the store its
-/// entries came from.
+/// entries came from. It is on the library page - a test about the tab strip
+/// has to be on the page that has one, and the app opens on the dashboard.
 fn showing_two_tabs() -> App {
     let mut app = navigable();
     let entries = (0..4)
@@ -984,6 +1056,7 @@ fn showing_two_tabs() -> App {
         })
         .collect();
     let _ = app.update(Message::CatalogLoaded(Ok(entries)));
+    app.page = Page::Library;
     app
 }
 
