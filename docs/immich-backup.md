@@ -6,6 +6,14 @@ external SSD; the database does not.
 Checked against Immich **v3.3.4** (released 2026-10-20) and Podman **6.1.4** on
 2026-10-21.
 
+> **Reinstalling on an existing disk:** do not follow steps 1–3. Step 1 formats
+> the disk; steps 2–3 are what
+> [`deploy/immich/install.sh`](../deploy/immich/install.sh) does, without
+> touching the library. Use
+> [`deploy/immich/README.md`](../deploy/immich/README.md) for the bare-metal
+> reinstall and restore procedure. The steps below are the original build for a
+> blank disk.
+
 ## Decision
 
 - **Runtime:** rootless Podman under a dedicated `immich` user, declared as a
@@ -15,6 +23,11 @@ Checked against Immich **v3.3.4** (released 2026-10-20) and Podman **6.1.4** on
   server container.
 - **Database:** a Podman named volume on the internal disk. It is 1–3 GB,
   latency-sensitive, and must not vanish when the SSD is unplugged.
+- **Off-disk backup:** the nightly timer mirrors the database dumps to the
+  second disk. It does not mirror the originals: the second disk is not the
+  place for a second copy of the library, and the full-library backup is a later
+  cloud step. Until that step exists, the library disk is the only copy of the
+  photos.
 - **Version:** `ghcr.io/immich-app/*:v3`, upgraded by hand after reading the
   release notes. No `podman auto-update`.
 
@@ -47,13 +60,17 @@ image; never change the Postgres major version on an existing volume.
 | --- | --- | --- |
 | Podman / compose provider | 6.1.4 / podman-compose 1.6.0 | `podman compose` delegates to `podman-compose`. |
 | CPU / RAM | 4 cores / 7.6 GiB | Immich minimum is 6 GiB, recommendation 8 GiB. It fits, but ML and the desktop compete; swap is already configured. |
-| Root filesystem | 18 GiB free | Images (~3.6 GB), model cache (~1 GB) and the database (1–3 GB) all live here. This is the tightest constraint. |
+| Root filesystem | 21 GiB free | Images (~3.6 GB), model cache (~1 GB) and the database (1–3 GB) all live here. This is the tightest constraint. |
 | External SSD | 1 TB Crucial X9 (USB) | Library. Use a blue USB 3 port; the 480 Mbps bus caps copies at roughly 40 MB/s. |
-| Second disk | 1 TB Crucial X10 at `/mnt/external` (exFAT) | Backup copy only, never the database. |
+| Second disk | 1 TB Crucial X10 at `/mnt/external` (exFAT) | Database-dump mirror; never the live database. The originals are not copied here. |
 | Firewall | ufw active, no SELinux | Open `2283` for the LAN subnet only. Do not add `:z` mount flags here. |
 | LAN address | your server's LAN IP (Wi-Fi) | Phones use `http://<server-lan-ip>:2283`. |
 
 ## 1. Prepare the SSD
+
+Skip this step when the disk already contains an Immich library. This is only
+for a genuinely blank disk; `install.sh` mounts an existing ext4 filesystem and
+never formats it.
 
 Replace `/dev/sdX` with the new disk; confirm with `lsblk -o
 NAME,SIZE,MODEL,SERIAL,TRAN` before writing anything. This erases the disk.
@@ -236,8 +253,8 @@ container that references `immich.pod` to the pod unit, so starting the pod
 starts them all and the pod is what boots.
 
 The five files are versioned in [`deploy/immich/`](../deploy/immich/). The
-non-destructive reinstall path (`install.sh`), the database restore procedure,
-and the nightly off-disk copy timer are documented in
+non-destructive reinstall path (`install.sh`), the database and originals
+restore procedure, and the nightly off-disk mirror timer are documented in
 [`deploy/immich/README.md`](../deploy/immich/README.md). That runbook is the
 one to follow after a machine format; the provisioning script that created this
 host is not, because it wipes the disk first.
@@ -305,34 +322,53 @@ read-only mount prevents deleting them from the web UI.
 
 ## 6. Backups
 
-The SSD is primary storage, not a backup. A dead USB controller loses
-everything on it. Immich's automatic dumps live on the same disk, so they do
+The library disk is primary storage, not a backup. A dead USB controller loses
+everything on it, and Immich's automatic dumps live on the same disk, so they do
 not count either.
 
-The minimum worth doing:
+Today the second disk receives the **database dumps only**. Mirroring the
+originals there was considered and rejected for space: the external disk already
+holds other data, and the full-library backup is a later cloud step. Until that
+cloud copy exists, the library disk is the only copy of the photos. The dump is
+the catalogue, not the files: restoring it without the originals gives a library
+whose entries point at missing images.
+
+### What has to be copied (current scope)
+
+| Piece | Path | Off-disk copy today |
+| --- | --- | --- |
+| Originals | `data/upload/` (and `data/library/` with the storage template) | none; cloud backup later |
+| Avatars | `data/profile/` | none |
+| Database dumps | `data/backups/` | nightly to `/mnt/external` |
+| Thumbnails, transcoded video | `data/thumbs/`, `data/encoded-video/` | skip; Immich regenerates them |
+
+### Nightly dump mirror
 
 1. Keep **Administration → Settings → Database Dump Settings** enabled. The
-   dumps land in `/mnt/immich/data/backups/`.
-2. Mirror the dumps to the second disk nightly, database first. The timer in
-   [`deploy/immich/`](../deploy/immich/) runs as the desktop user, verifies the
-   newest dump with `gzip -t`, and refuses to run when `/mnt/external` is not
-   mounted. Set `IMMICH_BACKUP_ORIGINALS=1` in `~/.config/immich-backup.env` to
-   copy the library too; thumbnails and encoded video are regenerated, so they
-   are skipped. The manual equivalent is:
+   dumps land in `/mnt/immich/data/backups/` (daily 02:00, keep 14).
+2. Install the mirror as the desktop user:
+
+   ```sh
+   deploy/immich/install-backup.sh
+   systemctl --user start immich-backup.service
+   ```
+
+   The default is dumps only. The script refuses a missing `/mnt/external`, a
+   corrupt newest dump, and a dump older than 48 hours (which means Immich's own
+   dump job stopped). `IMMICH_BACKUP_DRY_RUN=1` previews without writing.
+
+   The manual equivalent is:
 
    ```sh
    rsync -rlt --delete /mnt/immich/data/backups/ /mnt/external/immich/backups/
-   rsync -rlt --delete /mnt/immich/data/upload/ /mnt/external/immich/data/upload/
    ```
 
-   `/mnt/external` is the second 1 TB disk (exFAT, so `-rlt` instead of
-   `-a`: exFAT cannot store Unix ownership or permissions). Do **not** use
-   `/srv` on the internal disk; it has only ~18 GiB free and cannot hold the
-   library. Check `findmnt /mnt/external` and `df -h /mnt/external` first: if
-   the disk is not mounted, rsync would write to the internal disk instead.
-   Both disks are 1 TB, so the backup only fits if the second disk is mostly
-   empty. `--delete` mirrors deletions; make sure `/mnt/external/immich` is the
-   right target before the first run.
+   `/mnt/external` is the second 1 TB disk (exFAT, so `-rlt` instead of `-a`:
+   exFAT cannot store Unix ownership or permissions). Do **not** use `/srv` on
+   the internal disk; it has only ~21 GiB free and cannot hold the library.
+   Check `findmnt /mnt/external` and `df -h /mnt/external` first: if the disk is
+   not mounted, rsync would write to the internal disk instead. `--delete`
+   mirrors deletions, so treat it as a mirror, not an archive.
 3. Take an immediate dump before upgrades:
 
    ```sh
@@ -345,9 +381,26 @@ The minimum worth doing:
    supported path is **Administration → Maintenance → Restore database backup**;
    the command-line disaster path is in the
    [official backup docs](https://immich.app/docs/administration/backup-and-restore).
+   The reinstall procedure, including seeding a dump from the mirror before the
+   first start, is in [`deploy/immich/README.md`](../deploy/immich/README.md).
 
-For a real 3-2-1 setup, add a third copy off-site (another disk taken elsewhere,
-or restic/borg to a remote). `rsync` only gives you the second copy.
+### If originals mirroring is enabled later
+
+The script keeps an opt-in `--originals` flag (or `IMMICH_BACKUP_ORIGINALS=1` in
+`~/.config/immich-backup.env`). Do not turn it on without checking
+`df -h /mnt/external`: the first run copies the whole library (about 82 GB on
+this machine), and `--delete` makes the copy follow deletions. A second local
+disk is still not the third copy a 3-2-1 setup needs; the cloud backup is what
+survives theft, fire, and a bad `rm`.
+
+### The secret and the dump
+
+A dump contains the `immich` database, not the Postgres cluster roles. On a
+formatted machine the new `immich-db` volume is initialised with the new
+`immich-db-password` secret, and the restored dump is used with that same
+password. That is why `install.sh` can create a fresh secret safely. Restoring
+the raw Postgres volume is a different operation: it needs the old secret, and
+it is not the supported path.
 
 ## 7. Upgrades
 

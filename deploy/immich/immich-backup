@@ -11,12 +11,14 @@
 #   IMMICH_BACKUP_DIR       destination directory   (default /mnt/external/immich)
 #   IMMICH_BACKUP_MOUNT     mount that must be up   (default /mnt/external)
 #   IMMICH_BACKUP_ORIGINALS 1 to mirror upload/, profile/ and library/
+#   IMMICH_BACKUP_DRY_RUN   1 to print what rsync would do, without writing
 set -euo pipefail
 
 SRC=${IMMICH_DATA_DIR:-/mnt/immich/data}
 DEST=${IMMICH_BACKUP_DIR:-/mnt/external/immich}
 EXTERNAL=${IMMICH_BACKUP_MOUNT:-/mnt/external}
 ORIGINALS=${IMMICH_BACKUP_ORIGINALS:-0}
+DRY_RUN=${IMMICH_BACKUP_DRY_RUN:-0}
 
 die() { echo "immich-backup: $*" >&2; exit 1; }
 
@@ -53,8 +55,14 @@ gzip -t "$latest" || die "newest dump is corrupt: $latest"
 [[ -z $(find "$latest" -mmin +2880 -print -quit) ]] \
   || die "newest dump is older than 48 hours: $latest"
 
+RSYNC_OPTS=(-rlt --delete --info=stats1)
+if [[ $DRY_RUN == 1 ]]; then
+  RSYNC_OPTS+=(--dry-run)
+  echo "immich-backup: dry run; rsync will not write"
+fi
+
 echo "immich-backup: mirroring dumps ($(basename "$latest")) to $DEST/backups"
-rsync -rlt --delete --info=stats1 "$SRC/backups/" "$DEST/backups/"
+rsync "${RSYNC_OPTS[@]}" "$SRC/backups/" "$DEST/backups/"
 
 if [[ $ORIGINALS == 1 ]]; then
   # --delete against an empty source would erase the mirror. The mount guard
@@ -63,8 +71,10 @@ if [[ $ORIGINALS == 1 ]]; then
     || die "refusing to mirror an empty upload directory"
 
   echo "immich-backup: mirroring originals to $DEST/data"
+  # rsync creates the final directory, not every missing parent.
+  mkdir -p "$DEST/data"
   for dir in upload profile library; do
     [[ -d $SRC/$dir ]] || continue
-    rsync -rlt --delete --info=stats1 "$SRC/$dir/" "$DEST/data/$dir/"
+    rsync "${RSYNC_OPTS[@]}" "$SRC/$dir/" "$DEST/data/$dir/"
   done
 fi

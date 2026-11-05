@@ -16,12 +16,15 @@
 #   IMMICH_MOUNT        mount point (default: /mnt/immich)
 #   IMMICH_USER         service user (default: immich)
 #   IMMICH_LAN_SUBNET   optional ufw source subnet for port 2283
+#   IMMICH_NO_START     1 to install without starting the pod, so a dump can be
+#                       seeded into $IMMICH_MOUNT/data/backups first
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 MOUNT=${IMMICH_MOUNT:-/mnt/immich}
 USER_NAME=${IMMICH_USER:-immich}
 DEVICE=${IMMICH_DEVICE:-}
+NO_START=${IMMICH_NO_START:-0}
 
 die() { echo "install-immich: $*" >&2; exit 1; }
 
@@ -114,8 +117,25 @@ if ufw status 2>/dev/null | grep -q "Status: active"; then
   fi
 fi
 
-echo "starting Immich; the first start pulls about 3.6 GB of images"
 as_user systemctl --user daemon-reload
+
+if [[ $NO_START == 1 ]]; then
+  cat <<EOF
+
+Installed, but not started (IMMICH_NO_START=1).
+
+The database is empty. Put the dump to restore in $MOUNT/data/backups first,
+then start the pod:
+
+  sudo install -o $USER_NAME -g $USER_NAME -m 644 <dump>.sql.gz $MOUNT/data/backups/
+  sudo machinectl shell $USER_NAME@
+  systemctl --user start immich-pod
+
+EOF
+  exit 0
+fi
+
+echo "starting Immich; the first start pulls about 3.6 GB of images"
 as_user systemctl --user start immich-pod
 as_user systemctl --user --no-pager status immich-pod || true
 
