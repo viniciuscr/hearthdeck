@@ -2020,7 +2020,7 @@ fn a_rail_card_draws_the_icon_its_own_item_carries() {
     })])));
     let rail = |app: &mut App, icon: Option<&str>| {
         let _ = app.update(collections_loaded(
-            &app,
+            app,
             Ok(vec![Collection {
                 slug: "favorites".to_owned(),
                 kind: "membership".to_owned(),
