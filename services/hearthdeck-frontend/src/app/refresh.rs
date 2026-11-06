@@ -5,8 +5,8 @@
 //! normal case when both start together - used to leave the dashboard on its
 //! fallback shelf for the whole session, with only a log line to say why.
 //!
-//! Collection reads carry request identity from scheduling through completion.
-//! Only the latest scheduled read may replace rails or continue a retry chain.
+//! Catalog and collection reads carry separate identities from scheduling through
+//! completion. Only each resource's latest read may replace it or continue retries.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +20,16 @@ use super::{App, Message, Page};
 
 /// How long a failed read waits before it is tried again.
 const DATA_RETRY_INTERVAL: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CatalogRequest(u64);
+
+impl CatalogRequest {
+    pub(super) fn begin(&mut self) -> Self {
+        self.0 += 1;
+        *self
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CollectionRequest(u64);
@@ -141,7 +151,8 @@ impl App {
     }
 
     /// Fetches the whole catalog after `delay`.
-    pub(super) fn load_catalog(&self, delay: Duration) -> Task<Message> {
+    pub(super) fn load_catalog(&mut self, delay: Duration) -> Task<Message> {
+        let request = self.catalog_request.begin();
         let client = self.daemon_client.clone();
         Task::perform(
             async move {
@@ -152,7 +163,7 @@ impl App {
                     .map(|items| items.into_iter().map(Arc::new).collect())
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::CatalogLoaded(result)),
+            move |result| cosmic::Action::App(Message::CatalogLoaded(request, result)),
         )
     }
 

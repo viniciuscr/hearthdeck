@@ -134,7 +134,10 @@ pub enum Message {
     Romm(settings::romm::Message),
     /// The catalog fetched from the daemon, rendered as tiles, or why it could
     /// not be.
-    CatalogLoaded(Result<Vec<Arc<LibraryItem>>, String>),
+    CatalogLoaded(
+        refresh::CatalogRequest,
+        Result<Vec<Arc<LibraryItem>>, String>,
+    ),
     /// A page of console records arrived, for the scope and load it was started
     /// for.
     ConsolePageLoaded {
@@ -375,6 +378,7 @@ pub struct App {
     daemon_client: DaemonClient,
     /// Local source records and their form projection (PC games and applications).
     catalog: Catalog,
+    catalog_request: refresh::CatalogRequest,
     /// Every console scope's records, a page at a time, as the daemon reports
     /// them, cached per scope with the cursor that extends them.
     console: ConsoleScopes,
@@ -529,6 +533,7 @@ impl Application for App {
             config_store,
             daemon_client,
             catalog: Catalog::default(),
+            catalog_request: refresh::CatalogRequest::default(),
             console: ConsoleScopes::default(),
             console_platforms: Vec::new(),
             visible: Vec::new(),
@@ -609,7 +614,10 @@ impl Application for App {
         // The arms that replace what it walks repair it again themselves.
         self.cursors = focus::clamp(self.cursors, self.layout());
         match message {
-            Message::CatalogLoaded(result) => {
+            Message::CatalogLoaded(request, result) => {
+                if request != self.catalog_request {
+                    return Task::none();
+                }
                 // A failed read leaves the library as it was: an empty catalog
                 // would also prune the tabs its entries imply, and persist that.
                 let entries = match result {
