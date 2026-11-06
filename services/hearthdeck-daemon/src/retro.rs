@@ -221,12 +221,17 @@ pub async fn prepare_launch(
     paths: &RommPaths,
     rom_id: i64,
 ) -> Result<RetroLaunchPlan, RetroLaunchError> {
-    let rom = romm::rom(settings, rom_id)
+    let connection = romm::Connection::load(settings)
+        .await
+        .map_err(RetroLaunchError::Romm)?;
+    let rom = connection
+        .rom(rom_id)
         .await
         .map_err(RetroLaunchError::Romm)?;
     let rom_path = library_rom_path(paths, &rom).await?;
 
-    let platforms = romm::platforms(settings)
+    let platforms = connection
+        .platforms()
         .await
         .map_err(RetroLaunchError::Romm)?;
     let platform = platforms

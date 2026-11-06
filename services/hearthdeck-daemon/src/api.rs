@@ -360,19 +360,10 @@ async fn retro_rom_details(
     State(state): State<SharedState>,
     Path(rom_id): Path<i64>,
 ) -> Result<Json<RetroGameDetails>, ApiError> {
-    let game = romm::rom(&state.settings, rom_id)
+    let game = romm::details(&state.settings, rom_id)
         .await
         .map_err(ApiError::romm_query)?;
-    let mut details = RetroGameDetails::from(&game);
-    // Reading the true favorite state can need one more RomM call, because
-    // favorites are a collection rather than a field on the rom. A failure here
-    // only costs the button its initial label: the screen still opens, and
-    // toggling still writes.
-    match romm::favorite(&state.settings, &game).await {
-        Ok(favorite) => details.favorite = favorite,
-        Err(error) => warn!(?error, rom_id, "could not read RomM favorite state"),
-    }
-    Ok(Json(details))
+    Ok(Json(RetroGameDetails::from(&game)))
 }
 
 #[derive(Deserialize)]

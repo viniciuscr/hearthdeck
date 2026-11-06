@@ -128,6 +128,120 @@ fn an_unchanged_catalog_keeps_the_grid_scroll_position() {
 }
 
 #[test]
+fn ownership_catalog_adoption_preserves_store_identity_and_clears_removed_facets() {
+    let mut app = shell();
+    let steam = entry("steam", &["Game", "hearthdeck-store:Steam"]);
+    let gog = entry("gog", &["Game", "hearthdeck-store:GOG"]);
+    let _ = app.update(catalog_loaded(&app, Ok(vec![steam.clone()])));
+    let _ = app.apply_group(Some(0));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![gog.clone(), steam])));
+    assert_eq!(app.cur_group, Some(1));
+    assert_eq!(drawn(&app), ["steam"]);
+    let _ = app.update(catalog_loaded(&app, Ok(vec![gog.clone()])));
+    assert_eq!(app.cur_group, None);
+    assert_eq!(drawn(&app), ["gog"]);
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![
+            gog.clone(),
+            entry("steam", &["Game", "hearthdeck-store:Steam"]),
+        ]),
+    ));
+
+    let _ = app.apply_group(None);
+    let _ = app.update(Message::Filters(filters::Message::Select {
+        facet: "store".into(),
+        value: Some("hearthdeck-store:Steam".into()),
+    }));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![gog])));
+    assert!(app.filters.selected().is_empty());
+    assert_eq!(drawn(&app), ["gog"]);
+}
+
+#[test]
+fn ownership_console_platform_adoption_preserves_identity_and_accepts_empty_results() {
+    let mut app = showing_console_tabs();
+    let source = app.console.source_revision();
+    let platform = |id, label: &str| crate::providers::daemon::RetroConsole {
+        id,
+        label: label.into(),
+        artwork: None,
+    };
+    let _ = app.update(Message::ConsolesLoaded(
+        source,
+        Ok(vec![platform(9, "PlayStation"), platform(7, "SNES")]),
+    ));
+    assert_eq!(app.console_platform_id(), Some(7));
+    assert_eq!(app.cur_group, Some(1));
+    let _ = app.update(Message::ConsolesLoaded(source, Ok(Vec::new())));
+    assert!(app.console_platforms.is_empty());
+    assert!(app.tabs.console_games.is_empty());
+    assert_eq!(app.cur_group, None);
+}
+
+#[test]
+fn ownership_reconnect_retires_console_pages_and_facets_but_local_events_do_not() {
+    use crate::providers::daemon::DaemonEvent;
+
+    let mut app = showing_console_tabs();
+    let scope = app.console_scope();
+    let source = app.console.source_revision();
+    let generation = app.console.begin(&scope, 0).unwrap();
+    let facets = vec![Facet {
+        id: "genre".into(),
+        label: "Genre".into(),
+        options: vec![FacetOption {
+            value: "rpg".into(),
+            label: "RPG".into(),
+        }],
+    }];
+    app.filters.load_console_facets(facets.clone());
+    for event in [DaemonEvent::LibraryChanged, DaemonEvent::MetadataChanged] {
+        let _ = app.update(Message::DaemonChanged(FeedEvent::Changed(event)));
+        assert_eq!(app.console.source_revision(), source);
+        assert!(!app.console.entries(&scope).is_empty());
+        assert_eq!(app.filters.facets(), facets);
+    }
+    let _ = app.update(Message::DaemonChanged(FeedEvent::Resumed));
+    assert_ne!(app.console.source_revision(), source);
+    assert!(app.console.entries(&scope).is_empty());
+    assert!(app.filters.facets().is_empty());
+    assert_eq!(app.console_platform_id(), Some(7));
+    let _ = app.update(Message::FacetsLoaded {
+        source,
+        platform: Some(7),
+        result: Ok(facets),
+    });
+    assert!(app.filters.facets().is_empty());
+    let current_source = app.console.source_revision();
+    let platform = |label: &str| crate::providers::daemon::RetroConsole {
+        id: 7,
+        label: label.into(),
+        artwork: None,
+    };
+    let _ = app.update(Message::ConsolesLoaded(source, Ok(vec![platform("Old")])));
+    assert!(app.console_platforms.is_empty());
+    let _ = app.update(Message::ConsolesLoaded(
+        current_source,
+        Ok(vec![platform("New")]),
+    ));
+    assert_eq!(app.console_platforms[0].label, "New");
+    assert_eq!(app.console.ensure(&scope), console::Ensure::Loading);
+    let _ = app.update(Message::ConsolePageLoaded {
+        scope,
+        generation,
+        result: Ok(console::Page {
+            entries: vec![entry("romm:old", &["Game", "hearthdeck-console:7"])],
+            versions: BTreeMap::new(),
+            total: 1,
+            offset: 0,
+        }),
+    });
+    assert!(app.visible.is_empty());
+    assert_eq!(app.cur_group, Some(0));
+}
+
+#[test]
 fn a_romm_sign_in_reloads_consoles_and_removal_clears_the_url() {
     use crate::providers::daemon::RommSettings;
     use settings::romm::Message as Romm;
@@ -2997,6 +3111,25 @@ fn a_live_change_to_the_input_toggles_leaves_the_cursor_alone() {
 /// A form overridden outside the shell moves its tiles between the lists at
 /// once, without waiting for the next catalog load, and the Desktop tab goes
 /// with the last desktop app.
+#[test]
+fn ownership_removing_the_selected_desktop_tab_resets_the_grid() {
+    let mut app = shell();
+    app.cur_section = Section::Applications;
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
+    let _ = app.apply_group(Some(0));
+    app.grid_scroll_offset = 240.0;
+    let mut saved = app.config.clone();
+    saved
+        .form_overrides
+        .insert("writer".into(), FormFactor::Couch);
+
+    let _ = app.update(Message::AppConfigLoaded(saved));
+
+    assert_eq!(app.cur_group, None);
+    assert_eq!(drawn(&app), ["writer"]);
+    assert_eq!(app.grid_scroll_offset, 0.0);
+}
+
 #[test]
 fn a_live_form_override_moves_the_tiles() {
     let mut app = showing(4);

@@ -12,6 +12,16 @@ use crate::screens::library::console::ConsoleScope;
 use super::{App, CONSOLE_SEARCH_DEBOUNCE, Message, ROMM_PAGE_SIZE};
 
 impl App {
+    /// Retires source data while retaining tab identity until the platform list answers.
+    pub(super) fn invalidate_console_source(&mut self) {
+        self.console.invalidate();
+        self.retries.consoles = false;
+        if self.cur_section == crate::app_group::Section::ConsoleGames {
+            self.filters.clear_source();
+            self.refilter();
+        }
+    }
+
     /// The RomM platform id of the console group in scope, when one is selected.
     pub(super) fn console_platform_id(&self) -> Option<i64> {
         self.cur_group
