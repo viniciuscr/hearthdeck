@@ -102,6 +102,11 @@ clear_checkout_units() {
     hearthdeck-daemon.service hearthdeck-input.service hearthdeck-log.service \
     hearthdeck-overlay.service romm.service romm.path
   do
+    file=$dir/$unit.d/90-hearthdeck-checkout.conf
+    if [ -f "$file" ]; then
+      mv "$file" "$file.pre-package.bak"
+      printf 'hearthdeck: moved checkout paths aside: %s\n' "$file"
+    fi
     file=$dir/$unit
     [ -f "$file" ] || continue
     # Only our own copies: a unit the user wrote themselves that happens to share

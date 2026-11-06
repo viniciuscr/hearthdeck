@@ -6,7 +6,7 @@ PartOf=hearthdeck.target
 Type=exec
 Environment=RUST_LOG=hearthdeck_input=info
 EnvironmentFile=-%h/.config/hearthdeck/input.env
-ExecStart=%h/.local/bin/hearthdeck-input
+ExecStart=/usr/lib/hearthdeck/hearthdeck-input
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes

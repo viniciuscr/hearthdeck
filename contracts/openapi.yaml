@@ -63,25 +63,6 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/LibraryItem'
-  /v1/activity/recent:
-    get:
-      operationId: listRecentActivity
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, minimum: 1, maximum: 50, default: 6 }
-      responses:
-        '200':
-          description: Most recently launched items
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/RecentActivity'
   /v1/collections:
     get:
       operationId: listCollections
@@ -162,14 +143,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Collection'
-  /v1/library/rescan:
-    post:
-      operationId: rescanLibrary
-      security:
-        - bearerAuth: []
-      responses:
-        '202':
-          description: Discovery jobs accepted
   /v1/categorization:
     get:
       operationId: getCategorization
@@ -523,20 +496,6 @@ paths:
           description: RomM rejected the change, or its token lacks write scope
         '503':
           description: RomM is not configured
-  /v1/retro/service/restart:
-    post:
-      operationId: restartRommService
-      description: >-
-        Restarts the fixed romm.service systemd user unit (see
-        deploy/systemd/romm.service), if the user has configured it.
-        The unit name is not a request parameter.
-      security:
-        - bearerAuth: []
-      responses:
-        '202':
-          description: Restart requested
-        '502':
-          description: The bridge is unavailable, or systemd rejected the restart (for example, the unit is not installed)
   /v1/retro/assets:
     get:
       operationId: getRetroAsset
@@ -659,37 +618,6 @@ paths:
                 $ref: '#/components/schemas/RommLinkStatus'
         '502':
           description: RomM could not be reached
-  /v1/settings:
-    get:
-      operationId: getUserSettings
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: Current user settings
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserSettings'
-    put:
-      operationId: updateUserSettings
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UserSettingsUpdate'
-      responses:
-        '200':
-          description: Saved user settings
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserSettings'
-        '409':
-          description: The supplied settings revision is stale
   /v1/discovery/{source_id}/refresh:
     post:
       operationId: refreshDiscoverySource
@@ -977,27 +905,6 @@ components:
       properties:
         client_id: { type: string }
         token: { type: string }
-    UserSettings:
-      type: object
-      required: [theme_mode, backdrop_mode, categorization_enabled, revision, updated_at]
-      properties:
-        theme_mode: { type: string, enum: [system, aurora, ember, indigo, noir] }
-        backdrop_mode: { type: string, enum: [solid, edge_wash, quiet_grid] }
-        categorization_enabled:
-          type: boolean
-          description: >-
-            The user's opt-in for smart categorization, defaulting to false.
-            Set it through the categorization endpoints rather than the settings
-            update, which the theme and backdrop clients share.
-        revision: { type: integer, minimum: 0 }
-        updated_at: { type: string, format: date-time }
-    UserSettingsUpdate:
-      type: object
-      minProperties: 1
-      properties:
-        theme_mode: { type: string, enum: [system, aurora, ember, indigo, noir] }
-        backdrop_mode: { type: string, enum: [solid, edge_wash, quiet_grid] }
-        revision: { type: integer, minimum: 0 }
     LibraryItem:
       type: object
       required: [id, source_id, title, kind, metadata, classification]
@@ -1093,7 +1000,7 @@ components:
             - $ref: '#/components/schemas/RecentActivity'
           description: >-
             Present on an item a `rule` collection derived from a play, absent on
-            a curated one. It is the play record the activity endpoint serves, so
+            a curated one. It carries the play's snapshot and launch counts, so
             a client renders and launches the card with the code it already has
             for a play, and needs to know nothing about where the rule's data
             came from.

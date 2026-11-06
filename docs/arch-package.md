@@ -109,9 +109,12 @@ bridges will follow the same target-plus-socket lifecycle.
 
 If you previously used `just install-services` or copied units by hand, those
 copies in `~/.config/systemd/user/` override the package units and keep unit
-fixes from reaching the session. The package names the files it finds there at
-the end of an install; delete them (or move the differences into a systemd
-drop-in) to run the packaged units.
+fixes from reaching the session. The package backs up recognized checkout units
+and their `90-hearthdeck-checkout.conf` executable-path drop-ins as
+`.pre-package.bak`; other drop-ins remain. It reports remaining full-unit
+overrides. Move those aside (or move the differences into a systemd drop-in)
+to run the packaged units. Unit definitions have one source in `deploy/systemd`;
+the packaging paths are symlinks, not a second set of definitions.
 
 ### After an upgrade
 
