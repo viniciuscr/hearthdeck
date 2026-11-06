@@ -47,6 +47,12 @@ desktop-entry dispatch. The HTTP handler only loads the record, asks for a plan
 and submits it to the session service. Retro filesystem/core resolution stays
 in the retro adapter.
 
+Multi-request RomM reads use one saved connection snapshot. Detail metadata and
+favorite lookup, and launch ROM/platform resolution, cannot mix accounts or
+servers if settings change between requests. The RomM client owns detail-read
+sequencing; a failed favorite lookup still logs a warning and leaves the details
+available. HTTP only converts the resulting game to its response.
+
 Collection rule composition lives in `collections/rules.rs`. Its service borrows
 the catalog, activity store and optional categorizer, without HTTP or application
 state dependencies. It keeps existing owner-qualified rule dispatch, resolves
@@ -182,6 +188,13 @@ Desktop-entry and AppStream categories therefore classify applications
 without a frontend provider-specific branch. (The former Flutter
 `CatalogRepository`/`MockCatalogRepository` abstraction was removed with the
 Flutter client.)
+
+Catalog replacement preserves the selected tab by group identity, not its old
+index, and removes facet selections whose options disappeared. RomM platform
+replacement follows the same identity rule and accepts an empty list as
+authoritative. A daemon-feed reconnect invalidates cached RomM pages and facets
+before reloading platforms; ordinary local-provider events do not flush them.
+External RomM edits remain cached until reconnect or connection change.
 
 Packaged Linux builds pair with the loopback daemon at runtime. The client
 reads `HEARTHDECK_BACKEND_URL` and `HEARTHDECK_PAIRING_TOKEN` from the

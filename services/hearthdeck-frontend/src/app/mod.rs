@@ -638,9 +638,7 @@ impl Application for App {
                 // catalog the grid draws is therefore what the strip is built
                 // from. Console Games is the exception - its tabs are the
                 // platforms the daemon reported (see `ConsolesLoaded`).
-                self.tabs.sync_category_groups(self.catalog.entries());
-                self.filters
-                    .load_local_facets(self.cur_section, self.catalog.entries());
+                self.sync_local_catalog();
                 self.refilter();
                 return self.list_replaced();
             }
@@ -656,29 +654,29 @@ impl Application for App {
                     }
                 };
                 self.retries.consoles = false;
-                // None reported: keep the tabs the last answer built.
-                if platforms.is_empty() {
-                    return Task::none();
-                }
                 // Store the consoles for the dashboard rail. The rail appends
                 // itself at the end of the page, so the pad is named by the
                 // card it was on and put back on it once the list is rebuilt.
                 let was = self.dashboard_cursor_card();
+                let selected_platform = self.console_platform_id();
                 self.console_platforms = platforms.clone();
                 let platform_tuples: Vec<(i64, String)> =
                     platforms.into_iter().map(|c| (c.id, c.label)).collect();
+                self.tabs.sync_console_groups(&platform_tuples);
                 let mut tasks = vec![self.queue_console_prefetch(), self.reland_dashboard(was)];
-                if self.tabs.sync_console_groups(&platform_tuples) {
-                    // The chrome the ring walks changed, so its stop may no
-                    // longer be one that exists.
-                    self.cursors = focus::clamp(self.cursors, self.layout());
-                    // Indices may have moved, so drop the selection and reload.
-                    if self.cur_section == Section::ConsoleGames {
-                        self.cur_group = None;
-                        self.refilter();
-                        tasks.push(self.load_console_page(self.console_scope(), 0));
-                        tasks.push(self.load_facets());
+                if self.cur_section == Section::ConsoleGames {
+                    self.cur_group = selected_platform.and_then(|id| {
+                        self.tabs
+                            .console_games
+                            .iter()
+                            .position(|group| group.romm_platform_id() == Some(id))
+                    });
+                    if self.console_platform_id() != selected_platform {
+                        self.filters.clear_source();
                     }
+                    self.refilter();
+                    tasks.push(self.ensure_console_scope());
+                    tasks.push(self.load_facets());
                 }
                 return Task::batch(tasks);
             }
@@ -1601,6 +1599,21 @@ impl App {
             }
         }
     }
+    fn sync_local_catalog(&mut self) {
+        let selected = self
+            .cur_group
+            .and_then(|index| self.tabs.get(self.cur_section).get(index))
+            .cloned();
+        self.tabs.sync_category_groups(self.catalog.entries());
+        self.cur_group = selected.and_then(|selected| {
+            self.tabs
+                .get(self.cur_section)
+                .iter()
+                .position(|group| *group == selected)
+        });
+        self.filters
+            .load_local_facets(self.cur_section, self.catalog.entries());
+    }
     /// Puts the application at tile `index` in `form`, and remembers the choice.
     ///
     /// The Desktop tab exists only while something wants it, so the strip is
@@ -1612,14 +1625,8 @@ impl App {
         };
         self.config.set_form_override(&id, form);
         self.catalog.project(&self.config);
-        self.tabs.sync_category_groups(self.catalog.entries());
+        self.sync_local_catalog();
         self.persist_config();
-        let tabs = self.tabs.get(self.cur_section).len();
-        if self.cur_group.is_some_and(|group| group >= tabs) {
-            self.cur_group = None;
-        }
-        self.filters
-            .load_local_facets(self.cur_section, self.catalog.entries());
         self.refilter();
         self.focus_task()
     }

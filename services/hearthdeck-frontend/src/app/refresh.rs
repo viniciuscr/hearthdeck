@@ -7,6 +7,8 @@
 //!
 //! Catalog and collection reads carry separate identities from scheduling through
 //! completion. Only each resource's latest read may replace it or continue retries.
+//! A feed reconnect also retires console pages and facets before reloading platforms;
+//! ordinary catalog events describe local providers, not changes to RomM.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -121,6 +123,7 @@ impl App {
     /// Re-reads what `event` says changed. A read already in a retry chain is
     /// left to it.
     pub(super) fn daemon_changed(&mut self, event: FeedEvent) -> Task<Message> {
+        let resumed = event == FeedEvent::Resumed;
         let stale = stale_after(event);
         let mut reads = Vec::new();
         if stale.catalog && !self.retries.catalog {
@@ -129,7 +132,13 @@ impl App {
         if stale.collections && !self.retries.collections {
             reads.push(self.load_collections());
         }
-        if stale.missing_consoles && self.console_platforms.is_empty() && !self.retries.consoles {
+        if resumed {
+            self.invalidate_console_source();
+            reads.push(self.load_consoles());
+        } else if stale.missing_consoles
+            && self.console_platforms.is_empty()
+            && !self.retries.consoles
+        {
             reads.push(self.load_consoles());
         }
         if stale.categorization {
