@@ -57,26 +57,23 @@ pub(crate) async fn set_session_input_profile(
     );
 
     let mode = InputMode { profile, retro_osk };
-    let command = if hearthdeck_protocol::input::broker_enabled() {
-        let app_ids = if retro_osk {
-            [
-                "retroarch",
-                "org.libretro.RetroArch",
-                "com.libretro.RetroArch",
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-        } else {
-            application_id
-                .into_iter()
-                .map(|id| id.strip_suffix(".desktop").unwrap_or(id).to_owned())
-                .collect()
-        };
-        serde_json::to_vec(&hearthdeck_protocol::input::SessionContext { mode, app_ids })?
+    let app_ids = if retro_osk {
+        [
+            "retroarch",
+            "org.libretro.RetroArch",
+            "com.libretro.RetroArch",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
     } else {
-        mode.command().to_vec()
+        application_id
+            .into_iter()
+            .map(|id| id.strip_suffix(".desktop").unwrap_or(id).to_owned())
+            .collect()
     };
+    let command =
+        serde_json::to_vec(&hearthdeck_protocol::input::SessionContext { mode, app_ids })?;
     let socket = UnixDatagram::unbound()?;
     match socket.send_to(&command, &socket_path).await {
         Ok(_) => Ok(()),

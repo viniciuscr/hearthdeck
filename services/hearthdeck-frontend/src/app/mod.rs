@@ -64,7 +64,7 @@ use crate::style::{
 };
 use crate::subscriptions::config_watch::config_watch;
 use crate::subscriptions::daemon_events::{FeedEvent, daemon_events};
-use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
+use crate::subscriptions::gamepad::GamepadEvent;
 use crate::system_status::SystemStatus;
 use crate::text_entry::{Field, TextEntry};
 use crate::ui;
@@ -563,8 +563,7 @@ impl Application for App {
             grid_restore_pending: false,
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
-            broker_error: hearthdeck_protocol::input::broker_enabled()
-                .then(|| "Connecting to controller broker...".into()),
+            broker_error: Some("Connecting to controller broker...".into()),
             details: None,
             retries: refresh::Retries::default(),
         };
@@ -1110,7 +1109,7 @@ impl Application for App {
         // vocabulary: a step is a step whichever made it. Neither is acted on
         // while something else owns the screen - the update arm drops events
         // then - so there is nothing to gate here.
-        let navigation = if hearthdeck_protocol::input::broker_enabled() {
+        let navigation = {
             use hearthdeck_protocol::input::Delivery;
             let delivery = if self.text_entry.is_active() {
                 Delivery::TextEntry
@@ -1125,8 +1124,6 @@ impl Application for App {
                 Delivery::Observe
             };
             crate::subscriptions::broker::events(delivery).map(Message::BrokerInput)
-        } else {
-            gamepad_events().map(Message::GamepadEvent)
         };
         let daemon = daemon_events(self.daemon_client.clone()).map(Message::DaemonChanged);
         // Only the primary window drives the layout; dialogs are separate

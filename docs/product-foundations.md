@@ -64,8 +64,8 @@ mechanism instead of per-screen code:
 - The frontend's top-level `Application::subscription()` maps the Escape key
   and the gamepad `Back` button to the same back intent, so it fires
   regardless of which widget currently holds focus.
-- Gamepad Back arrives through the `gilrs` subscription
-  (`subscriptions/gamepad.rs`) as `GamepadEvent::Back`, not through a
+- Gamepad Back arrives through the controller broker subscription
+  (`subscriptions/broker.rs`) as `GamepadEvent::Back`, not through a
   per-widget key handler.
 - Both paths must run the ordered dismissals above before closing the current
   route.

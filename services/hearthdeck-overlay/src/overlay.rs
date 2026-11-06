@@ -26,7 +26,6 @@ use futures_util::SinkExt;
 use tokio::net::UnixDatagram;
 use tracing::{error, info, warn};
 
-use crate::input;
 use crate::shortcut;
 use crate::state::{Effect, Event, MENU_ITEM_COUNT, OverlayState, RETRY_ITEM_COUNT, Status};
 
@@ -269,16 +268,8 @@ impl cosmic::Application for Overlay {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let controller = if hearthdeck_protocol::input::broker_enabled() {
-            crate::broker_input::subscription(self.broker_requested).map(Message::BrokerInput)
-        } else {
-            input::subscription(self.state.visible).map(|event| match event {
-                input::GamepadEvent::ToggleOverlay => Message::ToggleOverlay,
-                input::GamepadEvent::NavigateUp => Message::NavigateUp,
-                input::GamepadEvent::NavigateDown => Message::NavigateDown,
-                input::GamepadEvent::Activate => Message::Activate,
-            })
-        };
+        let controller =
+            crate::broker_input::subscription(self.broker_requested).map(Message::BrokerInput);
         Subscription::batch([
             controller,
             toggle_subscription().map(|()| Message::ToggleOverlay),
@@ -289,7 +280,7 @@ impl cosmic::Application for Overlay {
         match message {
             Message::BrokerInput(event) => self.broker_input(event),
             Message::ToggleOverlay => {
-                if hearthdeck_protocol::input::broker_enabled() && !self.state.visible {
+                if !self.state.visible {
                     self.broker_requested = !self.broker_requested;
                     return Task::none();
                 }

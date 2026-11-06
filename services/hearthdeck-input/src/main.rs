@@ -12,11 +12,7 @@ mod ownership;
 #[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    if hearthdeck_protocol::input::broker_enabled() {
-        broker::run().await
-    } else {
-        linux::run().await
-    }
+    broker::run().await
 }
 
 #[cfg(not(target_os = "linux"))]

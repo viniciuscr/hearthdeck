@@ -1,36 +1,28 @@
 # Input ownership and host acceptance
 
-Status: **broker enabled by default; hardware acceptance pending**. The user
-authorized default enablement on 2026-11-04 for host testing. Set
-`HEARTHDECK_INPUT_MODE=legacy` explicitly to roll back. An existing input.env
-with that value still overrides the new default.
+Status: **broker only; hardware acceptance pending**. The user authorized
+removal of the legacy input path. `HEARTHDECK_INPUT_MODE` is no longer read;
+remove it from existing input.env files. There is no runtime reader switch.
 
 ## Why change it
 
-Legacy mode has three independent readers:
-
-- [Frontend gilrs subscription](../services/hearthdeck-frontend/src/subscriptions/gamepad.rs)
-  normalizes navigation, repeat and Start+Select.
-- [Overlay evdev subscription](../services/hearthdeck-overlay/src/input.rs)
-  opens on Guide press and attempts exclusive grabs while visible. A failed
-  grab currently permits navigation to leak to the game.
-- [Input compatibility service](../services/hearthdeck-input/src/linux.rs)
-  maps controllers to keyboard/mouse and invokes `gamepad-osk` on Guide+X.
-
-In legacy mode Guide opens the overlay before a Guide+X chord can be resolved.
-Separate readers cannot reliably agree which surface owns that press.
+The former frontend, overlay and compatibility-service readers could not
+reliably agree which surface owned a press. They have been removed. The
+[broker](../services/hearthdeck-input/src/broker.rs) now owns Hearthdeck's
+physical controller reads and uses the
+[Linux adapter](../services/hearthdeck-input/src/linux.rs) for device I/O.
 
 ## Broker ownership
 
 `hearthdeck-input` is Hearthdeck's controller broker. It owns device discovery,
 normalization, held state, repeat,
 chords, capture and compatibility output. Frontend and overlay consume semantic
-events; neither opens physical controllers after migration.
+events; neither opens physical controllers.
 
 "One reader" means one **Hearthdeck** reader, not exclusive ownership at all
 times. Native games keep their physical controller access during gameplay.
 Permanently grabbing controllers would require virtual gamepad forwarding,
-mapping and rumble support; that is not part of this proposal.
+mapping and rumble support; that is not implemented.
 
 The daemon remains the authority for managed game sessions. The broker owns
 input delivery, not launch, process supervision or UI navigation. Frontend
@@ -72,7 +64,7 @@ RetroArch has an explicit app-ID list. Host acceptance must check real IDs.
 ## Buttons and keyboards
 
 - **Guide release:** toggle overlay, unless that hold already triggered a chord.
-  This intentionally changes today's press-triggered behavior. A long hold
+  Unlike the removed reader, this waits for release. A long hold
   alone has no extra action.
 - **Guide then X on the same controller:** toggle the in-game keyboard when
   enabled; consume the Guide action. X then Guide is not a keyboard chord.
@@ -94,7 +86,7 @@ capture, not at Guide press. Approving this limitation is part of the decision.
 The game keyboard uses an explicit foreground adapter. Before spawning it the
 broker releases synthetic input and closes all physical controller descriptors;
 it stops scanning until that process exits. It then rediscovers devices and
-requires neutral. This is a deliberate handoff to a legacy reader, not semantic
+requires neutral. This is a deliberate handoff to an external reader, not semantic
 keyboard delivery. Without a configured adapter, the request shows an error.
 `gamepad-osk --toggle` is not a valid adapter: it can exit while the keyboard is
 still active. The installed keyboard's actual lifetime/capture behavior must
@@ -122,23 +114,15 @@ be verified on the host; no adapter is invented or enabled by default.
 8. Use bounded delivery. If a consumer cannot keep up, disconnect and revoke its
    ownership rather than drop releases or replay a stale navigation backlog.
 
-## Staged rollout
+## Migration status
 
-1. **Approve this contract and assign hardware validation.** Confirm Guide
-   release timing, native-game chord leakage, keyboard scope and recovery
-   behavior. Record approval and acceptance evidence here.
-2. **Implement pure ownership/chord state.** Test transitions, per-device held
-   state, failed acquisition rollback and disconnect cleanup without devices.
-   Reuse existing mapper and navigation behavior, including neutral arming.
-3. **Review and implement local transport and lifecycle.** Define authenticated
-   client roles, acknowledgments, reconnect and bounded delivery. Review systemd
-   changes explicitly. No production capture or dual-reader switch yet.
-4. **Migrate consumers together.** Disable their old
-   device readers in broker mode; preserve one coherent legacy mode for rollback.
-   Do not add a fourth production reader as a permanent bridge.
-5. **Run Linux acceptance below.** Default enablement was authorized before
-   hardware acceptance; this is not evidence that these checks passed.
-   Remove legacy readers after the rollback requirement is explicitly retired.
+The ownership state machine, local transport and consumer migration are
+implemented. Legacy readers and their mode selection have been removed together.
+Native and desktop compatibility profiles still exist; they select delivery
+behavior inside the broker, not a different reader.
+
+Run Linux acceptance below. Removing the rollback path is an explicit product
+decision, not evidence that hardware checks passed.
 
 ## Linux acceptance gate
 
@@ -168,8 +152,8 @@ kernel, compositor and tested commit; untested combinations remain unaccepted.
   rightful owner.
 
 Implementation approval: granted 2026-11-04. Hardware validation: delegated by
-the user to a host agent; acceptance evidence is still pending. Broker mode is
-the release default by explicit user request, not by hardware validation.
+the user to a host agent; acceptance evidence is still pending. Broker-only
+delivery is explicit user direction, not hardware validation.
 
 ## Host-agent runbook
 
@@ -181,8 +165,9 @@ restart an active game just to run the checklist.
    frontend, overlay, bridge and input service. Install the matching packaged
    units and session script; do not mix checkout and packaged units.
 2. Save any existing `~/.config/hearthdeck/input.env`. Copy
-   `/usr/share/doc/hearthdeck/input.env.example` there and set
-   `HEARTHDECK_INPUT_MODE=broker`. Use plain `KEY=value` assignments, no shell
+   `/usr/share/doc/hearthdeck/input.env.example` there for keyboard-adapter
+   configuration. Remove any `HEARTHDECK_INPUT_MODE` line; it has no effect.
+   Use plain `KEY=value` assignments, no shell
    expansion: both systemd and the session script read this file.
 3. Leave `HEARTHDECK_GAMEPAD_OSK_ADAPTER` empty for the first pass. For the
    keyboard pass set it to an absolute executable path whose foreground process
@@ -190,21 +175,19 @@ restart an active game just to run the checklist.
    controller release behavior independently before trusting the adapter.
 4. Reload user units, then log out and start a fresh Hearthdeck session.
    A whole-session restart is required; changing only one service creates a
-   mixed-reader setup. In checkout development, export the same mode for every
-   manually started client as well.
+   mixed-version setup.
 5. Inspect unit environments with `systemctl --user show` for the input,
    bridge and overlay services using `-p Environment`, plus actual running
-   process environments. Confirm the direct frontend also uses broker mode.
-   Check the user journal for `opt-in semantic input broker ready`, ownership
+   process environments. Confirm the adapter setting agrees across processes.
+   Check the user journal for `semantic input broker ready`, ownership
    changes and capture errors. A running unit is not proof of capture.
 6. Run every acceptance item above. Record commit, hardware, actual app IDs,
    commands, observed results and journal excerpts (without credentials).
    Mark each item PASS/FAIL/BLOCKED, including keyboard-adapter absence as
-   BLOCKED, never PASS. Check the explicit legacy rollback in a separate session.
+   BLOCKED, never PASS.
 
-Rollback: restore the saved input environment or set
-`HEARTHDECK_INPUT_MODE=legacy`, remove the adapter setting, and restart the entire
-session. Do not run legacy readers beside a broker still holding devices.
-After a broker failure, keyboard/mouse can dismiss the overlay error; use SSH
-or a TTY to restore legacy mode if necessary. Keep this fallback until hardware
-acceptance and rollback retirement are explicitly approved.
+Recovery: after a broker failure, use physical keyboard/mouse, SSH or a TTY to
+inspect the journal and restart `hearthdeck-input.service`. Reconnect does not
+silently restore capture. If a release must be reverted, reinstall a complete
+known-good package and restart the whole session; an environment change cannot
+restore removed readers.

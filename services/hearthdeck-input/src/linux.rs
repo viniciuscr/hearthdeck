@@ -1,26 +1,17 @@
-use std::collections::{HashMap, HashSet};
 use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use evdev::uinput::VirtualDevice;
 use evdev::{
-    AbsoluteAxisCode, AttributeSet, Device, EventSummary, EventType, InputEvent, KeyCode,
-    RelativeAxisCode,
+    AbsoluteAxisCode, AttributeSet, Device, EventType, InputEvent, KeyCode, RelativeAxisCode,
 };
-use hearthdeck_protocol::{InputMode, InputProfile, paths};
 use tokio::net::UnixDatagram;
-use tokio::process::Command;
-use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
 
 use crate::mapping::{Control, Mapper, OutputEvent, OutputKey};
 
 const DEVICE_NAME: &str = "Hearthdeck Compatibility Input";
-const SCAN_INTERVAL: Duration = Duration::from_secs(2);
-const MOUSE_INTERVAL: Duration = Duration::from_millis(16);
 
 #[derive(Clone, Copy)]
 pub(crate) struct AxisRange {
@@ -34,149 +25,8 @@ impl AxisRange {
     }
 }
 
-enum DeviceMessage {
-    Key {
-        device: u64,
-        code: KeyCode,
-        value: i32,
-    },
-    Axis {
-        device: u64,
-        code: AbsoluteAxisCode,
-        value: i32,
-        range: Option<AxisRange>,
-    },
-    Disconnected {
-        device: u64,
-        path: PathBuf,
-    },
-}
-
-pub async fn run() -> Result<()> {
-    init_logging();
-
-    let socket_path = paths::input_socket_path().context("XDG_RUNTIME_DIR is not set")?;
-    let socket = bind_control_socket(&socket_path)?;
-    let mut output = create_virtual_device().context("could not create virtual input device")?;
-    let (device_tx, mut device_rx) = mpsc::channel(128);
-    let mut mapper = Mapper::default();
-    let mut mode = InputMode::default();
-    let mut guide_devices = HashSet::new();
-    let mut active_paths = HashSet::new();
-    let mut path_devices = HashMap::new();
-    let mut next_device = 1_u64;
-    let mut scan = tokio::time::interval(SCAN_INTERVAL);
-    let mut mouse = tokio::time::interval(MOUSE_INTERVAL);
-    let mut command = [0_u8; 32];
-
-    info!(path = ?socket_path, "input compatibility broker ready");
-
-    loop {
-        tokio::select! {
-            _ = scan.tick() => {
-                for (path, device) in gamepad_devices() {
-                    if !active_paths.insert(path.clone()) {
-                        continue;
-                    }
-                    let device_id = next_device;
-                    next_device += 1;
-                    path_devices.insert(path.clone(), device_id);
-                    tokio::spawn(watch_device(path, device_id, device, device_tx.clone()));
-                }
-            }
-            Some(message) = device_rx.recv() => {
-                let events = match message {
-                    DeviceMessage::Key { device, code, value } => {
-                        if osk_chord(&mut guide_devices, mode.retro_osk, device, code, value) {
-                            tokio::spawn(toggle_virtual_keyboard());
-                            Vec::new()
-                        } else {
-                            map_key(&mut mapper, device, code, value)
-                        }
-                    }
-                    DeviceMessage::Axis { device, code, value, range } => {
-                        map_axis(&mut mapper, device, code, value, range)
-                    }
-                    DeviceMessage::Disconnected { device, path } => {
-                        guide_devices.remove(&device);
-                        if path_devices.get(&path) == Some(&device) {
-                            active_paths.remove(&path);
-                            path_devices.remove(&path);
-                        }
-                        mapper.remove_device(device)
-                    }
-                };
-                emit(&mut output, events)?;
-            }
-            received = socket.recv(&mut command) => {
-                let length = received.context("input control socket read failed")?;
-                let Some(next) = InputMode::parse(&command[..length]) else {
-                    warn!("ignored invalid input profile command");
-                    continue;
-                };
-                // The frontend re-sends this on every poll, so it is a heartbeat,
-                // not an event: only a real change is worth an `info`, and the
-                // unchanged case stays at `debug` rather than filling the session
-                // log with the same line once a second.
-                let changed = next != mode;
-                mode = next;
-                let compatibility = mode.profile == InputProfile::Desktop;
-                let retro_osk = mode.retro_osk;
-                guide_devices.clear();
-                if changed {
-                    info!(compatibility, retro_osk, "input mode updated");
-                } else {
-                    debug!(compatibility, retro_osk, "input mode unchanged");
-                }
-                let events = mapper.set_active(compatibility);
-                emit(&mut output, events)?;
-            }
-            _ = mouse.tick() => {
-                if let Some(event) = mapper.mouse_tick() {
-                    emit(&mut output, [event])?;
-                }
-            }
-            _ = tokio::signal::ctrl_c() => break,
-        }
-    }
-
-    emit(&mut output, mapper.set_active(false))?;
-    let _ = std::fs::remove_file(socket_path);
-    Ok(())
-}
-
-fn init_logging() {
-    hearthdeck_observability::init("hearthdeck-input", "error");
-}
-
-fn osk_chord(
-    guide_devices: &mut HashSet<u64>,
-    enabled: bool,
-    device: u64,
-    code: KeyCode,
-    value: i32,
-) -> bool {
-    if code == KeyCode::BTN_MODE {
-        if value == 0 {
-            guide_devices.remove(&device);
-        } else {
-            guide_devices.insert(device);
-        }
-        return false;
-    }
-    enabled && code == KeyCode::BTN_WEST && value == 1 && guide_devices.contains(&device)
-}
-
-async fn toggle_virtual_keyboard() {
-    match Command::new("gamepad-osk")
-        .args(["--toggle"])
-        .status()
-        .await
-    {
-        Ok(status) if status.success() => info!("virtual keyboard toggled"),
-        Ok(status) => warn!(?status, "gamepad-osk rejected virtual keyboard toggle"),
-        Err(error) => warn!(%error, "could not toggle virtual keyboard"),
-    }
+pub(crate) fn init_logging() {
+    hearthdeck_observability::init("hearthdeck-input", "warn,hearthdeck_input=info");
 }
 
 pub(crate) fn bind_control_socket(path: &Path) -> Result<UnixDatagram> {
@@ -227,79 +77,6 @@ pub(crate) fn gamepad_devices() -> Vec<(PathBuf, Device)> {
                     .is_some_and(|keys| keys.contains(KeyCode::BTN_SOUTH))
         })
         .collect()
-}
-
-async fn watch_device(
-    path: PathBuf,
-    device_id: u64,
-    device: Device,
-    tx: mpsc::Sender<DeviceMessage>,
-) {
-    let ranges = device
-        .get_absinfo()
-        .map(|axes| {
-            axes.map(|(code, info)| {
-                (
-                    code,
-                    AxisRange {
-                        minimum: info.minimum(),
-                        maximum: info.maximum(),
-                    },
-                )
-            })
-            .collect::<HashMap<_, _>>()
-        })
-        .unwrap_or_default();
-    let name = device.name().unwrap_or("unknown gamepad").to_owned();
-    let mut stream = match device.into_event_stream() {
-        Ok(stream) => stream,
-        Err(error) => {
-            warn!(?path, %error, "could not open gamepad event stream");
-            let _ = tx
-                .send(DeviceMessage::Disconnected {
-                    device: device_id,
-                    path,
-                })
-                .await;
-            return;
-        }
-    };
-    info!(?path, %name, "watching gamepad");
-
-    loop {
-        let message = match stream.next_event().await {
-            Ok(event) => match event.destructure() {
-                EventSummary::Key(_, code, value) => Some(DeviceMessage::Key {
-                    device: device_id,
-                    code,
-                    value,
-                }),
-                EventSummary::AbsoluteAxis(_, code, value) => Some(DeviceMessage::Axis {
-                    device: device_id,
-                    code,
-                    value,
-                    range: ranges.get(&code).copied(),
-                }),
-                _ => None,
-            },
-            Err(error) => {
-                warn!(?path, %error, "gamepad event stream ended");
-                break;
-            }
-        };
-        if let Some(message) = message
-            && tx.send(message).await.is_err()
-        {
-            return;
-        }
-    }
-
-    let _ = tx
-        .send(DeviceMessage::Disconnected {
-            device: device_id,
-            path,
-        })
-        .await;
 }
 
 pub(crate) fn map_key(
@@ -450,11 +227,7 @@ fn output_key_code(key: OutputKey) -> KeyCode {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
-    use evdev::KeyCode;
-
-    use super::{AxisRange, normalize_centered, normalize_trigger, osk_chord};
+    use super::{AxisRange, normalize_centered, normalize_trigger};
 
     #[test]
     fn shared_logging_preserves_filters_and_supports_both_formats() {
@@ -466,7 +239,7 @@ mod tests {
             return;
         }
         for (format, filter, info_visible) in [
-            ("default", None, false),
+            ("default", None, true),
             ("json", Some("hearthdeck_input=info"), true),
             ("pretty", Some("hearthdeck_input=info"), true),
         ] {
@@ -503,14 +276,6 @@ mod tests {
                 assert!(event.contains("\"level\":\"ERROR\""), "{event}");
             }
         }
-    }
-
-    #[test]
-    fn guide_and_x_toggle_the_osk_only_when_enabled() {
-        let mut guides = HashSet::new();
-        assert!(!osk_chord(&mut guides, true, 1, KeyCode::BTN_MODE, 1));
-        assert!(osk_chord(&mut guides, true, 1, KeyCode::BTN_WEST, 1));
-        assert!(!osk_chord(&mut guides, false, 1, KeyCode::BTN_WEST, 1));
     }
 
     #[test]
