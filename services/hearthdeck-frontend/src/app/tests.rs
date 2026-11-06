@@ -162,6 +162,102 @@ fn a_romm_sign_in_reloads_consoles_and_removal_clears_the_url() {
 }
 
 #[test]
+fn removing_romm_cannot_be_undone_by_an_old_console_list() {
+    let mut app = shell();
+    let source = app.console.source_revision();
+    let _ = app.update(Message::Romm(settings::romm::Message::Removed(Ok(()))));
+    let _ = app.update(Message::ConsolesLoaded(
+        source,
+        Ok(vec![crate::providers::daemon::RetroConsole {
+            id: 7,
+            label: "Old server".to_owned(),
+            artwork: None,
+        }]),
+    ));
+    assert!(app.console_platforms.is_empty());
+    assert!(app.tabs.console_games.is_empty());
+}
+
+#[test]
+fn removing_romm_cannot_restart_an_old_console_retry_chain() {
+    let mut app = shell();
+    let source = app.console.source_revision();
+    app.retries.consoles = true;
+    let _ = app.update(Message::Romm(settings::romm::Message::Removed(Ok(()))));
+    assert!(!app.retries.consoles);
+    let _ = app.update(Message::ConsolesLoaded(
+        source,
+        Err("old server offline".into()),
+    ));
+    assert!(!app.retries.consoles);
+}
+
+#[test]
+fn console_metadata_follows_the_connection_even_when_platform_ids_match() {
+    let mut app = showing_console_tabs();
+    let old_source = app.console.source_revision();
+    let console = |label: &str| crate::providers::daemon::RetroConsole {
+        id: 7,
+        label: label.to_owned(),
+        artwork: None,
+    };
+    let _ = app.update(Message::Romm(settings::romm::Message::SignedIn(Ok(
+        crate::providers::daemon::RommSettings {
+            base_url: "http://new-server:8080".into(),
+            configured: true,
+        },
+    ))));
+    let source = app.console.source_revision();
+    assert_ne!(source, old_source);
+    let _ = app.update(Message::ConsolesLoaded(
+        source,
+        Ok(vec![console("New server")]),
+    ));
+    let _ = app.apply_group(Some(0));
+    let facets = |value: &str| {
+        vec![Facet {
+            id: "genre".into(),
+            label: "Genre".into(),
+            options: vec![FacetOption {
+                value: value.into(),
+                label: value.into(),
+            }],
+        }]
+    };
+    let _ = app.update(Message::FacetsLoaded {
+        source,
+        platform: Some(7),
+        result: Ok(facets("new")),
+    });
+    app.retries.consoles = true;
+    for result in [
+        Ok(vec![console("Old server")]),
+        Err("old server offline".into()),
+    ] {
+        let _ = app.update(Message::ConsolesLoaded(old_source, result));
+        assert_eq!(tabs(&app, Section::ConsoleGames), ["New server"]);
+        assert_eq!(app.console_platforms[0].label, "New server");
+        assert!(
+            app.retries.consoles,
+            "old replies cannot change the new retry chain"
+        );
+    }
+    for result in [Ok(facets("old")), Err("old server offline".into())] {
+        let _ = app.update(Message::FacetsLoaded {
+            source: old_source,
+            platform: Some(7),
+            result,
+        });
+        assert_eq!(app.filters.facets()[0].options[0].value, "new");
+    }
+    let _ = app.update(Message::ConsolesLoaded(
+        source,
+        Ok(vec![console("New server")]),
+    ));
+    assert!(!app.retries.consoles);
+}
+
+#[test]
 fn pending_romm_requests_cannot_be_overwritten_or_submitted_twice() {
     use settings::romm::Message as Romm;
 
@@ -238,13 +334,14 @@ fn a_store_no_installed_game_comes_from_is_not_a_tab() {
 #[test]
 fn a_loaded_catalog_leaves_the_console_tabs_alone() {
     let mut app = shell();
-    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
-        crate::providers::daemon::RetroConsole {
+    let _ = app.update(Message::ConsolesLoaded(
+        app.console.source_revision(),
+        Ok(vec![crate::providers::daemon::RetroConsole {
             id: 7,
             label: "PlayStation".to_owned(),
             artwork: None,
-        },
-    ])));
+        }]),
+    ));
 
     let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
         "half-life",
@@ -264,10 +361,10 @@ fn a_console_picked_on_the_dashboard_opens_its_own_tab() {
         label: label.to_owned(),
         artwork: None,
     };
-    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
-        console(7, "SNES"),
-        console(9, "PlayStation"),
-    ])));
+    let _ = app.update(Message::ConsolesLoaded(
+        app.console.source_revision(),
+        Ok(vec![console(7, "SNES"), console(9, "PlayStation")]),
+    ));
     assert_eq!(app.page, Page::Dashboard);
 
     let _ = app.update(Message::Dashboard(dashboard::Message::ConsolePressed(9)));
@@ -395,6 +492,7 @@ fn console_facets_cannot_replace_the_local_sections_facets() {
     let mut app = showing_a_filter();
     let before = app.filters.facets().to_vec();
     let _ = app.update(Message::FacetsLoaded {
+        source: app.console.source_revision(),
         platform: None,
         result: Ok(vec![Facet {
             id: "genre".into(),
@@ -419,6 +517,7 @@ fn console_facets_follow_the_platform_that_requested_them() {
         }]
     };
     let _ = app.update(Message::FacetsLoaded {
+        source: app.console.source_revision(),
         platform: Some(7),
         result: Ok(facets()),
     });
@@ -427,6 +526,7 @@ fn console_facets_follow_the_platform_that_requested_them() {
     assert!(app.filters.facets().is_empty());
     for platform in [None, Some(7)] {
         let _ = app.update(Message::FacetsLoaded {
+            source: app.console.source_revision(),
             platform,
             result: Ok(facets()),
         });
@@ -436,11 +536,13 @@ fn console_facets_follow_the_platform_that_requested_them() {
         );
     }
     let _ = app.update(Message::FacetsLoaded {
+        source: app.console.source_revision(),
         platform: Some(9),
         result: Ok(facets()),
     });
     let before = app.filters.facets().to_vec();
     let _ = app.update(Message::FacetsLoaded {
+        source: app.console.source_revision(),
         platform: Some(9),
         result: Err("offline".into()),
     });
@@ -450,6 +552,7 @@ fn console_facets_follow_the_platform_that_requested_them() {
         "a failed read keeps the last answer"
     );
     let _ = app.update(Message::FacetsLoaded {
+        source: app.console.source_revision(),
         platform: Some(9),
         result: Ok(Vec::new()),
     });
@@ -1868,13 +1971,14 @@ fn a_rail_that_arrives_late_does_not_snap_the_page_back_to_the_top() {
 
     // The consoles arrive: a rail is appended at the end of the page, past
     // the pad.
-    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
-        crate::providers::daemon::RetroConsole {
+    let _ = app.update(Message::ConsolesLoaded(
+        app.console.source_revision(),
+        Ok(vec![crate::providers::daemon::RetroConsole {
             id: 1,
             label: "Mega Drive".to_owned(),
             artwork: None,
-        },
-    ])));
+        }]),
+    ));
 
     assert_eq!(
         app.dashboard_cursor.rail, 1,
@@ -2299,13 +2403,14 @@ fn the_rail_lengths_the_pad_walks_are_the_cards_the_view_draws() {
         collection("smart:empty", None, &[]),
         arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
     ])));
-    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
-        crate::providers::daemon::RetroConsole {
+    let _ = app.update(Message::ConsolesLoaded(
+        app.console.source_revision(),
+        Ok(vec![crate::providers::daemon::RetroConsole {
             id: 1,
             label: "Mega Drive".to_owned(),
             artwork: None,
-        },
-    ])));
+        }]),
+    ));
     assert_eq!(
         app.dashboard_rail_lengths(),
         vec![1, crate::style::DASHBOARD_RAIL_TILES, 1]
@@ -2456,13 +2561,14 @@ fn the_consoles_rail_is_the_last_rail_on_the_page() {
         arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
         collection("favorites", None, &["hearthdeck:game-0"]),
     ])));
-    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
-        crate::providers::daemon::RetroConsole {
+    let _ = app.update(Message::ConsolesLoaded(
+        app.console.source_revision(),
+        Ok(vec![crate::providers::daemon::RetroConsole {
             id: 1,
             label: "Mega Drive".to_owned(),
             artwork: None,
-        },
-    ])));
+        }]),
+    ));
 
     let shelves = app.dashboard_shelves();
     assert_eq!(

@@ -44,6 +44,10 @@ const MAX_PREFETCH_INFLIGHT: usize = 3;
 /// without bound.
 const MAX_NARROWED_SCOPES: usize = 8;
 
+/// Identifies the RomM connection that supplied console pages and metadata.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceRevision(u64);
+
 /// Which console grid a page belongs to: the platform tab it is filed under,
 /// plus everything the source narrows it by. Two scopes never share pages,
 /// however close they are - "SNES" and "SNES searched for zelda" are different
@@ -241,11 +245,18 @@ pub struct ConsoleScopes {
     clock: u64,
     /// Survives eviction and server invalidation, unlike the individual logs.
     generation: u64,
+    source: SourceRevision,
 }
 
 impl ConsoleScopes {
+    #[must_use]
+    pub fn source_revision(&self) -> SourceRevision {
+        self.source
+    }
+
     /// Forget data from the previous server without accepting its in-flight pages.
     pub fn invalidate(&mut self) {
+        self.source.0 += 1;
         self.prefetch.clear();
         self.scopes.clear();
     }
