@@ -31,6 +31,7 @@ fn shell() -> App {
             token: String::new(),
         }),
         catalog: Catalog::default(),
+        catalog_request: refresh::CatalogRequest::default(),
         console: ConsoleScopes::default(),
         console_platforms: Vec::new(),
         visible: Vec::new(),
@@ -118,10 +119,10 @@ fn entry(id: &str, categories: &[&str]) -> Arc<LibraryItem> {
 fn an_unchanged_catalog_keeps_the_grid_scroll_position() {
     let mut app = shell();
     let entries = vec![entry("game", &["Game"])];
-    let _ = app.update(Message::CatalogLoaded(Ok(entries.clone())));
+    let _ = app.update(catalog_loaded(&app, Ok(entries.clone())));
     app.grid_scroll_offset = 240.0;
 
-    let _ = app.update(Message::CatalogLoaded(Ok(entries)));
+    let _ = app.update(catalog_loaded(&app, Ok(entries)));
 
     assert_eq!(app.grid_scroll_offset, 240.0);
 }
@@ -298,10 +299,13 @@ fn add_pc_tab(app: &mut App, name: &str) {
 fn a_loaded_catalog_gives_each_section_its_category_tabs() {
     let mut app = shell();
 
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![
-        entry("half-life", &["Game", "hearthdeck-store:Steam"]),
-        entry("writer", &["Office"]),
-    ])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![
+            entry("half-life", &["Game", "hearthdeck-store:Steam"]),
+            entry("writer", &["Office"]),
+        ]),
+    ));
 
     assert_eq!(tabs(&app, Section::PcGames), ["Steam"]);
     assert_eq!(tabs(&app, Section::Applications), ["Desktop"]);
@@ -313,14 +317,14 @@ fn a_loaded_catalog_gives_each_section_its_category_tabs() {
 #[test]
 fn a_store_no_installed_game_comes_from_is_not_a_tab() {
     let mut app = shell();
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "half-life",
-        &["Game", "hearthdeck-store:Steam"],
-    )])));
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![entry(
+            "half-life",
+            &["Game", "hearthdeck-store:Steam"],
+        )]),
+    ));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
 
     assert!(
         tabs(&app, Section::PcGames).is_empty(),
@@ -344,10 +348,13 @@ fn a_loaded_catalog_leaves_the_console_tabs_alone() {
         }]),
     ));
 
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "half-life",
-        &["Game", "hearthdeck-store:Steam"],
-    )])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![entry(
+            "half-life",
+            &["Game", "hearthdeck-store:Steam"],
+        )]),
+    ));
 
     assert_eq!(tabs(&app, Section::ConsoleGames), ["PlayStation"]);
 }
@@ -380,15 +387,83 @@ fn a_console_picked_on_the_dashboard_opens_its_own_tab() {
 #[test]
 fn a_failed_catalog_read_keeps_the_library_and_its_tabs() {
     let mut app = shell();
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "half-life",
-        &["Game", "hearthdeck-store:Steam"],
-    )])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![entry(
+            "half-life",
+            &["Game", "hearthdeck-store:Steam"],
+        )]),
+    ));
 
-    let _ = app.update(Message::CatalogLoaded(Err("daemon down".to_owned())));
+    let _ = app.update(catalog_loaded(&app, Err("daemon down".to_owned())));
 
     assert_eq!(app.catalog.entries().len(), 1);
     assert_eq!(tabs(&app, Section::PcGames), ["Steam"]);
+}
+
+fn catalog_loaded(app: &App, result: Result<Vec<Arc<LibraryItem>>, String>) -> Message {
+    Message::CatalogLoaded(app.catalog_request, result)
+}
+
+#[test]
+fn an_old_catalog_success_cannot_restore_removed_games_and_tabs() {
+    let mut app = shell();
+    let _ = app.load_catalog(std::time::Duration::ZERO);
+    let old = app.catalog_request;
+    let _ = app.load_catalog(std::time::Duration::ZERO);
+    let current = app.catalog_request;
+    let _ = app.update(Message::CatalogLoaded(current, Ok(Vec::new())));
+    let _ = app.update(Message::CatalogLoaded(
+        old,
+        Ok(vec![entry("removed", &["Game", "hearthdeck-store:Steam"])]),
+    ));
+    assert!(app.catalog.entries().is_empty());
+    assert!(tabs(&app, Section::PcGames).is_empty());
+}
+
+#[test]
+fn an_old_catalog_failure_cannot_restart_a_completed_retry_chain() {
+    let mut app = shell();
+    let _ = app.load_catalog(std::time::Duration::ZERO);
+    let old = app.catalog_request;
+    let _ = app.load_catalog(std::time::Duration::ZERO);
+    let current = app.catalog_request;
+    let _ = app.update(Message::CatalogLoaded(current, Ok(Vec::new())));
+    let _ = app.update(Message::CatalogLoaded(old, Err("old failure".into())));
+    assert!(!app.retries.catalog);
+    assert_eq!(app.catalog_request, current);
+}
+
+#[test]
+fn a_delayed_catalog_read_retires_old_replies_without_retiring_collection_reads() {
+    let mut app = shell();
+    let _ = app.load_collections();
+    let collections = app.collections_request;
+    let _ = app.load_catalog(std::time::Duration::ZERO);
+    let old = app.catalog_request;
+    let _ = app.load_catalog(std::time::Duration::from_secs(10));
+    let current = app.catalog_request;
+    for result in [
+        Ok(vec![entry("removed", &["Game", "hearthdeck-store:Steam"])]),
+        Err("old failure".into()),
+    ] {
+        let _ = app.update(Message::CatalogLoaded(old, result));
+        assert!(app.catalog.entries().is_empty());
+        assert!(tabs(&app, Section::PcGames).is_empty());
+        assert!(!app.retries.catalog);
+        assert_eq!(app.catalog_request, current);
+    }
+    let _ = app.update(Message::CatalogLoaded(
+        current,
+        Ok(vec![entry("current", &["Game", "hearthdeck-store:GOG"])]),
+    ));
+    assert_eq!(app.catalog.entries()[0].id, "current");
+    assert_eq!(tabs(&app, Section::PcGames), ["GOG"]);
+    let _ = app.update(Message::CollectionsLoaded(
+        collections,
+        Ok(vec![collection("favorites", None, &["current"])]),
+    ));
+    assert_eq!(app.collections[0].items[0].item_id, "current");
 }
 
 /// A shell the pad can drive: the session has been checked and the frontend
@@ -407,7 +482,7 @@ fn loaded(count: usize) -> App {
     let entries = (0..count)
         .map(|index| entry(&format!("hearthdeck:game-{index}"), &["Game"]))
         .collect();
-    let _ = app.update(Message::CatalogLoaded(Ok(entries)));
+    let _ = app.update(catalog_loaded(&app, Ok(entries)));
     app
 }
 
@@ -1180,7 +1255,7 @@ fn showing_two_tabs() -> App {
             )
         })
         .collect();
-    let _ = app.update(Message::CatalogLoaded(Ok(entries)));
+    let _ = app.update(catalog_loaded(&app, Ok(entries)));
     app.page = Page::Library;
     app
 }
@@ -1452,10 +1527,13 @@ fn the_context_button_clears_the_filters_inside_the_drawer() {
 #[test]
 fn local_filter_messages_narrow_the_grid_and_clear_restores_it() {
     let mut app = navigable();
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![
-        entry("steam-game", &["Game", "hearthdeck-store:Steam"]),
-        entry("gog-game", &["Game", "hearthdeck-store:GOG"]),
-    ])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![
+            entry("steam-game", &["Game", "hearthdeck-store:Steam"]),
+            entry("gog-game", &["Game", "hearthdeck-store:GOG"]),
+        ]),
+    ));
     let _ = app.update(Message::Filters(filters::Message::Select {
         facet: "store".into(),
         value: Some("hearthdeck-store:Steam".into()),
@@ -2012,12 +2090,15 @@ fn a_rail_card_draws_the_icon_its_own_item_carries() {
     let mut app = shell();
     // A library entry under the rail item's own id, wearing artwork of its
     // own: it is not what the card draws.
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![Arc::new(LibraryItem {
-        id: "hearthdeck:game-0".to_owned(),
-        name: "Library's own".to_owned(),
-        icon: IconSource::Path(PathBuf::from("/usr/share/icons/library-only.png")),
-        ..LibraryItem::default()
-    })])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![Arc::new(LibraryItem {
+            id: "hearthdeck:game-0".to_owned(),
+            name: "Library's own".to_owned(),
+            icon: IconSource::Path(PathBuf::from("/usr/share/icons/library-only.png")),
+            ..LibraryItem::default()
+        })]),
+    ));
     let rail = |app: &mut App, icon: Option<&str>| {
         let _ = app.update(collections_loaded(
             app,
@@ -2895,10 +2976,7 @@ fn the_health_reply_says_whether_the_feature_exists_here() {
 fn a_live_change_to_the_input_toggles_leaves_the_cursor_alone() {
     let mut app = showing(4);
     app.cur_section = Section::Applications;
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
     app.cur_group = Some(1);
 
     let mut saved = app.config.clone();
@@ -2923,10 +3001,7 @@ fn a_live_change_to_the_input_toggles_leaves_the_cursor_alone() {
 fn a_live_form_override_moves_the_tiles() {
     let mut app = showing(4);
     app.cur_section = Section::Applications;
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
     assert_eq!(
         app.visible.len(),
         0,
@@ -2950,10 +3025,7 @@ fn a_live_form_override_moves_the_tiles() {
 fn removing_a_live_form_override_restores_the_daemons_form() {
     let mut app = shell();
     app.cur_section = Section::Applications;
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
     let mut saved = app.config.clone();
     saved
         .form_overrides
@@ -3894,10 +3966,7 @@ fn restoring_the_dashboard_shows_it_with_the_cursor_on_the_first_card() {
 #[test]
 fn moving_an_application_to_the_couch_takes_it_off_the_desktop_tab() {
     let mut app = showing(1);
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
     app.cur_section = Section::Applications;
     app.cur_group = Some(0);
     app.refilter();
