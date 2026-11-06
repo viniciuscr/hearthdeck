@@ -4,6 +4,9 @@
 //! Each read is made once at startup, and a daemon that is not answering yet - the
 //! normal case when both start together - used to leave the dashboard on its
 //! fallback shelf for the whole session, with only a log line to say why.
+//!
+//! Collection reads carry request identity from scheduling through completion.
+//! Only the latest scheduled read may replace rails or continue a retry chain.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +20,16 @@ use super::{App, Message, Page};
 
 /// How long a failed read waits before it is tried again.
 const DATA_RETRY_INTERVAL: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CollectionRequest(u64);
+
+impl CollectionRequest {
+    pub(super) fn begin(&mut self) -> Self {
+        self.0 += 1;
+        *self
+    }
+}
 
 /// Which reads are in a retry chain, so a read that keeps failing is retried by
 /// that one chain rather than by one more for every request that finds it down.
@@ -97,7 +110,7 @@ pub(super) fn dashboard_tick_runs(page: Page) -> bool {
 impl App {
     /// Re-reads what `event` says changed. A read already in a retry chain is
     /// left to it.
-    pub(super) fn daemon_changed(&self, event: FeedEvent) -> Task<Message> {
+    pub(super) fn daemon_changed(&mut self, event: FeedEvent) -> Task<Message> {
         let stale = stale_after(event);
         let mut reads = Vec::new();
         if stale.catalog && !self.retries.catalog {
@@ -118,7 +131,7 @@ impl App {
     /// The dashboard's own slow tick: its rails are read again, from the same
     /// rule the subscription is gated by, so a tick that lands after the
     /// dashboard was left reads nothing.
-    pub(super) fn dashboard_ticked(&self) -> Task<Message> {
+    pub(super) fn dashboard_ticked(&mut self) -> Task<Message> {
         let stale = stale_tick(self.page);
         if stale.collections && !self.retries.collections {
             self.load_collections()
@@ -165,7 +178,7 @@ impl App {
     /// What landing on the dashboard asks for: its rails read again, and the
     /// consoles if none have ever arrived. A read already in a retry chain is
     /// left to it.
-    pub(super) fn refresh_dashboard(&self) -> Task<Message> {
+    pub(super) fn refresh_dashboard(&mut self) -> Task<Message> {
         let mut reads = Vec::new();
         if !self.retries.collections {
             reads.push(self.load_collections());

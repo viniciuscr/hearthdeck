@@ -153,7 +153,7 @@ pub enum Message {
         result: Result<Vec<Facet>, String>,
     },
     /// The dashboard's collections arrived, which is what its rails are made of.
-    CollectionsLoaded(Result<Vec<Collection>, String>),
+    CollectionsLoaded(refresh::CollectionRequest, Result<Vec<Collection>, String>),
     /// The daemon said something changed (or its feed came back).
     DaemonChanged(FeedEvent),
     Readiness(settings::readiness::Message),
@@ -393,6 +393,7 @@ pub struct App {
     /// feature's own categories, and so the AI's, are - appears without a
     /// frontend change.
     collections: Vec<Collection>,
+    collections_request: refresh::CollectionRequest,
     /// The smart-categories section's daemon snapshot, capability and notices.
     categorization: settings::categorization::State,
     /// The Stremio link flow: the account the daemon holds, the code being
@@ -533,6 +534,7 @@ impl Application for App {
             visible: Vec::new(),
             filters: filters::State::default(),
             collections: Vec::new(),
+            collections_request: refresh::CollectionRequest::default(),
             text_entry: TextEntry::default(),
             menu: menu::State::default(),
             cur_section: Section::PcGames,
@@ -738,7 +740,10 @@ impl Application for App {
                 return self.ensure_console_scope();
             }
             Message::DaemonChanged(event) => return self.daemon_changed(event),
-            Message::CollectionsLoaded(result) => {
+            Message::CollectionsLoaded(request, result) => {
+                if request != self.collections_request {
+                    return Task::none();
+                }
                 match result {
                     Ok(collections) => {
                         // Rails can appear and drop out between reads, which

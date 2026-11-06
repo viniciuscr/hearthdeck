@@ -479,7 +479,7 @@ impl App {
     /// One request for all of them, in the order the daemon composes them, rather
     /// than a request per shelf: a collection nobody wrote frontend code for has
     /// to arrive the same way as one that did.
-    pub(super) fn load_collections(&self) -> Task<Message> {
+    pub(super) fn load_collections(&mut self) -> Task<Message> {
         self.load_collections_after(std::time::Duration::ZERO)
     }
 
@@ -488,7 +488,8 @@ impl App {
     /// The delay exists for the write that produces them: publishing a source's
     /// rows is a network round trip on the daemon's side, so reading the
     /// collections straight away would find them still empty.
-    pub(super) fn load_collections_after(&self, delay: std::time::Duration) -> Task<Message> {
+    pub(super) fn load_collections_after(&mut self, delay: std::time::Duration) -> Task<Message> {
+        let request = self.collections_request.begin();
         let client = self.daemon_client.clone();
         Task::perform(
             async move {
@@ -498,7 +499,7 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::CollectionsLoaded(result)),
+            move |result| cosmic::Action::App(Message::CollectionsLoaded(request, result)),
         )
     }
 }
