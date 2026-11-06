@@ -955,13 +955,14 @@ fn the_pad_never_leaves_the_content() {
 /// all the library the screen is not showing.
 #[test]
 fn the_librarys_chords_do_nothing_off_the_library() {
+    use hearthdeck_protocol::input::{Action, Event};
     let events = [
-        GamepadEvent::PrevGroup,
-        GamepadEvent::NextGroup,
-        GamepadEvent::PrevTab,
-        GamepadEvent::NextTab,
-        GamepadEvent::FilterPanel,
-        GamepadEvent::ContextMenu,
+        Action::PrevGroup,
+        Action::NextGroup,
+        Action::PrevTab,
+        Action::NextTab,
+        Action::FilterPanel,
+        Action::ContextMenu,
     ];
     for page in [Page::Dashboard, Page::Settings, Page::Details] {
         let mut app = showing(12);
@@ -975,7 +976,7 @@ fn the_librarys_chords_do_nothing_off_the_library() {
             app.filters.is_open(),
         );
         for event in events {
-            send(&mut app, event);
+            let _ = app.update(Message::BrokerInput(Event::Action(event)));
             settle(&mut app);
             assert_eq!(
                 (
@@ -996,27 +997,28 @@ fn the_librarys_chords_do_nothing_off_the_library() {
 /// switch tab, and Select opens the drawer. Scoping must not undo this.
 #[test]
 fn the_library_keeps_its_section_tab_and_drawer_chords() {
+    use hearthdeck_protocol::input::{Action, Event};
     let mut app = showing(12);
     add_pc_tab(&mut app, "Favorites");
 
-    send(&mut app, GamepadEvent::NextGroup);
+    let _ = app.update(Message::BrokerInput(Event::Action(Action::NextGroup)));
     settle(&mut app);
     assert_eq!(app.page, Page::Library, "NextGroup stays on the library");
     assert_eq!(app.cur_section, Section::ConsoleGames, "NextGroup");
 
-    send(&mut app, GamepadEvent::PrevGroup);
+    let _ = app.update(Message::BrokerInput(Event::Action(Action::PrevGroup)));
     settle(&mut app);
     assert_eq!(app.cur_section, Section::PcGames, "PrevGroup");
 
-    send(&mut app, GamepadEvent::NextTab);
+    let _ = app.update(Message::BrokerInput(Event::Action(Action::NextTab)));
     settle(&mut app);
     assert_eq!(app.cur_group, Some(0), "NextTab lands on the first tab");
 
-    send(&mut app, GamepadEvent::PrevTab);
+    let _ = app.update(Message::BrokerInput(Event::Action(Action::PrevTab)));
     settle(&mut app);
     assert_eq!(app.cur_group, None, "PrevTab is back on the all tab");
 
-    send(&mut app, GamepadEvent::FilterPanel);
+    let _ = app.update(Message::BrokerInput(Event::Action(Action::FilterPanel)));
     assert!(app.filters.is_open(), "FilterPanel opens the drawer");
 }
 

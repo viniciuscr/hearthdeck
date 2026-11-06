@@ -29,8 +29,6 @@ export XDG_CURRENT_DESKTOP=hearthdeck:COSMIC
 export XDG_SESSION_DESKTOP=hearthdeck
 export XDG_SESSION_TYPE=wayland
 
-# One selection for the direct frontend child and all systemd-owned readers.
-export HEARTHDECK_INPUT_MODE=broker
 export HEARTHDECK_GAMEPAD_OSK_ADAPTER=
 input_env="$HOME/.config/hearthdeck/input.env"
 if [[ -f "$input_env" ]]; then
@@ -38,10 +36,6 @@ if [[ -f "$input_env" ]]; then
   source "$input_env"
   set +a
 fi
-case "$HEARTHDECK_INPUT_MODE" in
-  legacy|broker) ;;
-  *) log "invalid HEARTHDECK_INPUT_MODE; refusing a mixed-reader session"; exit 1 ;;
-esac
 
 # This session starts its own local daemon and pairs with it at runtime.
 unset HEARTHDECK_BACKEND_URL HEARTHDECK_PAIRING_TOKEN
@@ -59,7 +53,7 @@ fi
 # process's children, so they need it exported here too.
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus}"
 
-systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE DBUS_SESSION_BUS_ADDRESS HEARTHDECK_INPUT_MODE HEARTHDECK_GAMEPAD_OSK_ADAPTER || true
+systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE DBUS_SESSION_BUS_ADDRESS HEARTHDECK_GAMEPAD_OSK_ADAPTER || true
 
 # Critical: daemon-reload must come after import-environment to make systemd re-read
 # units with the new environment. Without it, hearthdeck.target and its services

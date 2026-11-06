@@ -6,7 +6,6 @@ PartOf=hearthdeck.target
 
 [Service]
 Type=exec
-Environment=HEARTHDECK_INPUT_MODE=broker
 EnvironmentFile=-%h/.config/hearthdeck/input.env
 EnvironmentFile=-%h/.config/hearthdeck/daemon.env
 Environment=HEARTHDECK_LOG_FORMAT=json

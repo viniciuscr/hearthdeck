@@ -54,7 +54,6 @@ rust-embed = "8.9"
 clap = { version = "4.5", features = ["derive"] }
 
 # System integration
-gilrs = "0.11.2"
 nix = { version = "0.30", features = ["fs"] }
 
 # iced decodes a cached poster through the `image` crate, and libcosmic enables
