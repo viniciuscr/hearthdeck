@@ -85,6 +85,16 @@ its existing gateway-error mapping even for persistence failures; settings and
 unlink failures remain internal errors. Link codes are not logged. The underlying
 link state still owns expiry and polling, with unchanged concurrency semantics.
 
+## Database baseline
+
+The daemon accepts a fresh database or the current deployed schema, preserving
+existing data when adopting the latter. Fresh creation includes every final
+schema and seed-data effect; only the historical upgrade steps are retired.
+Both paths record `PRAGMA user_version = 1`, replacing the old migration ledger.
+Pre-baseline schemas and unknown future versions are rejected rather than
+partially upgraded. Back up the database before adopting this baseline.
+There is no historical `ALTER TABLE` or table-rebuild chain.
+
 ## Platform Adaptation Rules
 
 Hearthdeck targets Linux only. Platform-specific behavior still terminates at an
@@ -141,9 +151,10 @@ Implement `DiscoveryProvider` for every source:
 - `discover()`: fetch/scan only that source and produce normalized
   `CatalogRecord` values. It does not write SQL or emit API events.
 
-The API can enqueue every provider with `POST /v1/library/rescan`, or one
-registered source with `POST /v1/discovery/{source_id}/refresh`. It does not
-invoke scanners or write catalog rows directly.
+Startup queues every provider. The API can enqueue one registered source with
+`POST /v1/discovery/{source_id}/refresh`, or one metadata provider with
+`POST /v1/metadata/{provider_id}/refresh`. It does not invoke scanners or write
+catalog rows directly.
 
 ## Catalog Update Flow
 
@@ -234,8 +245,10 @@ The public OpenAPI contract is `contracts/openapi.yaml`.
 - `GET /v1/health`: unauthenticated daemon discovery/status.
 - `POST /v1/pairing/complete`: consumes a host-created one-time pairing code.
 - `GET /v1/library`: authenticated library metadata.
-- `POST /v1/library/rescan`: authenticated request to refresh every registered
-  discovery and metadata provider.
+- `POST /v1/discovery/{source_id}/refresh`: authenticated request to refresh one
+  discovery source.
+- `POST /v1/metadata/{provider_id}/refresh`: authenticated request to refresh one
+  metadata provider.
 - `POST /v1/launch/{item_id}`: authenticated launch of whatever an item id
   names — the daemon resolves the prefix and picks the catalog or retro
   launch (operationId `launchItem`).
@@ -243,6 +256,14 @@ The public OpenAPI contract is `contracts/openapi.yaml`.
 
 The loopback admin listener exposes `POST /v1/pairing` for host-side pairing
 flows. It is not included in the public API contract.
+
+The unused `/v1/activity/recent`, `/v1/library/rescan`,
+`/v1/retro/service/restart` and `/v1/settings` routes are retired. They return
+`404` with or without credentials. Recently played games still arrive through
+`GET /v1/collections`; discovery still runs at startup and on provider refresh.
+Frontend appearance preferences live in COSMIC config, not the daemon's former
+theme/backdrop API. RomM and Stremio connection settings keep their separate,
+authenticated `/v1/retro/settings` and `/v1/stremio/settings` routes.
 
 ## Deployment
 
@@ -260,10 +281,16 @@ Gamescope wrapper; Heroic's own per-game launch settings remain authoritative.
 See [arch-package.md](arch-package.md#hearthdeck-session) for the current session
 and [kiosk-session.md](kiosk-session.md) for historical incident notes.
 
-Source-checkout units live in [deploy/systemd](../deploy/systemd/); packaged units
-live in [packaging/arch](../packaging/arch/). `just install-services` currently
-copies and enables checkout units; that developer workflow is distinct from the
-packaged session's explicit target start.
+All units live in [deploy/systemd](../deploy/systemd/); packaging paths are
+symlinks to those canonical files. `just install-services` copies the backend
+units and binaries and adds `90-hearthdeck-checkout.conf` drop-ins for
+`~/.local/bin` paths. It only reloads the user manager: it never starts, stops,
+enables, or disables units, and preserves existing enablement. Start explicitly
+with `systemctl --user start --no-block hearthdeck.target`; the packaged session
+already does this. A running checkout needs an explicit restart to use new binaries.
+To undo a persistent enable left by an older installer, run
+`systemctl --user disable hearthdeck.target` manually; this does not stop the
+running target. Explicit `start` needs no enablement.
 Configure LAN TLS through `~/.config/hearthdeck/daemon.env`; see
 [daemon.env.example](../deploy/systemd/daemon.env.example).
 

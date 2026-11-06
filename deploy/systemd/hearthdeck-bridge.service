@@ -16,7 +16,7 @@ Environment=RUST_LOG=hearthdeck_bridge=info
 # pCloud/Dropbox folder. The bridge resolves the same path from XDG when this
 # is empty, and a test in platform/linux.rs keeps the three in step.
 Environment=HEARTHDECK_RETRO_SAVE_ROOT=%h/.local/share/hearthdeck/retroarch
-ExecStart=%h/.local/bin/hearthdeck-bridge
+ExecStart=/usr/lib/hearthdeck/hearthdeck-bridge
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes

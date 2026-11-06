@@ -398,9 +398,8 @@ imperative shell-out embedded in the daemon or bridge.
 contain host-specific command construction." Wrapping `podman-compose up -d` in a
 daemon startup routine would be exactly that, plus it would reinvent what systemd
 already does correctly for free: start/stop ordering and session integration. So
-the daemon *reports* RomM's status and can ask the bridge to restart it
-(`BridgeRequest::RestartRommService`, a fixed unit constant in the bridge); it
-never starts the stack itself.
+the daemon *reports* RomM's status; systemd owns starting and restarting the
+stack. It never starts the stack itself.
 
 ### What triggers what, in order
 
@@ -499,18 +498,11 @@ RomM's container-stack status shows up in Settings' existing service status
 view next to the daemon and bridge — no new screen, no separate place to go
 looking for whether it's up.
 
-**Done: a restart control from within Hearthdeck's own UI.**
-`POST /v1/retro/service/restart` asks the bridge to run `systemctl --user restart
-romm.service` — the unit name is a fixed constant in the bridge's
-`systemd::restart_romm_service`, never a request parameter, so this is
-one narrowly scoped action, not a generic "restart any unit" capability
-(same discipline as the existing install-request boundary). Threaded
-through `CatalogRepository.restartRommService()` and surfaced as a
-**Restart** button directly on the RomM card in Settings' existing service
-status view, next to the daemon/bridge cards — reusing
-`_refresh()`/snackbar UX already established for the library-rescan and
-provider-refresh controls on the same screen. Only shown/wired for the
-`romm_container` card; every other service card is unaffected.
+The COSMIC frontend does not call a RomM restart API. The unused
+`POST /v1/retro/service/restart` route is retired; host maintenance uses
+`systemctl --user restart romm.service` directly. Its bridge restart request and
+response are also retired; startup, the Compose driver and recovery scripts
+continue to use systemd directly.
 
 13. **Emulator readiness is a settings card, and the user's own GitHub
    project is the source for everything no package provides.** The card

@@ -12,8 +12,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use hearthdeck_ai::categorization::ScanReport;
 use hearthdeck_protocol::{
-    ApplicationSession, BridgeErrorCode, BridgeRequest, BridgeResponse, CategorizationSnapshot,
-    Collection, CollectionItem, HealthResponse, HostCapabilities, InputProfile, ProviderHealth,
+    ApplicationSession, BridgeErrorCode, BridgeRequest, CategorizationSnapshot, Collection,
+    CollectionItem, HealthResponse, HostCapabilities, InputProfile, ProviderHealth,
     RetroBiosSyncReport, RetroCoreInstallReport, RetroGame, RetroGameDetails, RetroRomVersion,
     RetroSystemReadiness, ServerEvent,
 };
@@ -24,7 +24,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::{
-    activity::{ActivityEntry, RecentActivity},
+    activity::ActivityEntry,
     categorizer::control::ControlError,
     collections, diagnostics, readiness,
     retro::RetroLaunchError,
@@ -34,9 +34,7 @@ use crate::{
         control::{ControlError as RommControlError, LinkStatus as RommLinkResponse},
     },
     sessions::{ControlError as SessionControlError, LaunchError, StopTarget},
-    settings::{
-        BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
-    },
+    settings::RommSettings,
     state::SharedState,
     stremio::{
         LinkOffer, StremioConnection,
@@ -61,7 +59,6 @@ fn protected_routes() -> Router<SharedState> {
     Router::new()
         .route("/v1/diagnostics", get(diagnostics))
         .route("/v1/library", get(list_library))
-        .route("/v1/activity/recent", get(list_recent_activity))
         .route("/v1/collections", get(list_collections))
         .route(
             "/v1/collections/{slug}/items",
@@ -76,7 +73,6 @@ fn protected_routes() -> Router<SharedState> {
         .route("/v1/retro/roms/{id}", get(retro_rom_details))
         .route("/v1/retro/roms/{id}/favorite", post(set_retro_favorite))
         .route("/v1/retro/roms/{id}/backlog", post(set_retro_backlogged))
-        .route("/v1/retro/service/restart", post(restart_romm_service))
         .route("/v1/retro/assets", get(retro_asset))
         .route(
             "/v1/retro/settings",
@@ -94,7 +90,6 @@ fn protected_routes() -> Router<SharedState> {
             "/v1/stremio/settings",
             get(get_stremio_settings).delete(unlink_stremio),
         )
-        .route("/v1/library/rescan", post(rescan_library))
         .route("/v1/categorization", get(categorization))
         .route("/v1/categorization/enable", post(enable_categorization))
         .route("/v1/categorization/disable", post(disable_categorization))
@@ -104,7 +99,6 @@ fn protected_routes() -> Router<SharedState> {
             delete(remove_categorization_collections),
         )
         .route("/v1/categorization/form-factors", post(detect_form_factors))
-        .route("/v1/settings", get(get_settings).put(update_settings))
         .route("/v1/discovery/{source_id}/refresh", post(refresh_source))
         .route("/v1/metadata/{provider_id}/refresh", post(refresh_metadata))
         .route("/v1/launch/{item_id}", post(launch_item))
@@ -225,18 +219,6 @@ async fn list_library(
     Ok(Json(items))
 }
 
-async fn list_recent_activity(
-    State(state): State<SharedState>,
-    Query(query): Query<RecentActivityQuery>,
-) -> Result<Json<Vec<RecentActivity>>, ApiError> {
-    let items = state
-        .activity
-        .recent(query.limit.unwrap_or(6))
-        .await
-        .map_err(ApiError::internal)?;
-    Ok(Json(items))
-}
-
 async fn list_retro_consoles(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<RommPlatform>>, ApiError> {
@@ -274,7 +256,6 @@ async fn sync_retro_readiness(
     let source = state.config.bios_source.clone().map_err(|error| ApiError {
         status: StatusCode::SERVICE_UNAVAILABLE,
         message: error.to_string(),
-        settings: None,
     })?;
     Ok(Json(
         readiness::sync_bios(&platforms, &readiness::ReadinessPaths::discover(), &source).await,
@@ -478,29 +459,6 @@ async fn launch_retro(
     Ok(Json(session))
 }
 
-/// Asks the bridge to restart the fixed `romm.service` systemd unit
-/// (`deploy/systemd/romm.service`), if the user has configured it.
-/// Not a generic "restart any unit" endpoint: the request carries no unit name.
-async fn restart_romm_service(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
-    match crate::bridge::request(
-        &state.config.bridge_socket_path,
-        BridgeRequest::RestartRommService,
-    )
-    .await
-    .map_err(ApiError::bad_gateway)?
-    {
-        BridgeResponse::RommServiceRestarted => {}
-        BridgeResponse::Error { code, message } => return Err(ApiError::bridge(code, message)),
-        _ => {
-            return Err(ApiError::bad_gateway(
-                "bridge answered the RomM restart with an unexpected response",
-            ));
-        }
-    }
-    info!("romm.service restart requested");
-    Ok(StatusCode::ACCEPTED)
-}
-
 async fn retro_asset(
     State(state): State<SharedState>,
     axum::extract::Query(query): axum::extract::Query<RommAssetQuery>,
@@ -634,20 +592,6 @@ async fn unlink_stremio(State(state): State<SharedState>) -> Result<StatusCode, 
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn rescan_library(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
-    state
-        .discovery
-        .as_ref()
-        .ok_or_else(ApiError::service_unavailable)?
-        .request_all()
-        .await;
-    if let Some(enrichment) = &state.enrichment {
-        enrichment.request_all().await;
-    }
-    info!("all discovery and metadata providers refresh requested");
-    Ok(StatusCode::ACCEPTED)
-}
-
 async fn categorization(
     State(state): State<SharedState>,
 ) -> Result<Json<CategorizationSnapshot<ScanReport>>, ApiError> {
@@ -713,47 +657,6 @@ async fn start_categorization(State(state): State<SharedState>) -> Result<Status
         .await
         .map_err(ApiError::from)?;
     Ok(StatusCode::ACCEPTED)
-}
-
-async fn get_settings(State(state): State<SharedState>) -> Result<Json<UserSettings>, ApiError> {
-    state
-        .settings
-        .get()
-        .await
-        .map(Json)
-        .map_err(ApiError::internal)
-}
-
-async fn update_settings(
-    State(state): State<SharedState>,
-    Json(request): Json<UpdateSettingsRequest>,
-) -> Result<Json<UserSettings>, ApiError> {
-    let theme_mode = request
-        .theme_mode
-        .as_deref()
-        .map(|mode| ThemeMode::parse(mode).ok_or_else(ApiError::invalid_theme_mode))
-        .transpose()?;
-    let backdrop_mode = request
-        .backdrop_mode
-        .as_deref()
-        .map(|mode| BackdropMode::parse(mode).ok_or_else(ApiError::invalid_backdrop_mode))
-        .transpose()?;
-    let change = SettingsChange {
-        theme_mode,
-        backdrop_mode,
-    };
-    if change.is_empty() {
-        return Err(ApiError::empty_settings_update());
-    }
-    match state
-        .settings
-        .update(change, request.revision)
-        .await
-        .map_err(ApiError::internal)?
-    {
-        SettingsUpdate::Saved(settings) => Ok(Json(settings)),
-        SettingsUpdate::Conflict(settings) => Err(ApiError::settings_conflict(settings)),
-    }
 }
 
 async fn refresh_source(
@@ -856,11 +759,6 @@ async fn launch_catalog(
 struct LaunchOptions {
     #[serde(default)]
     input_profile: InputProfile,
-}
-
-#[derive(Deserialize)]
-struct RecentActivityQuery {
-    limit: Option<u32>,
 }
 
 fn retro_activity_entry(game: &RommGame) -> ActivityEntry {
@@ -983,13 +881,6 @@ struct CompletePairingRequest {
 struct PairingCompleteResponse {
     client_id: String,
     token: String,
-}
-
-#[derive(Deserialize)]
-struct UpdateSettingsRequest {
-    theme_mode: Option<String>,
-    backdrop_mode: Option<String>,
-    revision: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -1204,7 +1095,6 @@ fn http_url(value: Option<&str>) -> Option<String> {
 struct ApiError {
     status: StatusCode,
     message: String,
-    settings: Option<UserSettings>,
 }
 
 /// The dashboard's collections, in composition order.
@@ -1351,7 +1241,6 @@ impl ApiError {
         Self {
             status: StatusCode::UNAUTHORIZED,
             message: "authentication required".to_owned(),
-            settings: None,
         }
     }
 
@@ -1362,7 +1251,6 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: "collection contents are derived and cannot be edited".to_owned(),
-            settings: None,
         }
     }
 
@@ -1370,7 +1258,6 @@ impl ApiError {
         Self {
             status: StatusCode::NOT_FOUND,
             message: "resource not found".to_owned(),
-            settings: None,
         }
     }
 
@@ -1378,42 +1265,6 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: "client_name must contain 1 to 128 characters".to_owned(),
-            settings: None,
-        }
-    }
-
-    fn invalid_theme_mode() -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            message: "theme_mode must be system, aurora, ember, indigo, or noir".to_owned(),
-            settings: None,
-        }
-    }
-
-    fn invalid_backdrop_mode() -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            message: "backdrop_mode must be solid, edge_wash, or quiet_grid".to_owned(),
-            settings: None,
-        }
-    }
-
-    fn empty_settings_update() -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            message: "at least one settings field is required".to_owned(),
-            settings: None,
-        }
-    }
-
-    fn settings_conflict(settings: UserSettings) -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            message: format!(
-                "settings version conflict at revision {}",
-                settings.revision
-            ),
-            settings: Some(settings),
         }
     }
 
@@ -1425,7 +1276,6 @@ impl ApiError {
             // and the opt-in categorization — and naming discovery made the
             // message a lie for the other two.
             message: "this deployment does not provide that service".to_owned(),
-            settings: None,
         }
     }
 
@@ -1433,7 +1283,6 @@ impl ApiError {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             message: "RomM is not configured".to_owned(),
-            settings: None,
         }
     }
 
@@ -1452,18 +1301,15 @@ impl ApiError {
             RetroLaunchError::UnsupportedPlatform { .. } => Self {
                 status: StatusCode::NOT_IMPLEMENTED,
                 message,
-                settings: None,
             },
             RetroLaunchError::CoreNotInstalled { .. } => Self {
                 status: StatusCode::SERVICE_UNAVAILABLE,
                 message,
-                settings: None,
             },
             RetroLaunchError::RomHasNoContentFile | RetroLaunchError::InvalidContentFileName => {
                 Self {
                     status: StatusCode::BAD_GATEWAY,
                     message,
-                    settings: None,
                 }
             }
             RetroLaunchError::RomNotOnDisk { .. } => Self::not_found(),
@@ -1482,7 +1328,6 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_GATEWAY,
             message: error.to_string(),
-            settings: None,
         }
     }
 
@@ -1492,7 +1337,6 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_GATEWAY,
             message: error.to_string(),
-            settings: None,
         }
     }
 
@@ -1500,7 +1344,6 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: error.to_string(),
-            settings: None,
         }
     }
 
@@ -1509,7 +1352,6 @@ impl ApiError {
         Self {
             status: StatusCode::CONFLICT,
             message: message.into(),
-            settings: None,
         }
     }
 
@@ -1517,7 +1359,6 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_GATEWAY,
             message: error.to_string(),
-            settings: None,
         }
     }
 
@@ -1532,7 +1373,6 @@ impl ApiError {
                 | BridgeErrorCode::Internal => StatusCode::BAD_GATEWAY,
             },
             message,
-            settings: None,
         }
     }
 
@@ -1542,7 +1382,6 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: "internal error".to_owned(),
-            settings: None,
         }
     }
 }
@@ -1556,10 +1395,7 @@ impl IntoResponse for ApiError {
                 "API request failed"
             );
         }
-        let mut body = serde_json::json!({ "error": self.message });
-        if let Some(settings) = self.settings {
-            body["settings"] = serde_json::to_value(settings).unwrap_or_default();
-        }
+        let body = serde_json::json!({ "error": self.message });
         (self.status, Json(body)).into_response()
     }
 }
@@ -1817,7 +1653,7 @@ mod tests {
     struct ApiTestProvider;
 
     #[tokio::test]
-    async fn protected_routes_authenticate_before_extracting_invalid_requests() {
+    async fn registered_routes_require_authentication_and_retired_routes_are_not_found() {
         let temporary = tempfile::tempdir().unwrap();
         let database = Database::connect(&temporary.path().join("hearthdeck.db"))
             .await
@@ -1840,17 +1676,18 @@ mod tests {
         for (method, path) in [
             ("GET", "/v1/diagnostics"),
             ("GET", "/v1/library"),
-            ("GET", "/v1/activity/recent?limit=invalid"),
             ("GET", "/v1/collections"),
             ("POST", "/v1/collections/favorites/items"),
             ("DELETE", "/v1/collections/favorites/items"),
             ("GET", "/v1/retro/consoles"),
+            ("GET", "/v1/retro/readiness"),
+            ("POST", "/v1/retro/readiness/sync"),
+            ("POST", "/v1/retro/cores/install"),
             ("GET", "/v1/retro/roms?limit=invalid"),
             ("GET", "/v1/retro/facets"),
             ("GET", "/v1/retro/roms/invalid"),
             ("POST", "/v1/retro/roms/invalid/favorite"),
             ("POST", "/v1/retro/roms/invalid/backlog"),
-            ("POST", "/v1/retro/service/restart"),
             ("GET", "/v1/retro/assets"),
             ("GET", "/v1/retro/settings"),
             ("PUT", "/v1/retro/settings"),
@@ -1862,15 +1699,12 @@ mod tests {
             ("GET", "/v1/stremio/link"),
             ("GET", "/v1/stremio/settings"),
             ("DELETE", "/v1/stremio/settings"),
-            ("POST", "/v1/library/rescan"),
             ("GET", "/v1/categorization"),
             ("POST", "/v1/categorization/enable"),
             ("POST", "/v1/categorization/disable"),
             ("POST", "/v1/categorization/scan"),
             ("DELETE", "/v1/categorization/collections"),
             ("POST", "/v1/categorization/form-factors"),
-            ("GET", "/v1/settings"),
-            ("PUT", "/v1/settings"),
             ("POST", "/v1/discovery/test/refresh"),
             ("POST", "/v1/metadata/test/refresh"),
             ("POST", "/v1/launch/test?input_profile=invalid"),
@@ -1943,9 +1777,39 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         let token = paired["token"].as_str().unwrap();
+        let authorization = format!("Bearer {token}");
+        for (method, path) in [
+            ("GET", "/v1/activity/recent"),
+            ("GET", "/v1/activity/recent?limit=invalid"),
+            ("POST", "/v1/library/rescan"),
+            ("POST", "/v1/retro/service/restart"),
+            ("GET", "/v1/settings"),
+            ("PUT", "/v1/settings"),
+        ] {
+            for token in [None, Some("Bearer invalid"), Some(authorization.as_str())] {
+                let mut request = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json");
+                if let Some(token) = token {
+                    request = request.header("authorization", token);
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::from("{")).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::NOT_FOUND,
+                    "{method} {path}, authenticated: {}",
+                    token.is_some()
+                );
+            }
+        }
         let response = app
             .oneshot(
-                Request::put("/v1/settings")
+                Request::put("/v1/retro/settings")
                     .header("authorization", format!("Bearer {token}"))
                     .header("content-type", "application/json")
                     .body(Body::from("{"))
@@ -2136,79 +2000,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(&body[..], br#"{"error":"internal error"}"#);
-    }
-
-    #[tokio::test]
-    async fn romm_restart_is_forwarded_to_the_bridge_and_its_refusal_surfaces() {
-        use hearthdeck_protocol::BridgeErrorCode;
-
-        for (reply, expected_status) in [
-            (BridgeResponse::RommServiceRestarted, StatusCode::ACCEPTED),
-            (
-                BridgeResponse::Error {
-                    code: BridgeErrorCode::Internal,
-                    message: "Unit romm.service not found".to_owned(),
-                },
-                StatusCode::BAD_GATEWAY,
-            ),
-        ] {
-            let temporary = tempfile::tempdir().unwrap();
-            let database = Database::connect(&temporary.path().join("hearthdeck.db"))
-                .await
-                .unwrap();
-            database.migrate().await.unwrap();
-            let state = Arc::new(AppState::new(
-                Config {
-                    bind_address: "127.0.0.1:38400".parse().unwrap(),
-                    local_admin_address: "127.0.0.1:38401".parse().unwrap(),
-                    database_path: temporary.path().join("hearthdeck.db"),
-                    bridge_socket_path: temporary.path().join("bridge.sock"),
-                    lan_enabled: false,
-                    tls: None,
-                    romm: crate::config::RommPaths::resolve(None, None, None),
-                    bios_source: crate::readiness::BiosSource::resolve(None, None),
-                },
-                database,
-            ));
-            let (_, pairing) = response_json(
-                local_router(state.clone()),
-                Request::post("/v1/pairing").body(Body::empty()).unwrap(),
-            )
-            .await;
-            let (_, paired) = response_json(
-                router(state.clone()),
-                Request::post("/v1/pairing/complete")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "code": pairing["code"], "client_name": "romm-restart-test"
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await;
-            let token = paired["token"].as_str().unwrap();
-            let bridge =
-                spawn_fake_bridge(state.config.bridge_socket_path.clone(), move |request| {
-                    assert!(matches!(request, BridgeRequest::RestartRommService));
-                    reply
-                });
-            let response = router(state.clone())
-                .oneshot(
-                    Request::post("/v1/retro/service/restart")
-                        .header("authorization", format!("Bearer {token}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), expected_status);
-            timeout(Duration::from_secs(5), bridge)
-                .await
-                .unwrap()
-                .unwrap();
-        }
     }
 
     #[async_trait]
@@ -2910,7 +2701,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pairing_and_rescan_require_the_intended_boundaries() {
+    async fn pairing_discovery_and_launch_keep_their_intended_boundaries() {
         let temporary = tempfile::tempdir().unwrap();
         let database = Database::connect(&temporary.path().join("hearthdeck.db"))
             .await
@@ -2966,7 +2757,11 @@ mod tests {
         let mut events = state.events.subscribe();
 
         let unauthenticated_settings = router(state.clone())
-            .oneshot(Request::get("/v1/settings").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/v1/retro/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(unauthenticated_settings.status(), StatusCode::UNAUTHORIZED);
@@ -3030,78 +2825,6 @@ mod tests {
         assert_eq!(diagnostics["romm"]["configured"], true);
         assert!(diagnostics["romm"].get("token").is_none());
 
-        let (status, settings) = response_json(
-            router(state.clone()),
-            Request::get("/v1/settings")
-                .header("authorization", format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(settings["theme_mode"], "noir");
-        assert_eq!(settings["backdrop_mode"], "solid");
-        assert_eq!(settings["revision"], 0);
-
-        let (status, settings) = response_json(
-            router(state.clone()),
-            Request::put("/v1/settings")
-                .header("authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"theme_mode":"ember","backdrop_mode":"solid","revision":0}"#,
-                ))
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(settings["theme_mode"], "ember");
-        assert_eq!(settings["backdrop_mode"], "solid");
-        assert_eq!(settings["revision"], 1);
-
-        let (status, persisted_settings) = response_json(
-            router(state.clone()),
-            Request::get("/v1/settings")
-                .header("authorization", format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(persisted_settings["theme_mode"], "ember");
-        assert_eq!(persisted_settings["backdrop_mode"], "solid");
-        assert_eq!(persisted_settings["revision"], 1);
-
-        let (status, settings) = response_json(
-            router(state.clone()),
-            Request::put("/v1/settings")
-                .header("authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"backdrop_mode":"quiet_grid","revision":1}"#))
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(settings["theme_mode"], "ember");
-        assert_eq!(settings["backdrop_mode"], "quiet_grid");
-        assert_eq!(settings["revision"], 2);
-
-        let (status, conflict) = response_json(
-            router(state.clone()),
-            Request::put("/v1/settings")
-                .header("authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"theme_mode":"indigo","backdrop_mode":"solid","revision":0}"#,
-                ))
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(conflict["settings"]["theme_mode"], "ember");
-        assert_eq!(conflict["settings"]["backdrop_mode"], "quiet_grid");
-        assert_eq!(conflict["settings"]["revision"], 2);
-
         let (status, health) = response_json(
             router(state.clone()),
             Request::get("/v1/health").body(Body::empty()).unwrap(),
@@ -3111,16 +2834,27 @@ mod tests {
         assert_eq!(health["providers"][0]["id"], "test-apps");
         assert_eq!(health["providers"][0]["status"], "starting");
 
-        let rescan = router(state.clone())
+        let unknown_source = router(state.clone())
             .oneshot(
-                Request::post("/v1/library/rescan")
+                Request::post("/v1/discovery/unknown/refresh")
                     .header("authorization", format!("Bearer {token}"))
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(rescan.status(), StatusCode::ACCEPTED);
+        assert_eq!(unknown_source.status(), StatusCode::NOT_FOUND);
+
+        let refresh = router(state.clone())
+            .oneshot(
+                Request::post("/v1/discovery/test-apps/refresh")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(refresh.status(), StatusCode::ACCEPTED);
         timeout(Duration::from_secs(1), events.recv())
             .await
             .unwrap()
@@ -3194,19 +2928,11 @@ mod tests {
         assert!(launched["id"].as_str().is_some_and(|id| !id.is_empty()));
         bridge.await.unwrap();
 
-        let (status, recent) = response_json(
-            router(state.clone()),
-            Request::get("/v1/activity/recent?limit=6")
-                .header("authorization", format!("Bearer {token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(recent[0]["id"], "hearthdeck:test:app");
-        assert_eq!(recent[0]["title"], "Hearthdeck Test App");
-        assert_eq!(recent[0]["launch_count"], 1);
-        assert!(recent[0]["last_launched_at"].is_string());
+        let recent = state.activity.recent(6).await.unwrap();
+        assert_eq!(recent[0].entry.id, "hearthdeck:test:app");
+        assert_eq!(recent[0].entry.title, "Hearthdeck Test App");
+        assert_eq!(recent[0].launch_count, 1);
+        assert!(!recent[0].last_launched_at.is_empty());
 
         let launch_unknown_item = router(state)
             .oneshot(

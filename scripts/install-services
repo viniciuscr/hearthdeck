@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+units="$HOME/.config/systemd/user"
+bin="$HOME/.local/bin"
+
+for name in bridge daemon input ai; do
+  if [[ ! -f "services/target/release/hearthdeck-$name" ]]; then
+    printf 'Missing services/target/release/hearthdeck-%s; run just build-services first.\n' "$name" >&2
+    exit 1
+  fi
+done
+
+mkdir -p "$units" "$bin"
+for unit in hearthdeck.target hearthdeck-bridge.socket hearthdeck-bridge.service \
+  hearthdeck-daemon.service hearthdeck-input.service hearthdeck-log.service \
+  romm.service romm.path; do
+  install -m644 "deploy/systemd/$unit" "$units/$unit"
+done
+for name in bridge daemon input ai; do
+  install -m755 "services/target/release/hearthdeck-$name" "$bin/hearthdeck-$name"
+done
+install -m755 packaging/arch/hearthdeck-romm "$bin/hearthdeck-romm"
+
+for name in bridge daemon input; do
+  mkdir -p "$units/hearthdeck-$name.service.d"
+  printf '[Service]\nExecStart=\nExecStart=%%h/.local/bin/hearthdeck-%s\n' "$name" \
+    > "$units/hearthdeck-$name.service.d/90-hearthdeck-checkout.conf"
+done
+mkdir -p "$units/romm.service.d"
+printf '%s\n' '[Service]' 'ExecStart=' 'ExecStart=%h/.local/bin/hearthdeck-romm up' \
+  'ExecStop=' 'ExecStop=%h/.local/bin/hearthdeck-romm down' \
+  > "$units/romm.service.d/90-hearthdeck-checkout.conf"
+
+systemctl --user daemon-reload

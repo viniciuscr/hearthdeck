@@ -120,9 +120,6 @@ pub enum BridgeRequest {
     InstallRetroCores {
         packages: Vec<String>,
     },
-    /// Restarts the optional `romm.service` user unit. Carries no unit name:
-    /// the bridge restarts that one fixed unit and nothing else.
-    RestartRommService,
     ActiveApplicationSession,
     StopActiveApplicationSession,
     StopApplicationSession {
@@ -179,7 +176,6 @@ pub enum BridgeResponse {
     RetroCoresInstalled {
         report: RetroCoreInstallReport,
     },
-    RommServiceRestarted,
     Error {
         code: BridgeErrorCode,
         message: String,
@@ -662,6 +658,16 @@ mod tests {
             serde_json::from_str::<BridgeRequest>(json).unwrap(),
             BridgeRequest::StopActiveApplicationSession
         ));
+    }
+
+    #[test]
+    fn retired_romm_restart_wire_messages_are_rejected() {
+        assert!(
+            serde_json::from_str::<BridgeRequest>(r#"{"type":"restart_romm_service"}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<BridgeResponse>(r#"{"type":"romm_service_restarted"}"#).is_err()
+        );
     }
 
     #[test]
