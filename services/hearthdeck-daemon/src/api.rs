@@ -33,7 +33,7 @@ use crate::{
         DeviceOffer,
         control::{ControlError as RommControlError, LinkStatus as RommLinkResponse},
     },
-    sessions::LaunchError,
+    sessions::{ControlError as SessionControlError, LaunchError, StopTarget},
     settings::{
         BackdropMode, RommSettings, SettingsChange, SettingsUpdate, ThemeMode, UserSettings,
     },
@@ -887,65 +887,21 @@ fn retro_activity_entry(game: &RommGame) -> ActivityEntry {
 async fn active_application_session(
     State(state): State<SharedState>,
 ) -> Result<Json<Option<ApplicationSession>>, ApiError> {
-    let response = crate::bridge::request(
-        &state.config.bridge_socket_path,
-        BridgeRequest::ActiveApplicationSession,
-    )
-    .await
-    .map_err(ApiError::bad_gateway)?;
-    let BridgeResponse::ApplicationSession { session } = response else {
-        return Err(ApiError::bad_gateway(
-            "bridge rejected application-session lookup",
-        ));
-    };
-    Ok(Json(session))
+    Ok(Json(state.sessions().active().await?))
 }
 
 async fn stop_active_application_session(
     State(state): State<SharedState>,
 ) -> Result<StatusCode, ApiError> {
-    let response = crate::bridge::request(
-        &state.config.bridge_socket_path,
-        BridgeRequest::StopActiveApplicationSession,
-    )
-    .await
-    .map_err(ApiError::bad_gateway)?;
-    match response {
-        BridgeResponse::StopAccepted { session_id } => {
-            state.sessions().finished(&session_id).await;
-            Ok(StatusCode::ACCEPTED)
-        }
-        BridgeResponse::Error { code, message } => Err(ApiError::bridge(code, message)),
-        _ => Err(ApiError::bad_gateway(
-            "bridge rejected application-session stop",
-        )),
-    }
+    state.sessions().stop(StopTarget::Active).await?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 async fn stop_application_session(
     State(state): State<SharedState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let response = crate::bridge::request(
-        &state.config.bridge_socket_path,
-        BridgeRequest::StopApplicationSession {
-            session_id: id.clone(),
-        },
-    )
-    .await
-    .map_err(ApiError::bad_gateway)?;
-    match response {
-        BridgeResponse::StopAccepted { .. } => {}
-        BridgeResponse::Error { code, message } => return Err(ApiError::bridge(code, message)),
-        _ => {
-            return Err(ApiError::bad_gateway(
-                "bridge rejected application-session stop",
-            ));
-        }
-    }
-    // A stop the user asked for knows when the play ended, so it does not wait for
-    // the watcher's next tick.
-    state.sessions().finished(&id).await;
+    state.sessions().stop(StopTarget::Session(&id)).await?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -1379,6 +1335,17 @@ impl From<StremioControlError> for ApiError {
     }
 }
 
+impl From<SessionControlError> for ApiError {
+    fn from(error: SessionControlError) -> Self {
+        match error {
+            SessionControlError::Rejected { code, message } => Self::bridge(code, message),
+            other @ (SessionControlError::Transport(_)
+            | SessionControlError::UnexpectedLookup
+            | SessionControlError::UnexpectedStop) => Self::bad_gateway(other),
+        }
+    }
+}
+
 impl ApiError {
     fn unauthorized() -> Self {
         Self {
@@ -1634,6 +1601,47 @@ mod tests {
             .await
             .expect("rule resolves")
             .expect("known rule")
+    }
+
+    #[test]
+    fn session_control_errors_keep_existing_http_responses() {
+        for (error, status, message) in [
+            (
+                super::SessionControlError::Rejected {
+                    code: hearthdeck_protocol::BridgeErrorCode::NotFound,
+                    message: "no active session".to_owned(),
+                },
+                StatusCode::NOT_FOUND,
+                "no active session",
+            ),
+            (
+                super::SessionControlError::Rejected {
+                    code: hearthdeck_protocol::BridgeErrorCode::Internal,
+                    message: "stop failed".to_owned(),
+                },
+                StatusCode::BAD_GATEWAY,
+                "stop failed",
+            ),
+            (
+                super::SessionControlError::Transport(anyhow::anyhow!("bridge unavailable")),
+                StatusCode::BAD_GATEWAY,
+                "bridge unavailable",
+            ),
+            (
+                super::SessionControlError::UnexpectedLookup,
+                StatusCode::BAD_GATEWAY,
+                "bridge rejected application-session lookup",
+            ),
+            (
+                super::SessionControlError::UnexpectedStop,
+                StatusCode::BAD_GATEWAY,
+                "bridge rejected application-session stop",
+            ),
+        ] {
+            let error = super::ApiError::from(error);
+            assert_eq!(error.status, status, "{message}");
+            assert_eq!(error.message, message);
+        }
     }
 
     #[test]
@@ -1953,42 +1961,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stop_active_requires_auth_and_finishes_only_the_bridge_selected_play() {
+    async fn stop_routes_require_auth_and_finish_only_the_selected_play() {
         use crate::activity::ActivityEntry;
         use hearthdeck_protocol::BridgeErrorCode;
 
-        for (reply, expected_status, expected_message) in [
-            (
-                BridgeResponse::StopAccepted {
-                    session_id: "selected".to_owned(),
-                },
-                StatusCode::ACCEPTED,
-                None,
-            ),
-            (
-                BridgeResponse::Error {
-                    code: BridgeErrorCode::NotFound,
-                    message: "no active session".to_owned(),
-                },
-                StatusCode::NOT_FOUND,
-                Some("no active session"),
-            ),
-            (
-                BridgeResponse::Error {
-                    code: BridgeErrorCode::LaunchFailed,
-                    message: "systemd stop failed".to_owned(),
-                },
-                StatusCode::BAD_GATEWAY,
-                Some("systemd stop failed"),
-            ),
-            (
-                BridgeResponse::Health {
-                    version: "unexpected".to_owned(),
-                },
-                StatusCode::BAD_GATEWAY,
-                Some("bridge rejected application-session stop"),
-            ),
-        ] {
+        for (target, (reply, expected_status, expected_message)) in
+            ["active", "selected"].into_iter().flat_map(|target| {
+                [
+                    (
+                        BridgeResponse::StopAccepted {
+                            session_id: "selected".to_owned(),
+                        },
+                        StatusCode::ACCEPTED,
+                        None,
+                    ),
+                    (
+                        BridgeResponse::Error {
+                            code: BridgeErrorCode::NotFound,
+                            message: "no active session".to_owned(),
+                        },
+                        StatusCode::NOT_FOUND,
+                        Some("no active session"),
+                    ),
+                    (
+                        BridgeResponse::Error {
+                            code: BridgeErrorCode::LaunchFailed,
+                            message: "systemd stop failed".to_owned(),
+                        },
+                        StatusCode::BAD_GATEWAY,
+                        Some("systemd stop failed"),
+                    ),
+                    (
+                        BridgeResponse::Health {
+                            version: "unexpected".to_owned(),
+                        },
+                        StatusCode::BAD_GATEWAY,
+                        Some("bridge rejected application-session stop"),
+                    ),
+                ]
+                .into_iter()
+                .map(move |case| (target, case))
+            })
+        {
             let temporary = tempfile::tempdir().unwrap();
             let database = Database::connect(&temporary.path().join("hearthdeck.db"))
                 .await
@@ -2032,7 +2046,7 @@ mod tests {
             }
             let (status, _) = response_json(
                 router(state.clone()),
-                Request::post("/v1/sessions/active/stop")
+                Request::post(format!("/v1/sessions/{target}/stop"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2061,15 +2075,19 @@ mod tests {
             let token = paired["token"].as_str().unwrap();
             let bridge =
                 spawn_fake_bridge(state.config.bridge_socket_path.clone(), move |request| {
-                    assert!(matches!(
-                        request,
-                        BridgeRequest::StopActiveApplicationSession
-                    ));
+                    match request {
+                        BridgeRequest::StopActiveApplicationSession => assert_eq!(target, "active"),
+                        BridgeRequest::StopApplicationSession { session_id } => {
+                            assert_eq!(target, "selected");
+                            assert_eq!(session_id, "selected");
+                        }
+                        other => panic!("unexpected stop request: {other:?}"),
+                    }
                     reply
                 });
             let response = router(state.clone())
                 .oneshot(
-                    Request::post("/v1/sessions/active/stop")
+                    Request::post(format!("/v1/sessions/{target}/stop"))
                         .header("authorization", format!("Bearer {token}"))
                         .body(Body::empty())
                         .unwrap(),

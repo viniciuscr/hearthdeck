@@ -30,6 +30,26 @@ pub(crate) enum LaunchError {
     Unexpected(BridgeResponse),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ControlError {
+    #[error("{0}")]
+    Transport(#[from] anyhow::Error),
+    #[error("{message}")]
+    Rejected {
+        code: BridgeErrorCode,
+        message: String,
+    },
+    #[error("bridge rejected application-session lookup")]
+    UnexpectedLookup,
+    #[error("bridge rejected application-session stop")]
+    UnexpectedStop,
+}
+
+pub(crate) enum StopTarget<'a> {
+    Active,
+    Session(&'a str),
+}
+
 impl std::fmt::Display for LaunchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -52,6 +72,39 @@ impl std::error::Error for LaunchError {
 }
 
 impl SessionService<'_> {
+    pub async fn active(&self) -> Result<Option<ApplicationSession>, ControlError> {
+        match crate::bridge::request(self.bridge_socket, BridgeRequest::ActiveApplicationSession)
+            .await?
+        {
+            BridgeResponse::ApplicationSession { session } => Ok(session),
+            _ => Err(ControlError::UnexpectedLookup),
+        }
+    }
+
+    pub async fn stop(&self, target: StopTarget<'_>) -> Result<(), ControlError> {
+        let request = match target {
+            StopTarget::Active => BridgeRequest::StopActiveApplicationSession,
+            StopTarget::Session(id) => BridgeRequest::StopApplicationSession {
+                session_id: id.to_owned(),
+            },
+        };
+        match crate::bridge::request(self.bridge_socket, request).await? {
+            BridgeResponse::StopAccepted { session_id } => {
+                let id = match target {
+                    StopTarget::Active => session_id.as_str(),
+                    StopTarget::Session(id) => id,
+                };
+                // Explicit stops record the end now, rather than at the next watcher tick.
+                self.finished(id).await;
+                Ok(())
+            }
+            BridgeResponse::Error { code, message } => {
+                Err(ControlError::Rejected { code, message })
+            }
+            _ => Err(ControlError::UnexpectedStop),
+        }
+    }
+
     pub async fn launch(
         &self,
         request: BridgeRequest,
@@ -76,7 +129,7 @@ impl SessionService<'_> {
         Ok(session)
     }
 
-    pub async fn finished(&self, session_id: &str) {
+    async fn finished(&self, session_id: &str) {
         let source = match self
             .activity
             .session_ended(session_id, SessionOutcome::Closed)
@@ -116,19 +169,14 @@ impl SessionService<'_> {
         if running.is_empty() {
             return;
         }
-        let active = match crate::bridge::request(
-            self.bridge_socket,
-            BridgeRequest::ActiveApplicationSession,
-        )
-        .await
-        {
-            Ok(BridgeResponse::ApplicationSession { session }) => session.map(|it| it.id),
-            Ok(_) => {
-                warn!("bridge answered the wrong way about the active session");
+        let active = match self.active().await {
+            Ok(session) => session.map(|it| it.id),
+            Err(ControlError::Transport(error)) => {
+                debug!(%error, "bridge unreachable while watching a play");
                 return;
             }
             Err(error) => {
-                debug!(%error, "bridge unreachable while watching a play");
+                warn!(%error, "could not query the active session while watching a play");
                 return;
             }
         };
@@ -189,8 +237,10 @@ mod tests {
         (directory, ActivityStore::new(database.pool().clone()))
     }
 
-    fn bridge(path: &Path, response: BridgeResponse) -> JoinHandle<BridgeRequest> {
+    fn bridge(path: &Path, response: &BridgeResponse) -> JoinHandle<BridgeRequest> {
         let listener = UnixListener::bind(path).unwrap();
+        let mut response = serde_json::to_vec(response).unwrap();
+        response.push(b'\n');
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = String::new();
@@ -199,11 +249,140 @@ mod tests {
                 .await
                 .unwrap();
             let request = serde_json::from_str(&request).unwrap();
-            let mut response = serde_json::to_vec(&response).unwrap();
-            response.push(b'\n');
             stream.write_all(&response).await.unwrap();
             request
         })
+    }
+
+    #[tokio::test]
+    async fn lookup_reports_the_bridge_session_without_finishing_activity() {
+        for reply in [
+            Some(BridgeResponse::ApplicationSession {
+                session: Some(session("selected")),
+            }),
+            Some(BridgeResponse::ApplicationSession { session: None }),
+            Some(BridgeResponse::Error {
+                code: BridgeErrorCode::NotFound,
+                message: "no active session".to_owned(),
+            }),
+            Some(BridgeResponse::Health {
+                version: "unexpected".to_owned(),
+            }),
+            None,
+        ] {
+            let (directory, activity) = store().await;
+            activity
+                .session_started(entry(), &session("selected"))
+                .await
+                .unwrap();
+            let socket = directory.path().join("bridge.sock");
+            let (events, mut receiver) = broadcast::channel(8);
+            let service = SessionService {
+                bridge_socket: &socket,
+                activity: &activity,
+                discovery: None,
+                events: &events,
+            };
+            let server = reply.as_ref().map(|reply| bridge(&socket, reply));
+            let result = service.active().await;
+            match reply {
+                Some(BridgeResponse::ApplicationSession { session }) => {
+                    assert_eq!(
+                        serde_json::to_value(result.unwrap()).unwrap(),
+                        serde_json::to_value(session).unwrap()
+                    );
+                }
+                Some(_) => assert!(matches!(result, Err(ControlError::UnexpectedLookup))),
+                None => assert!(matches!(result, Err(ControlError::Transport(_)))),
+            }
+            if let Some(server) = server {
+                assert!(matches!(
+                    tokio::time::timeout(Duration::from_secs(5), server)
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    BridgeRequest::ActiveApplicationSession
+                ));
+            }
+            assert_eq!(activity.running_sessions().await.unwrap(), ["selected"]);
+            assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+        }
+    }
+
+    #[tokio::test]
+    async fn stops_finish_only_the_selected_play_and_only_after_bridge_acceptance() {
+        for reply in [
+            Some(BridgeResponse::StopAccepted {
+                session_id: "selected".to_owned(),
+            }),
+            Some(BridgeResponse::Error {
+                code: BridgeErrorCode::NotFound,
+                message: "no active session".to_owned(),
+            }),
+            Some(BridgeResponse::Health {
+                version: "unexpected".to_owned(),
+            }),
+            None,
+        ] {
+            for target in [StopTarget::Active, StopTarget::Session("selected")] {
+                let active = matches!(target, StopTarget::Active);
+                let (directory, activity) = store().await;
+                for id in ["selected", "other"] {
+                    activity
+                        .session_started(entry(), &session(id))
+                        .await
+                        .unwrap();
+                }
+                let socket = directory.path().join("bridge.sock");
+                let (events, mut receiver) = broadcast::channel(8);
+                let service = SessionService {
+                    bridge_socket: &socket,
+                    activity: &activity,
+                    discovery: None,
+                    events: &events,
+                };
+                let server = reply.as_ref().map(|reply| bridge(&socket, reply));
+                let result = service.stop(target).await;
+                if let Some(server) = server {
+                    let request = tokio::time::timeout(Duration::from_secs(5), server)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    match request {
+                        BridgeRequest::StopActiveApplicationSession => assert!(active),
+                        BridgeRequest::StopApplicationSession { session_id } => {
+                            assert!(!active);
+                            assert_eq!(session_id, "selected");
+                        }
+                        other => panic!("unexpected stop request: {other:?}"),
+                    }
+                }
+                match &reply {
+                    Some(BridgeResponse::StopAccepted { .. }) => {
+                        result.unwrap();
+                        assert_eq!(activity.running_sessions().await.unwrap(), ["other"]);
+                        assert!(matches!(
+                            receiver.try_recv().unwrap(),
+                            ServerEvent::ApplicationSessionChanged { session: None }
+                        ));
+                        service.finished("selected").await;
+                    }
+                    other => {
+                        match other {
+                            Some(BridgeResponse::Error { .. }) => assert!(matches!(result,
+                                Err(ControlError::Rejected { code: BridgeErrorCode::NotFound, message })
+                                if message == "no active session")),
+                            Some(_) => {
+                                assert!(matches!(result, Err(ControlError::UnexpectedStop)))
+                            }
+                            None => assert!(matches!(result, Err(ControlError::Transport(_)))),
+                        }
+                        assert_eq!(activity.running_sessions().await.unwrap().len(), 2);
+                    }
+                }
+                assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+            }
+        }
     }
 
     #[tokio::test]
@@ -231,7 +410,7 @@ mod tests {
             };
             let accepted = matches!(reply, BridgeResponse::LaunchAccepted { .. });
             let rejected = matches!(reply, BridgeResponse::Error { .. });
-            let server = bridge(&socket, reply);
+            let server = bridge(&socket, &reply);
             let result = service
                 .launch(
                     BridgeRequest::LaunchApplication {
@@ -332,7 +511,7 @@ mod tests {
                 discovery: None,
                 events: &events,
             };
-            let server = bridge(&socket, reply);
+            let server = bridge(&socket, &reply);
             service.reconcile().await;
             assert!(matches!(
                 tokio::time::timeout(Duration::from_secs(5), server)
