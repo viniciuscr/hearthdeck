@@ -148,6 +148,7 @@ pub enum Message {
     },
     /// The filter facets the current console scope offers, from the daemon.
     FacetsLoaded {
+        source: console::SourceRevision,
         platform: Option<i64>,
         result: Result<Vec<Facet>, String>,
     },
@@ -161,7 +162,10 @@ pub enum Message {
     OpenSettings,
     Stremio(settings::stremio_link::Message),
     /// The console list a tab strip is built from: `(platform id, label)`.
-    ConsolesLoaded(Result<Vec<crate::providers::daemon::RetroConsole>, String>),
+    ConsolesLoaded(
+        console::SourceRevision,
+        Result<Vec<crate::providers::daemon::RetroConsole>, String>,
+    ),
     SelectSection(Section),
     /// The dashboard's top bar: show the dashboard itself.
     OpenDashboard,
@@ -631,7 +635,10 @@ impl Application for App {
                 self.refilter();
                 return self.list_replaced();
             }
-            Message::ConsolesLoaded(result) => {
+            Message::ConsolesLoaded(source, result) => {
+                if source != self.console.source_revision() {
+                    return Task::none();
+                }
                 let platforms = match result {
                     Ok(platforms) => platforms,
                     Err(error) => {
@@ -749,8 +756,13 @@ impl Application for App {
                     }
                 }
             }
-            Message::FacetsLoaded { platform, result } => {
-                if self.cur_section != Section::ConsoleGames
+            Message::FacetsLoaded {
+                source,
+                platform,
+                result,
+            } => {
+                if source != self.console.source_revision()
+                    || self.cur_section != Section::ConsoleGames
                     || platform != self.console_platform_id()
                 {
                     return Task::none();

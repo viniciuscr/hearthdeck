@@ -110,6 +110,7 @@ impl App {
 
     fn romm_connection_changed(&mut self) -> Task<Message> {
         self.console.invalidate();
+        self.retries.consoles = false;
         self.console_platforms.clear();
         self.tabs.sync_console_groups(&[]);
         if self.cur_section == crate::app_group::Section::ConsoleGames {
