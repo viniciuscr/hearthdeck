@@ -22,6 +22,8 @@
 //! has since replaced is dropped rather than merged into a list it no longer
 //! describes: a slow answer for a load the user superseded must not paint onto
 //! what they are looking at.
+//! Request generations belong to the cache, not its evictable logs, so recreating
+//! a search cannot accept a reply from its previous lifetime.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -101,8 +103,7 @@ pub struct ConsoleListing {
     next_offset: Option<u32>,
     /// The generation of the request in flight, if there is one.
     pending: Option<u64>,
-    /// Bumped by every first-page load, so a page from before it can be told
-    /// apart from a page that still describes the scope on screen.
+    /// Assigned by the cache owner, so evicting a log cannot reuse its identity.
     generation: u64,
     /// Whether the scope has ever answered with a page. An empty console is an
     /// answer: its scope is loaded and must not be asked again.
@@ -128,18 +129,18 @@ impl ConsoleListing {
         self.versions.get(entry_id).map_or(&[], Vec::as_slice)
     }
 
-    /// Begins a load of the page at `offset`, returning the generation to tag
-    /// the request with, or `None` when the request must not be made.
+    /// Begins a load of the page at `offset` with the cache's generation,
+    /// returning its tag, or `None` when the request must not be made.
     ///
     /// Offset 0 opens a new generation, which abandons a page still in flight -
     /// [`Self::apply`] drops it when it lands. A later page is refused while one
     /// is already in flight, so paging cannot stack requests up.
-    pub fn start(&mut self, offset: u32) -> Option<u64> {
+    fn start(&mut self, offset: u32, generation: u64) -> Option<u64> {
         if offset > 0 && self.pending.is_some() {
             return None;
         }
         if offset == 0 {
-            self.generation += 1;
+            self.generation = generation;
             // Nothing to extend until the new load reports its own total.
             self.next_offset = None;
         }
@@ -238,18 +239,15 @@ pub struct ConsoleScopes {
     /// The counter [`Self::touch`] stamps scopes with, so a full cache can
     /// drop the one that has gone longest without being used.
     clock: u64,
+    /// Survives eviction and server invalidation, unlike the individual logs.
+    generation: u64,
 }
 
 impl ConsoleScopes {
     /// Forget data from the previous server without accepting its in-flight pages.
     pub fn invalidate(&mut self) {
         self.prefetch.clear();
-        for log in self.scopes.values_mut() {
-            *log = ConsoleListing {
-                generation: log.generation + 1,
-                ..ConsoleListing::default()
-            };
-        }
+        self.scopes.clear();
     }
 
     /// The records loaded for `scope` so far, in the source's own order. Empty
@@ -297,7 +295,14 @@ impl ConsoleScopes {
     /// [`Self::apply`] drops it when it lands. A later page is refused while one
     /// is already in flight, so paging cannot stack requests up.
     pub fn begin(&mut self, scope: &ConsoleScope, offset: u32) -> Option<u64> {
-        let generation = self.scopes.entry(scope.clone()).or_default().start(offset);
+        if offset == 0 {
+            self.generation += 1;
+        }
+        let generation = self
+            .scopes
+            .entry(scope.clone())
+            .or_default()
+            .start(offset, self.generation);
         self.touch(scope);
         self.evict();
         generation
@@ -309,9 +314,8 @@ impl ConsoleScopes {
     /// a page from a generation the log has replaced is dropped.
     pub fn apply(&mut self, scope: &ConsoleScope, generation: u64, page: Page) -> bool {
         self.scopes
-            .entry(scope.clone())
-            .or_default()
-            .apply(generation, page)
+            .get_mut(scope)
+            .is_some_and(|log| log.apply(generation, page))
     }
 
     /// Records that the load tagged `generation` came back without a page, so
@@ -463,7 +467,9 @@ mod tests {
     /// Loads one page the way [`crate::app`] does, and reports whether it was
     /// accepted as the load in flight.
     fn load(listing: &mut ConsoleListing, page: Page) -> bool {
-        let generation = listing.start(page.offset).expect("the load is allowed");
+        let generation = listing
+            .start(page.offset, listing.generation + 1)
+            .expect("the load is allowed");
         listing.apply(generation, page)
     }
 
@@ -482,12 +488,53 @@ mod tests {
         scopes.invalidate();
         assert!(scopes.entries(&scope).is_empty());
         assert!(!scopes.apply(&scope, pending, page(1, 1, 2)));
+        assert!(scopes.scopes.is_empty());
         let Ensure::Requested(new) = scopes.ensure(&scope) else {
             panic!("the new server must be queried");
         };
         assert_ne!(old, new);
         assert!(!scopes.apply(&scope, old, page(0, 1, 1)));
         assert!(scopes.apply(&scope, new, page(0, 1, 1)));
+    }
+
+    #[test]
+    fn recreating_an_evicted_search_rejects_its_abandoned_reply() {
+        let mut scopes = ConsoleScopes::default();
+        let scope = search(7, "zelda");
+        let abandoned = scopes.begin(&scope, 0).unwrap();
+        let replacement = scopes.begin(&scope, 0).unwrap();
+        assert!(scopes.apply(&scope, replacement, page(0, 1, 1)));
+        for index in 0..MAX_NARROWED_SCOPES {
+            let other = search(7, &format!("other-{index}"));
+            assert!(load_scope(&mut scopes, &other, page(0, 1, 1)));
+        }
+        assert!(!scopes.scopes.contains_key(&scope));
+        let current = scopes.begin(&scope, 0).unwrap();
+        assert!(!scopes.apply(&scope, abandoned, page(0, 2, 2)));
+        assert!(!scopes.failed(&scope, abandoned));
+        assert!(matches!(scopes.ensure(&scope), Ensure::Loading));
+        assert!(scopes.apply(&scope, current, page(0, 1, 1)));
+        assert_eq!(scopes.entries(&scope).len(), 1);
+    }
+
+    #[test]
+    fn recreating_an_evicted_search_ignores_its_abandoned_failure() {
+        let mut scopes = ConsoleScopes::default();
+        let scope = search(7, "zelda");
+        let abandoned = scopes.begin(&scope, 0).unwrap();
+        let replacement = scopes.begin(&scope, 0).unwrap();
+        assert!(scopes.apply(&scope, replacement, page(0, 1, 1)));
+        for index in 0..MAX_NARROWED_SCOPES {
+            assert!(load_scope(
+                &mut scopes,
+                &search(7, &format!("other-{index}")),
+                page(0, 1, 1)
+            ));
+        }
+        let current = scopes.begin(&scope, 0).unwrap();
+        assert!(!scopes.failed(&scope, abandoned));
+        assert!(matches!(scopes.ensure(&scope), Ensure::Loading));
+        assert!(scopes.apply(&scope, current, page(0, 1, 1)));
     }
 
     /// The scope of one console tab narrowed by a search term.
@@ -558,7 +605,7 @@ mod tests {
     #[test]
     fn a_page_from_a_superseded_reload_is_dropped() {
         let mut listing = ConsoleListing::default();
-        let abandoned = listing.start(0).expect("the load is allowed");
+        let abandoned = listing.start(0, 1).expect("the load is allowed");
         load(&mut listing, page(0, 60, 100));
 
         // The scope is reloaded while the first load is still out; the answer to
@@ -570,17 +617,17 @@ mod tests {
     #[test]
     fn a_later_page_is_refused_while_one_is_in_flight() {
         let mut listing = ConsoleListing::default();
-        let generation = listing.start(0).expect("the load is allowed");
+        let generation = listing.start(0, 1).expect("the load is allowed");
 
         assert_eq!(
-            listing.start(60),
+            listing.start(60, generation),
             None,
             "two pages at once would interleave in arrival order"
         );
 
         listing.apply(generation, page(0, 60, 100));
         assert!(
-            listing.start(60).is_some(),
+            listing.start(60, generation).is_some(),
             "the slot frees up once the page it was waiting for lands"
         );
     }
@@ -590,17 +637,17 @@ mod tests {
     #[test]
     fn a_failed_page_stops_the_log_waiting_for_it() {
         let mut listing = ConsoleListing::default();
-        let generation = listing.start(0).expect("the load is allowed");
+        let generation = listing.start(0, 1).expect("the load is allowed");
         assert!(listing.failed(generation));
 
-        assert!(listing.start(60).is_some());
+        assert!(listing.start(60, generation).is_some());
     }
 
     #[test]
     fn a_failure_from_a_superseded_reload_is_ignored() {
         let mut listing = ConsoleListing::default();
-        let abandoned = listing.start(0).expect("the load is allowed");
-        listing.start(0).expect("a first page is never refused");
+        let abandoned = listing.start(0, 1).expect("the load is allowed");
+        listing.start(0, 2).expect("a first page is never refused");
 
         assert!(!listing.failed(abandoned));
     }
