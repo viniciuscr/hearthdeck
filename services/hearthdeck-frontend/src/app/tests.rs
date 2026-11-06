@@ -1960,11 +1960,14 @@ fn a_rail_below_the_fold_still_follows_the_cursor_sideways() {
 #[test]
 fn a_rail_that_arrives_late_does_not_snap_the_page_back_to_the_top() {
     let mut app = shell();
-    let _ = app.update(collections_loaded(&app, Ok(vec![
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-        collection("play-later", None, &["hearthdeck:game-1"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+            collection("play-later", None, &["hearthdeck:game-1"]),
+        ]),
+    ));
 
     // Down onto the rail below the arrivals: the page moves down to it.
     let _ = app.step_dashboard(Direction::Down);
@@ -2016,24 +2019,27 @@ fn a_rail_card_draws_the_icon_its_own_item_carries() {
         ..LibraryItem::default()
     })])));
     let rail = |app: &mut App, icon: Option<&str>| {
-        let _ = app.update(collections_loaded(&app, Ok(vec![Collection {
-            slug: "favorites".to_owned(),
-            kind: "membership".to_owned(),
-            rule: None,
-            role: "favorite".to_owned(),
-            position: 0,
-            owner: "system".to_owned(),
-            name: None,
-            items: vec![CollectionItem {
-                item_id: "hearthdeck:game-0".to_owned(),
-                name: "Game 0".to_owned(),
-                icon: icon.map(str::to_owned),
-                background: None,
-                logo: None,
-                description: None,
-                played: None,
-            }],
-        }])));
+        let _ = app.update(collections_loaded(
+            &app,
+            Ok(vec![Collection {
+                slug: "favorites".to_owned(),
+                kind: "membership".to_owned(),
+                rule: None,
+                role: "favorite".to_owned(),
+                position: 0,
+                owner: "system".to_owned(),
+                name: None,
+                items: vec![CollectionItem {
+                    item_id: "hearthdeck:game-0".to_owned(),
+                    name: "Game 0".to_owned(),
+                    icon: icon.map(str::to_owned),
+                    background: None,
+                    logo: None,
+                    description: None,
+                    played: None,
+                }],
+            }]),
+        ));
     };
 
     // The cover the provider resolved for a console game. That game is not in
@@ -2077,13 +2083,16 @@ fn arrivals(ids: &[&str]) -> Collection {
 #[test]
 fn what_has_just_arrived_is_the_dashboards_first_rail() {
     let mut app = shell();
-    let _ = app.update(collections_loaded(&app, Ok(vec![
-        collection("favorites", None, &["hearthdeck:game-0"]),
-        arrivals(&[
-            "hearthdeck:stremio-arrivals:tt1",
-            "hearthdeck:stremio-arrivals:tt2",
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            collection("favorites", None, &["hearthdeck:game-0"]),
+            arrivals(&[
+                "hearthdeck:stremio-arrivals:tt1",
+                "hearthdeck:stremio-arrivals:tt2",
+            ]),
         ]),
-    ])));
+    ));
 
     let shelves = app.dashboard_shelves();
     assert_eq!(
@@ -2106,13 +2115,16 @@ fn the_background_follows_the_pad_across_the_rail() {
     use crate::style::BACKGROUND_TRANSITION_DURATION;
 
     let mut app = shell();
-    let _ = app.update(collections_loaded(&app, Ok(vec![
-        arrivals(&[
-            "hearthdeck:stremio-arrivals:tt1",
-            "hearthdeck:stremio-arrivals:tt2",
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&[
+                "hearthdeck:stremio-arrivals:tt1",
+                "hearthdeck:stremio-arrivals:tt2",
+            ]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
         ]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-    ])));
+    ));
 
     // Along the arrivals rail the art cross-fades from card to card.
     let _ = app.step_dashboard(Direction::Right);
@@ -2162,10 +2174,13 @@ fn the_pages_place_under_the_background_does_not_depend_on_what_it_shows() {
     }
 
     let mut app = shell();
-    let _ = app.update(collections_loaded(&app, Ok(vec![
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+        ]),
+    ));
 
     // On the arrivals, whose cards carry the wide art the background draws...
     app.backdrop_at = dashboard::backdrop::At { rail: 0, card: 0 };
@@ -2192,11 +2207,14 @@ fn the_first_rail_snaps_the_page_to_the_top() {
     for window_height in [WINDOW_HEIGHT, 1080.0] {
         let mut app = shell();
         app.window_height = window_height;
-        let _ = app.update(collections_loaded(&app, Ok(vec![
-            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-            collection("favorites", None, &["hearthdeck:game-0"]),
-            collection("play-later", None, &["hearthdeck:game-1"]),
-        ])));
+        let _ = app.update(collections_loaded(
+            &app,
+            Ok(vec![
+                arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+                collection("favorites", None, &["hearthdeck:game-0"]),
+                collection("play-later", None, &["hearthdeck:game-1"]),
+            ]),
+        ));
 
         // Down past the first rail, the page follows the pad to the rails below.
         let _ = app.step_dashboard(Direction::Down);
@@ -2223,10 +2241,13 @@ fn the_first_rail_snaps_the_page_to_the_top() {
 #[test]
 fn stepping_down_from_the_arrivals_brings_the_next_rail_to_the_top_of_the_view() {
     let mut app = shell();
-    let _ = app.update(collections_loaded(&app, Ok(vec![
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+        ]),
+    ));
 
     let _ = app.step_dashboard(Direction::Down);
 
@@ -2250,10 +2271,13 @@ fn a_follow_scroll_is_not_overwritten_by_its_own_reports() {
     use crate::style::SCROLL_TRANSITION_DURATION;
 
     let mut app = shell();
-    let _ = app.update(collections_loaded(&app, Ok(vec![
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+        ]),
+    ));
 
     // Down off the banner drives the page to the rail below the fold.
     let _ = app.step_dashboard(Direction::Down);
@@ -2367,10 +2391,13 @@ fn two_rails() -> App {
         .map(|index| format!("hearthdeck:game-{index}"))
         .collect();
     let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-    let _ = app.update(collections_loaded(&app, Ok(vec![
-        collection("last-played", None, &ids),
-        collection("stremio:continue-watching", None, &ids),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            collection("last-played", None, &ids),
+            collection("stremio:continue-watching", None, &ids),
+        ]),
+    ));
     app
 }
 
@@ -2401,11 +2428,14 @@ fn the_rail_lengths_the_pad_walks_are_the_cards_the_view_draws() {
         .map(|index| format!("hearthdeck:game-{index}"))
         .collect();
     let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-    let _ = app.update(collections_loaded(&app, Ok(vec![
-        collection("favorites", None, &ids),
-        collection("smart:empty", None, &[]),
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            collection("favorites", None, &ids),
+            collection("smart:empty", None, &[]),
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+        ]),
+    ));
     let _ = app.update(Message::ConsolesLoaded(
         app.console.source_revision(),
         Ok(vec![crate::providers::daemon::RetroConsole {
@@ -2540,10 +2570,13 @@ fn source_card_identity_matches_rendered_ids_after_rails_are_inserted_or_removed
 #[test]
 fn the_dashboards_rails_are_the_daemons_collections() {
     let mut app = loaded(2);
-    let _ = app.update(collections_loaded(&app, Ok(vec![
-        collection("favorites", None, &["hearthdeck:game-0"]),
-        collection("smart:action", Some("Action picks"), &["hearthdeck:game-1"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            collection("favorites", None, &["hearthdeck:game-0"]),
+            collection("smart:action", Some("Action picks"), &["hearthdeck:game-1"]),
+        ]),
+    ));
 
     let shelves = app.dashboard_shelves();
     assert_eq!(shelves.len(), 2, "one rail per collection");
@@ -2560,10 +2593,13 @@ fn the_dashboards_rails_are_the_daemons_collections() {
 #[test]
 fn the_consoles_rail_is_the_last_rail_on_the_page() {
     let mut app = shell();
-    let _ = app.update(collections_loaded(&app, Ok(vec![
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+        ]),
+    ));
     let _ = app.update(Message::ConsolesLoaded(
         app.console.source_revision(),
         Ok(vec![crate::providers::daemon::RetroConsole {
@@ -2592,11 +2628,14 @@ fn the_consoles_rail_is_the_last_rail_on_the_page() {
 #[test]
 fn a_collection_with_no_name_reads_as_its_slug() {
     let mut app = loaded(1);
-    let _ = app.update(collections_loaded(&app, Ok(vec![collection(
-        "smart:mystery",
-        None,
-        &["hearthdeck:game-0"],
-    )])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![collection(
+            "smart:mystery",
+            None,
+            &["hearthdeck:game-0"],
+        )]),
+    ));
 
     assert_eq!(app.dashboard_shelves()[0].title, "smart:mystery");
 }
@@ -2606,11 +2645,10 @@ fn a_collection_with_no_name_reads_as_its_slug() {
 #[test]
 fn a_collection_card_launches_the_item_it_names() {
     let mut app = loaded(2);
-    let _ = app.update(collections_loaded(&app, Ok(vec![collection(
-        "favorites",
-        None,
-        &["hearthdeck:game-1"],
-    )])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![collection("favorites", None, &["hearthdeck:game-1"])]),
+    ));
 
     send(&mut app, GamepadEvent::Confirm);
 
@@ -2635,11 +2673,14 @@ fn a_collection_card_launches_the_item_it_names() {
 #[test]
 fn a_media_card_the_library_never_held_launches_anyway() {
     let mut app = loaded(1);
-    let _ = app.update(collections_loaded(&app, Ok(vec![collection(
-        "stremio:continue-watching",
-        None,
-        &["hearthdeck:stremio:tt0111161"],
-    )])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![collection(
+            "stremio:continue-watching",
+            None,
+            &["hearthdeck:stremio:tt0111161"],
+        )]),
+    ));
 
     send(&mut app, GamepadEvent::Confirm);
 
@@ -2660,11 +2701,14 @@ fn a_media_card_the_library_never_held_launches_anyway() {
 #[test]
 fn a_card_id_reaches_the_launch_route_exactly_as_the_rail_carried_it() {
     let mut app = loaded(1);
-    let _ = app.update(collections_loaded(&app, Ok(vec![collection(
-        "stremio:continue-watching",
-        None,
-        &["stremio:tt0111161"],
-    )])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![collection(
+            "stremio:continue-watching",
+            None,
+            &["stremio:tt0111161"],
+        )]),
+    ));
 
     let shelves = app.dashboard_shelves();
     assert_eq!(shelves[0].title, fl!("continue-watching"));
