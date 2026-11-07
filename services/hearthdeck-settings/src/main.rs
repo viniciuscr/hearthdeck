@@ -38,11 +38,14 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
     WindowOptions, div, point, prelude::FluentBuilder as _, px, size,
 };
+use gpui_component::alert::Alert;
 use gpui_component::button::Button;
-use gpui_component::group_box::GroupBox;
+use gpui_component::group_box::{GroupBox, GroupBoxVariant, GroupBoxVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::progress::ProgressCircle;
+use gpui_component::separator::Separator;
 use gpui_component::switch::Switch;
+use gpui_component::tag::Tag;
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Theme, ThemeMode, h_flex, v_flex,
 };
@@ -270,7 +273,19 @@ impl Page {
 
 struct Group {
     title: &'static str,
+    /// A one-word state beside the card's title, when the section has one worth
+    /// reading at a glance. The rows still carry the detail.
+    status: Option<(&'static str, Tone)>,
     rows: Vec<Row>,
+}
+
+/// What a section's status chip says at a glance: working, waiting on the user,
+/// or not set up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tone {
+    Good,
+    Attention,
+    Off,
 }
 
 struct Row {
@@ -563,6 +578,7 @@ impl SettingsWindow {
                 groups: vec![
                     Group {
                         title: "This window",
+                        status: None,
                         rows: vec![Row {
                             label: "Refresh",
                             description: Some("Read the daemon and this machine again."),
@@ -571,6 +587,11 @@ impl SettingsWindow {
                     },
                     Group {
                         title: "Daemon",
+                        status: Some(if self.snapshot.daemon {
+                            ("Connected", Tone::Good)
+                        } else {
+                            ("Unavailable", Tone::Off)
+                        }),
                         rows: vec![
                             Row {
                                 label: "Backend",
@@ -586,6 +607,7 @@ impl SettingsWindow {
                     },
                     Group {
                         title: "Storage",
+                        status: None,
                         rows: vec![Row {
                             label: "Free space",
                             description: Some("On this machine's home volume."),
@@ -599,14 +621,27 @@ impl SettingsWindow {
                 groups: vec![
                     Group {
                         title: "RomM",
+                        status: Some(match &self.snapshot.romm {
+                            Some(romm) if romm.configured => ("Signed in", Tone::Good),
+                            Some(_) => ("Needs sign-in", Tone::Attention),
+                            None => ("Not set up", Tone::Off),
+                        }),
                         rows: romm_rows,
                     },
                     Group {
                         title: "Stremio",
+                        status: Some(if self.snapshot.stremio_linked_at.is_some() {
+                            ("Linked", Tone::Good)
+                        } else if self.stremio_offer.is_some() {
+                            ("Waiting", Tone::Attention)
+                        } else {
+                            ("Not linked", Tone::Off)
+                        }),
                         rows: stremio_rows,
                     },
                     Group {
                         title: "TMDB",
+                        status: Some(("Preview", Tone::Off)),
                         rows: vec![
                             Row {
                                 label: "API key",
@@ -627,6 +662,7 @@ impl SettingsWindow {
                 groups: vec![
                     Group {
                         title: "Categories",
+                        status: None,
                         rows: vec![
                             Row {
                                 label: "Group the library",
@@ -644,6 +680,7 @@ impl SettingsWindow {
                     },
                     Group {
                         title: "Dashboard",
+                        status: None,
                         rows: vec![Row {
                             label: "Restore rails",
                             description: Some(
@@ -659,6 +696,7 @@ impl SettingsWindow {
                 groups: vec![
                     Group {
                         title: "Palette",
+                        status: None,
                         rows: vec![Row {
                             label: "Color identity",
                             description: Some(
@@ -672,6 +710,7 @@ impl SettingsWindow {
                     },
                     Group {
                         title: "Backdrop",
+                        status: None,
                         rows: vec![Row {
                             label: "Route treatment",
                             description: Some("Static by design: no video, no shaders."),
@@ -683,6 +722,7 @@ impl SettingsWindow {
                     },
                     Group {
                         title: "Motion",
+                        status: None,
                         rows: vec![Row {
                             label: "Reduce motion",
                             description: Some(
@@ -697,6 +737,7 @@ impl SettingsWindow {
                 kind: PageKind::Emulation,
                 groups: vec![Group {
                     title: "Readiness",
+                    status: None,
                     rows: vec![
                         Row {
                             label: "Systems",
@@ -1243,10 +1284,13 @@ impl SettingsWindow {
                         self.row_element(cx, row, page_index, index, focused, theme)
                     })
                     .collect::<Vec<_>>();
+                // `Fill` is the variant that draws a surface. `Normal`, the
+                // group box's default, draws none - which is what made a page of
+                // sections read as one list.
                 GroupBox::new()
                     .id(SharedString::from(group.title))
-                    .title(div().text_lg().child(group.title))
-                    .gap_1()
+                    .with_variant(GroupBoxVariant::Fill)
+                    .title(group_title(group, theme))
                     .children(rows)
                     .into_any_element()
             })
@@ -1273,16 +1317,12 @@ impl SettingsWindow {
                                     .text_sm()
                                     .text_color(theme.muted_foreground)
                                     .child(page.kind.description()),
-                            ),
+                            )
+                            .child(div().pt_2().child(Separator::horizontal().h(px(1.)))),
                     )
                     .children(groups)
                     .when_some(self.notice.clone(), |this, notice| {
-                        this.child(
-                            div()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child(notice),
-                        )
+                        this.child(Alert::info("settings-notice", notice))
                     }),
             )
             .into_any_element()
@@ -1312,7 +1352,11 @@ impl SettingsWindow {
             .py_3()
             .rounded(theme.radius)
             .border_1()
-            .border_color(if focused { theme.ring } else { theme.border })
+            .border_color(if focused {
+                theme.ring
+            } else {
+                theme.transparent
+            })
             .when(focused, |this| this.bg(theme.list_active))
             .child(
                 v_flex()
@@ -1478,6 +1522,29 @@ fn clear_field(cx: &mut Context<SettingsWindow>, field: &Entity<InputState>) {
     let _ = window.update(cx, |_, window, cx| {
         field.update(cx, |state, cx| state.set_value("", window, cx));
     });
+}
+
+/// A card's heading: the section name, and a status chip when the section has a
+/// state worth reading at a glance. The rows still carry the detail.
+fn group_title(group: &Group, theme: &Theme) -> AnyElement {
+    h_flex()
+        .items_center()
+        .gap_3()
+        .child(
+            div()
+                .text_lg()
+                .text_color(theme.foreground)
+                .child(group.title),
+        )
+        .when_some(group.status, |this, (label, tone)| {
+            let tag = match tone {
+                Tone::Good => Tag::success(),
+                Tone::Attention => Tag::warning(),
+                Tone::Off => Tag::new(),
+            };
+            this.child(tag.text_sm().child(label))
+        })
+        .into_any_element()
 }
 
 /// What the Stremio account row says: the daemon's account, a pending approval,

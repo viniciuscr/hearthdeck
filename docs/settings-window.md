@@ -41,6 +41,18 @@ One layout, two levels:
 - the reading column on the right, capped at `CONTENT_MAX_WIDTH`, holding the
   page title, its groups, and their rows.
 
+Each group is a **card**: a `GroupBox` with the `Fill` variant, which is the
+variant that draws a surface — the default `Normal` draws none, which is what
+made a page of sections read as one long list. A rule under the page's opening
+sentence separates the introduction from the cards, and the page's one-line
+notice is an `Alert` rather than plain text.
+
+A card's heading carries the section name and a status chip (`Tag`) when the
+section has a state worth reading at a glance: `Daemon` says Connected or
+Unavailable, `RomM` Signed in / Needs sign-in / Not set up, `Stremio` Linked /
+Waiting / Not linked, `TMDB` Preview. The rows still carry the detail; the chip
+is what lets a glance down the page tell the three connections apart.
+
 A row is a label, an optional sentence under it, and one control on the right.
 There are five shapes, and the shape decides what Enter does:
 
