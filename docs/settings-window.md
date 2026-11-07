@@ -27,16 +27,137 @@ does. Depending on `gpui-pre`, `gpui-component` and `gpui-pre-platform` with
 `wayland` alone removes the backend: the packaged binary links `libxkbcommon`
 and nothing else from the X11 stack.
 
+## The surface
+
+The window is a **full surface, not a dialog**: it opens fullscreen and draws no
+top bar of its own. It is opened from a fullscreen kiosk app, so a floating
+panel reads as a utility window over a TV picture; a full surface reads as a
+destination, which is what it is.
+
+One layout, two levels:
+
+- a page column on the left (`Status`, `Connections`, `Library`, `Appearance`,
+  `Emulation`), sized for a sofa;
+- the reading column on the right, capped at `CONTENT_MAX_WIDTH`, holding the
+  page title, its groups, and their rows.
+
+A row is a label, an optional sentence under it, and one control on the right.
+There are five shapes, and the shape decides what Enter does:
+
+| Shape | Control | Enter |
+| --- | --- | --- |
+| Fact | a state or measurement | nothing |
+| Text | a real `Input` | focuses the field |
+| Toggle | a `Switch` | flips it |
+| Choice | the current option in a chip | cycles to the next option |
+| Action | a `Button` | runs it |
+
+Adding a setting is adding a row, not adding a screen.
+
+## Editing: one setting is wired
+
+**Three settings are wired. All use the same three steps: read the daemon's
+state, write, then report what the daemon says afterwards.**
+
+`Library` → `Group the library` is a switch the daemon owns: the value comes from
+`GET /v1/categorization`, the press becomes `POST /v1/categorization/enable` (or
+`/disable`), and the control settles on the daemon's answer. While the write is in
+flight the switch shows the value that was asked for; if the daemon refuses, the
+error is printed under the page and the switch falls back to the daemon's answer,
+which never changed. `Scan now` posts `/v1/categorization/scan`, is disabled while
+the opt-in is off, and reports the refusal (409) when it comes.
+
+`Connections` → `RomM` signs in the way the iced page always has: the address,
+username and password are posted **once** to `POST /v1/retro/login`, the daemon
+exchanges them for a RomM client token and stores that token, and the password is
+never stored anywhere. On success the window keeps only the connection the daemon
+reports, empties the password field, and shows the address under `Saved
+connection`; the `Forget connection` row appears only while a connection exists
+and posts `DELETE /v1/retro/settings`. A saved connection prefills the address
+field at launch, so signing in again starts from where the daemon already is.
+
+`Connections` → `Stremio` is a flow, not a field. `Link account` posts
+`POST /v1/stremio/link`; the code and the link it comes with become rows of their
+own (the link already carries the code, so it is shown for a phone), and the
+window polls `GET /v1/stremio/link` every two seconds while the offer stands.
+`waiting` updates the countdown, `linked` stores the account and drops the rows,
+`expired` and `idle` say so and offer the button again. Each poll belongs to a
+generation counter, so replacing or unlinking a pending code stops the older
+loop instead of writing over the newer one. `Unlink account` appears only while an
+account is linked and posts `DELETE /v1/stremio/settings`. Nothing here ever sees
+the Stremio session: the daemon holds it.
+
+**Everything else is still a preview.** Text values live in the window's
+`InputState`s, palette, backdrop and reduce-motion in its `Draft`, and every
+other action answers with one line under the page saying what it would post, so
+the shape of the feedback is visible before the write path exists.
+
+`TMDB`'s key is deliberately **not** wired here. `contracts/openapi.yaml` serves
+`/v1/tmdb/settings` on the loopback admin listener only, because the key is set
+once from the host and is kept "out of the LAN and out of a controller keyboard".
+The field is drawn so the form can be judged, and its action says where the key
+really comes from.
+
+What is left to wire, row by row:
+
+- `Appearance` — palette, backdrop, reduce motion. The names come from
+  `docs/appearance-system.md`; the daemon already owns them, so wiring them is a
+  read and a write, not a new model.
+- `Emulation` — install the missing cores, sync the BIOS.
+
+## Focus and input
+
+Keyboard today, controller next. Both drive the **same semantic actions**, which
+is the whole point of the split:
+
+| Input | Action | Effect |
+| --- | --- | --- |
+| Up / Down | `MoveUp` / `MoveDown` | Move the cursor between rows, stopping at both ends |
+| Left / Right | `PreviousPage` / `NextPage` | Switch page; the cursor lands on that page's first row |
+| Enter | `Confirm` | Run or edit the focused row |
+| Escape | `CloseWindow` | Dismiss a focused text field first; otherwise close the window |
+| Pointer | click | Sets the cursor on the clicked row, then does what Enter would |
+
+While a text field has focus, the kit's input key context owns the arrow keys
+and Enter, so typing never moves the cursor. Escape is the one key the input
+does not claim, which is why the handler is the thing that decides between
+"dismiss the field" and "close the window".
+
+The cursor is a painted `selected` position, not platform focus — the same
+model the iced screens use for their ring cursor. `nav.rs` owns it as a plain
+value with no gpui types, so the rules are tested without a window and the pad
+transport lands by calling the methods the keyboard already calls.
+
+**The controller is not wired yet, on purpose.** The broker grants delivery per
+role, and the library app drops to `Delivery::Observe` when its window loses
+focus (`ownership.rs` returns no d-pad for `Observe`), so the pad goes quiet the
+moment this window takes focus. Wiring it means either the library app keeping
+`Delivery::Frontend` while the child is up and forwarding semantic actions over
+a socket, or a new `Role::Settings` in `hearthdeck-protocol`. Both are decisions
+with their own contract change; neither is hidden inside the window.
+
+## Why not the kit's `setting::Settings` component
+
+`gpui_component::setting` is a complete settings surface - sidebar, search,
+group scroll-spy, reset - and it is where the row vocabulary above comes from.
+It also keeps its page selection in private keyed window state, so a pad cannot
+change page without forking it, and its sidebar has no sizing hook for a TV.
+The page is therefore built from the kit's public pieces (`GroupBox`, `Icon`,
+`ProgressCircle`, `Button`, theme tokens); the row and the cursor are ours.
 
 ## The contract
 
 - **Opening Settings does not change page.** The library app stays where it is
   and the window appears over it; when the window closes, focus returns with the
   shell untouched. One Back press, one result.
-- **Escape, the pad's Back and the Close button all close the window.** It is
-  read-only, so there is nothing to discard.
+- **Escape and the Close button close the window**, and a focused text field is
+  dismissed first — the pad's Back joins them when the transport lands. Because
+  nothing is saved yet, closing loses nothing but the field contents.
 - **The window pairs with the daemon itself** — the same loopback handshake
   `hearthdeck_client` performs — so no token crosses the process boundary.
+- **Reads happen on open and on the Refresh row**, which re-reads the daemon and
+  the disk on a background thread; Enter cannot stack a second read behind the
+  first. A daemon that never answers degrades a row, never the page.
 - **Nothing degrades to a dead end.** A daemon that does not answer renders
   "Unavailable" rows; a binary that will not start falls back to the in-app page
   (tested in `settings_window.rs`).
@@ -63,10 +184,20 @@ installs the binary beside the other Hearthdeck binaries.
 
 ## Known limits
 
-- **Untested on the deployment box** as of this change: whether the compositor
-  hands gamepad focus to the window when it opens and back when it closes, and
-  whether `Escape`/Back closes it from a pad. Both need the TV and a controller.
-- **The write paths are still in iced.** Turning this into a full replacement
-  means porting four flows (RomM, Stremio link, categorization, readiness) over
-  the daemon API, not just the shell.
-- The window reads once, at launch. Reopening it is the refresh.
+- **No controller input yet.** See above: it needs a transport decision before
+  it is a code change.
+- **Not everything is written.** Three settings are: the categorization opt-in,
+  the RomM connection and the Stremio link. Every other field holds its value in
+  the window, and its action only says what it would post. The rest is the next
+  change, one row at a time.
+- **No scroll-to-focus.** Pages are short enough to fit a fullscreen window at
+  either scale factor. A page long enough to overflow needs the cursor to scroll
+  the column, which the cursor model does not do yet.
+- **Text entry is unproven on the box.** GPUI's Wayland backend implements
+  `zwp_text_input_v3`, so cosmic-osk should type into a GPUI field; it has not
+  been tried on the TV, and no write flow depends on it yet.
+- **The iced page still owns the real flows.** RomM sign-in, Stremio linking,
+  categorization and BIOS sync keep working there until each is ported.
+- **No visual capture in this change.** `cosmic-screenshot` aborts in this
+  environment, so the layout was checked by running the window, not by a
+  screenshot.
