@@ -21,7 +21,7 @@ intentionally absent.
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user enable --now hearthdeck.target
+systemctl --user start --no-block hearthdeck.target
 systemctl --user status hearthdeck.target hearthdeck-bridge.socket hearthdeck-daemon.service hearthdeck-input.service
 ```
 
@@ -64,7 +64,7 @@ rest of `hearthdeck.target` still starts.
 Pair a client using the one-time code, then use its bearer token:
 
 ```sh
-curl -X POST http://127.0.0.1:38400/v1/library/rescan \
+curl -X POST http://127.0.0.1:38400/v1/discovery/desktop-apps/refresh \
   -H 'Authorization: Bearer <token>'
 curl http://127.0.0.1:38400/v1/library \
   -H 'Authorization: Bearer <token>'
@@ -164,5 +164,8 @@ Restart the daemon, then confirm:
 - the Android client verifies the displayed/pinned certificate fingerprint;
 - pairing code creation remains unavailable on the LAN listener.
 
-`just install-services` migrates a prior LTV systemd installation, configuration,
-and database to Hearthdeck before enabling the renamed services.
+`just install-services` installs checkout binaries and canonical units with
+development-path drop-ins, then reloads the user manager. It does not migrate
+databases, start or stop services, or change persistent enablement. Use the
+explicit start above after installation; restart the target explicitly when
+updating a running checkout.

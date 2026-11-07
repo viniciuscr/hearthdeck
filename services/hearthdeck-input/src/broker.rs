@@ -56,7 +56,7 @@ struct Broker {
 }
 
 pub(crate) async fn run() -> Result<()> {
-    hearthdeck_observability::init("hearthdeck-input", "warn,hearthdeck_input=info");
+    linux::init_logging();
     let path = transport::socket_path().context("XDG_RUNTIME_DIR is not set")?;
     // A second broker must not unlink a live listener.
     anyhow::ensure!(
@@ -96,7 +96,7 @@ pub(crate) async fn run() -> Result<()> {
     let mut command = [0; hearthdeck_protocol::input::MAX_FRAME + 1];
     let mut focus = crate::focus::monitor();
     let mut next_client = 1;
-    info!(?path, "opt-in semantic input broker ready");
+    info!(?path, "semantic input broker ready");
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -525,7 +525,7 @@ impl Broker {
                 .context("Game keyboard unavailable: set a verified foreground HEARTHDECK_GAMEPAD_OSK_ADAPTER")?;
             linux::emit(&mut self.output, self.mapper.set_active(false))?;
             self.release()?;
-            // The legacy keyboard may read controllers itself. Close our descriptors
+            // The keyboard adapter may read controllers itself. Close our descriptors
             // for its entire foreground lifetime instead of pretending it is semantic.
             for pad in self.pads.drain(..) {
                 self.state.remove(pad.id);

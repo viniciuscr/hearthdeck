@@ -300,16 +300,51 @@ fn http() -> &'static reqwest::Client {
 pub async fn platforms(
     settings: &SettingsRepository,
 ) -> std::result::Result<Vec<RommPlatform>, RommQueryError> {
-    let credentials = settings
-        .romm_credentials()
-        .await
-        .map_err(RommQueryError::Failed)?
-        .ok_or(RommQueryError::NotConfigured)?;
-    let mut platforms = query_romm(&credentials).await?;
-    for platform in &mut platforms {
-        platform.artwork_paths = platform_artwork_paths(platform);
+    Connection::load(settings).await?.platforms().await
+}
+
+pub(crate) struct Connection {
+    credentials: RommCredentials,
+}
+
+impl Connection {
+    pub(crate) async fn load(settings: &SettingsRepository) -> Result<Self, RommQueryError> {
+        Ok(Self {
+            credentials: romm_credentials(settings).await?,
+        })
     }
-    Ok(platforms)
+
+    pub(crate) async fn platforms(&self) -> Result<Vec<RommPlatform>, RommQueryError> {
+        let mut platforms = query_romm(&self.credentials).await?;
+        for platform in &mut platforms {
+            platform.artwork_paths = platform_artwork_paths(platform);
+        }
+        Ok(platforms)
+    }
+
+    pub(crate) async fn rom(&self, rom_id: i64) -> Result<RommGame, RommQueryError> {
+        let response = romm_request(
+            &self.credentials,
+            reqwest::Method::GET,
+            &format!("/api/roms/{rom_id}"),
+        )
+        .send()
+        .await
+        .map_err(|error| RommQueryError::Failed(error.into()))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(RommQueryError::Failed(anyhow::anyhow!("rom not found")));
+        }
+        if !status.is_success() {
+            return Err(RommQueryError::Failed(anyhow::anyhow!(
+                "RomM returned {status}"
+            )));
+        }
+        response
+            .json::<RommGame>()
+            .await
+            .map_err(|error| RommQueryError::Failed(error.into()))
+    }
 }
 
 pub async fn games(
@@ -435,32 +470,20 @@ pub async fn rom(
     settings: &SettingsRepository,
     rom_id: i64,
 ) -> std::result::Result<RommGame, RommQueryError> {
-    let credentials = settings
-        .romm_credentials()
-        .await
-        .map_err(RommQueryError::Failed)?
-        .ok_or(RommQueryError::NotConfigured)?;
-    let response = http()
-        .get(format!("{}/api/roms/{rom_id}", credentials.base_url))
-        .header(reqwest::header::ACCEPT, "application/json")
-        .bearer_auth(&credentials.token)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(|error| RommQueryError::Failed(error.into()))?;
-    let status = response.status();
-    if status == reqwest::StatusCode::NOT_FOUND {
-        return Err(RommQueryError::Failed(anyhow::anyhow!("rom not found")));
+    Connection::load(settings).await?.rom(rom_id).await
+}
+
+pub(crate) async fn details(
+    settings: &SettingsRepository,
+    rom_id: i64,
+) -> std::result::Result<RommGame, RommQueryError> {
+    let connection = Connection::load(settings).await?;
+    let mut game = connection.rom(rom_id).await?;
+    match favorite(&connection.credentials, &game).await {
+        Ok(favorite) => game.is_favorite = Some(favorite),
+        Err(error) => tracing::warn!(?error, rom_id, "could not read RomM favorite state"),
     }
-    if !status.is_success() {
-        return Err(RommQueryError::Failed(anyhow::anyhow!(
-            "RomM returned {status}"
-        )));
-    }
-    response
-        .json::<RommGame>()
-        .await
-        .map_err(|error| RommQueryError::Failed(error.into()))
+    Ok(game)
 }
 
 /// Name RomM's own UI gives the collection it flags as favorites. Only used
@@ -529,15 +552,14 @@ async fn romm_favorite_collection(
 ///
 /// Uses the flag RomM puts on the rom when it sends one, and otherwise asks the
 /// favorite collection, which is where favorites actually live.
-pub async fn favorite(
-    settings: &SettingsRepository,
+async fn favorite(
+    credentials: &RommCredentials,
     game: &RommGame,
 ) -> std::result::Result<bool, RommQueryError> {
     if let Some(favorite) = game.is_favorite {
         return Ok(favorite);
     }
-    let credentials = romm_credentials(settings).await?;
-    let Some(collection) = romm_favorite_collection(&credentials).await? else {
+    let Some(collection) = romm_favorite_collection(credentials).await? else {
         return Ok(false);
     };
     Ok(collection.rom_ids.contains(&game.id))
@@ -798,6 +820,136 @@ fn normalized_romm_asset_path(value: &str) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use axum::{
+        Json, Router,
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        routing::get,
+    };
+    use serde_json::json;
+    use tokio::net::TcpListener;
+
+    use super::*;
+    use crate::database::Database;
+
+    async fn switching_connection() -> (
+        tempfile::TempDir,
+        SettingsRepository,
+        tokio::task::JoinHandle<()>,
+    ) {
+        async fn game(State(settings): State<SettingsRepository>) -> Json<serde_json::Value> {
+            let credentials = settings.romm_credentials().await.unwrap().unwrap();
+            settings
+                .save_romm(&credentials.base_url, "replacement-token")
+                .await
+                .unwrap();
+            Json(json!({
+                "id": 7, "platform_id": 1, "name": "Original game", "fs_name": "game.rom"
+            }))
+        }
+
+        async fn collections(headers: HeaderMap) -> (StatusCode, Json<serde_json::Value>) {
+            if headers["authorization"] == "Bearer unavailable-token" {
+                return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})));
+            }
+            let rom_ids = if headers["authorization"] == "Bearer original-token" {
+                vec![7]
+            } else {
+                vec![]
+            };
+            (
+                StatusCode::OK,
+                Json(
+                    json!([{"id": 1, "name": "Favorites", "is_favorite": true, "rom_ids": rom_ids}]),
+                ),
+            )
+        }
+
+        async fn platforms(headers: HeaderMap) -> Json<serde_json::Value> {
+            let id = if headers["authorization"] == "Bearer original-token" {
+                1
+            } else {
+                2
+            };
+            Json(json!([{"id": id, "name": "Original platform"}]))
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let settings = SettingsRepository::new(database.pool().clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        settings
+            .save_romm(&base_url, "original-token")
+            .await
+            .unwrap();
+        let app = Router::new()
+            .route("/api/roms/7", get(game))
+            .route("/api/collections", get(collections))
+            .route("/api/platforms", get(platforms))
+            .with_state(settings.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (directory, settings, server)
+    }
+
+    #[tokio::test]
+    async fn details_keep_one_connection_when_settings_change_during_the_read() {
+        let (_directory, settings, server) = switching_connection().await;
+        let details = details(&settings, 7).await.unwrap();
+        server.abort();
+        assert_eq!(details.name.as_deref(), Some("Original game"));
+        assert_eq!(details.is_favorite, Some(true));
+        assert_eq!(
+            settings.romm_credentials().await.unwrap().unwrap().token,
+            "replacement-token"
+        );
+    }
+
+    #[tokio::test]
+    async fn launch_keeps_the_roms_platform_when_settings_change_during_the_read() {
+        let (directory, settings, server) = switching_connection().await;
+        tokio::fs::write(directory.path().join("game.rom"), b"rom")
+            .await
+            .unwrap();
+        let paths = RommPaths {
+            library_root: directory.path().to_owned(),
+            resources_root: directory.path().join("resources"),
+        };
+        let result = crate::retro::prepare_launch(&settings, &paths, 7).await;
+        server.abort();
+        let error = result.err().expect("platform has no core mapping");
+        assert!(
+            matches!(&error, crate::retro::RetroLaunchError::UnsupportedPlatform { fs_slug } if fs_slug == "Original platform"),
+            "launch must resolve the original platform before reporting its missing core mapping: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn details_remain_available_when_favorites_fail_but_rom_errors_propagate() {
+        let (_directory, settings, server) = switching_connection().await;
+        let credentials = settings.romm_credentials().await.unwrap().unwrap();
+        settings
+            .save_romm(&credentials.base_url, "unavailable-token")
+            .await
+            .unwrap();
+        let game = details(&settings, 7).await.unwrap();
+        assert_eq!(game.name.as_deref(), Some("Original game"));
+        assert_eq!(game.is_favorite, None);
+        assert!(matches!(
+            details(&settings, 99).await,
+            Err(RommQueryError::Failed(_))
+        ));
+        settings.clear_romm().await.unwrap();
+        assert!(matches!(
+            details(&settings, 7).await,
+            Err(RommQueryError::NotConfigured)
+        ));
+        server.abort();
+    }
+
     #[test]
     fn romm_user_state_and_collections_parse_from_romm_shapes() {
         // Field names and nesting only; the values come from a real RomM

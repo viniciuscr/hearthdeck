@@ -1,5 +1,7 @@
 //! The console grid's source: which scope is on screen and the requests that
 //! fill it. The pages themselves are held by [`crate::screens::library::console`].
+//! Console lists and facets carry that owner's source revision, so changing the
+//! RomM connection rejects metadata still arriving from the previous one.
 
 use cosmic::app::Task;
 use std::sync::Arc;
@@ -10,6 +12,16 @@ use crate::screens::library::console::ConsoleScope;
 use super::{App, CONSOLE_SEARCH_DEBOUNCE, Message, ROMM_PAGE_SIZE};
 
 impl App {
+    /// Retires source data while retaining tab identity until the platform list answers.
+    pub(super) fn invalidate_console_source(&mut self) {
+        self.console.invalidate();
+        self.retries.consoles = false;
+        if self.cur_section == crate::app_group::Section::ConsoleGames {
+            self.filters.clear_source();
+            self.refilter();
+        }
+    }
+
     /// The RomM platform id of the console group in scope, when one is selected.
     pub(super) fn console_platform_id(&self) -> Option<i64> {
         self.cur_group
@@ -139,6 +151,7 @@ impl App {
     /// Fetches the console list after `delay`.
     pub(super) fn load_consoles_after(&self, delay: std::time::Duration) -> Task<Message> {
         let client = self.daemon_client.clone();
+        let source = self.console.source_revision();
         Task::perform(
             async move {
                 tokio::time::sleep(delay).await;
@@ -147,13 +160,14 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())
             },
-            |result| cosmic::Action::App(Message::ConsolesLoaded(result)),
+            move |result| cosmic::Action::App(Message::ConsolesLoaded(source, result)),
         )
     }
 
     /// Fetches the filter facets the current console scope offers.
     pub(super) fn load_facets(&self) -> Task<Message> {
         let platform_id = self.console_platform_id();
+        let source = self.console.source_revision();
         let client = self.daemon_client.clone();
         Task::perform(
             async move {
@@ -164,6 +178,7 @@ impl App {
             },
             move |result| {
                 cosmic::Action::App(Message::FacetsLoaded {
+                    source,
                     platform: platform_id,
                     result,
                 })

@@ -109,12 +109,11 @@ impl App {
     }
 
     fn romm_connection_changed(&mut self) -> Task<Message> {
-        self.console.invalidate();
+        self.invalidate_console_source();
         self.console_platforms.clear();
         self.tabs.sync_console_groups(&[]);
         if self.cur_section == crate::app_group::Section::ConsoleGames {
             self.cur_group = None;
-            self.filters.clear_source();
             self.refilter();
         }
         if self.romm.connection.is_some() {
@@ -449,12 +448,12 @@ impl App {
             // its tiles between the lists at once.
             self.catalog.project(&self.config);
             // The Desktop tab is there only while something wants a desktop.
-            let before = self.tabs.get(self.cur_section).clone();
-            self.tabs.sync_category_groups(self.catalog.entries());
-            if self.tabs.get(self.cur_section) != &before {
-                return self.apply_group(None);
-            }
+            let had_group = self.cur_group.is_some();
+            self.sync_local_catalog();
             self.refilter();
+            if had_group && self.cur_group.is_none() {
+                return Task::batch([self.list_replaced(), self.reveal_tab(0)]);
+            }
         }
         Task::none()
     }

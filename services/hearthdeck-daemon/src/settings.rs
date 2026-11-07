@@ -31,16 +31,6 @@ impl ThemeMode {
             _ => None,
         }
     }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::Aurora => "aurora",
-            Self::Ember => "ember",
-            Self::Indigo => "indigo",
-            Self::Noir => "noir",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -58,14 +48,6 @@ impl BackdropMode {
             "edge_wash" => Some(Self::EdgeWash),
             "quiet_grid" => Some(Self::QuietGrid),
             _ => None,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Solid => "solid",
-            Self::EdgeWash => "edge_wash",
-            Self::QuietGrid => "quiet_grid",
         }
     }
 }
@@ -88,24 +70,6 @@ pub struct RommSettings {
     pub updated_at: String,
 }
 
-#[derive(Clone, Debug)]
-pub enum SettingsUpdate {
-    Saved(UserSettings),
-    Conflict(UserSettings),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SettingsChange {
-    pub theme_mode: Option<ThemeMode>,
-    pub backdrop_mode: Option<BackdropMode>,
-}
-
-impl SettingsChange {
-    pub fn is_empty(self) -> bool {
-        self.theme_mode.is_none() && self.backdrop_mode.is_none()
-    }
-}
-
 impl SettingsRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
@@ -122,9 +86,8 @@ impl SettingsRepository {
 
     /// Records the user's answer on smart categorization.
     ///
-    /// A direct write, unlike [`SettingsRepository::update`], because there is no
-    /// two-way editing here to reconcile: the flag is the daemon's gate on a
-    /// capability, and a half-applied toggle would be worse than a lost one.
+    /// There is no two-way editing here to reconcile: the flag is the daemon's
+    /// gate on a capability, and a half-applied toggle would be worse than a lost one.
     pub async fn set_categorization_enabled(&self, enabled: bool) -> Result<UserSettings> {
         let updated_at = Utc::now().to_rfc3339();
         sqlx::query(
@@ -135,50 +98,6 @@ impl SettingsRepository {
         .execute(&self.pool)
         .await?;
         self.get().await
-    }
-
-    pub async fn update(
-        &self,
-        change: SettingsChange,
-        expected_revision: Option<i64>,
-    ) -> Result<SettingsUpdate> {
-        let mut transaction = self.pool.begin().await?;
-        let row = sqlx::query(
-            "SELECT theme_mode, backdrop_mode, categorization_enabled, revision, updated_at FROM user_settings WHERE id = 1",
-        )
-        .fetch_one(&mut *transaction)
-        .await?;
-        let current = settings_from_row(&row)?;
-        let theme_mode = change.theme_mode.unwrap_or(current.theme_mode);
-        let backdrop_mode = change.backdrop_mode.unwrap_or(current.backdrop_mode);
-
-        if expected_revision.is_some_and(|revision| revision != current.revision)
-            && (current.theme_mode != theme_mode || current.backdrop_mode != backdrop_mode)
-        {
-            return Ok(SettingsUpdate::Conflict(current));
-        }
-        if current.theme_mode == theme_mode && current.backdrop_mode == backdrop_mode {
-            transaction.commit().await?;
-            return Ok(SettingsUpdate::Saved(current));
-        }
-
-        let updated_at = Utc::now().to_rfc3339();
-        sqlx::query(
-            "UPDATE user_settings SET theme_mode = ?, backdrop_mode = ?, revision = revision + 1, updated_at = ? WHERE id = 1",
-        )
-        .bind(theme_mode.as_str())
-        .bind(backdrop_mode.as_str())
-        .bind(updated_at)
-        .execute(&mut *transaction)
-        .await?;
-        let row = sqlx::query(
-            "SELECT theme_mode, backdrop_mode, categorization_enabled, revision, updated_at FROM user_settings WHERE id = 1",
-        )
-        .fetch_one(&mut *transaction)
-        .await?;
-        let saved = settings_from_row(&row)?;
-        transaction.commit().await?;
-        Ok(SettingsUpdate::Saved(saved))
     }
 
     pub async fn romm(&self) -> Result<Option<RommSettings>> {

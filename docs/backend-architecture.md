@@ -32,9 +32,10 @@ the socket existing rather than on a race-prone bridge process startup. Future
 host capabilities receive their own typed socket/service pair under the same
 target.
 
-The daemon's session service owns launch acceptance, activity recording,
-session-change events and exit reconciliation. HTTP handlers prepare launch
-requests and map errors; the activity store only persists and queries plays.
+The daemon's session service owns launch acceptance, active-session lookup,
+explicit stops, activity recording, session-change events and exit reconciliation.
+HTTP handlers prepare requests and map errors; the activity store only persists
+and queries plays.
 Explicit stops and the periodic watcher share the same idempotent completion
 path. The service borrows its bridge path, activity store, discovery coordinator
 and event sender, rather than depending on the whole application state.
@@ -45,6 +46,12 @@ Stremio title selection (including desktop fallback for legacy records) and
 desktop-entry dispatch. The HTTP handler only loads the record, asks for a plan
 and submits it to the session service. Retro filesystem/core resolution stays
 in the retro adapter.
+
+Multi-request RomM reads use one saved connection snapshot. Detail metadata and
+favorite lookup, and launch ROM/platform resolution, cannot mix accounts or
+servers if settings change between requests. The RomM client owns detail-read
+sequencing; a failed favorite lookup still logs a warning and leaves the details
+available. HTTP only converts the resulting game to its response.
 
 Collection rule composition lives in `collections/rules.rs`. Its service borrows
 the catalog, activity store and optional categorizer, without HTTP or application
@@ -91,6 +98,16 @@ rows in the same call, so a banner cannot outlive the credential that filled it.
 HTTP maps a key that could never work to a bad request and storage failures to an
 internal error. The key itself never crosses this boundary — the response type has
 no field for it.
+
+## Database baseline
+
+The daemon accepts a fresh database or the current deployed schema, preserving
+existing data when adopting the latter. Fresh creation includes every final
+schema and seed-data effect; only the historical upgrade steps are retired.
+Both paths record `PRAGMA user_version = 1`, replacing the old migration ledger.
+Pre-baseline schemas and unknown future versions are rejected rather than
+partially upgraded. Back up the database before adopting this baseline.
+There is no historical `ALTER TABLE` or table-rebuild chain.
 
 ## Platform Adaptation Rules
 
@@ -148,9 +165,10 @@ Implement `DiscoveryProvider` for every source:
 - `discover()`: fetch/scan only that source and produce normalized
   `CatalogRecord` values. It does not write SQL or emit API events.
 
-The API can enqueue every provider with `POST /v1/library/rescan`, or one
-registered source with `POST /v1/discovery/{source_id}/refresh`. It does not
-invoke scanners or write catalog rows directly.
+Startup queues every provider. The API can enqueue one registered source with
+`POST /v1/discovery/{source_id}/refresh`, or one metadata provider with
+`POST /v1/metadata/{provider_id}/refresh`. It does not invoke scanners or write
+catalog rows directly.
 
 ## Catalog Update Flow
 
@@ -178,6 +196,13 @@ Desktop-entry and AppStream categories therefore classify applications
 without a frontend provider-specific branch. (The former Flutter
 `CatalogRepository`/`MockCatalogRepository` abstraction was removed with the
 Flutter client.)
+
+Catalog replacement preserves the selected tab by group identity, not its old
+index, and removes facet selections whose options disappeared. RomM platform
+replacement follows the same identity rule and accepts an empty list as
+authoritative. A daemon-feed reconnect invalidates cached RomM pages and facets
+before reloading platforms; ordinary local-provider events do not flush them.
+External RomM edits remain cached until reconnect or connection change.
 
 Packaged Linux builds pair with the loopback daemon at runtime. The client
 reads `HEARTHDECK_BACKEND_URL` and `HEARTHDECK_PAIRING_TOKEN` from the
@@ -241,8 +266,10 @@ The public OpenAPI contract is `contracts/openapi.yaml`.
 - `GET /v1/health`: unauthenticated daemon discovery/status.
 - `POST /v1/pairing/complete`: consumes a host-created one-time pairing code.
 - `GET /v1/library`: authenticated library metadata.
-- `POST /v1/library/rescan`: authenticated request to refresh every registered
-  discovery and metadata provider.
+- `POST /v1/discovery/{source_id}/refresh`: authenticated request to refresh one
+  discovery source.
+- `POST /v1/metadata/{provider_id}/refresh`: authenticated request to refresh one
+  metadata provider.
 - `POST /v1/launch/{item_id}`: authenticated launch of whatever an item id
   names — the daemon resolves the prefix and picks the catalog or retro
   launch (operationId `launchItem`).
@@ -250,6 +277,14 @@ The public OpenAPI contract is `contracts/openapi.yaml`.
 
 The loopback admin listener exposes `POST /v1/pairing` for host-side pairing
 flows. It is not included in the public API contract.
+
+The unused `/v1/activity/recent`, `/v1/library/rescan`,
+`/v1/retro/service/restart` and `/v1/settings` routes are retired. They return
+`404` with or without credentials. Recently played games still arrive through
+`GET /v1/collections`; discovery still runs at startup and on provider refresh.
+Frontend appearance preferences live in COSMIC config, not the daemon's former
+theme/backdrop API. RomM and Stremio connection settings keep their separate,
+authenticated `/v1/retro/settings` and `/v1/stremio/settings` routes.
 
 ## Deployment
 
@@ -267,10 +302,16 @@ Gamescope wrapper; Heroic's own per-game launch settings remain authoritative.
 See [arch-package.md](arch-package.md#hearthdeck-session) for the current session
 and [kiosk-session.md](kiosk-session.md) for historical incident notes.
 
-Source-checkout units live in [deploy/systemd](../deploy/systemd/); packaged units
-live in [packaging/arch](../packaging/arch/). `just install-services` currently
-copies and enables checkout units; that developer workflow is distinct from the
-packaged session's explicit target start.
+All units live in [deploy/systemd](../deploy/systemd/); packaging paths are
+symlinks to those canonical files. `just install-services` copies the backend
+units and binaries and adds `90-hearthdeck-checkout.conf` drop-ins for
+`~/.local/bin` paths. It only reloads the user manager: it never starts, stops,
+enables, or disables units, and preserves existing enablement. Start explicitly
+with `systemctl --user start --no-block hearthdeck.target`; the packaged session
+already does this. A running checkout needs an explicit restart to use new binaries.
+To undo a persistent enable left by an older installer, run
+`systemctl --user disable hearthdeck.target` manually; this does not stop the
+running target. Explicit `start` needs no enablement.
 Configure LAN TLS through `~/.config/hearthdeck/daemon.env`; see
 [daemon.env.example](../deploy/systemd/daemon.env.example).
 

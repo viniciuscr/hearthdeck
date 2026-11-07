@@ -123,6 +123,11 @@ impl State {
     pub fn load_local_facets(&mut self, section: Section, catalog: &[Arc<LibraryItem>]) {
         if section != Section::ConsoleGames {
             self.facets = section_facets(section, catalog);
+            self.selected.retain(|id, value| {
+                self.facets.iter().any(|facet| {
+                    &facet.id == id && facet.options.iter().any(|option| &option.value == value)
+                })
+            });
         }
     }
 

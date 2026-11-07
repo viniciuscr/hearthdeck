@@ -151,25 +151,13 @@ ci-package-arch:
 acceptance-linux:
   ./scripts/linux-acceptance --require-romm
 
-# Install Linux systemd user units and enable the local services.
+# Install Linux systemd user units without starting or enabling services.
 install-services:
-  mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/bin"
-  systemctl --user disable --now hearthdeck.target hearthdeck-bridge.socket hearthdeck-bridge.service hearthdeck-daemon.service hearthdeck-input.service 2>/dev/null || true
-  cp deploy/systemd/hearthdeck-bridge.service "$HOME/.config/systemd/user/"
-  cp deploy/systemd/hearthdeck-daemon.service "$HOME/.config/systemd/user/"
-  cp deploy/systemd/hearthdeck-input.service "$HOME/.config/systemd/user/"
-  cp deploy/systemd/hearthdeck-bridge.socket "$HOME/.config/systemd/user/"
-  cp deploy/systemd/hearthdeck.target "$HOME/.config/systemd/user/"
-  cp deploy/systemd/hearthdeck-log.service "$HOME/.config/systemd/user/"
-  cp deploy/systemd/romm.service "$HOME/.config/systemd/user/"
-  cp deploy/systemd/romm.path "$HOME/.config/systemd/user/"
-  cp services/target/release/hearthdeck-bridge "$HOME/.local/bin/"
-  cp services/target/release/hearthdeck-daemon "$HOME/.local/bin/"
-  cp services/target/release/hearthdeck-input "$HOME/.local/bin/"
-  cp services/target/release/hearthdeck-ai "$HOME/.local/bin/"
-  cp packaging/arch/hearthdeck-romm "$HOME/.local/bin/hearthdeck-romm"
-  systemctl --user daemon-reload
-  systemctl --user enable --now hearthdeck.target
+  bash scripts/install-services
+
+# Test deployment wiring without touching host services.
+test-deployment:
+  python3 scripts/test-deployment.py
 
 # Show Linux service status.
 services-status:

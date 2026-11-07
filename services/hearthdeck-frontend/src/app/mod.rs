@@ -64,7 +64,7 @@ use crate::style::{
 };
 use crate::subscriptions::config_watch::config_watch;
 use crate::subscriptions::daemon_events::{FeedEvent, daemon_events};
-use crate::subscriptions::gamepad::{GamepadEvent, gamepad_events};
+use crate::subscriptions::gamepad::GamepadEvent;
 use crate::system_status::SystemStatus;
 use crate::text_entry::{Field, TextEntry};
 use crate::ui;
@@ -134,7 +134,10 @@ pub enum Message {
     Romm(settings::romm::Message),
     /// The catalog fetched from the daemon, rendered as tiles, or why it could
     /// not be.
-    CatalogLoaded(Result<Vec<Arc<LibraryItem>>, String>),
+    CatalogLoaded(
+        refresh::CatalogRequest,
+        Result<Vec<Arc<LibraryItem>>, String>,
+    ),
     /// A page of console records arrived, for the scope and load it was started
     /// for.
     ConsolePageLoaded {
@@ -148,11 +151,12 @@ pub enum Message {
     },
     /// The filter facets the current console scope offers, from the daemon.
     FacetsLoaded {
+        source: console::SourceRevision,
         platform: Option<i64>,
         result: Result<Vec<Facet>, String>,
     },
     /// The dashboard's collections arrived, which is what its rails are made of.
-    CollectionsLoaded(Result<Vec<Collection>, String>),
+    CollectionsLoaded(refresh::CollectionRequest, Result<Vec<Collection>, String>),
     /// The daemon said something changed (or its feed came back).
     DaemonChanged(FeedEvent),
     Readiness(settings::readiness::Message),
@@ -161,7 +165,10 @@ pub enum Message {
     OpenSettings,
     Stremio(settings::stremio_link::Message),
     /// The console list a tab strip is built from: `(platform id, label)`.
-    ConsolesLoaded(Result<Vec<crate::providers::daemon::RetroConsole>, String>),
+    ConsolesLoaded(
+        console::SourceRevision,
+        Result<Vec<crate::providers::daemon::RetroConsole>, String>,
+    ),
     SelectSection(Section),
     /// The dashboard's top bar: show the dashboard itself.
     OpenDashboard,
@@ -371,6 +378,7 @@ pub struct App {
     daemon_client: DaemonClient,
     /// Local source records and their form projection (PC games and applications).
     catalog: Catalog,
+    catalog_request: refresh::CatalogRequest,
     /// Every console scope's records, a page at a time, as the daemon reports
     /// them, cached per scope with the cursor that extends them.
     console: ConsoleScopes,
@@ -389,6 +397,7 @@ pub struct App {
     /// feature's own categories, and so the AI's, are - appears without a
     /// frontend change.
     collections: Vec<Collection>,
+    collections_request: refresh::CollectionRequest,
     /// The smart-categories section's daemon snapshot, capability and notices.
     categorization: settings::categorization::State,
     /// The Stremio link flow: the account the daemon holds, the code being
@@ -524,11 +533,13 @@ impl Application for App {
             config_store,
             daemon_client,
             catalog: Catalog::default(),
+            catalog_request: refresh::CatalogRequest::default(),
             console: ConsoleScopes::default(),
             console_platforms: Vec::new(),
             visible: Vec::new(),
             filters: filters::State::default(),
             collections: Vec::new(),
+            collections_request: refresh::CollectionRequest::default(),
             text_entry: TextEntry::default(),
             menu: menu::State::default(),
             cur_section: Section::PcGames,
@@ -559,8 +570,7 @@ impl Application for App {
             grid_restore_pending: false,
             launch_state: LaunchState::default(),
             input_ownership: InputOwnership::default(),
-            broker_error: hearthdeck_protocol::input::broker_enabled()
-                .then(|| "Connecting to controller broker...".into()),
+            broker_error: Some("Connecting to controller broker...".into()),
             details: None,
             retries: refresh::Retries::default(),
         };
@@ -604,7 +614,10 @@ impl Application for App {
         // The arms that replace what it walks repair it again themselves.
         self.cursors = focus::clamp(self.cursors, self.layout());
         match message {
-            Message::CatalogLoaded(result) => {
+            Message::CatalogLoaded(request, result) => {
+                if request != self.catalog_request {
+                    return Task::none();
+                }
                 // A failed read leaves the library as it was: an empty catalog
                 // would also prune the tabs its entries imply, and persist that.
                 let entries = match result {
@@ -625,13 +638,14 @@ impl Application for App {
                 // catalog the grid draws is therefore what the strip is built
                 // from. Console Games is the exception - its tabs are the
                 // platforms the daemon reported (see `ConsolesLoaded`).
-                self.tabs.sync_category_groups(self.catalog.entries());
-                self.filters
-                    .load_local_facets(self.cur_section, self.catalog.entries());
+                self.sync_local_catalog();
                 self.refilter();
                 return self.list_replaced();
             }
-            Message::ConsolesLoaded(result) => {
+            Message::ConsolesLoaded(source, result) => {
+                if source != self.console.source_revision() {
+                    return Task::none();
+                }
                 let platforms = match result {
                     Ok(platforms) => platforms,
                     Err(error) => {
@@ -640,29 +654,29 @@ impl Application for App {
                     }
                 };
                 self.retries.consoles = false;
-                // None reported: keep the tabs the last answer built.
-                if platforms.is_empty() {
-                    return Task::none();
-                }
                 // Store the consoles for the dashboard rail. The rail appends
                 // itself at the end of the page, so the pad is named by the
                 // card it was on and put back on it once the list is rebuilt.
                 let was = self.dashboard_cursor_card();
+                let selected_platform = self.console_platform_id();
                 self.console_platforms = platforms.clone();
                 let platform_tuples: Vec<(i64, String)> =
                     platforms.into_iter().map(|c| (c.id, c.label)).collect();
+                self.tabs.sync_console_groups(&platform_tuples);
                 let mut tasks = vec![self.queue_console_prefetch(), self.reland_dashboard(was)];
-                if self.tabs.sync_console_groups(&platform_tuples) {
-                    // The chrome the ring walks changed, so its stop may no
-                    // longer be one that exists.
-                    self.cursors = focus::clamp(self.cursors, self.layout());
-                    // Indices may have moved, so drop the selection and reload.
-                    if self.cur_section == Section::ConsoleGames {
-                        self.cur_group = None;
-                        self.refilter();
-                        tasks.push(self.load_console_page(self.console_scope(), 0));
-                        tasks.push(self.load_facets());
+                if self.cur_section == Section::ConsoleGames {
+                    self.cur_group = selected_platform.and_then(|id| {
+                        self.tabs
+                            .console_games
+                            .iter()
+                            .position(|group| group.romm_platform_id() == Some(id))
+                    });
+                    if self.console_platform_id() != selected_platform {
+                        self.filters.clear_source();
                     }
+                    self.refilter();
+                    tasks.push(self.ensure_console_scope());
+                    tasks.push(self.load_facets());
                 }
                 return Task::batch(tasks);
             }
@@ -732,7 +746,10 @@ impl Application for App {
                 return self.ensure_console_scope();
             }
             Message::DaemonChanged(event) => return self.daemon_changed(event),
-            Message::CollectionsLoaded(result) => {
+            Message::CollectionsLoaded(request, result) => {
+                if request != self.collections_request {
+                    return Task::none();
+                }
                 match result {
                     Ok(collections) => {
                         // Rails can appear and drop out between reads, which
@@ -749,8 +766,13 @@ impl Application for App {
                     }
                 }
             }
-            Message::FacetsLoaded { platform, result } => {
-                if self.cur_section != Section::ConsoleGames
+            Message::FacetsLoaded {
+                source,
+                platform,
+                result,
+            } => {
+                if source != self.console.source_revision()
+                    || self.cur_section != Section::ConsoleGames
                     || platform != self.console_platform_id()
                 {
                     return Task::none();
@@ -1098,7 +1120,7 @@ impl Application for App {
         // vocabulary: a step is a step whichever made it. Neither is acted on
         // while something else owns the screen - the update arm drops events
         // then - so there is nothing to gate here.
-        let navigation = if hearthdeck_protocol::input::broker_enabled() {
+        let navigation = {
             use hearthdeck_protocol::input::Delivery;
             let delivery = if self.text_entry.is_active() {
                 Delivery::TextEntry
@@ -1113,8 +1135,6 @@ impl Application for App {
                 Delivery::Observe
             };
             crate::subscriptions::broker::events(delivery).map(Message::BrokerInput)
-        } else {
-            gamepad_events().map(Message::GamepadEvent)
         };
         let daemon = daemon_events(self.daemon_client.clone()).map(Message::DaemonChanged);
         // Only the primary window drives the layout; dialogs are separate
@@ -1579,6 +1599,21 @@ impl App {
             }
         }
     }
+    fn sync_local_catalog(&mut self) {
+        let selected = self
+            .cur_group
+            .and_then(|index| self.tabs.get(self.cur_section).get(index))
+            .cloned();
+        self.tabs.sync_category_groups(self.catalog.entries());
+        self.cur_group = selected.and_then(|selected| {
+            self.tabs
+                .get(self.cur_section)
+                .iter()
+                .position(|group| *group == selected)
+        });
+        self.filters
+            .load_local_facets(self.cur_section, self.catalog.entries());
+    }
     /// Puts the application at tile `index` in `form`, and remembers the choice.
     ///
     /// The Desktop tab exists only while something wants it, so the strip is
@@ -1590,14 +1625,8 @@ impl App {
         };
         self.config.set_form_override(&id, form);
         self.catalog.project(&self.config);
-        self.tabs.sync_category_groups(self.catalog.entries());
+        self.sync_local_catalog();
         self.persist_config();
-        let tabs = self.tabs.get(self.cur_section).len();
-        if self.cur_group.is_some_and(|group| group >= tabs) {
-            self.cur_group = None;
-        }
-        self.filters
-            .load_local_facets(self.cur_section, self.catalog.entries());
         self.refilter();
         self.focus_task()
     }

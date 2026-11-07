@@ -7,8 +7,6 @@
 #[cfg(target_os = "linux")]
 mod broker_input;
 #[cfg(target_os = "linux")]
-mod input;
-#[cfg(target_os = "linux")]
 mod overlay;
 #[cfg(target_os = "linux")]
 mod shortcut;

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use tracing::warn;
 
@@ -28,6 +28,14 @@ impl Database {
     }
 
     pub async fn migrate(&self) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+            .fetch_one(&mut *transaction)
+            .await?;
+        ensure!(
+            matches!(version, 0 | 1),
+            "unsupported database schema version {version}"
+        );
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS paired_clients (
@@ -67,7 +75,8 @@ impl Database {
               theme_mode TEXT NOT NULL,
               backdrop_mode TEXT NOT NULL DEFAULT 'solid',
               revision INTEGER NOT NULL DEFAULT 0,
-              updated_at TEXT NOT NULL
+              updated_at TEXT NOT NULL,
+              categorization_enabled INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS romm_settings (
               id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -103,15 +112,12 @@ impl Database {
               api_key TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS hearthdeck_schema_migrations (
-              version INTEGER PRIMARY KEY
+            CREATE TABLE IF NOT EXISTS launch_activity (
+              item_id TEXT PRIMARY KEY,
+              snapshot_json TEXT NOT NULL,
+              last_launched_at TEXT NOT NULL,
+              launch_count INTEGER NOT NULL DEFAULT 1
             );
-                        CREATE TABLE IF NOT EXISTS launch_activity (
-                            item_id TEXT PRIMARY KEY,
-                            snapshot_json TEXT NOT NULL,
-                            last_launched_at TEXT NOT NULL,
-                            launch_count INTEGER NOT NULL DEFAULT 1
-                        );
             -- One row per play, not per item. `launch_activity` above is a cache of
             -- this for the dashboard's shelf; this is the record, and the only place
             -- a duration can come from. `duration_seconds` is NULL, not 0, for a play
@@ -174,90 +180,29 @@ impl Database {
             );
             "#,
         )
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        // Existing development databases predate source ownership. SQLite has
-        // no `ADD COLUMN IF NOT EXISTS`, so a duplicate-column error is the
-        // expected no-op case after the first migration; `add_column` tolerates
-        // exactly that error and propagates every other one.
-        add_column(
-            &self.pool,
-            "ALTER TABLE library_items ADD COLUMN source_id TEXT NOT NULL DEFAULT 'legacy'",
-        )
-        .await?;
-        add_column(
-            &self.pool,
-            "ALTER TABLE library_items ADD COLUMN launch_id TEXT",
-        )
-        .await?;
-        add_column(
-            &self.pool,
-            "ALTER TABLE user_settings ADD COLUMN backdrop_mode TEXT NOT NULL DEFAULT 'solid' CHECK (backdrop_mode IN ('solid', 'edge_wash', 'quiet_grid'))",
-        )
-        .await?;
-        // Collections gained an owner: who may edit one. The seeded rows predate
-        // it, and their owner is the only thing about them that is not already
-        // implied by their slug and role.
-        add_column(
-            &self.pool,
-            "ALTER TABLE collections ADD COLUMN owner TEXT NOT NULL DEFAULT 'user'",
-        )
-        .await?;
-        add_column(&self.pool, "ALTER TABLE collections ADD COLUMN name TEXT").await?;
-        // Seeded only now, after `owner` and `name` exist. On a database whose
-        // `collections` table predates those columns, the `CREATE TABLE IF NOT
-        // EXISTS` above is a no-op, so a seed INSERT earlier in this function
-        // would name columns the table does not have and fail the whole
-        // migration (SQLite has no `ADD COLUMN IF NOT EXISTS`).
-        crate::collections::seed_builtin(&self.pool).await?;
-        // Versions 1 and 2 rebuild `user_settings` with the same column list; the
-        // second was a copy of the first. Recording both keeps the ledger
-        // continuous for a future `> N` check, but the table is rewritten at most
-        // once — previously a fresh database dropped and recreated it twice.
-        let mut rebuild = false;
-        for version in [1_i64, 2] {
-            let migration = sqlx::query(
-                "INSERT OR IGNORE INTO hearthdeck_schema_migrations (version) VALUES (?)",
-            )
-            .bind(version)
-            .execute(&self.pool)
-            .await?;
-            rebuild |= migration.rows_affected() == 1;
-        }
-        if rebuild {
-            let mut transaction = self.pool.begin().await?;
-            sqlx::query(
-                "CREATE TABLE user_settings_rebuilt (id INTEGER PRIMARY KEY CHECK (id = 1), theme_mode TEXT NOT NULL, backdrop_mode TEXT NOT NULL DEFAULT 'solid', revision INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)",
-            )
-            .execute(&mut *transaction)
-            .await?;
-            sqlx::query(
-                "INSERT INTO user_settings_rebuilt (id, theme_mode, backdrop_mode, revision, updated_at) SELECT id, theme_mode, backdrop_mode, revision, updated_at FROM user_settings",
-            )
-            .execute(&mut *transaction)
-            .await?;
-            sqlx::query("DROP TABLE user_settings")
+        // Only the current deployed schema is adopted; historical upgrades are retired.
+        for statement in [
+            "SELECT source_id, launch_id FROM library_items LIMIT 0",
+            "SELECT backdrop_mode, revision, categorization_enabled FROM user_settings LIMIT 0",
+            "SELECT owner, name FROM collections LIMIT 0",
+        ] {
+            sqlx::query(statement)
                 .execute(&mut *transaction)
-                .await?;
-            sqlx::query("ALTER TABLE user_settings_rebuilt RENAME TO user_settings")
-                .execute(&mut *transaction)
-                .await?;
-            transaction.commit().await?;
+                .await
+                .context("database predates the supported baseline; restore a current database before starting")?;
         }
-        // Columns added after `user_settings` was first defined have to be added
-        // here, below the versioned rebuilds: those rebuild the table from a fixed
-        // column list, so a column added before them is dropped again on any
-        // database that has not yet applied them.
-        add_column(
-            &self.pool,
-            "ALTER TABLE user_settings ADD COLUMN categorization_enabled INTEGER NOT NULL DEFAULT 0",
-        )
-        .await?;
         sqlx::query(
             "INSERT OR IGNORE INTO user_settings (id, theme_mode, backdrop_mode, revision, updated_at) VALUES (1, 'noir', 'solid', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         )
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
+        sqlx::query("DROP TABLE IF EXISTS hearthdeck_schema_migrations; PRAGMA user_version = 1")
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        crate::collections::seed_builtin(&self.pool).await?;
         Ok(())
     }
 
@@ -290,32 +235,12 @@ async fn restrict_to_owner(path: &Path) {
     }
 }
 
-/// Runs an `ALTER TABLE ... ADD COLUMN`, tolerating only the one benign failure.
-///
-/// SQLite has no `ADD COLUMN IF NOT EXISTS`, so a column that is already present
-/// fails with "duplicate column name" — the expected no-op on every database past
-/// its first migration. Every other error is a real migration problem; discarding
-/// it with `let _ =`, as this used to, turned a locked database or a type mismatch
-/// into a later, unexplained query failure.
-async fn add_column(pool: &SqlitePool, statement: &'static str) -> Result<(), sqlx::Error> {
-    match sqlx::query(statement).execute(pool).await {
-        Err(sqlx::Error::Database(error)) if error.message().contains("duplicate column name") => {
-            Ok(())
-        }
-        outcome => outcome.map(|_| ()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::Database;
 
-    /// A database whose `collections` table predates the `owner`/`name` columns
-    /// must still migrate. `CREATE TABLE IF NOT EXISTS` cannot add columns to a
-    /// table it finds, so the seed INSERT has to run after the ALTERs, not with
-    /// the CREATE batch.
     #[tokio::test]
-    async fn migrates_a_legacy_collections_table_without_owner_or_name() {
+    async fn rejects_prebaseline_databases_without_partial_schema_changes() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::connect(&directory.path().join("hearthdeck.db"))
             .await
@@ -338,26 +263,23 @@ mod tests {
         .await
         .unwrap();
 
-        database.migrate().await.unwrap();
-
-        let (owner, name): (String, Option<String>) =
-            sqlx::query_as::<_, (String, Option<String>)>(
-                "SELECT owner, name FROM collections WHERE slug = 'last-played'",
-            )
+        let error = database.migrate().await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("predates the supported baseline")
+        );
+        let tables: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+                .fetch_all(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(tables, ["collections"]);
+        let slug: String = sqlx::query_scalar("SELECT slug FROM collections")
             .fetch_one(database.pool())
             .await
             .unwrap();
-        assert_eq!(owner, "system");
-        assert_eq!(name, None);
-
-        // The other built-ins are seeded alongside the pre-existing row, including
-        // the two Stremio ones, which the daemon owns and resolves from records its
-        // providers published.
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM collections")
-            .fetch_one(database.pool())
-            .await
-            .unwrap();
-        assert_eq!(count, 5);
+        assert_eq!(slug, "last-played");
     }
 
     /// A database created before Stremio support gains its table on the next
@@ -495,7 +417,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrations_record_both_versions_and_rerun_safely() {
+    async fn a_fresh_baseline_is_idempotent_without_a_legacy_ledger() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::connect(&directory.path().join("hearthdeck.db"))
             .await
@@ -506,20 +428,128 @@ mod tests {
         // it must be a no-op rather than an error.
         database.migrate().await.unwrap();
 
-        let versions: Vec<i64> =
-            sqlx::query_scalar("SELECT version FROM hearthdeck_schema_migrations ORDER BY version")
-                .fetch_all(database.pool())
-                .await
-                .unwrap();
-        assert_eq!(versions, vec![1, 2]);
-
-        // The rebuild left exactly one `user_settings` row and no scratch table.
-        let rebuilt: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'user_settings_rebuilt'",
+        let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(version, 1);
+        let obsolete: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('user_settings_rebuilt', 'hearthdeck_schema_migrations')",
         )
         .fetch_one(database.pool())
         .await
         .unwrap();
-        assert_eq!(rebuilt, 0);
+        assert_eq!(obsolete, 0);
+        let settings: (String, String, i64, bool) = sqlx::query_as(
+            "SELECT theme_mode, backdrop_mode, revision, categorization_enabled FROM user_settings",
+        )
+        .fetch_one(database.pool())
+        .await
+        .unwrap();
+        assert_eq!(settings, ("noir".into(), "solid".into(), 0, false));
+        let builtins: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM collections")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(builtins, 5);
+    }
+
+    #[tokio::test]
+    async fn adopts_the_current_deployed_settings_without_rebuilding_or_losing_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE user_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1), theme_mode TEXT NOT NULL,
+                backdrop_mode TEXT NOT NULL DEFAULT 'solid', revision INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL, categorization_enabled INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO user_settings VALUES (1, 'light', 'edge_wash', 42, 'saved', 1);
+             CREATE TABLE hearthdeck_schema_migrations (version INTEGER PRIMARY KEY);
+             INSERT INTO hearthdeck_schema_migrations VALUES (1), (2);
+             CREATE TABLE romm_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1), base_url TEXT NOT NULL,
+                token TEXT NOT NULL, updated_at TEXT NOT NULL
+             );
+             INSERT INTO romm_settings VALUES (1, 'http://romm', 'saved-token', 'saved');
+             CREATE TABLE collections (
+                slug TEXT PRIMARY KEY, kind TEXT NOT NULL, rule TEXT,
+                role TEXT NOT NULL DEFAULT 'none', position INTEGER NOT NULL,
+                created_at TEXT NOT NULL, owner TEXT NOT NULL DEFAULT 'user', name TEXT
+             );
+             INSERT INTO collections VALUES ('my-list', 'membership', NULL, 'none', 6, 'saved', 'user', 'My list');
+             CREATE TABLE collection_items (
+                collection_slug TEXT NOT NULL REFERENCES collections(slug) ON DELETE CASCADE,
+                item_id TEXT NOT NULL, name TEXT NOT NULL, icon TEXT,
+                position INTEGER NOT NULL, created_at TEXT NOT NULL,
+                PRIMARY KEY (collection_slug, item_id)
+             );
+             INSERT INTO collection_items VALUES ('my-list', 'game', 'Saved game', NULL, 0, 'saved');",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+        let root: i64 =
+            sqlx::query_scalar("SELECT rootpage FROM sqlite_master WHERE name = 'user_settings'")
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        database.migrate().await.unwrap();
+        database.migrate().await.unwrap();
+        let settings: (String, String, i64, String, bool) = sqlx::query_as(
+            "SELECT theme_mode, backdrop_mode, revision, updated_at, categorization_enabled FROM user_settings",
+        )
+        .fetch_one(database.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            settings,
+            ("light".into(), "edge_wash".into(), 42, "saved".into(), true)
+        );
+        let current_root: i64 =
+            sqlx::query_scalar("SELECT rootpage FROM sqlite_master WHERE name = 'user_settings'")
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(root, current_root);
+        let token: String = sqlx::query_scalar("SELECT token FROM romm_settings WHERE id = 1")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(token, "saved-token");
+        let saved_item: (String, String) = sqlx::query_as(
+            "SELECT c.name, i.item_id FROM collections c JOIN collection_items i ON i.collection_slug = c.slug WHERE c.slug = 'my-list'",
+        )
+        .fetch_one(database.pool())
+        .await
+        .unwrap();
+        assert_eq!(saved_item, ("My list".into(), "game".into()));
+    }
+
+    #[tokio::test]
+    async fn refuses_future_schema_versions_without_changing_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA user_version = 2")
+            .execute(database.pool())
+            .await
+            .unwrap();
+        assert!(
+            database
+                .migrate()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported database schema version 2")
+        );
+        let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(version, 2);
     }
 }

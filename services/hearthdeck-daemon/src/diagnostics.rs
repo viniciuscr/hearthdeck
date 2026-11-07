@@ -529,10 +529,7 @@ mod tests {
                 .any(|line| line.trim_start().starts_with("ExecCondition=")),
             "the packaged romm.service must not silently skip on a condition"
         );
-        // The checkout copy runs the driver from ~/.local/bin, the package from
-        // /usr/lib, exactly like the daemon and bridge units.
-        assert!(service.contains("ExecStart=%h/.local/bin/hearthdeck-romm up"));
-        assert!(service.contains("ExecStop=%h/.local/bin/hearthdeck-romm down"));
+        assert_eq!(service, packaged_service);
         assert!(packaged_service.contains("ExecStart=/usr/lib/hearthdeck/hearthdeck-romm up"));
         assert!(packaged_service.contains("ExecStop=/usr/lib/hearthdeck/hearthdeck-romm down"));
         assert!(service.contains("SyslogIdentifier=romm"));
@@ -621,9 +618,11 @@ mod tests {
         assert!(acceptance.contains("ROMM_COMPOSE_ARGS"));
         assert!(acceptance.contains("stat -c '%a' \"$log_file\""));
         assert!(justfile.contains("./scripts/linux-acceptance --require-romm"));
-        assert!(justfile.contains("cp deploy/systemd/hearthdeck-log.service"));
-        assert!(justfile.contains("cp deploy/systemd/romm.service"));
-        assert!(justfile.contains("cp deploy/systemd/romm.path"));
+        assert!(justfile.contains("bash scripts/install-services"));
+        let installer = include_str!("../../../scripts/install-services");
+        assert!(installer.contains("hearthdeck-log.service"));
+        assert!(installer.contains("romm.service romm.path"));
+        assert!(installer.contains("install -m644 \"deploy/systemd/$unit\" \"$units/$unit\""));
     }
 
     /// The gamepad's only path into a text field is cosmic-osk, and what makes
@@ -676,15 +675,8 @@ mod tests {
         assert!(package.contains("'cosmic-osk: "));
     }
 
-    /// A packaged unit is the deploy unit it is derived from, with one difference:
-    /// it runs the installed binary under `/usr/lib` instead of the source
-    /// checkout's `~/.local/bin`. Restating a unit in two files is how the packaged
-    /// bridge silently lost the `EnvironmentFile` that tells it where RomM keeps
-    /// its roms, so the two copies are pinned to each other here: nothing but that
-    /// path may drift, which is also what lets a package upgrade be trusted to
-    /// install the unit the source tree is testing.
     #[test]
-    fn packaged_units_differ_from_their_deploy_source_only_in_the_binary_path() {
+    fn packaged_units_match_their_canonical_deploy_sources() {
         let pairs = [
             (
                 "hearthdeck.target",
@@ -718,11 +710,9 @@ mod tests {
             ),
         ];
 
-        let as_packaged = |unit: &str| unit.replace("%h/.local/bin/", "/usr/lib/hearthdeck/");
         for (name, deploy, packaged) in pairs {
             assert_eq!(
-                as_packaged(deploy),
-                as_packaged(packaged),
+                deploy, packaged,
                 "{name} drifted from its deploy/systemd copy"
             );
         }
@@ -892,10 +882,9 @@ mod tests {
         let packaged_service = include_str!("../../../packaging/arch/romm.service");
         let driver = include_str!("../../../packaging/arch/hearthdeck-romm");
         let package = include_str!("../../../packaging/arch/PKGBUILD");
+        let installer = include_str!("../../../scripts/install-services");
 
-        // The script the package installs at /usr/lib is the one the packaged unit
-        // names, and the checkout unit names the ~/.local/bin copy the justfile
-        // installs. The destination, not just the source name, is asserted.
+        assert_eq!(service, packaged_service);
         assert!(package.contains("$pkgdir/usr/lib/hearthdeck/hearthdeck-romm\""));
         for verb in ["up", "down"] {
             assert!(
@@ -903,8 +892,8 @@ mod tests {
                 "the packaged romm.service must invoke the driver's `{verb}`"
             );
             assert!(
-                service.contains(&format!("%h/.local/bin/hearthdeck-romm {verb}")),
-                "the checkout romm.service must invoke the driver's `{verb}`"
+                installer.contains(&format!("%h/.local/bin/hearthdeck-romm {verb}")),
+                "the checkout drop-in must invoke the driver's `{verb}`"
             );
             assert!(
                 driver.contains(&format!("\n{verb})")),

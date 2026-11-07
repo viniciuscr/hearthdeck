@@ -120,9 +120,6 @@ pub enum BridgeRequest {
     InstallRetroCores {
         packages: Vec<String>,
     },
-    /// Restarts the optional `romm.service` user unit. Carries no unit name:
-    /// the bridge restarts that one fixed unit and nothing else.
-    RestartRommService,
     ActiveApplicationSession,
     StopActiveApplicationSession,
     StopApplicationSession {
@@ -138,36 +135,11 @@ pub enum InputProfile {
     Desktop,
 }
 
-/// A mode change the bridge sends to the `hearthdeck-input` broker as one
-/// datagram on [`paths::input_socket_path`].
+/// The compatibility settings carried by [`input::SessionContext`].
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct InputMode {
     pub profile: InputProfile,
     pub retro_osk: bool,
-}
-
-impl InputMode {
-    #[must_use]
-    pub fn command(self) -> &'static [u8] {
-        match (self.profile, self.retro_osk) {
-            (InputProfile::Native, false) => b"native",
-            (InputProfile::Desktop, false) => b"desktop",
-            (InputProfile::Native, true) => b"retro-native",
-            (InputProfile::Desktop, true) => b"retro-desktop",
-        }
-    }
-
-    #[must_use]
-    pub fn parse(command: &[u8]) -> Option<Self> {
-        let (profile, retro_osk) = match command {
-            b"native" => (InputProfile::Native, false),
-            b"desktop" => (InputProfile::Desktop, false),
-            b"retro-native" => (InputProfile::Native, true),
-            b"retro-desktop" => (InputProfile::Desktop, true),
-            _ => return None,
-        };
-        Some(Self { profile, retro_osk })
-    }
 }
 
 /// The Heroic runners Hearthdeck can delegate to. The bridge constructs the
@@ -204,7 +176,6 @@ pub enum BridgeResponse {
     RetroCoresInstalled {
         report: RetroCoreInstallReport,
     },
-    RommServiceRestarted,
     Error {
         code: BridgeErrorCode,
         message: String,
@@ -690,6 +661,16 @@ mod tests {
     }
 
     #[test]
+    fn retired_romm_restart_wire_messages_are_rejected() {
+        assert!(
+            serde_json::from_str::<BridgeRequest>(r#"{"type":"restart_romm_service"}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<BridgeResponse>(r#"{"type":"romm_service_restarted"}"#).is_err()
+        );
+    }
+
+    #[test]
     fn section_values_keep_their_wire_names_and_order() {
         let cases = [
             (Section::PcGames, "\"pc_games\""),
@@ -1114,17 +1095,19 @@ mod tests {
     }
 
     #[test]
-    fn input_mode_commands_round_trip() {
+    fn session_input_context_round_trips() {
         for profile in [InputProfile::Native, InputProfile::Desktop] {
             for retro_osk in [false, true] {
                 let mode = InputMode { profile, retro_osk };
-                assert_eq!(InputMode::parse(mode.command()), Some(mode));
+                let context = crate::input::SessionContext {
+                    mode,
+                    app_ids: vec!["org.libretro.RetroArch".into()],
+                };
+                let json = serde_json::to_vec(&context).unwrap();
+                let decoded: crate::input::SessionContext = serde_json::from_slice(&json).unwrap();
+                assert_eq!(decoded.mode, mode);
+                assert_eq!(decoded.app_ids, context.app_ids);
             }
         }
-        assert_eq!(
-            InputMode::parse(b"retro-desktop").map(|m| m.profile),
-            Some(InputProfile::Desktop)
-        );
-        assert_eq!(InputMode::parse(b"bogus"), None);
     }
 }

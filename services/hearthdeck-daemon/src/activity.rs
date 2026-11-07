@@ -162,6 +162,7 @@ impl ActivityStore {
         Ok(result.rows_affected())
     }
 
+    #[cfg(test)]
     pub async fn recent(&self, limit: u32) -> Result<Vec<RecentActivity>> {
         let rows = sqlx::query(
             r#"
@@ -183,10 +184,8 @@ impl ActivityStore {
     ///
     /// A game is what the games sections play — a Heroic PC game or a RomM
     /// console game — so a launched application and a Stremio film or series
-    /// are plays the activity endpoint serves but not plays this rail holds.
-    /// The filter is part of the query rather than applied to [`recent`]'s
-    /// answer, so the limit counts games: a run of recent application launches
-    /// cannot leave the rail short of the games behind them.
+    /// are recorded plays but not plays this rail holds. The query filters before
+    /// limiting, so recent application launches cannot hide the games behind them.
     ///
     /// A play recorded before `kind` existed is not served here. Nothing can
     /// tell such a snapshot from an application's, and a program or a series on

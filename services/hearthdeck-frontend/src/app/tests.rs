@@ -31,11 +31,13 @@ fn shell() -> App {
             token: String::new(),
         }),
         catalog: Catalog::default(),
+        catalog_request: refresh::CatalogRequest::default(),
         console: ConsoleScopes::default(),
         console_platforms: Vec::new(),
         visible: Vec::new(),
         filters: filters::State::default(),
         collections: Vec::new(),
+        collections_request: refresh::CollectionRequest::default(),
         text_entry: TextEntry::default(),
         menu: menu::State::default(),
         cur_section: Section::PcGames,
@@ -117,12 +119,126 @@ fn entry(id: &str, categories: &[&str]) -> Arc<LibraryItem> {
 fn an_unchanged_catalog_keeps_the_grid_scroll_position() {
     let mut app = shell();
     let entries = vec![entry("game", &["Game"])];
-    let _ = app.update(Message::CatalogLoaded(Ok(entries.clone())));
+    let _ = app.update(catalog_loaded(&app, Ok(entries.clone())));
     app.grid_scroll_offset = 240.0;
 
-    let _ = app.update(Message::CatalogLoaded(Ok(entries)));
+    let _ = app.update(catalog_loaded(&app, Ok(entries)));
 
     assert_eq!(app.grid_scroll_offset, 240.0);
+}
+
+#[test]
+fn ownership_catalog_adoption_preserves_store_identity_and_clears_removed_facets() {
+    let mut app = shell();
+    let steam = entry("steam", &["Game", "hearthdeck-store:Steam"]);
+    let gog = entry("gog", &["Game", "hearthdeck-store:GOG"]);
+    let _ = app.update(catalog_loaded(&app, Ok(vec![steam.clone()])));
+    let _ = app.apply_group(Some(0));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![gog.clone(), steam])));
+    assert_eq!(app.cur_group, Some(1));
+    assert_eq!(drawn(&app), ["steam"]);
+    let _ = app.update(catalog_loaded(&app, Ok(vec![gog.clone()])));
+    assert_eq!(app.cur_group, None);
+    assert_eq!(drawn(&app), ["gog"]);
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![
+            gog.clone(),
+            entry("steam", &["Game", "hearthdeck-store:Steam"]),
+        ]),
+    ));
+
+    let _ = app.apply_group(None);
+    let _ = app.update(Message::Filters(filters::Message::Select {
+        facet: "store".into(),
+        value: Some("hearthdeck-store:Steam".into()),
+    }));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![gog])));
+    assert!(app.filters.selected().is_empty());
+    assert_eq!(drawn(&app), ["gog"]);
+}
+
+#[test]
+fn ownership_console_platform_adoption_preserves_identity_and_accepts_empty_results() {
+    let mut app = showing_console_tabs();
+    let source = app.console.source_revision();
+    let platform = |id, label: &str| crate::providers::daemon::RetroConsole {
+        id,
+        label: label.into(),
+        artwork: None,
+    };
+    let _ = app.update(Message::ConsolesLoaded(
+        source,
+        Ok(vec![platform(9, "PlayStation"), platform(7, "SNES")]),
+    ));
+    assert_eq!(app.console_platform_id(), Some(7));
+    assert_eq!(app.cur_group, Some(1));
+    let _ = app.update(Message::ConsolesLoaded(source, Ok(Vec::new())));
+    assert!(app.console_platforms.is_empty());
+    assert!(app.tabs.console_games.is_empty());
+    assert_eq!(app.cur_group, None);
+}
+
+#[test]
+fn ownership_reconnect_retires_console_pages_and_facets_but_local_events_do_not() {
+    use crate::providers::daemon::DaemonEvent;
+
+    let mut app = showing_console_tabs();
+    let scope = app.console_scope();
+    let source = app.console.source_revision();
+    let generation = app.console.begin(&scope, 0).unwrap();
+    let facets = vec![Facet {
+        id: "genre".into(),
+        label: "Genre".into(),
+        options: vec![FacetOption {
+            value: "rpg".into(),
+            label: "RPG".into(),
+        }],
+    }];
+    app.filters.load_console_facets(facets.clone());
+    for event in [DaemonEvent::LibraryChanged, DaemonEvent::MetadataChanged] {
+        let _ = app.update(Message::DaemonChanged(FeedEvent::Changed(event)));
+        assert_eq!(app.console.source_revision(), source);
+        assert!(!app.console.entries(&scope).is_empty());
+        assert_eq!(app.filters.facets(), facets);
+    }
+    let _ = app.update(Message::DaemonChanged(FeedEvent::Resumed));
+    assert_ne!(app.console.source_revision(), source);
+    assert!(app.console.entries(&scope).is_empty());
+    assert!(app.filters.facets().is_empty());
+    assert_eq!(app.console_platform_id(), Some(7));
+    let _ = app.update(Message::FacetsLoaded {
+        source,
+        platform: Some(7),
+        result: Ok(facets),
+    });
+    assert!(app.filters.facets().is_empty());
+    let current_source = app.console.source_revision();
+    let platform = |label: &str| crate::providers::daemon::RetroConsole {
+        id: 7,
+        label: label.into(),
+        artwork: None,
+    };
+    let _ = app.update(Message::ConsolesLoaded(source, Ok(vec![platform("Old")])));
+    assert!(app.console_platforms.is_empty());
+    let _ = app.update(Message::ConsolesLoaded(
+        current_source,
+        Ok(vec![platform("New")]),
+    ));
+    assert_eq!(app.console_platforms[0].label, "New");
+    assert_eq!(app.console.ensure(&scope), console::Ensure::Loading);
+    let _ = app.update(Message::ConsolePageLoaded {
+        scope,
+        generation,
+        result: Ok(console::Page {
+            entries: vec![entry("romm:old", &["Game", "hearthdeck-console:7"])],
+            versions: BTreeMap::new(),
+            total: 1,
+            offset: 0,
+        }),
+    });
+    assert!(app.visible.is_empty());
+    assert_eq!(app.cur_group, Some(0));
 }
 
 #[test]
@@ -159,6 +275,102 @@ fn a_romm_sign_in_reloads_consoles_and_removal_clears_the_url() {
     let _ = app.update(Message::Romm(Romm::Removed(Ok(()))));
     assert!(app.romm.base_url.is_empty());
     assert!(app.romm.connection.is_none());
+}
+
+#[test]
+fn removing_romm_cannot_be_undone_by_an_old_console_list() {
+    let mut app = shell();
+    let source = app.console.source_revision();
+    let _ = app.update(Message::Romm(settings::romm::Message::Removed(Ok(()))));
+    let _ = app.update(Message::ConsolesLoaded(
+        source,
+        Ok(vec![crate::providers::daemon::RetroConsole {
+            id: 7,
+            label: "Old server".to_owned(),
+            artwork: None,
+        }]),
+    ));
+    assert!(app.console_platforms.is_empty());
+    assert!(app.tabs.console_games.is_empty());
+}
+
+#[test]
+fn removing_romm_cannot_restart_an_old_console_retry_chain() {
+    let mut app = shell();
+    let source = app.console.source_revision();
+    app.retries.consoles = true;
+    let _ = app.update(Message::Romm(settings::romm::Message::Removed(Ok(()))));
+    assert!(!app.retries.consoles);
+    let _ = app.update(Message::ConsolesLoaded(
+        source,
+        Err("old server offline".into()),
+    ));
+    assert!(!app.retries.consoles);
+}
+
+#[test]
+fn console_metadata_follows_the_connection_even_when_platform_ids_match() {
+    let mut app = showing_console_tabs();
+    let old_source = app.console.source_revision();
+    let console = |label: &str| crate::providers::daemon::RetroConsole {
+        id: 7,
+        label: label.to_owned(),
+        artwork: None,
+    };
+    let _ = app.update(Message::Romm(settings::romm::Message::SignedIn(Ok(
+        crate::providers::daemon::RommSettings {
+            base_url: "http://new-server:8080".into(),
+            configured: true,
+        },
+    ))));
+    let source = app.console.source_revision();
+    assert_ne!(source, old_source);
+    let _ = app.update(Message::ConsolesLoaded(
+        source,
+        Ok(vec![console("New server")]),
+    ));
+    let _ = app.apply_group(Some(0));
+    let facets = |value: &str| {
+        vec![Facet {
+            id: "genre".into(),
+            label: "Genre".into(),
+            options: vec![FacetOption {
+                value: value.into(),
+                label: value.into(),
+            }],
+        }]
+    };
+    let _ = app.update(Message::FacetsLoaded {
+        source,
+        platform: Some(7),
+        result: Ok(facets("new")),
+    });
+    app.retries.consoles = true;
+    for result in [
+        Ok(vec![console("Old server")]),
+        Err("old server offline".into()),
+    ] {
+        let _ = app.update(Message::ConsolesLoaded(old_source, result));
+        assert_eq!(tabs(&app, Section::ConsoleGames), ["New server"]);
+        assert_eq!(app.console_platforms[0].label, "New server");
+        assert!(
+            app.retries.consoles,
+            "old replies cannot change the new retry chain"
+        );
+    }
+    for result in [Ok(facets("old")), Err("old server offline".into())] {
+        let _ = app.update(Message::FacetsLoaded {
+            source: old_source,
+            platform: Some(7),
+            result,
+        });
+        assert_eq!(app.filters.facets()[0].options[0].value, "new");
+    }
+    let _ = app.update(Message::ConsolesLoaded(
+        source,
+        Ok(vec![console("New server")]),
+    ));
+    assert!(!app.retries.consoles);
 }
 
 #[test]
@@ -201,10 +413,13 @@ fn add_pc_tab(app: &mut App, name: &str) {
 fn a_loaded_catalog_gives_each_section_its_category_tabs() {
     let mut app = shell();
 
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![
-        entry("half-life", &["Game", "hearthdeck-store:Steam"]),
-        entry("writer", &["Office"]),
-    ])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![
+            entry("half-life", &["Game", "hearthdeck-store:Steam"]),
+            entry("writer", &["Office"]),
+        ]),
+    ));
 
     assert_eq!(tabs(&app, Section::PcGames), ["Steam"]);
     assert_eq!(tabs(&app, Section::Applications), ["Desktop"]);
@@ -216,14 +431,14 @@ fn a_loaded_catalog_gives_each_section_its_category_tabs() {
 #[test]
 fn a_store_no_installed_game_comes_from_is_not_a_tab() {
     let mut app = shell();
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "half-life",
-        &["Game", "hearthdeck-store:Steam"],
-    )])));
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![entry(
+            "half-life",
+            &["Game", "hearthdeck-store:Steam"],
+        )]),
+    ));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
 
     assert!(
         tabs(&app, Section::PcGames).is_empty(),
@@ -238,18 +453,22 @@ fn a_store_no_installed_game_comes_from_is_not_a_tab() {
 #[test]
 fn a_loaded_catalog_leaves_the_console_tabs_alone() {
     let mut app = shell();
-    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
-        crate::providers::daemon::RetroConsole {
+    let _ = app.update(Message::ConsolesLoaded(
+        app.console.source_revision(),
+        Ok(vec![crate::providers::daemon::RetroConsole {
             id: 7,
             label: "PlayStation".to_owned(),
             artwork: None,
-        },
-    ])));
+        }]),
+    ));
 
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "half-life",
-        &["Game", "hearthdeck-store:Steam"],
-    )])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![entry(
+            "half-life",
+            &["Game", "hearthdeck-store:Steam"],
+        )]),
+    ));
 
     assert_eq!(tabs(&app, Section::ConsoleGames), ["PlayStation"]);
 }
@@ -264,10 +483,10 @@ fn a_console_picked_on_the_dashboard_opens_its_own_tab() {
         label: label.to_owned(),
         artwork: None,
     };
-    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
-        console(7, "SNES"),
-        console(9, "PlayStation"),
-    ])));
+    let _ = app.update(Message::ConsolesLoaded(
+        app.console.source_revision(),
+        Ok(vec![console(7, "SNES"), console(9, "PlayStation")]),
+    ));
     assert_eq!(app.page, Page::Dashboard);
 
     let _ = app.update(Message::Dashboard(dashboard::Message::ConsolePressed(9)));
@@ -282,15 +501,83 @@ fn a_console_picked_on_the_dashboard_opens_its_own_tab() {
 #[test]
 fn a_failed_catalog_read_keeps_the_library_and_its_tabs() {
     let mut app = shell();
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "half-life",
-        &["Game", "hearthdeck-store:Steam"],
-    )])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![entry(
+            "half-life",
+            &["Game", "hearthdeck-store:Steam"],
+        )]),
+    ));
 
-    let _ = app.update(Message::CatalogLoaded(Err("daemon down".to_owned())));
+    let _ = app.update(catalog_loaded(&app, Err("daemon down".to_owned())));
 
     assert_eq!(app.catalog.entries().len(), 1);
     assert_eq!(tabs(&app, Section::PcGames), ["Steam"]);
+}
+
+fn catalog_loaded(app: &App, result: Result<Vec<Arc<LibraryItem>>, String>) -> Message {
+    Message::CatalogLoaded(app.catalog_request, result)
+}
+
+#[test]
+fn an_old_catalog_success_cannot_restore_removed_games_and_tabs() {
+    let mut app = shell();
+    let _ = app.load_catalog(std::time::Duration::ZERO);
+    let old = app.catalog_request;
+    let _ = app.load_catalog(std::time::Duration::ZERO);
+    let current = app.catalog_request;
+    let _ = app.update(Message::CatalogLoaded(current, Ok(Vec::new())));
+    let _ = app.update(Message::CatalogLoaded(
+        old,
+        Ok(vec![entry("removed", &["Game", "hearthdeck-store:Steam"])]),
+    ));
+    assert!(app.catalog.entries().is_empty());
+    assert!(tabs(&app, Section::PcGames).is_empty());
+}
+
+#[test]
+fn an_old_catalog_failure_cannot_restart_a_completed_retry_chain() {
+    let mut app = shell();
+    let _ = app.load_catalog(std::time::Duration::ZERO);
+    let old = app.catalog_request;
+    let _ = app.load_catalog(std::time::Duration::ZERO);
+    let current = app.catalog_request;
+    let _ = app.update(Message::CatalogLoaded(current, Ok(Vec::new())));
+    let _ = app.update(Message::CatalogLoaded(old, Err("old failure".into())));
+    assert!(!app.retries.catalog);
+    assert_eq!(app.catalog_request, current);
+}
+
+#[test]
+fn a_delayed_catalog_read_retires_old_replies_without_retiring_collection_reads() {
+    let mut app = shell();
+    let _ = app.load_collections();
+    let collections = app.collections_request;
+    let _ = app.load_catalog(std::time::Duration::ZERO);
+    let old = app.catalog_request;
+    let _ = app.load_catalog(std::time::Duration::from_secs(10));
+    let current = app.catalog_request;
+    for result in [
+        Ok(vec![entry("removed", &["Game", "hearthdeck-store:Steam"])]),
+        Err("old failure".into()),
+    ] {
+        let _ = app.update(Message::CatalogLoaded(old, result));
+        assert!(app.catalog.entries().is_empty());
+        assert!(tabs(&app, Section::PcGames).is_empty());
+        assert!(!app.retries.catalog);
+        assert_eq!(app.catalog_request, current);
+    }
+    let _ = app.update(Message::CatalogLoaded(
+        current,
+        Ok(vec![entry("current", &["Game", "hearthdeck-store:GOG"])]),
+    ));
+    assert_eq!(app.catalog.entries()[0].id, "current");
+    assert_eq!(tabs(&app, Section::PcGames), ["GOG"]);
+    let _ = app.update(Message::CollectionsLoaded(
+        collections,
+        Ok(vec![collection("favorites", None, &["current"])]),
+    ));
+    assert_eq!(app.collections[0].items[0].item_id, "current");
 }
 
 /// A shell the pad can drive: the session has been checked and the frontend
@@ -309,7 +596,7 @@ fn loaded(count: usize) -> App {
     let entries = (0..count)
         .map(|index| entry(&format!("hearthdeck:game-{index}"), &["Game"]))
         .collect();
-    let _ = app.update(Message::CatalogLoaded(Ok(entries)));
+    let _ = app.update(catalog_loaded(&app, Ok(entries)));
     app
 }
 
@@ -395,6 +682,7 @@ fn console_facets_cannot_replace_the_local_sections_facets() {
     let mut app = showing_a_filter();
     let before = app.filters.facets().to_vec();
     let _ = app.update(Message::FacetsLoaded {
+        source: app.console.source_revision(),
         platform: None,
         result: Ok(vec![Facet {
             id: "genre".into(),
@@ -419,6 +707,7 @@ fn console_facets_follow_the_platform_that_requested_them() {
         }]
     };
     let _ = app.update(Message::FacetsLoaded {
+        source: app.console.source_revision(),
         platform: Some(7),
         result: Ok(facets()),
     });
@@ -427,6 +716,7 @@ fn console_facets_follow_the_platform_that_requested_them() {
     assert!(app.filters.facets().is_empty());
     for platform in [None, Some(7)] {
         let _ = app.update(Message::FacetsLoaded {
+            source: app.console.source_revision(),
             platform,
             result: Ok(facets()),
         });
@@ -436,11 +726,13 @@ fn console_facets_follow_the_platform_that_requested_them() {
         );
     }
     let _ = app.update(Message::FacetsLoaded {
+        source: app.console.source_revision(),
         platform: Some(9),
         result: Ok(facets()),
     });
     let before = app.filters.facets().to_vec();
     let _ = app.update(Message::FacetsLoaded {
+        source: app.console.source_revision(),
         platform: Some(9),
         result: Err("offline".into()),
     });
@@ -450,6 +742,7 @@ fn console_facets_follow_the_platform_that_requested_them() {
         "a failed read keeps the last answer"
     );
     let _ = app.update(Message::FacetsLoaded {
+        source: app.console.source_revision(),
         platform: Some(9),
         result: Ok(Vec::new()),
     });
@@ -955,13 +1248,14 @@ fn the_pad_never_leaves_the_content() {
 /// all the library the screen is not showing.
 #[test]
 fn the_librarys_chords_do_nothing_off_the_library() {
+    use hearthdeck_protocol::input::{Action, Event};
     let events = [
-        GamepadEvent::PrevGroup,
-        GamepadEvent::NextGroup,
-        GamepadEvent::PrevTab,
-        GamepadEvent::NextTab,
-        GamepadEvent::FilterPanel,
-        GamepadEvent::ContextMenu,
+        Action::PrevGroup,
+        Action::NextGroup,
+        Action::PrevTab,
+        Action::NextTab,
+        Action::FilterPanel,
+        Action::ContextMenu,
     ];
     for page in [Page::Dashboard, Page::Settings, Page::Details] {
         let mut app = showing(12);
@@ -975,7 +1269,7 @@ fn the_librarys_chords_do_nothing_off_the_library() {
             app.filters.is_open(),
         );
         for event in events {
-            send(&mut app, event);
+            let _ = app.update(Message::BrokerInput(Event::Action(event)));
             settle(&mut app);
             assert_eq!(
                 (
@@ -996,27 +1290,28 @@ fn the_librarys_chords_do_nothing_off_the_library() {
 /// switch tab, and Select opens the drawer. Scoping must not undo this.
 #[test]
 fn the_library_keeps_its_section_tab_and_drawer_chords() {
+    use hearthdeck_protocol::input::{Action, Event};
     let mut app = showing(12);
     add_pc_tab(&mut app, "Favorites");
 
-    send(&mut app, GamepadEvent::NextGroup);
+    let _ = app.update(Message::BrokerInput(Event::Action(Action::NextGroup)));
     settle(&mut app);
     assert_eq!(app.page, Page::Library, "NextGroup stays on the library");
     assert_eq!(app.cur_section, Section::ConsoleGames, "NextGroup");
 
-    send(&mut app, GamepadEvent::PrevGroup);
+    let _ = app.update(Message::BrokerInput(Event::Action(Action::PrevGroup)));
     settle(&mut app);
     assert_eq!(app.cur_section, Section::PcGames, "PrevGroup");
 
-    send(&mut app, GamepadEvent::NextTab);
+    let _ = app.update(Message::BrokerInput(Event::Action(Action::NextTab)));
     settle(&mut app);
     assert_eq!(app.cur_group, Some(0), "NextTab lands on the first tab");
 
-    send(&mut app, GamepadEvent::PrevTab);
+    let _ = app.update(Message::BrokerInput(Event::Action(Action::PrevTab)));
     settle(&mut app);
     assert_eq!(app.cur_group, None, "PrevTab is back on the all tab");
 
-    send(&mut app, GamepadEvent::FilterPanel);
+    let _ = app.update(Message::BrokerInput(Event::Action(Action::FilterPanel)));
     assert!(app.filters.is_open(), "FilterPanel opens the drawer");
 }
 
@@ -1074,7 +1369,7 @@ fn showing_two_tabs() -> App {
             )
         })
         .collect();
-    let _ = app.update(Message::CatalogLoaded(Ok(entries)));
+    let _ = app.update(catalog_loaded(&app, Ok(entries)));
     app.page = Page::Library;
     app
 }
@@ -1346,10 +1641,13 @@ fn the_context_button_clears_the_filters_inside_the_drawer() {
 #[test]
 fn local_filter_messages_narrow_the_grid_and_clear_restores_it() {
     let mut app = navigable();
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![
-        entry("steam-game", &["Game", "hearthdeck-store:Steam"]),
-        entry("gog-game", &["Game", "hearthdeck-store:GOG"]),
-    ])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![
+            entry("steam-game", &["Game", "hearthdeck-store:Steam"]),
+            entry("gog-game", &["Game", "hearthdeck-store:GOG"]),
+        ]),
+    ));
     let _ = app.update(Message::Filters(filters::Message::Select {
         facet: "store".into(),
         value: Some("hearthdeck-store:Steam".into()),
@@ -1854,11 +2152,14 @@ fn a_rail_below_the_fold_still_follows_the_cursor_sideways() {
 #[test]
 fn a_rail_that_arrives_late_does_not_snap_the_page_back_to_the_top() {
     let mut app = shell();
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-        collection("play-later", None, &["hearthdeck:game-1"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+            collection("play-later", None, &["hearthdeck:game-1"]),
+        ]),
+    ));
 
     // Down onto the rail below the arrivals: the page moves down to it.
     let _ = app.step_dashboard(Direction::Down);
@@ -1868,13 +2169,14 @@ fn a_rail_that_arrives_late_does_not_snap_the_page_back_to_the_top() {
 
     // The consoles arrive: a rail is appended at the end of the page, past
     // the pad.
-    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
-        crate::providers::daemon::RetroConsole {
+    let _ = app.update(Message::ConsolesLoaded(
+        app.console.source_revision(),
+        Ok(vec![crate::providers::daemon::RetroConsole {
             id: 1,
             label: "Mega Drive".to_owned(),
             artwork: None,
-        },
-    ])));
+        }]),
+    ));
 
     assert_eq!(
         app.dashboard_cursor.rail, 1,
@@ -1902,31 +2204,37 @@ fn a_rail_card_draws_the_icon_its_own_item_carries() {
     let mut app = shell();
     // A library entry under the rail item's own id, wearing artwork of its
     // own: it is not what the card draws.
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![Arc::new(LibraryItem {
-        id: "hearthdeck:game-0".to_owned(),
-        name: "Library's own".to_owned(),
-        icon: IconSource::Path(PathBuf::from("/usr/share/icons/library-only.png")),
-        ..LibraryItem::default()
-    })])));
+    let _ = app.update(catalog_loaded(
+        &app,
+        Ok(vec![Arc::new(LibraryItem {
+            id: "hearthdeck:game-0".to_owned(),
+            name: "Library's own".to_owned(),
+            icon: IconSource::Path(PathBuf::from("/usr/share/icons/library-only.png")),
+            ..LibraryItem::default()
+        })]),
+    ));
     let rail = |app: &mut App, icon: Option<&str>| {
-        let _ = app.update(Message::CollectionsLoaded(Ok(vec![Collection {
-            slug: "favorites".to_owned(),
-            kind: "membership".to_owned(),
-            rule: None,
-            role: "favorite".to_owned(),
-            position: 0,
-            owner: "system".to_owned(),
-            name: None,
-            items: vec![CollectionItem {
-                item_id: "hearthdeck:game-0".to_owned(),
-                name: "Game 0".to_owned(),
-                icon: icon.map(str::to_owned),
-                background: None,
-                logo: None,
-                description: None,
-                played: None,
-            }],
-        }])));
+        let _ = app.update(collections_loaded(
+            app,
+            Ok(vec![Collection {
+                slug: "favorites".to_owned(),
+                kind: "membership".to_owned(),
+                rule: None,
+                role: "favorite".to_owned(),
+                position: 0,
+                owner: "system".to_owned(),
+                name: None,
+                items: vec![CollectionItem {
+                    item_id: "hearthdeck:game-0".to_owned(),
+                    name: "Game 0".to_owned(),
+                    icon: icon.map(str::to_owned),
+                    background: None,
+                    logo: None,
+                    description: None,
+                    played: None,
+                }],
+            }]),
+        ));
     };
 
     // The cover the provider resolved for a console game. That game is not in
@@ -1970,13 +2278,16 @@ fn arrivals(ids: &[&str]) -> Collection {
 #[test]
 fn what_has_just_arrived_is_the_dashboards_first_rail() {
     let mut app = shell();
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-        collection("favorites", None, &["hearthdeck:game-0"]),
-        arrivals(&[
-            "hearthdeck:stremio-arrivals:tt1",
-            "hearthdeck:stremio-arrivals:tt2",
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            collection("favorites", None, &["hearthdeck:game-0"]),
+            arrivals(&[
+                "hearthdeck:stremio-arrivals:tt1",
+                "hearthdeck:stremio-arrivals:tt2",
+            ]),
         ]),
-    ])));
+    ));
 
     let shelves = app.dashboard_shelves();
     assert_eq!(
@@ -1999,13 +2310,16 @@ fn the_background_follows_the_pad_across_the_rail() {
     use crate::style::BACKGROUND_TRANSITION_DURATION;
 
     let mut app = shell();
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-        arrivals(&[
-            "hearthdeck:stremio-arrivals:tt1",
-            "hearthdeck:stremio-arrivals:tt2",
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&[
+                "hearthdeck:stremio-arrivals:tt1",
+                "hearthdeck:stremio-arrivals:tt2",
+            ]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
         ]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-    ])));
+    ));
 
     // Along the arrivals rail the art cross-fades from card to card.
     let _ = app.step_dashboard(Direction::Right);
@@ -2055,10 +2369,13 @@ fn the_pages_place_under_the_background_does_not_depend_on_what_it_shows() {
     }
 
     let mut app = shell();
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+        ]),
+    ));
 
     // On the arrivals, whose cards carry the wide art the background draws...
     app.backdrop_at = dashboard::backdrop::At { rail: 0, card: 0 };
@@ -2085,11 +2402,14 @@ fn the_first_rail_snaps_the_page_to_the_top() {
     for window_height in [WINDOW_HEIGHT, 1080.0] {
         let mut app = shell();
         app.window_height = window_height;
-        let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-            collection("favorites", None, &["hearthdeck:game-0"]),
-            collection("play-later", None, &["hearthdeck:game-1"]),
-        ])));
+        let _ = app.update(collections_loaded(
+            &app,
+            Ok(vec![
+                arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+                collection("favorites", None, &["hearthdeck:game-0"]),
+                collection("play-later", None, &["hearthdeck:game-1"]),
+            ]),
+        ));
 
         // Down past the first rail, the page follows the pad to the rails below.
         let _ = app.step_dashboard(Direction::Down);
@@ -2116,10 +2436,13 @@ fn the_first_rail_snaps_the_page_to_the_top() {
 #[test]
 fn stepping_down_from_the_arrivals_brings_the_next_rail_to_the_top_of_the_view() {
     let mut app = shell();
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+        ]),
+    ));
 
     let _ = app.step_dashboard(Direction::Down);
 
@@ -2143,10 +2466,13 @@ fn a_follow_scroll_is_not_overwritten_by_its_own_reports() {
     use crate::style::SCROLL_TRANSITION_DURATION;
 
     let mut app = shell();
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+        ]),
+    ));
 
     // Down off the banner drives the page to the rail below the fold.
     let _ = app.step_dashboard(Direction::Down);
@@ -2260,10 +2586,13 @@ fn two_rails() -> App {
         .map(|index| format!("hearthdeck:game-{index}"))
         .collect();
     let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-        collection("last-played", None, &ids),
-        collection("stremio:continue-watching", None, &ids),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            collection("last-played", None, &ids),
+            collection("stremio:continue-watching", None, &ids),
+        ]),
+    ));
     app
 }
 
@@ -2294,18 +2623,22 @@ fn the_rail_lengths_the_pad_walks_are_the_cards_the_view_draws() {
         .map(|index| format!("hearthdeck:game-{index}"))
         .collect();
     let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-        collection("favorites", None, &ids),
-        collection("smart:empty", None, &[]),
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-    ])));
-    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
-        crate::providers::daemon::RetroConsole {
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            collection("favorites", None, &ids),
+            collection("smart:empty", None, &[]),
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+        ]),
+    ));
+    let _ = app.update(Message::ConsolesLoaded(
+        app.console.source_revision(),
+        Ok(vec![crate::providers::daemon::RetroConsole {
             id: 1,
             label: "Mega Drive".to_owned(),
             artwork: None,
-        },
-    ])));
+        }]),
+    ));
     assert_eq!(
         app.dashboard_rail_lengths(),
         vec![1, crate::style::DASHBOARD_RAIL_TILES, 1]
@@ -2432,10 +2765,13 @@ fn source_card_identity_matches_rendered_ids_after_rails_are_inserted_or_removed
 #[test]
 fn the_dashboards_rails_are_the_daemons_collections() {
     let mut app = loaded(2);
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-        collection("favorites", None, &["hearthdeck:game-0"]),
-        collection("smart:action", Some("Action picks"), &["hearthdeck:game-1"]),
-    ])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            collection("favorites", None, &["hearthdeck:game-0"]),
+            collection("smart:action", Some("Action picks"), &["hearthdeck:game-1"]),
+        ]),
+    ));
 
     let shelves = app.dashboard_shelves();
     assert_eq!(shelves.len(), 2, "one rail per collection");
@@ -2452,17 +2788,21 @@ fn the_dashboards_rails_are_the_daemons_collections() {
 #[test]
 fn the_consoles_rail_is_the_last_rail_on_the_page() {
     let mut app = shell();
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![
-        arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
-        collection("favorites", None, &["hearthdeck:game-0"]),
-    ])));
-    let _ = app.update(Message::ConsolesLoaded(Ok(vec![
-        crate::providers::daemon::RetroConsole {
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![
+            arrivals(&["hearthdeck:stremio-arrivals:tt1"]),
+            collection("favorites", None, &["hearthdeck:game-0"]),
+        ]),
+    ));
+    let _ = app.update(Message::ConsolesLoaded(
+        app.console.source_revision(),
+        Ok(vec![crate::providers::daemon::RetroConsole {
             id: 1,
             label: "Mega Drive".to_owned(),
             artwork: None,
-        },
-    ])));
+        }]),
+    ));
 
     let shelves = app.dashboard_shelves();
     assert_eq!(
@@ -2483,11 +2823,14 @@ fn the_consoles_rail_is_the_last_rail_on_the_page() {
 #[test]
 fn a_collection_with_no_name_reads_as_its_slug() {
     let mut app = loaded(1);
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
-        "smart:mystery",
-        None,
-        &["hearthdeck:game-0"],
-    )])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![collection(
+            "smart:mystery",
+            None,
+            &["hearthdeck:game-0"],
+        )]),
+    ));
 
     assert_eq!(app.dashboard_shelves()[0].title, "smart:mystery");
 }
@@ -2497,11 +2840,10 @@ fn a_collection_with_no_name_reads_as_its_slug() {
 #[test]
 fn a_collection_card_launches_the_item_it_names() {
     let mut app = loaded(2);
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
-        "favorites",
-        None,
-        &["hearthdeck:game-1"],
-    )])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![collection("favorites", None, &["hearthdeck:game-1"])]),
+    ));
 
     send(&mut app, GamepadEvent::Confirm);
 
@@ -2526,11 +2868,14 @@ fn a_collection_card_launches_the_item_it_names() {
 #[test]
 fn a_media_card_the_library_never_held_launches_anyway() {
     let mut app = loaded(1);
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
-        "stremio:continue-watching",
-        None,
-        &["hearthdeck:stremio:tt0111161"],
-    )])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![collection(
+            "stremio:continue-watching",
+            None,
+            &["hearthdeck:stremio:tt0111161"],
+        )]),
+    ));
 
     send(&mut app, GamepadEvent::Confirm);
 
@@ -2551,11 +2896,14 @@ fn a_media_card_the_library_never_held_launches_anyway() {
 #[test]
 fn a_card_id_reaches_the_launch_route_exactly_as_the_rail_carried_it() {
     let mut app = loaded(1);
-    let _ = app.update(Message::CollectionsLoaded(Ok(vec![collection(
-        "stremio:continue-watching",
-        None,
-        &["stremio:tt0111161"],
-    )])));
+    let _ = app.update(collections_loaded(
+        &app,
+        Ok(vec![collection(
+            "stremio:continue-watching",
+            None,
+            &["stremio:tt0111161"],
+        )]),
+    ));
 
     let shelves = app.dashboard_shelves();
     assert_eq!(shelves[0].title, fl!("continue-watching"));
@@ -2742,10 +3090,7 @@ fn the_health_reply_says_whether_the_feature_exists_here() {
 fn a_live_change_to_the_input_toggles_leaves_the_cursor_alone() {
     let mut app = showing(4);
     app.cur_section = Section::Applications;
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
     app.cur_group = Some(1);
 
     let mut saved = app.config.clone();
@@ -2767,13 +3112,29 @@ fn a_live_change_to_the_input_toggles_leaves_the_cursor_alone() {
 /// once, without waiting for the next catalog load, and the Desktop tab goes
 /// with the last desktop app.
 #[test]
+fn ownership_removing_the_selected_desktop_tab_resets_the_grid() {
+    let mut app = shell();
+    app.cur_section = Section::Applications;
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
+    let _ = app.apply_group(Some(0));
+    app.grid_scroll_offset = 240.0;
+    let mut saved = app.config.clone();
+    saved
+        .form_overrides
+        .insert("writer".into(), FormFactor::Couch);
+
+    let _ = app.update(Message::AppConfigLoaded(saved));
+
+    assert_eq!(app.cur_group, None);
+    assert_eq!(drawn(&app), ["writer"]);
+    assert_eq!(app.grid_scroll_offset, 0.0);
+}
+
+#[test]
 fn a_live_form_override_moves_the_tiles() {
     let mut app = showing(4);
     app.cur_section = Section::Applications;
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
     assert_eq!(
         app.visible.len(),
         0,
@@ -2797,10 +3158,7 @@ fn a_live_form_override_moves_the_tiles() {
 fn removing_a_live_form_override_restores_the_daemons_form() {
     let mut app = shell();
     app.cur_section = Section::Applications;
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
     let mut saved = app.config.clone();
     saved
         .form_overrides
@@ -3652,14 +4010,72 @@ fn a_focus_step_eases_the_grid_to_its_row() {
 fn a_failed_dashboard_read_is_retried_until_one_succeeds() {
     let mut app = shell();
 
-    let _ = app.update(Message::CollectionsLoaded(Err("daemon down".to_owned())));
+    let _ = app.update(collections_loaded(&app, Err("daemon down".to_owned())));
     assert!(app.retries.collections, "a retry is on its way");
 
-    let _ = app.update(Message::CollectionsLoaded(Ok(Vec::new())));
+    let _ = app.update(collections_loaded(&app, Ok(Vec::new())));
     assert!(
         !app.retries.collections,
         "a read that landed ends the chain"
     );
+}
+
+fn collections_loaded(app: &App, result: Result<Vec<Collection>, String>) -> Message {
+    Message::CollectionsLoaded(app.collections_request, result)
+}
+
+#[test]
+fn an_old_collection_success_cannot_replace_newer_dashboard_rails() {
+    let mut app = shell();
+    let _ = app.load_collections();
+    let old = app.collections_request;
+    let _ = app.load_collections();
+    let current = app.collections_request;
+    let _ = app.update(Message::CollectionsLoaded(
+        current,
+        Ok(vec![collection("favorites", None, &["new"])]),
+    ));
+    let _ = app.update(Message::CollectionsLoaded(
+        old,
+        Ok(vec![collection("favorites", None, &["old"])]),
+    ));
+    assert_eq!(app.collections[0].items[0].item_id, "new");
+}
+
+#[test]
+fn an_old_collection_failure_cannot_restart_a_completed_retry_chain() {
+    let mut app = shell();
+    let _ = app.load_collections();
+    let old = app.collections_request;
+    let _ = app.load_collections_after(std::time::Duration::from_secs(10));
+    let current = app.collections_request;
+    let _ = app.update(Message::CollectionsLoaded(current, Ok(Vec::new())));
+    let _ = app.update(Message::CollectionsLoaded(old, Err("old failure".into())));
+    assert!(!app.retries.collections);
+    assert_eq!(app.collections_request, current);
+}
+
+#[test]
+fn scheduling_a_delayed_collection_read_retires_the_previous_response() {
+    let mut app = shell();
+    let _ = app.load_collections();
+    let old = app.collections_request;
+    let _ = app.load_collections_after(std::time::Duration::from_secs(10));
+    let current = app.collections_request;
+    for result in [
+        Ok(vec![collection("favorites", None, &["old"])]),
+        Err("old failure".into()),
+    ] {
+        let _ = app.update(Message::CollectionsLoaded(old, result));
+        assert!(app.collections.is_empty());
+        assert!(!app.retries.collections);
+        assert_eq!(app.collections_request, current);
+    }
+    let _ = app.update(Message::CollectionsLoaded(
+        current,
+        Ok(vec![collection("favorites", None, &["new"])]),
+    ));
+    assert_eq!(app.collections[0].items[0].item_id, "new");
 }
 
 #[test]
@@ -3683,10 +4099,7 @@ fn restoring_the_dashboard_shows_it_with_the_cursor_on_the_first_card() {
 #[test]
 fn moving_an_application_to_the_couch_takes_it_off_the_desktop_tab() {
     let mut app = showing(1);
-    let _ = app.update(Message::CatalogLoaded(Ok(vec![entry(
-        "writer",
-        &["Office"],
-    )])));
+    let _ = app.update(catalog_loaded(&app, Ok(vec![entry("writer", &["Office"])])));
     app.cur_section = Section::Applications;
     app.cur_group = Some(0);
     app.refilter();

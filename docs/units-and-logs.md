@@ -16,14 +16,17 @@ greetd / display manager
        -> systemctl --user start --no-block hearthdeck.target
             Wants= hearthdeck-log.service, hearthdeck-bridge.socket,
                    hearthdeck-daemon.service, hearthdeck-input.service,
-                   romm.service, romm.path, hearthdeck-overlay.service
+                   romm.service, romm.path
+       -> start hearthdeck-overlay.service and hearthdeck-osk.service
 ```
 
 - Units live in `/usr/lib/systemd/user/` (packaged) or `~/.config/systemd/user/`
-  (a checkout via `just install-services`).
-- `hearthdeck.target` is globally disabled and started explicitly: by
-  `default.target.wants/hearthdeck.target` from the package install, and by the
-  session script. Starting it twice is a no-op.
+  (a checkout via `just install-services`). Both use the canonical files in
+  `deploy/systemd`; packaging paths are symlinks.
+- `hearthdeck.target` is globally disabled and started explicitly by the launcher
+  or session script, not by a persistent `default.target.wants` link.
+  `just install-services` installs and reloads only; start the target explicitly
+  with `systemctl --user start --no-block hearthdeck.target`.
 - `PartOf=hearthdeck.target` means stopping/restarting the target stops/restarts
   the unit with it. That is why the whole stack dies at logout.
 
@@ -88,8 +91,11 @@ Then it is armed wherever `X` is pulled in, whatever target did the pulling.
 ## Rule 4 — `~/.config/systemd/user/` shadows the package
 
 A full copy of a unit there overrides `/usr/lib/systemd/user/` and silently masks
-package updates. `just install-services` writes full copies; the package writes
-`/usr/lib`. To extend a unit without shadowing it, use a drop-in
+package updates. `just install-services` writes canonical copies plus
+`<unit>.d/90-hearthdeck-checkout.conf` for development executable paths; the
+package writes `/usr/lib`. Its install hook backs up checkout copies and those
+named drop-ins so production uses packaged executables again. Other drop-ins
+are left alone. To extend a unit without shadowing it, use a drop-in
 (`<unit>.d/*.conf`) — `Wants=` in a drop-in merges, it does not replace.
 
 ## Rule 5 — know which binary is actually running
@@ -223,8 +229,10 @@ grep -i <unit> ~/hearthdeck.log
 ## Checklist
 
 - [ ] `systemd-analyze verify <unit>` is clean.
-- [ ] New unit is in the PKGBUILD, in `just install-services`, **and** in the log
-      collector.
+- [ ] New unit has one definition in `deploy/systemd`, a packaging symlink and
+      PKGBUILD entry, and is in the log collector. Add backend units to
+      `scripts/install-services` too.
+- [ ] `just test-deployment` passes (fake `systemctl`, isolated home).
 - [ ] A helper is armed from the unit that is actually wanted (Rule 3).
 - [ ] No transient fact in an `ExecCondition=` (Rule 1).
 - [ ] Conditions, `Wants=`, and `After=` inspected with `systemctl --user show` on a
