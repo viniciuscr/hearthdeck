@@ -84,6 +84,14 @@ its existing gateway-error mapping even for persistence failures; settings and
 unlink failures remain internal errors. Link codes are not logged. The underlying
 link state still owns expiry and polling, with unchanged concurrency semantics.
 
+`tmdb/control.rs` owns the arrival banner's credential: it borrows the settings
+repository and the catalog. A save validates the key's shape before storing it and
+then asks the arrivals provider to refresh; a clear removes the key and the arrival
+rows in the same call, so a banner cannot outlive the credential that filled it.
+HTTP maps a key that could never work to a bad request and storage failures to an
+internal error. The key itself never crosses this boundary — the response type has
+no field for it.
+
 ## Platform Adaptation Rules
 
 Hearthdeck targets Linux only. Platform-specific behavior still terminates at an

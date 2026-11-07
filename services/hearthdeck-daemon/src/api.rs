@@ -42,6 +42,7 @@ use crate::{
         LinkOffer, StremioConnection,
         control::{ControlError as StremioControlError, LinkStatus as StremioLinkResponse},
     },
+    tmdb::{ControlError as TmdbControlError, TmdbSettings},
 };
 
 pub fn router(state: SharedState) -> Router {
@@ -122,6 +123,12 @@ fn protected_routes() -> Router<SharedState> {
 pub fn local_router(state: SharedState) -> Router {
     Router::new()
         .route("/v1/pairing", post(create_pairing))
+        .route(
+            "/v1/tmdb/settings",
+            get(get_tmdb_settings)
+                .put(update_tmdb_settings)
+                .delete(clear_tmdb_settings),
+        )
         .with_state(state)
 }
 
@@ -634,6 +641,51 @@ async fn unlink_stremio(State(state): State<SharedState>) -> Result<StatusCode, 
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The stored TMDB credential, without the credential.
+async fn get_tmdb_settings(
+    State(state): State<SharedState>,
+) -> Result<Json<Option<TmdbSettings>>, ApiError> {
+    state
+        .tmdb_connection()
+        .settings()
+        .await
+        .map(Json)
+        .map_err(ApiError::from)
+}
+
+/// Stores the TMDB credential and asks the arrivals provider to read it now, so a
+/// banner that was empty fills without waiting out a refresh interval of hours.
+async fn update_tmdb_settings(
+    State(state): State<SharedState>,
+    Json(request): Json<UpdateTmdbSettingsRequest>,
+) -> Result<Json<TmdbSettings>, ApiError> {
+    let saved = state.tmdb_connection().save(&request.api_key).await?;
+    info!("tmdb credential stored");
+    refresh_arrivals(&state).await;
+    Ok(Json(saved))
+}
+
+/// Removes the credential and the arrivals it published, so a banner cannot
+/// outlive the key that filled it.
+async fn clear_tmdb_settings(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
+    state.tmdb_connection().clear().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Asks for a discovery refresh of the arrivals source.
+///
+/// Best effort on purpose: the settings write has already been committed and is
+/// what the caller asked for, so a daemon without a discovery service must not
+/// report the write as failed.
+async fn refresh_arrivals(state: &SharedState) {
+    let Some(discovery) = state.discovery.as_ref() else {
+        return;
+    };
+    discovery
+        .request(crate::discovery::providers::arrivals::SOURCE_ID)
+        .await;
+}
+
 async fn rescan_library(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
     state
         .discovery
@@ -1042,6 +1094,12 @@ struct UpdateRommSettingsRequest {
     token: String,
 }
 
+/// Deliberately not `Debug`: it carries the credential itself.
+#[derive(Deserialize)]
+struct UpdateTmdbSettingsRequest {
+    api_key: String,
+}
+
 /// Deliberately not `Debug`: it carries a password.
 #[derive(Deserialize)]
 struct RommLoginRequest {
@@ -1365,6 +1423,16 @@ impl From<RommControlError> for ApiError {
             RommControlError::InvalidSettings(error) => Self::invalid_romm_settings(error),
             RommControlError::Link(error) => Self::romm_link(error),
             RommControlError::Storage(error) => Self::internal(error),
+        }
+    }
+}
+
+impl From<TmdbControlError> for ApiError {
+    fn from(error: TmdbControlError) -> Self {
+        match error {
+            TmdbControlError::InvalidKey(error) => Self::invalid_romm_settings(error),
+            TmdbControlError::Storage(error) => Self::internal(error),
+            TmdbControlError::Catalog(error) => Self::internal(error),
         }
     }
 }
@@ -3682,5 +3750,104 @@ mod tests {
             favorites["items"][0]["icon"], "/usr/share/icons/example.png",
             "the catalog's icon answers for the item's own empty one"
         );
+    }
+
+    /// The TMDB credential is set from the host's own machine: the route exists on
+    /// the loopback admin listener only, and the key never comes back out of it.
+    #[tokio::test]
+    async fn the_tmdb_credential_is_set_on_the_admin_port_and_never_echoed() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.sock"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
+            },
+            database,
+        ));
+
+        // A paired device on the LAN cannot reach it, and neither can an
+        // unauthenticated caller on the network listener.
+        assert_eq!(
+            router(state.clone())
+                .oneshot(
+                    Request::get("/v1/tmdb/settings")
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let (status, stored) = response_json(
+            local_router(state.clone()),
+            Request::put("/v1/tmdb/settings")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "api_key": "0123456789abcdef0123456789abcdef" })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(stored["configured"], true);
+        assert!(
+            !stored.to_string().contains("0123456789abcdef"),
+            "the key must not be echoed: {stored}"
+        );
+
+        let (status, settings) = response_json(
+            local_router(state.clone()),
+            Request::get("/v1/tmdb/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(settings["configured"], true);
+
+        let rejected = local_router(state.clone())
+            .oneshot(
+                Request::put("/v1/tmdb/settings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "api_key": "short" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+
+        let cleared = local_router(state.clone())
+            .oneshot(
+                Request::delete("/v1/tmdb/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cleared.status(), StatusCode::NO_CONTENT);
+
+        let (_, empty) = response_json(
+            local_router(state),
+            Request::get("/v1/tmdb/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(empty, serde_json::Value::Null);
     }
 }

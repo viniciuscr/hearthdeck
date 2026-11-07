@@ -5,17 +5,37 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
 api = (root / "services/hearthdeck-daemon/src/api.rs").read_text()
-router = api.split("pub fn router(", 1)[1].split("/// Routes served only", 1)[0]
 route_pattern = re.compile(
     r'\.route\(\s*"([^"]+)"\s*,(.*?)(?=\n\s*\.route\(|\n\s*\.with_state\(state\)|\n\})',
     re.DOTALL,
 )
 method_pattern = re.compile(r"\b(get|post|put|delete|patch|head|options|trace)\s*\(")
-registered = {
-    (path, method)
-    for path, body in route_pattern.findall(router)
-    for method in method_pattern.findall(body)
-}
+
+
+def routes_built_by(marker: str) -> set[tuple[str, str]]:
+    """The (path, method) pairs one `Router::new()` chain registers.
+
+    Every router is read: the network listener's public routes, the protected ones
+    behind a bearer token, and the loopback admin listener's own. A route on the admin port is as much a part of
+    this contract as one behind a bearer token — it is how the host itself is
+    configured — so leaving it undocumented would be the same gap.
+    """
+    if marker not in api:
+        return set()
+    # Keep the closing brace: the last route's pattern needs it to terminate.
+    section = api.split(marker, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+    return {
+        (path, method)
+        for path, body in route_pattern.findall(section)
+        for method in method_pattern.findall(body)
+    }
+
+
+registered = (
+    routes_built_by("pub fn router(")
+    | routes_built_by("fn protected_routes(")
+    | routes_built_by("pub fn local_router(")
+)
 
 documented = set()
 in_paths = False

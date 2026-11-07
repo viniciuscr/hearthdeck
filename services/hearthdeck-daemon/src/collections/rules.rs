@@ -7,7 +7,7 @@ use crate::{
     activity::{ActivityStore, RecentActivity},
     catalog::CatalogStore,
     categorizer::CategorizationService,
-    discovery::providers::stremio_arrivals,
+    discovery::providers::arrivals,
     romm,
     settings::SettingsRepository,
     stremio,
@@ -154,7 +154,7 @@ impl RuleService<'_> {
     async fn new_arrival_items(&self) -> Result<Vec<CollectionItem>, RuleError> {
         let records = self
             .catalog
-            .list_source(stremio_arrivals::SOURCE_ID, usize::from(ITEM_LIMIT))
+            .list_source(arrivals::SOURCE_ID, usize::from(ITEM_LIMIT))
             .await?;
         Ok(records
             .into_iter()
@@ -257,7 +257,7 @@ mod tests {
         let store = super::super::CollectionStore::new(database.pool().clone());
         catalog
             .replace_source(
-                stremio_arrivals::SOURCE_ID,
+                arrivals::SOURCE_ID,
                 vec![crate::catalog::CatalogRecord {
                     id: "arrival".into(),
                     title: "Arrival".into(),

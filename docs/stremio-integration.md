@@ -156,29 +156,58 @@ Stremio's own home row uses (`CATALOG_PREVIEW_SIZE`).
 `timeOffset` and `duration` are **milliseconds** — confirmed, not assumed: 54
 durations were ≥ 100 000 and **zero** fell in the seconds range.
 
-### New arrivals: the Cinemeta catalog
+### New arrivals: what TMDB says can be watched
 
-"What just arrived" is not in the account datastore — that holds what the person
-already has — so it is read from an addon catalog instead. Cinemeta
-(`com.linvo.cinemeta`, the metadata addon Stremio itself ships against) answers it
-anonymously: addon identity is the manifest URL, every call is a plain `GET`, and
-nothing about the account travels with it.
+The banner's question is "what can I watch tonight that is new", and the catalog
+this feature first shipped with cannot answer it. Cinemeta's "New" catalog is a
+**release calendar**: `catalog/<movie|series>/year/genre=<year>` lists a film the
+day it opens *in cinemas*, and nothing in the meta distinguishes "out of cinemas"
+from "still showing". Read live on 2026-11-06, the top of the film bucket was a
+title whose `released` was that same day — in cinemas, unplayable at home. A
+banner built from that feed is mostly slides nobody can watch, which is why the
+provider reads TMDB instead.
+
+TMDB is asked the availability question directly: a film has left the cinemas
+once it has a **digital or physical release date in the past** for a market.
 
 | Checked | Result |
 | --- | --- |
-| `GET https://v3-cinemeta.strem.io/manifest.json` | **live** — `resources: [catalog, meta, addon_catalog]`, `types: [movie, series]`, `idPrefixes: [tt]` |
-| `v3-cinemeta.stremio.com` | **does not resolve** — the host everybody quotes is wrong; the addon is on `v3-cinemeta.strem.io` |
-| Catalogs | `top` (Popular), `year` (**New**, `extraRequired: [genre]` where the options are release years), `imdbRating` (Featured), `last-videos` / `calendar-videos` (id-list lookups) |
-| `GET .../catalog/movie/year/genre=2026.json` | **live** — full Meta objects in `metas`, not previews |
-| Shape of a meta | `id`, `imdb_id`, `type`, `name`, `poster`, `logo`, `background`, `releaseInfo`, `year`, `description`, `genres`, `cast`, `director`, `runtime`, `imdbRating`, `released`, `popularity`, `links` |
-| Ordering | recency-weighted, **not** newest-first: one page listed an October 9 title before October 14/15 ones |
-| Paging | `skip=` answered Cloudflare 504 on both attempts, so the tail of a bucket is unverified and unread |
+| Cinemeta `catalog/movie/year/genre=2026` (live) | full metas, and **no availability field at all** — `released`, `popularities`, art, cast, nothing about where it can be seen |
+| `GET /3/discover/movie` with `with_release_type=4\|5` + `release_date.gte/lte` + `region` | documented on `developer.themoviedb.org/reference/discover-movie`; **not yet answered with a real key** |
+| `GET /3/movie/{id}?append_to_response=release_dates,external_ids,images` | documented appendable. `release_dates.results[].release_dates[].type` is the number the check reads: **4 digital, 5 physical** (2/3 are theatrical) |
+| `GET /3/discover/tv` with `first_air_date.gte/lte` | a series has no cinema window, so its own air date is the availability |
+| Auth | a v3 key rides as `api_key=`, a v4 read token — a JWT — as a bearer header. Sending one as the other is a 401 with nothing to say why |
+| `api.themoviedb.org/3` | reachable and answering (a request with no key is `401 status_code 7`) |
 
-That is why "recently added" is not a thing the addon protocol has: there is no
-`sort` extra and no `last` catalog id, only an addon's own choice of catalog id.
-What the daemon reads is the **year bucket** — the current year and the previous
-one, so a January dashboard is not an empty banner — and it does the recency
-ordering itself from each meta's `released` date.
+That last row is the honest limit of the verification: everything the daemon
+reads from TMDB is written against documented shapes and covered by fixture
+tests, and the password-free check is to set a key and watch the banner fill —
+see "Re-verifying by hand".
+
+The daemon's own rules, which the fixtures pin:
+
+- **The window is the definition of new.** A home release inside
+  `AVAILABILITY_WINDOW_DAYS` (60) is an arrival; anything older has stopped being
+  one, and a date in the future is not one yet.
+- **The market is the host's locale.** `LC_ALL`, then `LC_TIME`, then `LANG`, and
+  `pt_BR.UTF-8` means language `pt-BR` and market `BR`; a host that declares none
+  gets `en-US`/`US` rather than an error.
+- **A market row is an answer.** If TMDB has a release row for the host's market,
+  it decides — a film with only theatrical dates there really is still in cinemas,
+  and no fallback applies. Only when TMDB has *no row for the market at all* (a
+  data gap, common in smaller markets) does the check fall back to another
+  market's home release, and the slide records which market it came from.
+- **The rank is popularity, the order is the date.** The window has already
+  answered "is this new", so the ten slides are the best-known of what survived;
+  the collection then re-sorts them by availability date on the way out, because
+  `list_source` orders on `updated_at` and that is what the record stores.
+- **The source id is still `stremio-arrivals`.** It is what the catalog rows and
+  the `stremio:new-arrivals` collection rule are keyed by, so it is a persisted
+  identifier rather than a description; a slide still launches Stremio, which is
+  also why the provider still resolves the desktop entry through the bridge.
+- **No key, no banner.** There is no keyless way to ask what is watchable, so an
+  unconfigured daemon publishes an empty snapshot and logs it once, rather than
+  falling back to the cinema calendar this feature replaced.
 
 ## The traps
 
@@ -233,17 +262,27 @@ These were all observed in real data. Each one silently produces a wrong rail.
   bridge validates it exactly as it validates any application id.
 
 - **The year catalog is a bucket, not a recency feed.** It is ordered by a blend
-  of release date and popularity, so a client that trusts its order draws a banner
-  that is nearly-newest rather than newest. The daemon sorts by `released`, and
-  falls back to the addon's own order only for the metas nobody dated.
+  of release date and popularity, and it is a *cinema* calendar. Both are reasons
+  it is no longer the arrivals source; it is still useful as a popularity-weighted
+  browse of the current year.
 - **A bucket's type is not a filter.** A series appeared inside the `movie` bucket.
   What a meta says it is decides what it is.
-- **A meta's id is not always a title id.** Cinemeta prefixes its ids with `tt`,
+- **A title's id is not always a title id.** Cinemeta prefixes its ids with `tt`,
   but the library also held `yt_id:` entries; an arrival only counts if its id is
-  an IMDb one, because that is what a launch can name.
+  an IMDb one, because that is what a launch can name. TMDB arrives indirectly the
+  same way: its own id is not launchable, so every candidate carries
+  `external_ids.imdb_id` and a title without one is dropped.
 - **`logo` and `background` are populated on arrival metas** even though they were
   absent on every Continue Watching record. That is the one dependable wide art
-  this feature has — a portrait poster cannot carry a 30 %-tall banner.
+  this feature has — a portrait poster cannot carry a 30 %-tall banner. TMDB
+  supplies the same two from different fields: `backdrop_path` for the backdrop,
+  and an `images.logos` entry ranked by language rather than the poster's art.
+- **A `reqwest::Error` carries the URL, and a v3 key rides in the query string.**
+  Every TMDB error is mapped through `without_url()` before it is logged or
+  reported in provider health, or the credential would be published in the one
+  place a degraded provider is described.
+- **TMDB's score is not an IMDb score.** `vote_average` is stored as
+  `tmdb_rating`; nothing in this feature may label it as an IMDb rating.
 
 ## Schema drift against `stremio-core`
 
@@ -306,12 +345,17 @@ authoritative would drop usable fields:
 10. **Unlinking removes both the credential and the catalog rows** that source
     owns, so a stale rail cannot outlive the account it came from.
 
-11. **New arrivals are read from Cinemeta's "New" catalog, not from the account.**
-    The datastore cannot answer "what just arrived" — it holds what is already
-    there — and the addon protocol is right for exactly that question. The
-    `StremioArrivalsProvider` (`source_id: "stremio-arrivals"`) reads two year
-    buckets for both types, sorts by release, caps at ten, and publishes them as
-    catalog records that launch like the account's own. **Implemented.**
+11. **New arrivals are read from TMDB, and the question is availability.**
+    Neither the account datastore (it holds what is already there) nor an addon
+    catalog (a cinema release calendar) can answer "what can I watch that is new".
+    TMDB can: a film with a digital or physical release in the past, for the
+    host's market. `NewArrivalsProvider` (`source_id: "stremio-arrivals"`, kept
+    because the id is persisted) reads one discover page per type, verifies each
+    candidate's own release list, keeps the last sixty days, ranks by popularity,
+    caps at ten, and publishes records that still launch Stremio. **Implemented as
+    `discovery::providers::arrivals`**; the Cinemeta provider it replaces is gone.
+    The shapes are documented, not yet observed with a real key — see the table
+    above, which is deliberately marked that way.
 
 12. **The banner is its own collection**, `stremio:new-arrivals`, seeded beside
     `stremio:continue-watching` and resolved from those records. `CollectionItem`
@@ -328,6 +372,17 @@ authoritative would drop usable fields:
     form without an episode segment and is **not yet seen on hardware**; the film
     and episode forms are. See Open questions.
 
+14. **The TMDB credential is set from the host itself, over the loopback admin
+    listener.** `GET`/`PUT`/`DELETE /v1/tmdb/settings` on `127.0.0.1:38401`, not on
+    the paired-device listener: a key is a one-time paste from a machine with a
+    keyboard, and routing it through the LAN API would need a pairing token to do
+    something no remote client ever should. The key is stored in `tmdb_settings`
+    in the same owner-only database file as the Stremio `auth_key`, no handler
+    returns it, and `DELETE` clears the arrivals rows with it so no banner outlives
+    the key that filled it. **Implemented.** Both TMDB credential spellings are
+    accepted, because telling a user their perfectly good v4 token is "invalid"
+    is the failure mode this avoids.
+
 ## Protocol and data model changes
 
 Schema changes are hand-written in `database.rs::migrate()` — there is no
@@ -339,6 +394,10 @@ existing `collections` table upgrade does.
   (the link flow never returns one). Confirm the database file itself is `0600`
   — SQLite creates files according to the umask, so this may need an explicit
   `chmod` at creation.
+- **Table `tmdb_settings`**, single row (`id = 1`), shaped like `stremio_settings`:
+  `api_key`, `updated_at`. The arrivals banner's credential, added after the rail
+  moved to TMDB; it is stored in the same owner-only database file and has no
+  route outside the loopback admin listener.
 - **`GET /v1/stremio/settings`** → connection status **without the credential**,
   following the `getRommSettings` precedent ("RomM connection status without its
   credential"): `{linked_at, item_count, in_progress_count, last_refresh}`.
@@ -497,6 +556,11 @@ curl -s -X POST https://api.strem.io/api/datastoreGet \
 # cheap change detection
 curl -s -X POST https://api.strem.io/api/datastoreMeta \
   -H 'Content-Type: application/json' -d "{\"authKey\":\"$KEY\",\"collection\":\"libraryItem\"}"
+
+# give the arrivals banner its TMDB credential: loopback admin port, no token.
+# GET the same path afterwards to confirm one is stored without reading it back.
+curl -s -X PUT http://127.0.0.1:38401/v1/tmdb/settings \
+  -H 'Content-Type: application/json' -d '{"api_key":"<v3 key or v4 read token>"}'
 ```
 
 Treat `$KEY` as a bearer token: do not paste it into a shell history you keep,

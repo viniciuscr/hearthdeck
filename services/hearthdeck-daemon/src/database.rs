@@ -93,6 +93,16 @@ impl Database {
               linked_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
+            -- The TMDB credential, shaped like `stremio_settings` above and kept
+            -- here for the same reason: it is a secret that only the arrivals
+            -- provider reads and no handler returns. The database file is narrowed
+            -- to its owner (see `restrict_to_owner`), whereas an environment
+            -- variable would be readable by every process running as that user.
+            CREATE TABLE IF NOT EXISTS tmdb_settings (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              api_key TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS hearthdeck_schema_migrations (
               version INTEGER PRIMARY KEY
             );
@@ -407,6 +417,63 @@ mod tests {
         .execute(database.pool())
         .await;
         assert!(second_row.is_err(), "a second session row must be refused");
+    }
+
+    /// A database created before the arrivals banner read TMDB gains its settings
+    /// table on the next migrate, and the CHECK keeps it a single row.
+    #[tokio::test]
+    async fn adds_the_tmdb_table_to_an_existing_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Database::connect(&directory.path().join("hearthdeck.db"))
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE stremio_settings (\
+             id INTEGER PRIMARY KEY CHECK (id = 1), auth_key TEXT NOT NULL, \
+             linked_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+
+        database.migrate().await.unwrap();
+
+        let present: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'tmdb_settings'",
+        )
+        .fetch_one(database.pool())
+        .await
+        .unwrap();
+        assert_eq!(present, 1);
+
+        sqlx::query(
+            "INSERT INTO tmdb_settings (id, api_key, updated_at) \
+             VALUES (1, 'first_key', '2026-01-01T00:00:00Z')",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+
+        // A re-migration is a no-op and keeps the stored key.
+        database.migrate().await.unwrap();
+        let api_key: Option<String> =
+            sqlx::query_scalar("SELECT api_key FROM tmdb_settings WHERE id = 1")
+                .fetch_optional(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(api_key.as_deref(), Some("first_key"));
+
+        let second_row = sqlx::query(
+            "INSERT INTO tmdb_settings (id, api_key, updated_at) \
+             VALUES (2, 'other_key', '2026-01-01T00:00:00Z')",
+        )
+        .execute(database.pool())
+        .await;
+        assert!(
+            second_row.is_err(),
+            "a second credential row must be refused"
+        );
     }
 
     /// The database holds bearer-equivalent credentials, so it is owner-only.
