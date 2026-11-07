@@ -27,6 +27,12 @@ does. Depending on `gpui-pre`, `gpui-component` and `gpui-pre-platform` with
 `wayland` alone removes the backend: the packaged binary links `libxkbcommon`
 and nothing else from the X11 stack.
 
+The one exception is a **dev-dependency on GPUI's `test-support`**, which pulls
+the `x11` feature for `cargo test` only: the headless window harness is what
+draws the page and reports element bounds. Dev-dependencies are not part of a
+normal build, so `cargo build --release` — what the package runs — still links
+Wayland alone (`ldd` shows `libxkbcommon.so.0`, no `libX11`/`libxcb`).
+
 ## The surface
 
 The window is a **full surface, not a dialog**: it opens fullscreen and draws no

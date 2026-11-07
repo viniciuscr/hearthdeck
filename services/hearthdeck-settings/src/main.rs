@@ -1362,16 +1362,33 @@ impl SettingsWindow {
                     .relative()
                     .flex_1()
                     .w_full()
-                    .child(list(list_state.clone(), move |ix, _, cx| {
-                        // The list resets in the same frame the items are built,
-                        // so the indexes agree; a miss is an empty line rather
-                        // than a panic on a television.
-                        let Some(item) = items.get(ix).copied() else {
-                            return div().into_any_element();
-                        };
-                        let this = view.read(cx);
-                        this.item_element(item, &pages, page_index, view.clone(), &theme)
-                    }))
+                    .debug_selector(|| "settings-list".to_string())
+                    .child(
+                        // `size_full` is what gives the list a height: on its own
+                        // it sizes to nothing, and a list with no height has no
+                        // visible items at all.
+                        list(list_state.clone(), move |ix, _, cx| {
+                            // The list resets in the same frame the items are
+                            // built, so the indexes agree; a miss is an empty
+                            // line rather than a panic on a television.
+                            let Some(item) = items.get(ix).copied() else {
+                                return div().into_any_element();
+                            };
+                            let this = view.read(cx);
+                            div()
+                                .debug_selector(move || format!("list-item-{ix}"))
+                                .w_full()
+                                .child(this.item_element(
+                                    item,
+                                    &pages,
+                                    page_index,
+                                    view.clone(),
+                                    &theme,
+                                ))
+                                .into_any_element()
+                        })
+                        .size_full(),
+                    )
                     .vertical_scrollbar(&list_state),
             )
             .into_any_element()
@@ -1766,6 +1783,61 @@ fn with_active_window(cx: &mut App, update: impl FnOnce(&mut Window, &mut App)) 
     let _ = window.update(cx, |_, window, cx| update(window, cx));
 }
 
+/// Every key this window answers to. `main` and the render tests both call it,
+/// so the path under test is the path that ships.
+fn install_shortcuts(cx: &mut App, view: Entity<SettingsWindow>) {
+    cx.bind_keys([
+        KeyBinding::new("escape", CloseWindow, None),
+        KeyBinding::new("up", MoveUp, None),
+        KeyBinding::new("down", MoveDown, None),
+        KeyBinding::new("left", PreviousPage, None),
+        KeyBinding::new("right", NextPage, None),
+        KeyBinding::new("enter", Confirm, None),
+    ]);
+
+    // Cursor movement is plain state, so it needs no window; confirming and
+    // closing do, because focusing a field is a window operation.
+    let movements = view.clone();
+    cx.on_action(move |_: &MoveUp, cx: &mut App| {
+        movements.update(cx, |this, cx| {
+            this.nav.up();
+            cx.notify();
+        });
+    });
+    let movements = view.clone();
+    cx.on_action(move |_: &MoveDown, cx: &mut App| {
+        movements.update(cx, |this, cx| {
+            this.nav.down();
+            cx.notify();
+        });
+    });
+    let pages = view.clone();
+    cx.on_action(move |_: &PreviousPage, cx: &mut App| {
+        pages.update(cx, |this, cx| {
+            this.nav.previous_page();
+            cx.notify();
+        });
+    });
+    let pages = view.clone();
+    cx.on_action(move |_: &NextPage, cx: &mut App| {
+        pages.update(cx, |this, cx| {
+            this.nav.next_page();
+            cx.notify();
+        });
+    });
+    let rows = view.clone();
+    cx.on_action(move |_: &Confirm, cx: &mut App| {
+        with_active_window(cx, |window, cx| {
+            rows.update(cx, |this, cx| this.confirm(window, cx));
+        });
+    });
+    cx.on_action(move |_: &CloseWindow, cx: &mut App| {
+        with_active_window(cx, |window, cx| {
+            view.update(cx, |this, cx| this.close(window, cx));
+        });
+    });
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -1788,14 +1860,6 @@ fn main() {
         gpui_component::init(cx);
         // The session this is drawn in is dark; the kit defaults to light.
         Theme::change(ThemeMode::Dark, None, cx);
-        cx.bind_keys([
-            KeyBinding::new("escape", CloseWindow, None),
-            KeyBinding::new("up", MoveUp, None),
-            KeyBinding::new("down", MoveDown, None),
-            KeyBinding::new("left", PreviousPage, None),
-            KeyBinding::new("right", NextPage, None),
-            KeyBinding::new("enter", Confirm, None),
-        ]);
 
         let options = WindowOptions {
             // The window is the settings surface, not a dialog over the library:
@@ -1834,49 +1898,7 @@ fn main() {
                 }),
             };
             let view = cx.new(|_| SettingsWindow::new(snapshot, disk, inputs));
-
-            // Cursor movement is plain state, so it needs no window; confirming
-            // and closing do, because focusing a field is a window operation.
-            let movements = view.clone();
-            cx.on_action(move |_: &MoveUp, cx: &mut App| {
-                movements.update(cx, |this, cx| {
-                    this.nav.up();
-                    cx.notify();
-                });
-            });
-            let movements = view.clone();
-            cx.on_action(move |_: &MoveDown, cx: &mut App| {
-                movements.update(cx, |this, cx| {
-                    this.nav.down();
-                    cx.notify();
-                });
-            });
-            let pages = view.clone();
-            cx.on_action(move |_: &PreviousPage, cx: &mut App| {
-                pages.update(cx, |this, cx| {
-                    this.nav.previous_page();
-                    cx.notify();
-                });
-            });
-            let pages = view.clone();
-            cx.on_action(move |_: &NextPage, cx: &mut App| {
-                pages.update(cx, |this, cx| {
-                    this.nav.next_page();
-                    cx.notify();
-                });
-            });
-            let rows = view.clone();
-            cx.on_action(move |_: &Confirm, cx: &mut App| {
-                with_active_window(cx, |window, cx| {
-                    rows.update(cx, |this, cx| this.confirm(window, cx));
-                });
-            });
-            let window_view = view.clone();
-            cx.on_action(move |_: &CloseWindow, cx: &mut App| {
-                with_active_window(cx, |window, cx| {
-                    window_view.update(cx, |this, cx| this.close(window, cx));
-                });
-            });
+            install_shortcuts(cx, view.clone());
 
             cx.new(|cx| gpui_base::Root::new(view, window, cx))
         });
@@ -2052,5 +2074,100 @@ mod tests {
                 "a text field is listed twice"
             );
         }
+    }
+}
+
+/// The page as a window draws it. These are the tests that catch "the screen is
+/// empty": bounds are what a user sees, and a list with no height or an item
+/// that never renders fails here instead of on the television.
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use gpui::{TestAppContext, VisualTestContext};
+
+    fn open(cx: &mut TestAppContext) -> (Entity<SettingsWindow>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        let mut opened = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let inputs = Inputs {
+                romm_url: cx.new(|cx| InputState::new(window, cx)),
+                romm_user: cx.new(|cx| InputState::new(window, cx)),
+                romm_password: cx.new(|cx| InputState::new(window, cx)),
+                tmdb_key: cx.new(|cx| InputState::new(window, cx)),
+            };
+            let view = cx.new(|_| SettingsWindow::new(Snapshot::default(), None, inputs));
+            install_shortcuts(cx, view.clone());
+            opened = Some(view.clone());
+            gpui_base::Root::new(view, window, cx)
+        });
+        let view = opened.expect("a settings view");
+        draw(cx);
+        (view, cx)
+    }
+
+    fn draw(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// The list item at `index`, by the selector its element carries.
+    fn selector(index: usize) -> &'static str {
+        Box::leak(format!("list-item-{index}").into_boxed_str())
+    }
+
+    #[gpui::test]
+    fn the_page_draws_its_rows(cx: &mut TestAppContext) {
+        let (_, cx) = open(cx);
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+
+        let list = cx
+            .debug_bounds("settings-list")
+            .expect("the list has bounds");
+        assert!(list.size.height > px(0.), "the list has height: {list:?}");
+
+        // A page starts with a gap, then a card heading, then its first row.
+        let row = cx.debug_bounds(selector(2)).expect("the first row draws");
+        assert!(row.size.height > px(0.), "the row has height: {row:?}");
+        assert!(row.size.width > px(0.), "the row has width: {row:?}");
+    }
+
+    #[gpui::test]
+    fn the_cursor_scrolls_a_row_below_the_fold_into_view(cx: &mut TestAppContext) {
+        let (view, cx) = open(cx);
+        // Short, like a television drawing at a scale factor of two.
+        cx.simulate_resize(size(px(1000.), px(420.)));
+        draw(cx);
+        cx.simulate_keystrokes("right");
+        draw(cx);
+
+        let last = cx.read(|app| {
+            let this = view.read(app);
+            let pages = this.pages();
+            let page = this.nav.page().min(pages.len().saturating_sub(1));
+            let (_, rows) = flat_items(&pages[page]);
+            *rows.last().expect("the page has rows")
+        });
+        let list = cx
+            .debug_bounds("settings-list")
+            .expect("the list has bounds");
+        let before = cx.debug_bounds(selector(last));
+        assert!(
+            before.is_none_or(|bounds| bounds.origin.y >= list.origin.y + list.size.height),
+            "the last row starts below the fold: {before:?}"
+        );
+
+        for _ in 0..12 {
+            cx.simulate_keystrokes("down");
+        }
+        draw(cx);
+
+        let after = cx
+            .debug_bounds(selector(last))
+            .expect("the last row is laid out");
+        assert!(
+            after.origin.y >= list.origin.y - px(1.)
+                && after.origin.y + after.size.height <= list.origin.y + list.size.height + px(1.),
+            "the cursor scrolled the row into the list: row {after:?} in list {list:?}"
+        );
     }
 }

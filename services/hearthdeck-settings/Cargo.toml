@@ -31,6 +31,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 
+# The headless window harness: it draws the page and reports element bounds, so
+# a layout that draws nothing fails a test instead of failing on the television.
+# `test-support` is a dev-only feature, so it pulls GPUI's `x11` backend into
+# test builds only - the packaged binary still links Wayland alone.
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "0.3.11", features = ["test-support"] }
+
 # Deliberately its own workspace, though it lives under `services/`. GPUI brings
 # its own large dependency tree; joining `services/Cargo.toml` would make every
 # `just check` and every CI run compile it, for a window that shares no code with
