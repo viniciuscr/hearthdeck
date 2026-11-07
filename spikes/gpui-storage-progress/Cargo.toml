@@ -1,0 +1,14 @@
+[package]
+name = "gpui-storage-progress"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gpui-kit = "0.9"
+nix = { version = "0.30", features = ["fs"] }
+
+# Deliberately its own workspace. This spike is not a member of `services/`: it
+# has to stay out of the frontend's lockfile, the `just check` gate, and the
+# packaging path. Delete the whole directory and nothing else changes.
+[workspace]

@@ -21,6 +21,7 @@ mod launch;
 mod navigation;
 mod refresh;
 mod settings_source;
+mod settings_window;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -408,6 +409,10 @@ pub struct App {
     romm: settings::romm::Form,
     /// The emulator-readiness card's state.
     retro_readiness: settings::readiness::Flow,
+    /// Which surface the Settings destination opens: the shipped GPUI window,
+    /// or the in-app page when there is no window to open. Owns the child
+    /// process, so `update` only has to ask.
+    settings_window: settings_window::SettingsWindow,
     /// Which text field owns the caret, if one does, which is also what says
     /// the on-screen keyboard is up: focusing a field is what activates the
     /// input method. While a field has it the pad belongs to the keyboard -
@@ -548,6 +553,7 @@ impl Application for App {
             stremio: settings::stremio_link::Flow::default(),
             romm: settings::romm::Form::default(),
             retro_readiness: settings::readiness::Flow::default(),
+            settings_window: settings_window::SettingsWindow::from_environment(),
             // The first tile: with nothing loaded yet there is nothing to point
             // at, and every read of the cursor tolerates that.
             cursors: Cursors::default(),
@@ -886,6 +892,18 @@ impl Application for App {
                 self.bar_cursor = None;
             }
             Message::OpenSettings => {
+                // Settings ships as its own GPUI window. When there is one to
+                // open, this destination does not change page at all: the
+                // window carries the screen, Back closes it, and the shell is
+                // still on whatever it was on when focus returns. With no
+                // window installed - or with the rollback set - the in-app page
+                // is what opens, exactly as before.
+                match self.settings_window.open() {
+                    settings_window::Open::Launched | settings_window::Open::AlreadyRunning => {
+                        return Task::none();
+                    }
+                    settings_window::Open::InApp | settings_window::Open::Failed => {}
+                }
                 self.switch_page(Page::Settings);
                 self.cursors.ring = None;
                 self.bar_cursor = None;
@@ -1425,6 +1443,9 @@ impl App {
     /// The settings screen, drawn as the whole window for the same reason the
     /// dashboard is: it is a sibling destination, and the library's sidebar
     /// belongs to the library.
+    ///
+    /// Only reached when there is no settings window to open - a machine without
+    /// the package's window, or `HEARTHDECK_SETTINGS_UI=iced`.
     fn view_settings(&self) -> Element<'_, Message> {
         container(settings::view(
             &settings::Settings {

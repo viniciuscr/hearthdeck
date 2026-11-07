@@ -46,6 +46,9 @@ fn shell() -> App {
         stremio: settings::stremio_link::Flow::default(),
         romm: settings::romm::Form::default(),
         retro_readiness: settings::readiness::Flow::default(),
+        // The settings window is never launched from a test: the shell draws the
+        // in-app page, which is what the navigation tests assert on.
+        settings_window: settings_window::SettingsWindow::in_app(),
         cursors: Cursors::default(),
         dashboard_cursor: dashboard::focus::Cursor::default(),
         bar_cursor: None,

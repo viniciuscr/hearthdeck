@@ -48,6 +48,10 @@ build() {
   cd "$source_dir"
 
   cargo build --manifest-path services/Cargo.toml --workspace --release
+  # The settings window is its own workspace (GPUI's tree would otherwise be
+  # compiled into every `just check` and every CI run), so it is built here, by
+  # name, and installed beside the other binaries.
+  cargo build --manifest-path services/hearthdeck-settings/Cargo.toml --release
 }
 
 package() {
@@ -69,6 +73,10 @@ package() {
   install -Dm755 services/target/release/hearthdeck-ai "$pkgdir/usr/lib/hearthdeck/hearthdeck-ai"
   install -Dm755 services/target/release/hearthdeck-input "$pkgdir/usr/lib/hearthdeck/hearthdeck-input"
   install -Dm755 services/target/release/hearthdeck-overlay "$pkgdir/usr/lib/hearthdeck/hearthdeck-overlay"
+  # Settings' own window. The library app launches it from
+  # /usr/lib/hearthdeck/hearthdeck-settings when the destination is opened; with
+  # it missing, the in-app settings page is what opens.
+  install -Dm755 services/hearthdeck-settings/target/release/hearthdeck-settings "$pkgdir/usr/lib/hearthdeck/hearthdeck-settings"
   install -Dm644 packaging/arch/hearthdeck.target "$pkgdir/usr/lib/systemd/user/hearthdeck.target"
   install -Dm644 packaging/arch/hearthdeck-bridge.socket "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.socket"
   install -Dm644 packaging/arch/hearthdeck-bridge.service "$pkgdir/usr/lib/systemd/user/hearthdeck-bridge.service"

@@ -1,0 +1,27 @@
+[package]
+name = "hearthdeck-settings"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Hearthdeck's settings window, drawn with GPUI"
+publish = false
+
+[dependencies]
+gpui-kit = "0.9"
+nix = { version = "0.30", features = ["fs"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "blocking",
+  "json",
+  "rustls-tls",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+
+# Deliberately its own workspace, though it lives under `services/`. GPUI brings
+# its own large dependency tree; joining `services/Cargo.toml` would make every
+# `just check` and every CI run compile it, for a window that shares no code with
+# the daemon. `packaging/arch/PKGBUILD` builds it with `--manifest-path`.
+[workspace]
