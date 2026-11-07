@@ -18,19 +18,19 @@ mod daemon;
 
 use std::ffi::CString;
 
-use gpui_kit::component::button::Button;
-use gpui_kit::component::progress::ProgressCircle;
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
-use gpui_kit::{
+use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, IntoElement, KeyBinding, ParentElement as _,
     Render, SharedString, Styled as _, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
     point, px, size,
 };
+use gpui_component::button::Button;
+use gpui_component::progress::ProgressCircle;
+use gpui_component::{ActiveTheme as _, Theme, ThemeMode, h_flex, v_flex};
 use nix::sys::statvfs::statvfs;
 
 use daemon::{Snapshot, read_snapshot};
 
-gpui_kit::actions!(hearthdeck_settings, [CloseWindow]);
+gpui::actions!(hearthdeck_settings, [CloseWindow]);
 
 /// The shipped settings page's column, so the two are read the same way on a TV.
 const PAGE_WIDTH: f32 = 900.0;
@@ -232,10 +232,10 @@ fn main() {
     let snapshot = read_snapshot();
     let disk = home_usage();
 
-    gpui_kit::application().run(move |cx: &mut App| {
-        gpui_kit::init(cx);
+    gpui_platform::application().run(move |cx: &mut App| {
+        gpui_component::init(cx);
         // The session this is drawn in is dark; the kit defaults to light.
-        gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
+        Theme::change(ThemeMode::Dark, None, cx);
         cx.bind_keys([KeyBinding::new("escape", CloseWindow, None)]);
         // App-level, not on the root element: `on_action` on the root would wrap
         // it in an interactive box whose sizing is not the window's, and the
@@ -254,12 +254,17 @@ fn main() {
             ..Default::default()
         };
 
-        gpui_kit::open_window(options, cx, move |_, cx| {
-            cx.new(|_| SettingsWindow {
+        // What `gpui_kit::open_window` did: the application content under a
+        // `Root`, which is what gives components their overlay and focus layers.
+        let opened = cx.open_window(options, move |window, cx| {
+            let view = cx.new(|_| SettingsWindow {
                 snapshot: snapshot.clone(),
                 disk,
-            })
-        })
-        .expect("failed to open the settings window");
+            });
+            cx.new(|cx| gpui_base::Root::new(view, window, cx))
+        });
+        if let Err(error) = opened {
+            tracing::error!(%error, "failed to open the settings window");
+        }
     });
 }

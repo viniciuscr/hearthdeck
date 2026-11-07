@@ -17,6 +17,17 @@ those flows and their daemon calls.
 `services/hearthdeck-settings/` is the window. `app/settings_window.rs` is the
 shell's half: which binary, whether to launch it, whether one is already up.
 
+### Wayland only, on purpose
+
+The crate depends on GPUI directly instead of the `gpui-kit` facade. The facade
+hard-enables `gpui-pre-platform`'s `x11` feature beside `wayland`, and Cargo
+features are additive, so every kit user links the X11 backend — that is where
+the `libxkbcommon-x11` link failure came from, not from anything the window
+does. Depending on `gpui-pre`, `gpui-component` and `gpui-pre-platform` with
+`wayland` alone removes the backend: the packaged binary links `libxkbcommon`
+and nothing else from the X11 stack.
+
+
 ## The contract
 
 - **Opening Settings does not change page.** The library app stays where it is

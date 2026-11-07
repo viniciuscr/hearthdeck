@@ -6,8 +6,19 @@ license = "MIT"
 description = "Hearthdeck's settings window, drawn with GPUI"
 publish = false
 
+# GPUI is used directly rather than through the `gpui-kit` facade. The facade
+# hard-enables `gpui-pre-platform`'s `x11` feature next to `wayland`, and Cargo
+# features are additive, so every kit user links the X11 backend (`libxkbcommon-x11`,
+# `libxcb`) whether or not the session has X in it. This window is a Wayland
+# client on a Wayland session, so the backend is requested by name and X11 is
+# simply not built.
 [dependencies]
-gpui-kit = "0.9"
+gpui = { package = "gpui-pre", version = "0.3.11" }
+gpui-base = "0.9"
+gpui-component = "0.9"
+gpui-platform = { package = "gpui-pre-platform", version = "0.3.11", features = [
+  "wayland",
+] }
 nix = { version = "0.30", features = ["fs"] }
 reqwest = { version = "0.12", default-features = false, features = [
   "blocking",

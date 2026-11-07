@@ -9,6 +9,11 @@ dependency tree would otherwise be compiled into every `just check`, every
 pre-push and every CI run, for a window that shares no code with the daemon.
 `packaging/arch/PKGBUILD` builds it with `--manifest-path`.
 
+It depends on GPUI directly rather than through `gpui-kit`, because the facade
+enables both the Wayland and X11 backends and Cargo features cannot be removed
+downstream. This window is Wayland-only, so the X11 stack
+(`libxkbcommon-x11`, `libxcb`) is not linked at all.
+
 ```sh
 cargo run                      # the window on its own
 cargo clippy --all-targets -- -D warnings
