@@ -41,11 +41,18 @@ One layout, two levels:
 - the reading column on the right, capped at `CONTENT_MAX_WIDTH`, holding the
   page title, its groups, and their rows.
 
-Each group is a **card**: a `GroupBox` with the `Fill` variant, which is the
-variant that draws a surface — the default `Normal` draws none, which is what
-made a page of sections read as one long list. A rule under the page's opening
-sentence separates the introduction from the cards, and the page's one-line
-notice is an `Alert` rather than plain text.
+Each group is a **card**. A card is not one element: the page is a single
+scrolling `list`, one item per card heading, card row, or gap between cards, so
+the cursor can scroll an individual row into view. The card surface is therefore
+drawn by each item with the same colour, width and corner rules — the heading
+rounds the top, the card's last row rounds the bottom, and a rule separates the
+rows — so the card still reads as one surface. The surface uses the same
+`group_box` token and radius `GroupBox`'s `Fill` variant uses; `GroupBox` itself
+cannot wrap the rows because a card split across list items has no single parent.
+
+The page heading — title, one sentence, and a rule — does not scroll. Only the
+cards do. The page's one-line notice is an `Alert` under the list, above the
+footer, where it cannot scroll away from the action that produced it.
 
 A card's heading carries the section name and a status chip (`Tag`) when the
 section has a state worth reading at a glance: `Daemon` says Connected or
@@ -202,9 +209,10 @@ installs the binary beside the other Hearthdeck binaries.
   the RomM connection and the Stremio link. Every other field holds its value in
   the window, and its action only says what it would post. The rest is the next
   change, one row at a time.
-- **No scroll-to-focus.** Pages are short enough to fit a fullscreen window at
-  either scale factor. A page long enough to overflow needs the cursor to scroll
-  the column, which the cursor model does not do yet.
+- **Scrolling follows the cursor, not the contents.** Moving the cursor scrolls
+  its row into view; scrolling with the wheel does not move the cursor, so the
+  two can be apart until the next Up or Down. There is no scrollbar-driven
+  cursor, and no scroll-by-page control in the pad vocabulary yet.
 - **Text entry is unproven on the box.** GPUI's Wayland backend implements
   `zwp_text_input_v3`, so cosmic-osk should type into a GPUI field; it has not
   been tried on the TV, and no write flow depends on it yet.

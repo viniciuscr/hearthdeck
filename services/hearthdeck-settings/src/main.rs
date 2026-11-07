@@ -33,16 +33,16 @@ use std::ffi::CString;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Entity, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, div, point, prelude::FluentBuilder as _, px, size,
+    AnyElement, App, AppContext as _, Bounds, ClickEvent, Context, Entity, Focusable as _,
+    InteractiveElement as _, IntoElement, KeyBinding, ListAlignment, ListState, ParentElement as _,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, div, list, point, prelude::FluentBuilder as _, px, size,
 };
 use gpui_component::alert::Alert;
 use gpui_component::button::Button;
-use gpui_component::group_box::{GroupBox, GroupBoxVariant, GroupBoxVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::progress::ProgressCircle;
+use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::separator::Separator;
 use gpui_component::switch::Switch;
 use gpui_component::tag::Tag;
@@ -260,6 +260,7 @@ enum Value {
     },
 }
 
+#[derive(Clone)]
 struct Page {
     kind: PageKind,
     groups: Vec<Group>,
@@ -271,6 +272,7 @@ impl Page {
     }
 }
 
+#[derive(Clone)]
 struct Group {
     title: &'static str,
     /// A one-word state beside the card's title, when the section has one worth
@@ -288,10 +290,52 @@ enum Tone {
     Off,
 }
 
+#[derive(Clone)]
 struct Row {
     label: &'static str,
     description: Option<&'static str>,
     control: Control,
+}
+
+/// One line of the scrolling page. A card is drawn by consecutive items - its
+/// heading, then its rows - all on the same surface, so splitting a card across
+/// items keeps one card.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Item {
+    /// The space between two cards.
+    Gap,
+    /// A card's heading.
+    Header { group: usize },
+    /// One row inside a card.
+    Row {
+        group: usize,
+        row: usize,
+        /// The row's index within the page, which is what the cursor counts.
+        flat: usize,
+        last: bool,
+    },
+}
+
+/// The page as one list, plus the index of the item that draws each row - which
+/// is how the cursor's row becomes a scroll target.
+fn flat_items(page: &Page) -> (Vec<Item>, Vec<usize>) {
+    let mut items = Vec::new();
+    let mut rows = Vec::new();
+    for (group_ix, group) in page.groups.iter().enumerate() {
+        items.push(Item::Gap);
+        items.push(Item::Header { group: group_ix });
+        for (row_ix, _) in group.rows.iter().enumerate() {
+            rows.push(items.len());
+            items.push(Item::Row {
+                group: group_ix,
+                row: row_ix,
+                flat: rows.len() - 1,
+                last: row_ix + 1 == group.rows.len(),
+            });
+        }
+    }
+    items.push(Item::Gap);
+    (items, rows)
 }
 
 /// Everything the window can edit that the daemon has not been told about yet.
@@ -437,6 +481,13 @@ struct SettingsWindow {
     /// instead of writing over the newer one.
     stremio_generation: u64,
     stremio_pending: Option<StremioTask>,
+    /// The scrolling page: one item per card heading, card row, or gap. A list,
+    /// not a column, because `scroll_to_reveal_item` is what keeps the cursor's
+    /// row on screen - the page has to be navigable with no pointer.
+    list: ListState,
+    /// The page the list was built for, and the row it was last asked to reveal.
+    list_page: usize,
+    scrolled_to: Option<(usize, usize)>,
     /// What the last action row said it would do. One line, under the page.
     notice: Option<String>,
 }
@@ -456,6 +507,9 @@ impl SettingsWindow {
             stremio_seconds_left: None,
             stremio_generation: 0,
             stremio_pending: None,
+            list: ListState::new(0, ListAlignment::Top, px(400.)),
+            list_page: 0,
+            scrolled_to: None,
             notice: None,
         }
     }
@@ -1266,71 +1320,129 @@ impl SettingsWindow {
             .into_any_element()
     }
 
-    fn content(&self, cx: &Context<Self>, theme: &Theme, pages: &[Page]) -> AnyElement {
-        let page_index = self.nav.page().min(pages.len().saturating_sub(1));
+    /// The page: a fixed heading, then the cards as one scrolling list. The
+    /// heading never moves, so the page a user is on stays legible while the
+    /// rows under it scroll.
+    fn content(
+        &self,
+        cx: &Context<Self>,
+        theme: &Theme,
+        pages: &[Page],
+        page_index: usize,
+        items: Vec<Item>,
+    ) -> AnyElement {
         let page = &pages[page_index];
-        let mut row_index = 0;
-        let groups = page
-            .groups
-            .iter()
-            .map(|group| {
-                let rows = group
-                    .rows
-                    .iter()
-                    .map(|row| {
-                        let index = row_index;
-                        let focused = page_index == self.nav.page() && index == self.nav.row();
-                        row_index += 1;
-                        self.row_element(cx, row, page_index, index, focused, theme)
-                    })
-                    .collect::<Vec<_>>();
-                // `Fill` is the variant that draws a surface. `Normal`, the
-                // group box's default, draws none - which is what made a page of
-                // sections read as one list.
-                GroupBox::new()
-                    .id(SharedString::from(group.title))
-                    .with_variant(GroupBoxVariant::Fill)
-                    .title(group_title(group, theme))
-                    .children(rows)
-                    .into_any_element()
-            })
-            .collect::<Vec<_>>();
-
+        let view = cx.entity();
+        let list_state = self.list.clone();
+        let pages = pages.to_vec();
+        let theme = theme.clone();
         v_flex()
             .id("settings-content")
             .flex_1()
             .min_w_0()
             .overflow_hidden()
             .child(
-                v_flex()
-                    .w_full()
-                    .max_w(px(CONTENT_MAX_WIDTH))
+                v_flex().w_full().px_8().pt_8().pb_4().child(
+                    v_flex()
+                        .w_full()
+                        .max_w(px(CONTENT_MAX_WIDTH))
+                        .gap_2()
+                        .child(div().text_3xl().child(page.kind.title()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(page.kind.description()),
+                        )
+                        .child(div().pt_2().child(Separator::horizontal().h(px(1.)))),
+                ),
+            )
+            .child(
+                div()
+                    .relative()
                     .flex_1()
-                    .gap_6()
-                    .p_8()
-                    .child(
-                        v_flex()
-                            .gap_2()
-                            .child(div().text_3xl().child(page.kind.title()))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.muted_foreground)
-                                    .child(page.kind.description()),
-                            )
-                            .child(div().pt_2().child(Separator::horizontal().h(px(1.)))),
-                    )
-                    .children(groups)
-                    .when_some(self.notice.clone(), |this, notice| {
-                        this.child(Alert::info("settings-notice", notice))
-                    }),
+                    .w_full()
+                    .child(list(list_state.clone(), move |ix, _, cx| {
+                        // The list resets in the same frame the items are built,
+                        // so the indexes agree; a miss is an empty line rather
+                        // than a panic on a television.
+                        let Some(item) = items.get(ix).copied() else {
+                            return div().into_any_element();
+                        };
+                        let this = view.read(cx);
+                        this.item_element(item, &pages, page_index, view.clone(), &theme)
+                    }))
+                    .vertical_scrollbar(&list_state),
             )
             .into_any_element()
     }
 
+    /// One item of the scrolling page. Every item draws the same card surface,
+    /// so a card split across items still reads as one card: the heading rounds
+    /// the top, the last row rounds the bottom, and a rule separates the rows.
+    fn item_element(
+        &self,
+        item: Item,
+        pages: &[Page],
+        page_index: usize,
+        view: Entity<Self>,
+        theme: &Theme,
+    ) -> AnyElement {
+        let card = |top: bool, bottom: bool| {
+            let mut card = v_flex()
+                .w_full()
+                .max_w(px(CONTENT_MAX_WIDTH))
+                .bg(theme.tokens.group_box);
+            if top {
+                card = card.rounded_t(theme.radius);
+            }
+            if bottom {
+                card = card.rounded_b(theme.radius);
+            }
+            card
+        };
+        match item {
+            Item::Gap => div().h(px(24.)).into_any_element(),
+            Item::Header { group } => {
+                let group = &pages[page_index].groups[group];
+                div()
+                    .w_full()
+                    .px_8()
+                    .child(
+                        card(true, false)
+                            .px_4()
+                            .pt_3()
+                            .pb_2()
+                            .child(group_title(group, theme)),
+                    )
+                    .into_any_element()
+            }
+            Item::Row {
+                group,
+                row,
+                flat,
+                last,
+            } => {
+                let group = &pages[page_index].groups[group];
+                let row = &group.rows[row];
+                let focused = page_index == self.nav.page() && flat == self.nav.row();
+                div()
+                    .w_full()
+                    .px_8()
+                    .child(
+                        card(false, last)
+                            .border_t_1()
+                            .border_color(theme.border)
+                            .child(self.row_element(view, row, page_index, flat, focused, theme)),
+                    )
+                    .into_any_element()
+            }
+        }
+    }
+
     fn row_element(
         &self,
-        cx: &Context<Self>,
+        view: Entity<Self>,
         row: &Row,
         page_index: usize,
         row_index: usize,
@@ -1342,6 +1454,15 @@ impl SettingsWindow {
         // own: a switch and a button already do something when pressed, and
         // clicking them must not also run the row and undo it.
         let confirm_on_click = matches!(control, Control::Text(_) | Control::Choice { .. });
+        let view_for_click = view.clone();
+        let on_click = move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+            view_for_click.update(cx, |this, cx| {
+                this.nav.select(page_index, row_index);
+                if confirm_on_click {
+                    this.confirm(window, cx);
+                }
+            });
+        };
         h_flex()
             .id(SharedString::from(format!("row-{page_index}-{row_index}")))
             .w_full()
@@ -1372,21 +1493,16 @@ impl SettingsWindow {
                         )
                     }),
             )
-            .child(self.control_element(cx, &control, page_index, row_index, theme))
+            .child(self.control_element(&view, &control, page_index, row_index, theme))
             // A pointer sets the cursor where it clicked, and does what Enter
             // would have done: nothing on this page is pointer-only.
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.nav.select(page_index, row_index);
-                if confirm_on_click {
-                    this.confirm(window, cx);
-                }
-            }))
+            .on_click(on_click)
             .into_any_element()
     }
 
     fn control_element(
         &self,
-        cx: &Context<Self>,
+        view: &Entity<Self>,
         control: &Control,
         page_index: usize,
         row_index: usize,
@@ -1400,14 +1516,16 @@ impl SettingsWindow {
                 .into_any_element(),
             Control::Toggle(field) => {
                 let field = *field;
+                let view = view.clone();
                 Switch::new(SharedString::from(format!(
                     "switch-{page_index}-{row_index}"
                 )))
                 .checked(self.toggle_value(field))
                 .disabled(!self.toggle_enabled(field))
-                .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                    this.set_toggle(field, *checked, cx);
-                }))
+                .on_click(move |checked: &bool, _: &mut Window, cx: &mut App| {
+                    let value = *checked;
+                    view.update(cx, |this, cx| this.set_toggle(field, value, cx));
+                })
                 .into_any_element()
             }
             Control::Choice { field, options } => {
@@ -1440,12 +1558,15 @@ impl SettingsWindow {
             }
             Control::Action(action) => {
                 let action = *action;
+                let view = view.clone();
                 Button::new(SharedString::from(format!(
                     "action-{page_index}-{row_index}"
                 )))
                 .label(action.label())
                 .disabled(!self.action_enabled(action))
-                .on_click(cx.listener(move |this, _, _, cx| this.run(action, cx)))
+                .on_click(move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                    view.update(cx, |this, cx| this.run(action, cx));
+                })
                 .into_any_element()
             }
         }
@@ -1592,6 +1713,25 @@ impl Render for SettingsWindow {
         // The content is the source of truth for how many rows exist, so the
         // cursor is pulled back inside it before anything is drawn.
         self.nav.resize(&counts);
+        let page_index = self.nav.page().min(pages.len().saturating_sub(1));
+        let (items, row_items) = flat_items(&pages[page_index]);
+
+        // A different page, or a different number of rows, is a different list:
+        // an offset from the old one means nothing.
+        if self.list_page != page_index || self.list.item_count() != items.len() {
+            self.list.reset(items.len());
+            self.list_page = page_index;
+            self.scrolled_to = None;
+        }
+
+        // Keep the cursor's row on screen. This is what makes a page taller than
+        // the display navigable with no pointer at all.
+        if let Some(item) = row_items.get(self.nav.row())
+            && self.scrolled_to != Some((page_index, self.nav.row()))
+        {
+            self.list.scroll_to_reveal_item(*item);
+            self.scrolled_to = Some((page_index, self.nav.row()));
+        }
 
         h_flex()
             .size_full()
@@ -1602,7 +1742,15 @@ impl Render for SettingsWindow {
                     .flex_1()
                     .h_full()
                     .min_w_0()
-                    .child(self.content(cx, theme, &pages))
+                    .child(self.content(cx, theme, &pages, page_index, items))
+                    .when_some(self.notice.clone(), |this, notice| {
+                        this.child(
+                            div()
+                                .px_8()
+                                .pb_2()
+                                .child(Alert::info("settings-notice", notice)),
+                        )
+                    })
                     .child(self.footer(cx, theme)),
             )
     }
@@ -1740,7 +1888,72 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{BACKDROPS, ChoiceField, Draft, PALETTES, TextField, mirrored, stremio_account};
+    use super::{
+        BACKDROPS, ChoiceField, Control, Draft, Group, Item, PALETTES, Page, PageKind, Row,
+        TextField, Value, flat_items, mirrored, stremio_account,
+    };
+
+    fn plain_row(label: &'static str) -> Row {
+        Row {
+            label,
+            description: None,
+            control: Control::Fact(Value::Text(String::new())),
+        }
+    }
+
+    fn page_of(groups: &[&[&'static str]]) -> Page {
+        Page {
+            kind: PageKind::Connections,
+            groups: groups
+                .iter()
+                .map(|labels| Group {
+                    title: "Service",
+                    status: None,
+                    rows: labels.iter().map(|label| plain_row(label)).collect(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn every_row_has_an_item_to_scroll_to() {
+        let page = page_of(&[&["a", "b"], &["c"]]);
+        let (items, rows) = flat_items(&page);
+
+        assert_eq!(
+            items.first(),
+            Some(&Item::Gap),
+            "a card starts clear of the heading"
+        );
+        assert_eq!(
+            items.last(),
+            Some(&Item::Gap),
+            "the page ends clear of the footer"
+        );
+        assert!(
+            matches!(items[1], Item::Header { group: 0 }),
+            "a card opens with its heading: {:?}",
+            items[1]
+        );
+        assert_eq!(rows.len(), 3, "one scroll target per row, not per card");
+        for (flat, item) in rows.iter().enumerate() {
+            match items[*item] {
+                Item::Row { flat: found, .. } => assert_eq!(found, flat),
+                other => panic!("row {flat} points at {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_last_row_of_each_card_closes_it() {
+        let page = page_of(&[&["a", "b"], &["c"]]);
+        let (items, rows) = flat_items(&page);
+        let closes = |flat: usize| matches!(items[rows[flat]], Item::Row { last: true, .. });
+
+        assert!(!closes(0), "a card's first row has square corners");
+        assert!(closes(1), "the card's last row rounds the bottom");
+        assert!(closes(2));
+    }
 
     #[test]
     fn the_stremio_row_says_which_state_the_account_is_in() {
