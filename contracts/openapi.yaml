@@ -11,6 +11,85 @@ servers:
       host:
         default: hearthdeck.local
 paths:
+  /v1/backup/settings:
+    get:
+      operationId: getBackupSettings
+      security:
+        - bearerAuth: []
+      description: >-
+        The off-site backup destination and schedule. `enabled` is the systemd
+        timer's state, not a stored flag: the package installs the timer
+        disabled, and this route is the only thing that turns it on.
+        `remote_available` says whether `rclone listremotes` knows the selected
+        remote, and a client disables Enable with an explanation while it is
+        false. No cloud credential is ever read or returned: rclone owns those.
+      responses:
+        '200':
+          description: The backup settings, and whether the remote exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupSettingsResponse'
+        '503':
+          description: This build does not include the backup units
+    put:
+      operationId: updateBackupSettings
+      security:
+        - bearerAuth: []
+      description: >-
+        Writes `backup.env` and the timer drop-in, reloads the units, then enables
+        or disables the timer. `enabled: true` is refused while the remote is not
+        in `rclone listremotes`, because a nightly job with no remote is noise.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BackupSettings'
+      responses:
+        '200':
+          description: The settings as stored, with the timer's new state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupSettingsResponse'
+        '400':
+          description: A field is not valid
+        '409':
+          description: The remote is not configured in rclone
+        '503':
+          description: This build does not include the backup units
+  /v1/backup/status:
+    get:
+      operationId: getBackupStatus
+      security:
+        - bearerAuth: []
+      description: >-
+        The last run and the next one, read from the user service manager and a
+        bounded journal tail. Cached for a few seconds so a polling client cannot
+        spawn a `systemctl` per request.
+      responses:
+        '200':
+          description: The last run and the schedule's next occurrence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupStatus'
+        '503':
+          description: This build does not include the backup units
+  /v1/backup/run:
+    post:
+      operationId: runBackupNow
+      security:
+        - bearerAuth: []
+      description: >-
+        Starts `hearthdeck-backup.service` and returns immediately; a backup takes
+        minutes, so the client polls `/v1/backup/status` for the outcome.
+      responses:
+        '202':
+          description: The run was started
+        '503':
+          description: This build does not include the backup units
   /v1/health:
     get:
       operationId: getHealth
@@ -1431,6 +1510,68 @@ components:
           properties:
             status: { type: string, enum: [linked] }
             connection: { $ref: '#/components/schemas/StremioConnection' }
+    BackupSettings:
+      type: object
+      required: [enabled, remote, root, schedule]
+      properties:
+        enabled:
+          type: boolean
+          description: >-
+            The timer's state. Setting it true is what activates the feature; a
+            package install never does.
+        remote:
+          type: string
+          description: >-
+            An rclone remote name, 1 to 64 characters of letters, digits, dot,
+            dash or underscore. Credentials stay in rclone's own configuration.
+        root:
+          type: string
+          description: >-
+            A folder under that remote: a relative path with no leading slash and
+            no `..`.
+        schedule:
+          $ref: '#/components/schemas/BackupSchedule'
+    BackupSchedule:
+      type: object
+      required: [hour, minute]
+      properties:
+        hour: { type: integer, minimum: 0, maximum: 23 }
+        minute: { type: integer, minimum: 0, maximum: 59 }
+    BackupSettingsResponse:
+      allOf:
+        - $ref: '#/components/schemas/BackupSettings'
+        - type: object
+          required: [remote_available]
+          properties:
+            remote_available:
+              type: boolean
+              description: >-
+                Whether `rclone listremotes` knows the selected remote. False
+                disables Enable, with the "add the remote first" caption.
+            updated_at:
+              type: string
+              format: date-time
+              description: When the settings file last changed.
+    BackupStatus:
+      type: object
+      properties:
+        timer_active: { type: boolean }
+        service_active: { type: boolean }
+        next_run:
+          type: string
+          format: date-time
+          description: >-
+            The schedule's next occurrence in UTC, computed from the drop-in the
+            daemon wrote. Null while the timer is not active.
+        last_result:
+          type: string
+          description: The service's own `Result` property.
+        last_finished_at:
+          type: string
+          format: date-time
+        last_error:
+          type: string
+          description: The last journal line, only when the last run did not succeed.
     CategorizationResponse:
       type: object
       required: [enabled, status, report]

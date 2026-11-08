@@ -37,6 +37,8 @@ pub struct AppState {
     /// The TMDB credential the arrivals banner is read with. A secret, read only
     /// by the arrivals provider; the settings route serves its timestamps.
     pub tmdb: TmdbRepository,
+    /// Off-site backup: the user's destination, the schedule, and the timer.
+    pub backup: crate::backup::Backup,
     /// The RomM device approval a user may be waiting on.
     pub romm_link: DeviceLinkState,
     pub discovery: Option<DiscoveryService>,
@@ -157,6 +159,7 @@ impl AppState {
             stremio: StremioRepository::new(database.pool().clone()),
             stremio_link: LinkState::new(),
             tmdb: TmdbRepository::new(database.pool().clone()),
+            backup: crate::backup::Backup::from_environment(),
             romm_link: DeviceLinkState::new(),
             discovery: None,
             enrichment: None,

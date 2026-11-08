@@ -139,6 +139,35 @@ bridge re-validates them before the privileged helper runs.
 `Appearance` is not in this window on purpose: palette, backdrop and motion stay
 in the library app, which is where they are chosen and stored.
 
+### Backup
+
+`Backup` is the fifth page, and the only one whose switch does not write on the
+press. The whole decision — destination, schedule, and whether the timer runs —
+is one request, so the switch marks a draft and `Save and apply` writes it with
+everything else. The daemon validates them together, which is why a refused write
+leaves the old configuration whole instead of half-applied.
+
+`Remote` and `Destination root` are text rows whose values come from
+`GET /v1/backup/settings`. When `remote_available` is false the daemon knows
+rclone does not list that remote: a `Remote not found` row explains what to do,
+and the switch is drawn disabled — arming a timer that cannot run would only fail
+nightly. Every row on the page is dead in the same way when the units are not
+installed: the 503 becomes a `Not installed` chip and a single explanatory row,
+never an empty switch.
+
+`Schedule` is the kit's `TimeField` (`gpui-base`'s `TimeFieldState`), not a
+stepper written here: up and down step the selected part, left and right select
+the part, and digits type it. That is also why the pad needed no new code — while
+a field owns the caret the pad's presses are dispatched as the *keystrokes* the
+field already binds, so the d-pad steps the schedule and moves a caret through
+the same path the keyboard uses.
+
+`Last run` reads `GET /v1/backup/status`: the next occurrence, the service's own
+`Result`, when it finished, and the last journal line when it failed. `Run now`
+posts and returns accepted; the card fills in when the service finishes, so the
+window never blocks on a backup. Nothing on either card holds a cloud
+credential: rclone owns those, and the window names a remote.
+
 ### Why TMDB is a paste, and the others are not
 
 TMDB has no credential exchange to call: a key or v4 read token is generated in

@@ -33,6 +33,7 @@ mod nav;
 use std::ffi::CString;
 use std::time::Duration;
 
+use chrono::Timelike as _;
 use gpui::{
     Action as _, AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context,
     Entity, Focusable as _, InteractiveElement as _, IntoElement, KeyBinding, ListAlignment,
@@ -48,6 +49,7 @@ use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::separator::Separator;
 use gpui_component::switch::Switch;
 use gpui_component::tag::Tag;
+use gpui_component::time_field::{TimeField, TimeFieldState, TimePrecision};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Theme, ThemeMode, h_flex, v_flex,
 };
@@ -94,14 +96,16 @@ enum PageKind {
     Connections,
     Library,
     Emulation,
+    Backup,
 }
 
 impl PageKind {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Status,
         Self::Connections,
         Self::Library,
         Self::Emulation,
+        Self::Backup,
     ];
 
     fn title(self) -> &'static str {
@@ -110,6 +114,7 @@ impl PageKind {
             Self::Connections => "Connections",
             Self::Library => "Library",
             Self::Emulation => "Emulation",
+            Self::Backup => "Backup",
         }
     }
 
@@ -119,6 +124,7 @@ impl PageKind {
             Self::Connections => "The accounts Hearthdeck talks to on your behalf.",
             Self::Library => "How the library is gathered and grouped.",
             Self::Emulation => "The cores RetroArch needs, and what is ready to play.",
+            Self::Backup => "A nightly copy of saves, databases and metadata, off this machine.",
         }
     }
 
@@ -128,6 +134,7 @@ impl PageKind {
             Self::Connections => IconName::Globe,
             Self::Library => IconName::FolderOpen,
             Self::Emulation => IconName::Cpu,
+            Self::Backup => IconName::HardDrive,
         }
     }
 }
@@ -138,6 +145,17 @@ impl PageKind {
 enum TextField {
     RommUrl,
     TmdbKey,
+    BackupRemote,
+    BackupRoot,
+}
+
+/// A switch row. Categorization writes as soon as it is flipped; backup carries
+/// the destination and the schedule with it, so it marks a draft and Save writes
+/// the whole decision at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToggleField {
+    Categorization,
+    Backup,
 }
 
 /// What Enter does with a focused row that is not a field.
@@ -154,6 +172,8 @@ enum RowAction {
     ScanLibrary,
     InstallCores,
     SyncBios,
+    SaveBackup,
+    RunBackup,
 }
 
 impl RowAction {
@@ -170,6 +190,8 @@ impl RowAction {
             Self::ScanLibrary => "Scan now",
             Self::InstallCores => "Install missing cores",
             Self::SyncBios => "Sync BIOS",
+            Self::SaveBackup => "Save and apply",
+            Self::RunBackup => "Run now",
         }
     }
 
@@ -214,7 +236,9 @@ enum Control {
     /// A state or a measurement the window only reports.
     Fact(Value),
     Text(TextField),
-    Toggle,
+    Toggle(ToggleField),
+    /// The nightly schedule: an hour and minute the kit edits with the dpad.
+    Time,
     Action(RowAction),
 }
 
@@ -310,6 +334,11 @@ fn flat_items(page: &Page) -> (Vec<Item>, Vec<usize>) {
 struct Inputs {
     romm_url: Entity<InputState>,
     tmdb_key: Entity<InputState>,
+    backup_remote: Entity<InputState>,
+    backup_root: Entity<InputState>,
+    /// The schedule. Its state owns the up/down stepping, so the row needs no
+    /// stepper of its own.
+    backup_schedule: Entity<TimeFieldState>,
 }
 
 impl Inputs {
@@ -317,6 +346,8 @@ impl Inputs {
         match field {
             TextField::RommUrl => &self.romm_url,
             TextField::TmdbKey => &self.tmdb_key,
+            TextField::BackupRemote => &self.backup_remote,
+            TextField::BackupRoot => &self.backup_root,
         }
     }
 }
@@ -375,6 +406,8 @@ struct SettingsWindow {
     /// Set while a refresh is in flight, so the row says so and Enter cannot
     /// stack a second read behind the first.
     refreshing: bool,
+    /// The backup switch the user flipped but Save has not written yet.
+    backup_pending: Option<bool>,
     /// The value the window asked the daemon for while that write is in flight.
     /// The switch shows it, so the control answers the press immediately, and
     /// drops back to the daemon's own answer when the write lands or fails.
@@ -410,6 +443,7 @@ impl SettingsWindow {
             inputs,
             refreshing: false,
             categorization_pending: None,
+            backup_pending: None,
             pending_link: None,
             link_generation: 0,
             linking: None,
@@ -630,7 +664,7 @@ impl SettingsWindow {
                                 description: Some(
                                     "Let Hearthdeck derive sections and collections from the catalog.",
                                 ),
-                                control: Control::Toggle,
+                                control: Control::Toggle(ToggleField::Categorization),
                             },
                             Row {
                                 label: "Scan now",
@@ -675,6 +709,149 @@ impl SettingsWindow {
                         },
                     ],
                 }],
+            },
+            Page {
+                kind: PageKind::Backup,
+                groups: match &self.snapshot.backup {
+                    None => vec![Group {
+                        title: "Off-site backup",
+                        status: Some(("Not installed", Tone::Off)),
+                        rows: vec![Row {
+                            label: "Availability",
+                            description: Some(
+                                "This Hearthdeck build does not include the backup units.",
+                            ),
+                            control: Control::Fact(Value::Text("Not installed".to_string())),
+                        }],
+                    }],
+                    Some(backup) => {
+                        let mut rows = vec![
+                            Row {
+                                label: "Enable off-site backup",
+                                description: Some(
+                                    "Runs nightly through the systemd timer. Save carries it with the destination.",
+                                ),
+                                control: Control::Toggle(ToggleField::Backup),
+                            },
+                            Row {
+                                label: "Remote",
+                                description: Some(
+                                    "An rclone remote name; its credentials stay in rclone's own config.",
+                                ),
+                                control: Control::Text(TextField::BackupRemote),
+                            },
+                            Row {
+                                label: "Destination root",
+                                description: Some("The folder under that remote."),
+                                control: Control::Text(TextField::BackupRoot),
+                            },
+                            Row {
+                                label: "Schedule",
+                                description: Some(
+                                    "Local time. Up and down change the hour, left and right pick the part.",
+                                ),
+                                control: Control::Time,
+                            },
+                        ];
+                        if !backup.remote_available {
+                            rows.push(Row {
+                                label: "Remote not found",
+                                description: Some(
+                                    "Add it in rclone first (`rclone config`), then refresh this page.",
+                                ),
+                                control: Control::Fact(Value::Text(backup.remote.clone())),
+                            });
+                        }
+                        rows.push(Row {
+                            label: "Save and apply",
+                            description: Some(
+                                "Writes the destination, the schedule and the timer's state.",
+                            ),
+                            control: Control::Action(RowAction::SaveBackup),
+                        });
+                        if let Some(updated_at) = &backup.updated_at {
+                            rows.push(Row {
+                                label: "Updated",
+                                description: None,
+                                control: Control::Fact(Value::Text(updated_at.clone())),
+                            });
+                        }
+
+                        let status = self.snapshot.backup_status.as_ref();
+                        let last = vec![
+                            Row {
+                                label: "Next run",
+                                description: None,
+                                control: Control::Fact(Value::Text(
+                                    status
+                                        .and_then(|status| status.next_run.clone())
+                                        .unwrap_or_else(|| "Not scheduled".to_string()),
+                                )),
+                            },
+                            Row {
+                                label: "Last result",
+                                description: None,
+                                control: Control::Fact(Value::Text(
+                                    status
+                                        .and_then(|status| status.last_result.clone())
+                                        .filter(|result| !result.is_empty())
+                                        .unwrap_or_else(|| "Never run".to_string()),
+                                )),
+                            },
+                            Row {
+                                label: "Last finished",
+                                description: None,
+                                control: Control::Fact(Value::Text(
+                                    status
+                                        .and_then(|status| status.last_finished_at.clone())
+                                        .unwrap_or_else(|| "Never".to_string()),
+                                )),
+                            },
+                            Row {
+                                label: "Last error",
+                                description: None,
+                                control: Control::Fact(Value::Text(
+                                    status
+                                        .and_then(|status| status.last_error.clone())
+                                        .unwrap_or_else(|| "None".to_string()),
+                                )),
+                            },
+                            Row {
+                                label: "Run now",
+                                description: Some(
+                                    "Starts one run immediately; it can take minutes.",
+                                ),
+                                control: Control::Action(RowAction::RunBackup),
+                            },
+                        ];
+
+                        vec![
+                            Group {
+                                title: "Off-site backup",
+                                status: Some(if backup.enabled {
+                                    ("On", Tone::Good)
+                                } else {
+                                    ("Off", Tone::Off)
+                                }),
+                                rows,
+                            },
+                            Group {
+                                title: "Last run",
+                                status: Some(match status {
+                                    Some(status) if status.service_active => {
+                                        ("Running", Tone::Attention)
+                                    }
+                                    Some(status) if !status.timer_active => {
+                                        ("Timer off", Tone::Off)
+                                    }
+                                    Some(_) => ("Idle", Tone::Off),
+                                    None => ("Unknown", Tone::Off),
+                                }),
+                                rows: last,
+                            },
+                        ]
+                    }
+                },
             },
         ]
     }
@@ -732,6 +909,8 @@ impl SettingsWindow {
             RowAction::StremioLink => self.start_link(LinkService::Stremio, cx),
             RowAction::StremioUnlink => self.unlink(LinkService::Stremio, cx),
             RowAction::SaveTmdbKey => self.save_tmdb_key(cx),
+            RowAction::SaveBackup => self.save_backup(cx),
+            RowAction::RunBackup => self.start_backup(cx),
             RowAction::ImportTmdbKey => self.import_tmdb_key(cx),
             RowAction::InstallCores => self.install_cores(cx),
             RowAction::SyncBios => self.sync_bios(cx),
@@ -759,25 +938,59 @@ impl SettingsWindow {
     }
 
     /// What the switch shows: the write in flight, else the daemon's answer.
-    fn toggle_value(&self) -> bool {
-        mirrored(
-            self.categorization_pending,
-            self.snapshot
-                .categorization
-                .as_ref()
-                .map(|categorization| categorization.enabled),
-        )
+    fn toggle_value(&self, field: ToggleField) -> bool {
+        match field {
+            ToggleField::Categorization => mirrored(
+                self.categorization_pending,
+                self.snapshot
+                    .categorization
+                    .as_ref()
+                    .map(|categorization| categorization.enabled),
+            ),
+            ToggleField::Backup => mirrored(
+                self.backup_pending,
+                self.snapshot.backup.as_ref().map(|backup| backup.enabled),
+            ),
+        }
     }
 
     /// A toggle whose state was never read is drawn disabled rather than
     /// focused and dead, and so is one while its write is in flight.
-    fn toggle_enabled(&self) -> bool {
-        self.categorization_pending.is_none()
-            && self
-                .snapshot
-                .categorization
-                .as_ref()
-                .is_some_and(|categorization| categorization.capable != Some(false))
+    fn toggle_enabled(&self, field: ToggleField) -> bool {
+        match field {
+            ToggleField::Categorization => {
+                self.categorization_pending.is_none()
+                    && self
+                        .snapshot
+                        .categorization
+                        .as_ref()
+                        .is_some_and(|categorization| categorization.capable != Some(false))
+            }
+            // A timer whose remote rclone does not know would only fail nightly,
+            // so the switch is dead until the remote exists.
+            ToggleField::Backup => {
+                self.backup_pending.is_none()
+                    && self
+                        .snapshot
+                        .backup
+                        .as_ref()
+                        .is_some_and(|backup| backup.remote_available)
+            }
+        }
+    }
+
+    /// Flips the control the user pressed. Categorization writes immediately;
+    /// backup only marks the draft, because Save carries the destination and the
+    /// schedule with it.
+    fn set_toggle(&mut self, field: ToggleField, value: bool, cx: &mut Context<Self>) {
+        match field {
+            ToggleField::Categorization => self.set_categorization(value, cx),
+            ToggleField::Backup => {
+                self.backup_pending = Some(value);
+                self.notice = Some("Save and apply to write the switch.".to_string());
+                cx.notify();
+            }
+        }
     }
 
     /// Turns the opt-in on or off on the daemon, then settles on what it says.
@@ -1143,6 +1356,76 @@ impl SettingsWindow {
         .detach();
     }
 
+    /// Writes the destination, the schedule and the switch in one request: the
+    /// daemon validates them together, so a refused write leaves the old
+    /// configuration whole.
+    fn save_backup(&mut self, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
+        let time = self.inputs.backup_schedule.read(cx).time();
+        let settings = daemon::BackupSettings {
+            enabled: self.toggle_value(ToggleField::Backup),
+            remote: self.inputs.backup_remote.read(cx).value().to_string(),
+            root: self.inputs.backup_root.read(cx).value().to_string(),
+            schedule: daemon::BackupSchedule {
+                hour: time.hour() as u8,
+                minute: time.minute() as u8,
+            },
+        };
+        self.busy = Some(RowAction::SaveBackup);
+        self.notice = Some("Saving the backup destination...".to_string());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { daemon::save_backup(&settings) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = None;
+                match result {
+                    Ok(view) => {
+                        this.snapshot.backup = Some(view);
+                        this.backup_pending = None;
+                        this.notice = Some("The backup settings were saved.".to_string());
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "the backup settings were refused");
+                        this.notice = Some(format!("Backup not saved: {error}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Starts one run. The daemon answers accepted and the last-run card fills in
+    /// when the service finishes, so this does not wait.
+    fn start_backup(&mut self, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
+        self.busy = Some(RowAction::RunBackup);
+        self.notice = Some("Starting the backup...".to_string());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async { daemon::run_backup() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = None;
+                this.notice = Some(match result {
+                    Ok(()) => "The backup was started; it can take minutes.".to_string(),
+                    Err(error) => format!("Backup not started: {error}"),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Saves the token from [`tmdb_key_file`]. The window never asks for a path:
     /// typing one on a television is the problem this exists to avoid.
     fn import_tmdb_key(&mut self, cx: &mut Context<Self>) {
@@ -1291,11 +1574,15 @@ impl SettingsWindow {
                 let input = self.inputs.text(field).clone();
                 input.update(cx, |state, cx| state.focus(window, cx));
             }
-            Some(Control::Toggle) => {
-                if self.toggle_enabled() {
-                    let value = !self.toggle_value();
-                    self.set_categorization(value, cx);
+            Some(Control::Toggle(field)) => {
+                if self.toggle_enabled(field) {
+                    let value = !self.toggle_value(field);
+                    self.set_toggle(field, value, cx);
                 }
+            }
+            Some(Control::Time) => {
+                let schedule = self.inputs.backup_schedule.clone();
+                schedule.update(cx, |state, cx| state.focus(window, cx));
             }
             Some(Control::Action(action)) => self.run(action, cx),
             Some(Control::Fact(_)) | None => {}
@@ -1304,8 +1591,20 @@ impl SettingsWindow {
 
     /// Escape: a text field is dismissed first, and only then the window - the
     /// order every writable field in Hearthdeck follows.
+    /// Whether an editable control owns the caret - a text field or the
+    /// schedule. Escape blurs one of these before it closes the window.
+    fn editing(&self, window: &Window, cx: &App) -> bool {
+        if self.focused_field(window, cx).is_some() {
+            return true;
+        }
+        let Some(focused) = window.focused(cx) else {
+            return false;
+        };
+        self.inputs.backup_schedule.read(cx).focus_handle(cx) == focused
+    }
+
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.text_field_focused(window, cx) {
+        if self.editing(window, cx) {
             window.blur(cx);
             return;
         }
@@ -1315,13 +1614,14 @@ impl SettingsWindow {
     /// Which text row owns the caret, if any.
     fn focused_field(&self, window: &Window, cx: &App) -> Option<TextField> {
         let focused = window.focused(cx)?;
-        [TextField::RommUrl, TextField::TmdbKey]
-            .into_iter()
-            .find(|field| self.inputs.text(*field).read(cx).focus_handle(cx) == focused)
-    }
-
-    fn text_field_focused(&self, window: &Window, cx: &App) -> bool {
-        self.focused_field(window, cx).is_some()
+        [
+            TextField::RommUrl,
+            TextField::TmdbKey,
+            TextField::BackupRemote,
+            TextField::BackupRoot,
+        ]
+        .into_iter()
+        .find(|field| self.inputs.text(*field).read(cx).focus_handle(cx) == focused)
     }
 
     /// Puts the clipboard into the focused field, and says so when there is
@@ -1614,19 +1914,24 @@ impl SettingsWindow {
                 .w(px(FIELD_WIDTH))
                 .child(Input::new(self.inputs.text(*field)))
                 .into_any_element(),
-            Control::Toggle => {
+            Control::Toggle(field) => {
+                let field = *field;
                 let view = view.clone();
                 Switch::new(SharedString::from(format!(
                     "switch-{page_index}-{row_index}"
                 )))
-                .checked(self.toggle_value())
-                .disabled(!self.toggle_enabled())
+                .checked(self.toggle_value(field))
+                .disabled(!self.toggle_enabled(field))
                 .on_click(move |checked: &bool, _: &mut Window, cx: &mut App| {
                     let value = *checked;
-                    view.update(cx, |this, cx| this.set_categorization(value, cx));
+                    view.update(cx, |this, cx| this.set_toggle(field, value, cx));
                 })
                 .into_any_element()
             }
+            Control::Time => div()
+                .w(px(190.))
+                .child(TimeField::new(&self.inputs.backup_schedule))
+                .into_any_element(),
             Control::Action(action) => {
                 let action = *action;
                 let view = view.clone();
@@ -1902,6 +2207,20 @@ fn pad_action(remote: input::Remote) -> Box<dyn gpui::Action> {
     }
 }
 
+/// The keystroke a pad press becomes while a field owns the caret. The fields
+/// already bind these keys, so the pad only has to speak them.
+fn pad_key(remote: input::Remote) -> Option<&'static str> {
+    use input::Remote;
+    Some(match remote {
+        Remote::Up => "up",
+        Remote::Down => "down",
+        Remote::Left => "left",
+        Remote::Right => "right",
+        Remote::Confirm => "enter",
+        Remote::Back => return None,
+    })
+}
+
 /// Reads what the library app forwards and dispatches it as the action that key
 /// would have produced.
 ///
@@ -1934,11 +2253,19 @@ fn pump_pad(
                 continue;
             };
             let _ = window.update(cx, |_, window, cx| {
-                let typing = {
+                let editing = {
                     let this = view.read(cx);
-                    this.text_field_focused(window, cx)
+                    this.editing(window, cx)
                 };
-                if typing && remote != input::Remote::Back {
+                if editing && remote != input::Remote::Back {
+                    // A field owns the caret, so the pad speaks to it in the only
+                    // language it has: the keys the field already binds. That is
+                    // what steps the schedule and moves a caret.
+                    if let Some(key) = pad_key(remote)
+                        && let Ok(keystroke) = gpui::Keystroke::parse(key)
+                    {
+                        window.dispatch_keystroke(keystroke, cx);
+                    }
                     return;
                 }
                 window.dispatch_action(pad_action(remote), cx);
@@ -2052,6 +2379,24 @@ fn main() {
         .as_ref()
         .map(|romm| romm.base_url.clone())
         .unwrap_or_default();
+    // The backup destination and schedule prefill the form, so the user edits
+    // what the daemon holds instead of retyping it.
+    let saved_backup = snapshot.backup.as_ref().map(daemon::BackupView::settings);
+    let saved_schedule = saved_backup.as_ref().and_then(|settings| {
+        chrono::NaiveTime::from_hms_opt(
+            u32::from(settings.schedule.hour),
+            u32::from(settings.schedule.minute),
+            0,
+        )
+    });
+    let saved_remote = saved_backup
+        .as_ref()
+        .map(|settings| settings.remote.clone())
+        .unwrap_or_default();
+    let saved_root = saved_backup
+        .as_ref()
+        .map(|settings| settings.root.clone())
+        .unwrap_or_default();
 
     gpui_platform::application().run(move |cx: &mut App| {
         gpui_component::init(cx);
@@ -2086,6 +2431,24 @@ fn main() {
                     InputState::new(window, cx)
                         .placeholder("TMDB API key")
                         .masked(true)
+                }),
+                backup_remote: cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder("pcloud")
+                        .default_value(saved_remote.clone())
+                }),
+                backup_root: cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder("hearthdeck-backups")
+                        .default_value(saved_root.clone())
+                }),
+                backup_schedule: cx.new(|cx| {
+                    let mut state =
+                        TimeFieldState::new(window, cx).precision(TimePrecision::Minute);
+                    if let Some(time) = saved_schedule {
+                        state.set_time(time, window, cx);
+                    }
+                    state
                 }),
             };
             let view = cx.new(|_| SettingsWindow::new(snapshot, disk, inputs));
@@ -2335,6 +2698,10 @@ mod render_tests {
             let inputs = Inputs {
                 romm_url: cx.new(|cx| InputState::new(window, cx)),
                 tmdb_key: cx.new(|cx| InputState::new(window, cx)),
+                backup_remote: cx.new(|cx| InputState::new(window, cx)),
+                backup_root: cx.new(|cx| InputState::new(window, cx)),
+                backup_schedule: cx
+                    .new(|cx| TimeFieldState::new(window, cx).precision(TimePrecision::Minute)),
             };
             let view = cx.new(|_| SettingsWindow::new(snapshot, None, inputs));
             install_shortcuts(cx, view.clone(), window.window_handle());
@@ -2353,6 +2720,51 @@ mod render_tests {
     /// The list item at `index`, by the selector its element carries.
     fn selector(index: usize) -> &'static str {
         Box::leak(format!("list-item-{index}").into_boxed_str())
+    }
+
+    /// With the units installed but the remote absent from rclone, the page says
+    /// so and the switch stays dead: enabling a timer that cannot run would only
+    /// fail nightly.
+    #[gpui::test]
+    fn the_backup_page_explains_a_missing_remote(cx: &mut TestAppContext) {
+        let (view, cx) = open_with(
+            Snapshot {
+                daemon: true,
+                backup: Some(crate::daemon::BackupView {
+                    enabled: false,
+                    remote: "pcloud".to_string(),
+                    root: "hearthdeck-backups".to_string(),
+                    schedule: crate::daemon::BackupSchedule {
+                        hour: 4,
+                        minute: 30,
+                    },
+                    remote_available: false,
+                    updated_at: None,
+                }),
+                ..Snapshot::default()
+            },
+            cx,
+        );
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+        // The backup page is the last one: one step left from Status wraps to it.
+        cx.simulate_keystrokes("left");
+        draw(cx);
+
+        let (rows, switch) = cx.read(|app| {
+            let this = view.read(app);
+            let page = this
+                .pages()
+                .into_iter()
+                .find(|page| page.kind == PageKind::Backup)
+                .expect("a backup page");
+            (page.row_count(), this.toggle_enabled(ToggleField::Backup))
+        });
+        assert!(rows >= 5, "the page lists its rows: {rows}");
+        assert!(
+            !switch,
+            "the switch is dead while rclone does not know the remote"
+        );
     }
 
     #[gpui::test]
@@ -2434,7 +2846,7 @@ mod render_tests {
         cx.simulate_keystrokes("right");
         draw(cx);
         assert!(
-            !cx.read(|app| view.read(app).toggle_value()),
+            !cx.read(|app| view.read(app).toggle_value(ToggleField::Categorization)),
             "the switch starts off"
         );
 
@@ -2443,7 +2855,7 @@ mod render_tests {
         cx.update(|window, cx| window.dispatch_action(Confirm.boxed_clone(), cx));
 
         assert!(
-            cx.read(|app| view.read(app).toggle_value()),
+            cx.read(|app| view.read(app).toggle_value(ToggleField::Categorization)),
             "Enter flips the row the cursor is on"
         );
     }

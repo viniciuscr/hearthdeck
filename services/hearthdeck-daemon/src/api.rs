@@ -25,6 +25,10 @@ use uuid::Uuid;
 
 use crate::{
     activity::ActivityEntry,
+    backup::{
+        BackupSettings, BackupStatus, SettingsView, ValidationError,
+        control::ControlError as BackupControlError,
+    },
     categorizer::control::ControlError,
     collections, diagnostics, readiness,
     retro::RetroLaunchError,
@@ -109,6 +113,12 @@ fn protected_routes() -> Router<SharedState> {
             post(stop_active_application_session),
         )
         .route("/v1/sessions/{id}/stop", post(stop_application_session))
+        .route(
+            "/v1/backup/settings",
+            get(get_backup_settings).put(update_backup_settings),
+        )
+        .route("/v1/backup/status", get(backup_status))
+        .route("/v1/backup/run", post(run_backup))
         .route("/v1/events", get(events))
 }
 
@@ -124,6 +134,30 @@ pub fn local_router(state: SharedState) -> Router {
                 .delete(clear_tmdb_settings),
         )
         .with_state(state)
+}
+
+async fn get_backup_settings(
+    State(state): State<SharedState>,
+) -> Result<Json<SettingsView>, ApiError> {
+    Ok(Json(state.backup.control().settings().await?))
+}
+
+async fn update_backup_settings(
+    State(state): State<SharedState>,
+    Json(request): Json<BackupSettings>,
+) -> Result<Json<SettingsView>, ApiError> {
+    Ok(Json(state.backup.control().update(request).await?))
+}
+
+async fn backup_status(State(state): State<SharedState>) -> Result<Json<BackupStatus>, ApiError> {
+    Ok(Json(state.backup.control().status().await?))
+}
+
+/// Starts one run and answers immediately: a backup takes minutes, and the client
+/// polls `status` for the outcome.
+async fn run_backup(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
+    state.backup.control().run_now().await?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
@@ -1274,6 +1308,31 @@ impl From<TmdbControlError> for ApiError {
     }
 }
 
+impl From<BackupControlError> for ApiError {
+    fn from(error: BackupControlError) -> Self {
+        match error {
+            BackupControlError::NotInstalled => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                message: "off-site backup is not installed".to_owned(),
+            },
+            // The precondition the UI explains: a timer with no remote would
+            // only produce nightly failures.
+            BackupControlError::Refused(ValidationError::RemoteMissing) => {
+                Self::conflict(error.to_string())
+            }
+            BackupControlError::Refused(other) => Self {
+                status: StatusCode::BAD_REQUEST,
+                message: other.to_string(),
+            },
+            BackupControlError::Systemd(message) => Self {
+                status: StatusCode::BAD_GATEWAY,
+                message,
+            },
+            BackupControlError::Storage(error) => Self::internal(error),
+        }
+    }
+}
+
 impl From<StremioControlError> for ApiError {
     fn from(error: StremioControlError) -> Self {
         match error {
@@ -1496,6 +1555,68 @@ mod tests {
             .await
             .expect("rule resolves")
             .expect("known rule")
+    }
+
+    #[test]
+    fn backup_failures_map_to_the_documented_statuses() {
+        use crate::backup::{ValidationError, control::ControlError as BackupError};
+
+        for (error, status) in [
+            (BackupError::NotInstalled, StatusCode::SERVICE_UNAVAILABLE),
+            (
+                BackupError::Refused(ValidationError::RemoteMissing),
+                StatusCode::CONFLICT,
+            ),
+            (
+                BackupError::Refused(ValidationError::Remote),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                BackupError::Systemd("the timer is broken".to_owned()),
+                StatusCode::BAD_GATEWAY,
+            ),
+        ] {
+            assert_eq!(super::ApiError::from(error).status, status);
+        }
+    }
+
+    /// The four backup routes are on the protected router: guarded, not absent.
+    #[tokio::test]
+    async fn backup_routes_require_the_paired_token() {
+        let temporary = tempfile::tempdir().expect("a temp dir");
+        let database = Database::connect(&temporary.path().join("hearthdeck.db"))
+            .await
+            .expect("a database");
+        let state: SharedState = Arc::new(AppState::new(
+            Config {
+                bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
+                local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
+                database_path: temporary.path().join("hearthdeck.db"),
+                bridge_socket_path: temporary.path().join("bridge.sock"),
+                lan_enabled: false,
+                tls: None,
+                romm: crate::config::RommPaths::resolve(None, None, None),
+                bios_source: crate::readiness::BiosSource::resolve(None, None),
+            },
+            database,
+        ));
+
+        for request in [
+            Request::get("/v1/backup/settings")
+                .body(Body::empty())
+                .unwrap(),
+            Request::put("/v1/backup/settings")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"enabled":false,"remote":"pcloud","root":"x","schedule":{"hour":4,"minute":30}}"#))
+                .unwrap(),
+            Request::get("/v1/backup/status")
+                .body(Body::empty())
+                .unwrap(),
+            Request::post("/v1/backup/run").body(Body::empty()).unwrap(),
+        ] {
+            let response = router(state.clone()).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
     }
 
     #[test]

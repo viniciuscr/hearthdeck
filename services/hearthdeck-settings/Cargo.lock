@@ -2828,6 +2828,7 @@ dependencies = [
 name = "hearthdeck-settings"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "gpui-base",
  "gpui-component",
  "gpui-pre",

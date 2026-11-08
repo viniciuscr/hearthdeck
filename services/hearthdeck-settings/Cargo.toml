@@ -13,6 +13,7 @@ publish = false
 # client on a Wayland session, so the backend is requested by name and X11 is
 # simply not built.
 [dependencies]
+chrono = "0.4"
 gpui = { package = "gpui-pre", version = "0.3.11" }
 gpui-base = "0.9"
 gpui-component = "0.9"

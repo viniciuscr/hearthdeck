@@ -4,6 +4,7 @@ compile_error!("hearthdeck-daemon targets Linux only");
 mod activity;
 mod api;
 mod auth;
+mod backup;
 mod bridge;
 mod catalog;
 mod categorizer;

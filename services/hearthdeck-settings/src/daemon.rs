@@ -19,7 +19,7 @@
 use std::time::Duration;
 
 use reqwest::StatusCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:38400";
@@ -48,6 +48,12 @@ pub struct Snapshot {
     /// Whether the daemon holds a TMDB key. `None` when the loopback admin
     /// listener could not be reached - which is where the contract serves it.
     pub tmdb_configured: Option<bool>,
+    /// The off-site backup configuration. `None` when this build has no backup
+    /// units, or the route did not answer: the page then says so rather than
+    /// offering a switch that cannot work.
+    pub backup: Option<BackupView>,
+    /// The last run, read in the same pass as the settings.
+    pub backup_status: Option<BackupStatus>,
 }
 
 /// The RomM connection the daemon holds.
@@ -55,6 +61,59 @@ pub struct Snapshot {
 pub struct Romm {
     pub base_url: String,
     pub configured: bool,
+}
+
+/// The local hour and minute the nightly backup runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupSchedule {
+    pub hour: u8,
+    pub minute: u8,
+}
+
+/// What the window writes: the destination, the schedule, and whether the timer
+/// runs. Sending all four together means one request expresses the whole
+/// decision, and a refused write leaves the old configuration alone.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupSettings {
+    pub enabled: bool,
+    pub remote: String,
+    pub root: String,
+    pub schedule: BackupSchedule,
+}
+
+/// The settings as the daemon answers them, plus the fact that makes them
+/// actionable: whether rclone knows the remote.
+#[derive(Clone, Debug, Deserialize)]
+pub struct BackupView {
+    pub enabled: bool,
+    pub remote: String,
+    pub root: String,
+    pub schedule: BackupSchedule,
+    pub remote_available: bool,
+    pub updated_at: Option<String>,
+}
+
+impl BackupView {
+    /// The writable half, for prefilling the fields.
+    pub fn settings(&self) -> BackupSettings {
+        BackupSettings {
+            enabled: self.enabled,
+            remote: self.remote.clone(),
+            root: self.root.clone(),
+            schedule: self.schedule,
+        }
+    }
+}
+
+/// The last run and the next one.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct BackupStatus {
+    pub timer_active: bool,
+    pub service_active: bool,
+    pub next_run: Option<String>,
+    pub last_result: Option<String>,
+    pub last_finished_at: Option<String>,
+    pub last_error: Option<String>,
 }
 
 /// A device approval: the code to show, and where to approve it. RomM and
@@ -156,6 +215,17 @@ pub fn stremio_link_status() -> Result<LinkStatus, Error> {
 /// Stores a TMDB key. The contract serves that endpoint on the loopback admin
 /// listener rather than the API, so this is the one write that does not carry
 /// the pairing token.
+/// Writes the backup destination and schedule, and moves the timer. A refusal -
+/// the remote is not in rclone, or a field is not valid - comes back as an error
+/// the page shows verbatim.
+pub fn save_backup(settings: &BackupSettings) -> Result<BackupView, Error> {
+    Client::connect()?.save_backup(settings)
+}
+
+pub fn run_backup() -> Result<(), Error> {
+    Client::connect()?.run_backup()
+}
+
 pub fn save_tmdb_key(api_key: String) -> Result<(), Error> {
     Client::connect()?.save_tmdb_key(&api_key)
 }
@@ -347,6 +417,20 @@ impl Client {
         Ok(self.send(self.http.post(self.url(path)))?.json()?)
     }
 
+    fn save_backup(&self, settings: &BackupSettings) -> Result<BackupView, Error> {
+        Ok(self
+            .send(
+                self.http
+                    .put(self.url("/v1/backup/settings"))
+                    .json(settings),
+            )?
+            .json()?)
+    }
+
+    fn run_backup(&self) -> Result<(), Error> {
+        self.post("/v1/backup/run")
+    }
+
     fn start_romm_link(&self, base_url: &str) -> Result<DeviceOffer, Error> {
         self.post_json(
             "/v1/retro/link",
@@ -501,6 +585,21 @@ impl Client {
             }
         };
 
+        let backup = match self.get::<BackupView>("/v1/backup/settings") {
+            Ok(backup) => Some(backup),
+            Err(error) => {
+                tracing::warn!(%error, "the backup settings could not be read");
+                None
+            }
+        };
+        let backup_status = match self.get::<BackupStatus>("/v1/backup/status") {
+            Ok(status) => Some(status),
+            Err(error) => {
+                tracing::warn!(%error, "the backup status could not be read");
+                None
+            }
+        };
+
         Snapshot {
             daemon: true,
             romm,
@@ -509,6 +608,8 @@ impl Client {
             total_systems,
             categorization,
             tmdb_configured,
+            backup,
+            backup_status,
         }
     }
 }
@@ -674,6 +775,46 @@ mod tests {
             .next()
             .and_then(|port| port.parse().ok())
             .expect("a stub port")
+    }
+
+    #[test]
+    fn saving_a_destination_sends_every_field_in_one_request() {
+        let (base, server) = serve(vec![(
+            200,
+            r#"{"enabled":true,"remote":"pcloud","root":"hearthdeck-backups","schedule":{"hour":4,"minute":30},"remote_available":true,"updated_at":"2026-11-08T15:00:00Z"}"#,
+        )]);
+        let settings = super::BackupSettings {
+            enabled: true,
+            remote: "pcloud".to_string(),
+            root: "hearthdeck-backups".to_string(),
+            schedule: super::BackupSchedule {
+                hour: 4,
+                minute: 30,
+            },
+        };
+
+        let view = client(base).save_backup(&settings).expect("the saved view");
+        assert!(view.remote_available, "the answer is read back");
+
+        let requests = server.join().expect("the stub thread");
+        assert!(
+            requests[0].starts_with("PUT /v1/backup/settings"),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains("\"enabled\":true"));
+        assert!(requests[0].contains("\"remote\":\"pcloud\""));
+        assert!(requests[0].contains("\"hour\":4"));
+    }
+
+    #[test]
+    fn run_now_posts_and_does_not_wait_for_the_run() {
+        let (base, server) = serve(vec![(202, "")]);
+
+        client(base).run_backup().expect("accepted");
+
+        let requests = server.join().expect("the stub thread");
+        assert!(requests[0].starts_with("POST /v1/backup/run"));
     }
 
     #[test]
