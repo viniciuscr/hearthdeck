@@ -80,6 +80,9 @@ const TYPE_CAPTION: f32 = 16.0;
 const TYPE_CODE: f32 = 48.0;
 /// The schedule field: an hour and a minute, not a URL.
 const TIME_FIELD_WIDTH: f32 = 190.0;
+/// How long a page change takes to fade the list in. Long enough to read as a
+/// transition, short enough that a pad press feels answered instantly.
+const PAGE_FADE: std::time::Duration = std::time::Duration::from_millis(180);
 /// The space between two cards, and the larger one under the page heading.
 const CARD_GAP: u16 = 24;
 const HEADER_GAP: u16 = 32;
@@ -487,7 +490,6 @@ fn home_usage() -> Option<DiskUsage> {
     })
 }
 
-/// Same output as the frontend's `system_status::human_size`.
 /// "1 core", "4 cores": a count that reads like a sentence rather than a form.
 fn plural(count: usize, singular: &str) -> String {
     if count == 1 {
@@ -509,6 +511,7 @@ fn local_time(raw: &str) -> String {
         .unwrap_or_else(|_| raw.to_string())
 }
 
+/// Same output as the frontend's `system_status::human_size`.
 fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = bytes as f64;
@@ -2251,12 +2254,15 @@ impl SettingsWindow {
                         .size_full(),
                     )
                     .vertical_scrollbar(&list_state)
-                    // A page change cross-fades the list only: never the heading,
-                    // and never the list's height. The id carries the page index,
-                    // so the animation restarts exactly when the page does.
+                    // A page change paints the new list over the old one in the
+                    // same frame, so this fades the new page *in* rather than
+                    // cross-fading two layers - including on the first paint.
+                    // Only the list fades: the heading and the height never move.
+                    // The id carries the page index, so a page change restarts it
+                    // and a row-count change does not.
                     .with_animation(
                         SharedString::from(format!("page-fade-{page_index}")),
-                        Animation::new(std::time::Duration::from_millis(180)),
+                        Animation::new(PAGE_FADE),
                         |this, delta| this.opacity(delta),
                     ),
             )
@@ -3173,7 +3179,7 @@ mod tests {
     use super::{
         Control, FAILURE_LIMIT, Group, IDLE_GRACE_READS, Item, Page, PageKind, Row, TextField,
         Value, WatchEnd, WatchState, WatchStep, daemon, describe_install, describe_sync,
-        flat_items, mirrored, stremio_account, watch_step,
+        flat_items, mirrored, plural, stremio_account, watch_step,
     };
 
     #[test]
@@ -3422,6 +3428,13 @@ mod tests {
             stremio_account(Some("2026-01-02T03:04:05Z"), true).starts_with("Linked since "),
             "a linked account outranks a stale offer"
         );
+    }
+
+    #[test]
+    fn a_count_reads_like_a_sentence() {
+        assert_eq!(plural(0, "core"), "0 cores");
+        assert_eq!(plural(1, "core"), "1 core");
+        assert_eq!(plural(2, "file"), "2 files");
     }
 
     #[test]

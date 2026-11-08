@@ -189,13 +189,17 @@ size, which needs a `Size` the kit does not export).
       now colours by fullness: green under 80%, amber to 90%, red above.
 - [ ] **CS-04 · wrong token family**: `theme.ring` as a row border, sidebar using
       `foreground` instead of `sidebar_foreground`/`sidebar_accent_foreground`.
-- [x] **CS-07 · no motion on navigation, but the switch animates.** Shipped: a 180ms
-      cross-fade of the list only, keyed by page index so it restarts exactly on a
-      page change; focus stays instant.
-- [x] **CS-05, FB-04, CT-07, PL-02, PL-03** — magic numbers (`px(190)`, `px(24)`,
-      `px(1)`) into consts; plurals (`1 core / 2 cores`); sentence-case drift and
-      "Not installed" three times in one card; ring colour never changes with
-      fullness; sidebar icons 24px and reused or dropped.
+- [x] **CS-07 · no motion on navigation, but the switch animates.** Shipped: a
+      180ms `PAGE_FADE` of the list only (a fade-in - the outgoing page is replaced
+      in the same frame, and the first paint fades too), keyed by page index so a
+      page change restarts it and a row-count change does not; focus stays
+      instant.
+- [x] **CS-05, FB-04, CT-07, PL-02** — `px(190)` and `px(24)` became
+      `TIME_FIELD_WIDTH` / `CARD_GAP` / `HEADER_GAP`; the Separator's `px(1.)` and
+      the sidebar's `px(56.)` are still literals (noted); plurals read like a
+      sentence; sentence-case drift fixed; the ring colours by fullness.
+      **PL-03 is not done**: the sidebar icon size needs a `Size` the kit keeps
+      private.
 
 ## What must survive the rework
 
