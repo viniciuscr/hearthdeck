@@ -77,6 +77,11 @@ const TYPE_LABEL: f32 = 21.0;
 const TYPE_VALUE: f32 = 21.0;
 const TYPE_BODY: f32 = 18.0;
 const TYPE_CAPTION: f32 = 16.0;
+/// The kit sizes its own controls - a Button's label, an Input's text - from
+/// `rem`, and does not export a way to set them individually. One rem size for
+/// the window lifts their smallest step (0.875rem) to 16.6px, so no control is
+/// the smallest text on the screen.
+const TYPE_REM: f32 = 19.0;
 
 /// The page column, sized for a television rather than a laptop window.
 const SIDEBAR_WIDTH: f32 = 320.0;
@@ -2448,7 +2453,7 @@ fn group_title(group: &Group, theme: &Theme) -> AnyElement {
                 Tone::Off => Tag::new(),
                 Tone::Danger => Tag::danger(),
             };
-            this.child(tag.text_size(px(TYPE_CAPTION)).child(label))
+            this.child(tag.py_1p5().px_3().text_size(px(TYPE_CAPTION)).child(label))
         })
         .into_any_element()
 }
@@ -2532,12 +2537,9 @@ impl Render for SettingsWindow {
                     .min_w_0()
                     .child(self.content(cx, theme, &pages, page_index, items))
                     .when_some(self.notice.clone(), |this, notice| {
-                        this.child(
-                            div()
-                                .px_8()
-                                .pb_2()
-                                .child(Alert::info("settings-notice", notice)),
-                        )
+                        this.child(div().px_8().pb_2().child(
+                            Alert::info("settings-notice", notice).text_size(px(TYPE_CAPTION)),
+                        ))
                     })
                     .child(self.footer(cx, theme)),
             )
@@ -2753,6 +2755,7 @@ fn main() {
         // What `gpui_kit::open_window` did: the application content under a
         // `Root`, which is what gives components their overlay and focus layers.
         let opened = cx.open_window(options, move |window, cx| {
+            window.set_rem_size(px(TYPE_REM));
             let inputs = Inputs {
                 romm_url: cx
                     .new(|cx| InputState::new(window, cx).placeholder("http://romm.local:8080")),
@@ -2884,6 +2887,27 @@ mod tests {
             super::read_key_file(&path).is_err(),
             "a missing file is reported, not panicked on"
         );
+    }
+
+    /// The card is painted from `tokens.group_box`; editing only `colors` leaves
+    /// that stale, which is how a surface change becomes a no-op. This test would
+    /// have caught it.
+    #[gpui::test]
+    fn the_palette_reaches_the_tokens_the_card_is_painted_from(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(crate::theme::install);
+
+        cx.update(|cx| {
+            let theme = gpui_component::Theme::global(cx);
+            assert_eq!(
+                theme.tokens.group_box.color, theme.colors.group_box,
+                "the token the card paints from follows the colour"
+            );
+            assert_ne!(
+                theme.tokens.group_box.color, theme.tokens.background.color,
+                "a card must not be the page colour"
+            );
+        });
     }
 
     #[test]
@@ -3075,6 +3099,7 @@ mod render_tests {
         cx: &mut TestAppContext,
     ) -> (Entity<SettingsWindow>, &mut VisualTestContext) {
         cx.update(gpui_component::init);
+        cx.update(crate::theme::install);
         let mut opened = None;
         let (_, cx) = cx.add_window_view(|window, cx| {
             let inputs = Inputs {
