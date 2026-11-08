@@ -26,6 +26,7 @@
 mod daemon;
 mod input;
 mod nav;
+mod theme;
 
 use std::ffi::CString;
 use std::time::Duration;
@@ -33,10 +34,10 @@ use std::time::Duration;
 use chrono::Timelike as _;
 use gpui::{
     Action as _, AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context,
-    Entity, Focusable as _, InteractiveElement as _, IntoElement, KeyBinding, ListAlignment,
-    ListState, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, TitlebarOptions, Window, WindowBounds, WindowOptions, div, list, point,
-    prelude::FluentBuilder as _, px, size,
+    Entity, Focusable as _, FontWeight, InteractiveElement as _, IntoElement, KeyBinding,
+    ListAlignment, ListState, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
+    WindowOptions, div, list, point, prelude::FluentBuilder as _, px, relative, size,
 };
 use gpui_component::alert::Alert;
 use gpui_component::button::Button;
@@ -47,9 +48,7 @@ use gpui_component::separator::Separator;
 use gpui_component::switch::Switch;
 use gpui_component::tag::Tag;
 use gpui_component::time_field::{TimeField, TimeFieldState, TimePrecision};
-use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Theme, ThemeMode, h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme as _, Disableable as _, Icon, IconName, Theme, h_flex, v_flex};
 use nix::sys::statvfs::statvfs;
 
 use daemon::{Categorization, DeviceOffer, LinkStatus, Snapshot, read_snapshot};
@@ -67,6 +66,17 @@ gpui::actions!(
         PasteIntoField
     ]
 );
+
+/// The TV type scale. Nothing here is below 16px: at three metres a 12px caption
+/// is decoration, and the smallest strings on this screen are the footer that
+/// explains the controls. The iced page's ratios are the reference
+/// (52 / 26 / 20.8 / 18.2 / 15.6).
+const TYPE_TITLE: f32 = 48.0;
+const TYPE_CARD: f32 = 26.0;
+const TYPE_LABEL: f32 = 21.0;
+const TYPE_VALUE: f32 = 21.0;
+const TYPE_BODY: f32 = 18.0;
+const TYPE_CAPTION: f32 = 16.0;
 
 /// The page column, sized for a television rather than a laptop window.
 const SIDEBAR_WIDTH: f32 = 320.0;
@@ -1883,7 +1893,13 @@ impl SettingsWindow {
             .border_r_1()
             .border_color(theme.border)
             .bg(theme.sidebar)
-            .child(div().pb_4().text_xl().child("Settings"))
+            .child(
+                div()
+                    .pb_4()
+                    .text_size(px(TYPE_CARD))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Settings"),
+            )
             .children(PageKind::ALL.iter().enumerate().map(|(index, kind)| {
                 let active = index == self.nav.page();
                 h_flex()
@@ -1902,7 +1918,8 @@ impl SettingsWindow {
                     }))
                     .child(
                         div()
-                            .text_lg()
+                            .text_size(px(TYPE_LABEL))
+                            .font_weight(FontWeight::MEDIUM)
                             .text_color(if active {
                                 theme.foreground
                             } else {
@@ -1918,13 +1935,16 @@ impl SettingsWindow {
             .child(div().flex_1())
             // What the window can say about itself: whether it is talking to the
             // daemon. It is not a description of the rows - those write.
-            .child(div().text_sm().text_color(theme.muted_foreground).child(
-                if self.snapshot.daemon {
-                    "Connected to the daemon"
-                } else {
-                    "Daemon unavailable"
-                },
-            ))
+            .child(
+                div()
+                    .text_size(px(TYPE_CAPTION))
+                    .text_color(theme.muted_foreground)
+                    .child(if self.snapshot.daemon {
+                        "Connected to the daemon"
+                    } else {
+                        "Daemon unavailable"
+                    }),
+            )
             .into_any_element()
     }
 
@@ -1955,10 +1975,16 @@ impl SettingsWindow {
                         .w_full()
                         .max_w(px(CONTENT_MAX_WIDTH))
                         .gap_2()
-                        .child(div().text_3xl().child(page.kind.title()))
                         .child(
                             div()
-                                .text_sm()
+                                .text_size(px(TYPE_TITLE))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(page.kind.title()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(TYPE_BODY))
+                                .line_height(relative(1.4))
                                 .text_color(theme.muted_foreground)
                                 .child(page.kind.description()),
                         )
@@ -2108,11 +2134,17 @@ impl SettingsWindow {
                 v_flex()
                     .flex_1()
                     .gap_1()
-                    .child(div().text_lg().child(row.label))
+                    .child(
+                        div()
+                            .text_size(px(TYPE_LABEL))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(row.label),
+                    )
                     .when_some(row.description, |this, description| {
                         this.child(
                             div()
-                                .text_sm()
+                                .text_size(px(TYPE_BODY))
+                                .line_height(relative(1.4))
                                 .text_color(theme.muted_foreground)
                                 .child(description),
                         )
@@ -2176,7 +2208,8 @@ impl SettingsWindow {
     fn value_element(&self, value: &Value, theme: &Theme) -> AnyElement {
         match value {
             Value::Text(text) => div()
-                .text_lg()
+                .text_size(px(TYPE_VALUE))
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.foreground)
                 .child(text.clone())
                 .into_any_element(),
@@ -2192,11 +2225,17 @@ impl SettingsWindow {
                         .color(theme.progress_bar)
                         .w(px(RING_SIZE))
                         .h(px(RING_SIZE))
-                        .child(div().text_xs().child(format!("{used_percent:.0}%"))),
+                        .child(
+                            div()
+                                .text_size(px(TYPE_CAPTION))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("{used_percent:.0}%")),
+                        ),
                 )
                 .child(
                     div()
-                        .text_lg()
+                        .text_size(px(TYPE_VALUE))
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.foreground)
                         .child(available.clone()),
                 )
@@ -2218,7 +2257,7 @@ impl SettingsWindow {
                 h_flex()
                     .items_center()
                     .gap_5()
-                    .text_sm()
+                    .text_size(px(TYPE_CAPTION))
                     .text_color(theme.muted_foreground)
                     .child(hint("Up/Down", "Move", theme))
                     .child(hint("Left/Right", "Page", theme))
@@ -2397,7 +2436,8 @@ fn group_title(group: &Group, theme: &Theme) -> AnyElement {
         .gap_3()
         .child(
             div()
-                .text_lg()
+                .text_size(px(TYPE_CARD))
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.foreground)
                 .child(group.title),
         )
@@ -2408,7 +2448,7 @@ fn group_title(group: &Group, theme: &Theme) -> AnyElement {
                 Tone::Off => Tag::new(),
                 Tone::Danger => Tag::danger(),
             };
-            this.child(tag.text_sm().child(label))
+            this.child(tag.text_size(px(TYPE_CAPTION)).child(label))
         })
         .into_any_element()
 }
@@ -2443,7 +2483,7 @@ fn hint(key: &'static str, meaning: &'static str, theme: &Theme) -> AnyElement {
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.secondary)
-                .text_xs()
+                .text_size(px(TYPE_CAPTION))
                 .child(key),
         )
         .child(meaning)
@@ -2693,7 +2733,7 @@ fn main() {
     gpui_platform::application().run(move |cx: &mut App| {
         gpui_component::init(cx);
         // The session this is drawn in is dark; the kit defaults to light.
-        Theme::change(ThemeMode::Dark, None, cx);
+        theme::install(cx);
 
         let options = WindowOptions {
             // The window is the settings surface, not a dialog over the library:

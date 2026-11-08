@@ -42,25 +42,31 @@ the next render because a field cannot be set without a window.
       completion path sets no notice, so a progressive-tense string stands for
       good. Fix: clear it on completion.
 
-## Phase 2 — Readable at three metres
+## Phase 2 — Readable at three metres — done
 
-- [ ] **TY-01 · page title 30px → 48px**, SEMIBOLD (iced uses 52).
-- [ ] **TY-02 · four roles share 18px.** Card title 26 SEMIBOLD, row label 21
+Shipped: a `TYPE_*` scale (48/26/21/21/18/16) applied to every string on the
+screen, and `theme.rs` — the Noir palette applied over the kit's dark theme so a
+card is a surface (`group_box #171717`) rather than the page colour, borders are
+visible (`#2e2e2e`), and focus is one blue (`#3b82f6`) across fill, border and
+ring.
+
+- [x] **TY-01 · page title 30px → 48px**, SEMIBOLD (iced uses 52).
+- [x] **TY-02 · four roles share 18px.** Card title 26 SEMIBOLD, row label 21
       MEDIUM, value 21 SEMIBOLD, sidebar item 21. Three sizes is enough to parse
       the page.
-- [ ] **TY-03 · row descriptions 14px → 18px**, `muted_foreground`,
+- [x] **TY-03 · row descriptions 14px → 18px**, `muted_foreground`,
       `line_height(1.4)`.
-- [ ] **TY-04 · footer keycaps and the storage percentage 12px → 16px.** The only
+- [x] **TY-04 · footer keycaps and the storage percentage 12px → 16px.** The only
       place the control scheme is written down is currently the smallest text.
-- [ ] **TY-05 · status chips ≈12px inside a 25px tag** → 16px text, `py_1p5`,
+- [x] **TY-05 · status chips ≈12px inside a 25px tag** → 16px text, `py_1p5`,
       `px_3`.
-- [ ] **CS-03 · cards have no surface.** In the loaded theme `group_box.background`
+- [x] **CS-03 · cards have no surface.** In the loaded theme `group_box.background`
       equals `background` (`#0a0a0a`); only a `#262626` hairline divides them.
       Fix: ship a Hearthdeck theme file — `background #0a0a0a`,
       `group_box #171717`, `border #2e2e2e`, `sidebar #111111`,
       `list.active.background #1d4ed81f`, `list.active.border #3b82f6`,
       `ring #3b82f6` — and load it instead of `Theme::change(ThemeMode::Dark)`.
-- [ ] **CS-06 · stock palette, not Hearthdeck's.** Same fix as CS-03; the accent,
+- [x] **CS-06 · stock palette, not Hearthdeck's.** Same fix as CS-03; the accent,
       focus and elevation ladder must match the library behind it.
 
 ## Phase 3 — Layout and focus
