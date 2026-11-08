@@ -1,0 +1,13 @@
+# Future Immich originals job (AWS Glacier / S3).
+#
+# Not active yet. To enable, create an S3-compatible remote named aws-glacier
+# and add this job to jobs.conf:
+#
+#   "immich-photos|/mnt/immich/data/upload|aws-glacier:hearthdeck-backups/photos|copy|photos.rclone|--s3-storage-class=DEEP_ARCHIVE"
+#
+# Photos are append-only: rclone copy never deletes from the remote. Immich's
+# own upload tree has no cache or generated files in it, so everything is data.
+# Uncomment the rules below if that ever changes.
+
+# - /thumbs/**
+# - /encoded-video/**

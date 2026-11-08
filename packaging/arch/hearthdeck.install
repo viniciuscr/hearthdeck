@@ -77,7 +77,8 @@ shadowing_units() {
   [ -n "$home" ] || return 0
   for unit in hearthdeck.target hearthdeck-log.service hearthdeck-daemon.service \
     hearthdeck-bridge.socket hearthdeck-bridge.service hearthdeck-input.service \
-    hearthdeck-overlay.service romm.service romm.path; do
+    hearthdeck-overlay.service hearthdeck-backup.service hearthdeck-backup.timer \
+    romm.service romm.path; do
     if [ -e "$home/.config/systemd/user/$unit" ]; then
       printf '  %s\n' "$home/.config/systemd/user/$unit"
     fi
@@ -100,7 +101,8 @@ clear_checkout_units() {
   for unit in \
     hearthdeck.target hearthdeck-bridge.socket hearthdeck-bridge.service \
     hearthdeck-daemon.service hearthdeck-input.service hearthdeck-log.service \
-    hearthdeck-overlay.service romm.service romm.path
+    hearthdeck-overlay.service hearthdeck-backup.service hearthdeck-backup.timer \
+    romm.service romm.path
   do
     file=$dir/$unit.d/90-hearthdeck-checkout.conf
     if [ -f "$file" ]; then
@@ -235,6 +237,7 @@ post_remove() {
   if [ -n "$user" ] && [ "$user" != root ]; then
     uid=$(id -u "$user" 2>/dev/null || true)
     if [ -n "$uid" ] && [ -d "/run/user/$uid" ]; then
+      user_systemctl "$user" "$uid" disable --now hearthdeck-backup.timer 2>/dev/null || true
       user_systemctl "$user" "$uid" stop hearthdeck.target 2>/dev/null || true
     fi
   fi

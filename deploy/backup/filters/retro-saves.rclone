@@ -1,0 +1,31 @@
+# RetroArch saves. The tree is per-game and Dolphin keeps a whole emulator
+# profile inside each game folder, so caches, configs, logs, dumps, texture
+# packs and console system files are excluded. SRAM (.srm, .raw) and memory
+# card saves (.gci) are kept.
+
+- */User/Cache/**
+- */User/Config/**
+- */User/Logs/**
+- */User/Dump/**
+- */User/ScreenShots/**
+- */User/Shaders/**
+- */User/Load/**
+- */User/ResourcePacks/**
+- */User/Styles/**
+- */User/Themes/**
+- */User/Maps/**
+- */User/Triforce/**
+- */User/WFS/**
+- */User/Wii/tmp/**
+- */User/Wii/import/**
+- */User/Wii/meta/**
+- */User/Wii/ticket/**
+- */User/Wii/sys/**
+- */User/Wii/wfs/**
+- */User/Wii/shared1/**
+- */User/Wii/shared2/**
+- */User/Wii/fst.bin
+- *.uidcache
+- *.cache
+- *.log
+- *.txt

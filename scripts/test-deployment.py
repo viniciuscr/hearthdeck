@@ -17,6 +17,8 @@ UNITS = (
     "hearthdeck-daemon.service",
     "hearthdeck-input.service",
     "hearthdeck-log.service",
+    "hearthdeck-backup.service",
+    "hearthdeck-backup.timer",
     "romm.service",
     "romm.path",
 )

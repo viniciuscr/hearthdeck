@@ -1,0 +1,5 @@
+# PCSX2 memory cards. .ps2 is the current format, .mcd the older one.
+
++ *.ps2
++ *.mcd
+- *

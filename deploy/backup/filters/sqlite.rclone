@@ -1,0 +1,5 @@
+# Consistent SQLite snapshots created by hearthdeck-backup.
+# Only finished .db files are uploaded; journals and temporary files are not.
+
++ *.db
+- *
