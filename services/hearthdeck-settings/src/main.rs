@@ -33,10 +33,11 @@ use std::ffi::CString;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, ClickEvent, Context, Entity, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyBinding, ListAlignment, ListState, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, div, list, point, prelude::FluentBuilder as _, px, size,
+    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context, Entity,
+    Focusable as _, InteractiveElement as _, IntoElement, KeyBinding, ListAlignment, ListState,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, div, list, point,
+    prelude::FluentBuilder as _, px, size,
 };
 use gpui_component::alert::Alert;
 use gpui_component::button::Button;
@@ -1773,19 +1774,14 @@ impl Render for SettingsWindow {
     }
 }
 
-/// Runs `update` against the active window. App-level action handlers get an
-/// `App`, and focusing a field - or blurring one - needs the window that owns
-/// it.
-fn with_active_window(cx: &mut App, update: impl FnOnce(&mut Window, &mut App)) {
-    let Some(window) = cx.active_window() else {
-        return;
-    };
-    let _ = window.update(cx, |_, window, cx| update(window, cx));
-}
-
 /// Every key this window answers to. `main` and the render tests both call it,
 /// so the path under test is the path that ships.
-fn install_shortcuts(cx: &mut App, view: Entity<SettingsWindow>) {
+///
+/// The window handle is captured here rather than asked for with
+/// `App::active_window()`: that asks the platform which of *its* windows is
+/// active, and a fullscreen kiosk window is not always reported as one. The
+/// handle this window was created with always is this window.
+fn install_shortcuts(cx: &mut App, view: Entity<SettingsWindow>, window: AnyWindowHandle) {
     cx.bind_keys([
         KeyBinding::new("escape", CloseWindow, None),
         KeyBinding::new("up", MoveUp, None),
@@ -1827,13 +1823,22 @@ fn install_shortcuts(cx: &mut App, view: Entity<SettingsWindow>) {
     });
     let rows = view.clone();
     cx.on_action(move |_: &Confirm, cx: &mut App| {
-        with_active_window(cx, |window, cx| {
-            rows.update(cx, |this, cx| this.confirm(window, cx));
+        // Deferred by one effect flush: an action is dispatched while the
+        // window is already leased, and asking for it again inside the listener
+        // fails - quietly, which is how Enter did nothing at all.
+        let rows = rows.clone();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                rows.update(cx, |this, cx| this.confirm(window, cx));
+            });
         });
     });
     cx.on_action(move |_: &CloseWindow, cx: &mut App| {
-        with_active_window(cx, |window, cx| {
-            view.update(cx, |this, cx| this.close(window, cx));
+        let view = view.clone();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                view.update(cx, |this, cx| this.close(window, cx));
+            });
         });
     });
 }
@@ -1898,7 +1903,7 @@ fn main() {
                 }),
             };
             let view = cx.new(|_| SettingsWindow::new(snapshot, disk, inputs));
-            install_shortcuts(cx, view.clone());
+            install_shortcuts(cx, view.clone(), window.window_handle());
 
             cx.new(|cx| gpui_base::Root::new(view, window, cx))
         });
@@ -2096,7 +2101,7 @@ mod render_tests {
                 tmdb_key: cx.new(|cx| InputState::new(window, cx)),
             };
             let view = cx.new(|_| SettingsWindow::new(Snapshot::default(), None, inputs));
-            install_shortcuts(cx, view.clone());
+            install_shortcuts(cx, view.clone(), window.window_handle());
             opened = Some(view.clone());
             gpui_base::Root::new(view, window, cx)
         });
@@ -2169,5 +2174,49 @@ mod render_tests {
                 && after.origin.y + after.size.height <= list.origin.y + list.size.height + px(1.),
             "the cursor scrolled the row into the list: row {after:?} in list {list:?}"
         );
+    }
+
+    #[gpui::test]
+    fn enter_flips_the_focused_toggle(cx: &mut TestAppContext) {
+        let (view, cx) = open(cx);
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+
+        // `Appearance` is the fourth page; its third card is `Motion`.
+        for _ in 0..3 {
+            cx.simulate_keystrokes("right");
+        }
+        for _ in 0..2 {
+            cx.simulate_keystrokes("down");
+        }
+        draw(cx);
+        assert!(
+            !cx.read(|app| view.read(app).draft.reduce_motion),
+            "the switch starts off"
+        );
+
+        cx.simulate_keystrokes("enter");
+        draw(cx);
+
+        assert!(
+            cx.read(|app| view.read(app).draft.reduce_motion),
+            "Enter flips the row the cursor is on"
+        );
+    }
+
+    #[gpui::test]
+    fn enter_focuses_a_text_row_so_typing_lands_in_it(cx: &mut TestAppContext) {
+        let (view, cx) = open(cx);
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+
+        // `Connections` is the second page; its first row is the RomM address.
+        cx.simulate_keystrokes("right");
+        cx.simulate_keystrokes("enter");
+        draw(cx);
+        cx.simulate_input("romm.local");
+
+        let typed = cx.read(|app| view.read(app).inputs.romm_url.read(app).value().to_string());
+        assert_eq!(typed, "romm.local", "typing lands in the focused field");
     }
 }

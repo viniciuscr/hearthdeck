@@ -148,6 +148,14 @@ and Enter, so typing never moves the cursor. Escape is the one key the input
 does not claim, which is why the handler is the thing that decides between
 "dismiss the field" and "close the window".
 
+Enter and Escape are the two actions that need the window itself — one focuses a
+field, the other blurs it or quits — and an action is dispatched *while the
+window is already leased*. Re-entering it from the listener fails without a
+word, so both handlers defer their window work by one effect flush (`cx.defer`)
+before asking for the handle they captured at window creation. That failure is
+what made Enter do nothing at all on the television; the render tests now press
+Enter for real and would catch its return.
+
 The cursor is a painted `selected` position, not platform focus — the same
 model the iced screens use for their ring cursor. `nav.rs` owns it as a plain
 value with no gpui types, so the rules are tested without a window and the pad
