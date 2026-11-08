@@ -482,6 +482,9 @@ struct SettingsWindow {
     /// instead of writing over the newer one.
     stremio_generation: u64,
     stremio_pending: Option<StremioTask>,
+    /// The daemon maintenance run in flight - a core install, a BIOS sync, a
+    /// rail rebuild - so its row is disabled until the report comes back.
+    busy: Option<RowAction>,
     /// The scrolling page: one item per card heading, card row, or gap. A list,
     /// not a column, because `scroll_to_reveal_item` is what keeps the cursor's
     /// row on screen - the page has to be navigable with no pointer.
@@ -508,6 +511,7 @@ impl SettingsWindow {
             stremio_seconds_left: None,
             stremio_generation: 0,
             stremio_pending: None,
+            busy: None,
             list: ListState::new(0, ListAlignment::Top, px(400.)),
             list_page: 0,
             scrolled_to: None,
@@ -739,7 +743,7 @@ impl SettingsWindow {
                         rows: vec![Row {
                             label: "Restore rails",
                             description: Some(
-                                "Puts the dashboard's rails back as Hearthdeck derives them.",
+                                "Removes the rails the last scan published; the dashboard derives its own.",
                             ),
                             control: Control::Action(RowAction::RestoreRails),
                         }],
@@ -867,8 +871,11 @@ impl SettingsWindow {
             RowAction::RommForget => self.forget_romm(cx),
             RowAction::StremioLink => self.start_stremio_link(cx),
             RowAction::StremioUnlink => self.unlink_stremio(cx),
-            other => {
-                self.notice = Some(other.preview().to_string());
+            RowAction::InstallCores => self.install_cores(cx),
+            RowAction::SyncBios => self.sync_bios(cx),
+            RowAction::RestoreRails => self.restore_rails(cx),
+            _ => {
+                self.notice = Some(action.preview().to_string());
                 cx.notify();
             }
         }
@@ -882,6 +889,9 @@ impl SettingsWindow {
                 self.stremio_pending.is_none() && self.stremio_offer.is_none()
             }
             RowAction::StremioUnlink => self.stremio_pending.is_none(),
+            RowAction::InstallCores | RowAction::SyncBios | RowAction::RestoreRails => {
+                self.busy.is_none()
+            }
             _ => true,
         }
     }
@@ -1175,6 +1185,107 @@ impl SettingsWindow {
             }
         })
         .detach();
+    }
+
+    /// Installs the cores the daemon's readiness report is missing, then re-reads
+    /// readiness so the page shows what can play now.
+    fn install_cores(&mut self, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
+        self.busy = Some(RowAction::InstallCores);
+        self.notice = Some("Installing the missing cores...".to_string());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let (report, readiness) = cx
+                .background_executor()
+                .spawn(async { (daemon::install_cores(), daemon::readiness().ok()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = None;
+                match report {
+                    Ok(report) => {
+                        this.notice = Some(describe_install(&report));
+                        this.apply_readiness(readiness);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "the core install failed");
+                        this.notice = Some(format!("Cores not installed: {error}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Places whatever BIOS files and source-only cores the daemon is missing,
+    /// then re-reads readiness.
+    fn sync_bios(&mut self, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
+        self.busy = Some(RowAction::SyncBios);
+        self.notice = Some("Syncing BIOS files...".to_string());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let (report, readiness) = cx
+                .background_executor()
+                .spawn(async { (daemon::sync_bios(), daemon::readiness().ok()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = None;
+                match report {
+                    Ok(report) => {
+                        this.notice = Some(describe_sync(&report));
+                        this.apply_readiness(readiness);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "the BIOS sync failed");
+                        this.notice = Some(format!("BIOS not synced: {error}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Drops the rails the last scan published, so the dashboard falls back to
+    /// what Hearthdeck derives itself.
+    fn restore_rails(&mut self, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
+        self.busy = Some(RowAction::RestoreRails);
+        self.notice = Some("Rebuilding the dashboard rails...".to_string());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async { daemon::restore_rails() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = None;
+                this.notice = Some(match result {
+                    Ok(()) => "The dashboard rails were removed; the dashboard derives its own."
+                        .to_string(),
+                    Err(error) => {
+                        tracing::warn!(%error, "the dashboard rails could not be removed");
+                        format!("Rails not removed: {error}")
+                    }
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn apply_readiness(&mut self, readiness: Option<(usize, usize)>) {
+        if let Some((ready, total)) = readiness {
+            self.snapshot.ready_systems = ready;
+            self.snapshot.total_systems = total;
+        }
     }
 
     /// Applies one poll. Returns whether the loop should keep going.
@@ -1663,6 +1774,43 @@ fn clear_field(cx: &mut Context<SettingsWindow>, field: &Entity<InputState>) {
     });
 }
 
+/// What an install report says in one line, naming the first package that
+/// failed so the line is something to act on.
+fn describe_install(report: &daemon::CoreInstall) -> String {
+    let installed = report.installed.len();
+    let failures = report.failed.len();
+    let first = report
+        .failed
+        .first()
+        .map(|failure| format!("\n{}: {}", failure.package, failure.reason))
+        .unwrap_or_default();
+    match (installed, failures) {
+        (0, 0) => "Every core was already installed.".to_string(),
+        (installed, 0) => format!("Installed {installed} core(s)."),
+        (0, failures) => format!("No core could be installed ({failures} failed){first}"),
+        (installed, failures) => {
+            format!("Installed {installed} core(s); {failures} failed{first}")
+        }
+    }
+}
+
+/// What a BIOS sync report says in one line, naming the first file that failed.
+fn describe_sync(report: &daemon::BiosSync) -> String {
+    let fetched = report.fetched.len();
+    let failures = report.failed.len();
+    let first = report
+        .failed
+        .first()
+        .map(|failure| format!("\n{}: {}", failure.filename, failure.reason))
+        .unwrap_or_default();
+    match (fetched, failures) {
+        (0, 0) => "Nothing was missing.".to_string(),
+        (fetched, 0) => format!("Placed {fetched} file(s)."),
+        (0, failures) => format!("Nothing could be placed ({failures} failed){first}"),
+        (fetched, failures) => format!("Placed {fetched} file(s); {failures} failed{first}"),
+    }
+}
+
 /// A card's heading: the section name, and a status chip when the section has a
 /// state worth reading at a glance. The rows still carry the detail.
 fn group_title(group: &Group, theme: &Theme) -> AnyElement {
@@ -1917,8 +2065,49 @@ fn main() {
 mod tests {
     use super::{
         BACKDROPS, ChoiceField, Control, Draft, Group, Item, PALETTES, Page, PageKind, Row,
-        TextField, Value, flat_items, mirrored, stremio_account,
+        TextField, Value, describe_install, describe_sync, flat_items, mirrored, stremio_account,
     };
+
+    #[test]
+    fn an_install_report_names_the_first_package_that_failed() {
+        use super::daemon::{CoreFailure, CoreInstall};
+
+        let mut report = CoreInstall::default();
+        assert_eq!(
+            describe_install(&report),
+            "Every core was already installed."
+        );
+
+        report.installed.push("libretro-snes9x".to_string());
+        assert_eq!(describe_install(&report), "Installed 1 core(s).");
+
+        report.failed.push(CoreFailure {
+            package: "libretro-dolphin".to_string(),
+            reason: "no such package".to_string(),
+        });
+        let line = describe_install(&report);
+        assert!(line.starts_with("Installed 1 core(s); 1 failed"), "{line}");
+        assert!(line.contains("libretro-dolphin: no such package"), "{line}");
+    }
+
+    #[test]
+    fn a_sync_report_names_the_first_file_that_failed() {
+        use super::daemon::{BiosFailure, BiosSync};
+
+        let mut report = BiosSync::default();
+        assert_eq!(describe_sync(&report), "Nothing was missing.");
+
+        report.fetched.push("bios/SCPH1001.BIN".to_string());
+        assert_eq!(describe_sync(&report), "Placed 1 file(s).");
+
+        report.failed.push(BiosFailure {
+            filename: "bios/scph5500.bin".to_string(),
+            reason: "not found".to_string(),
+        });
+        let line = describe_sync(&report);
+        assert!(line.starts_with("Placed 1 file(s); 1 failed"), "{line}");
+        assert!(line.contains("bios/scph5500.bin: not found"), "{line}");
+    }
 
     fn plain_row(label: &'static str) -> Row {
         Row {

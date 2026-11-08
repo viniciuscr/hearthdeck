@@ -79,10 +79,10 @@ There are five shapes, and the shape decides what Enter does:
 
 Adding a setting is adding a row, not adding a screen.
 
-## Editing: one setting is wired
+## Editing: what is wired
 
-**Three settings are wired. All use the same three steps: read the daemon's
-state, write, then report what the daemon says afterwards.**
+**Five settings are wired. All use the same three steps: read the daemon's state,
+write, then report what the daemon says afterwards.**
 
 `Library` → `Group the library` is a switch the daemon owns: the value comes from
 `GET /v1/categorization`, the press becomes `POST /v1/categorization/enable` (or
@@ -112,6 +112,18 @@ loop instead of writing over the newer one. `Unlink account` appears only while 
 account is linked and posts `DELETE /v1/stremio/settings`. Nothing here ever sees
 the Stremio session: the daemon holds it.
 
+`Library` → `Restore rails` deletes the collections the last scan published
+(`DELETE /v1/categorization/collections`), so the dashboard falls back to what it
+derives itself.
+
+`Emulation` → `Install missing cores` posts `/v1/retro/cores/install` and
+`Sync BIOS` posts `/v1/retro/readiness/sync`. Both answer with a per-package or
+per-file report, which the window turns into one line under the page — naming the
+first package or file that failed — and then re-reads `/v1/retro/readiness`, so
+the card's `Systems` row shows what can play now. The window never chooses a
+package: the daemon names them from its own platform-to-core table, and the
+bridge re-validates them before the privileged helper runs.
+
 **Everything else is still a preview.** Text values live in the window's
 `InputState`s, palette, backdrop and reduce-motion in its `Draft`, and every
 other action answers with one line under the page saying what it would post, so
@@ -126,9 +138,11 @@ really comes from.
 What is left to wire, row by row:
 
 - `Appearance` — palette, backdrop, reduce motion. The names come from
-  `docs/appearance-system.md`; the daemon already owns them, so wiring them is a
-  read and a write, not a new model.
-- `Emulation` — install the missing cores, sync the BIOS.
+  `docs/appearance-system.md`, but **the daemon exposes no appearance endpoint
+  today**: the values live in the library app's own config, so wiring them means
+  adding an API, not calling one.
+- `TMDB` — the key is served on the loopback admin listener by contract, so a
+  write from here needs a decision about that contract, not just a call.
 
 ## Focus and input
 
@@ -219,10 +233,10 @@ installs the binary beside the other Hearthdeck binaries.
 
 - **No controller input yet.** See above: it needs a transport decision before
   it is a code change.
-- **Not everything is written.** Three settings are: the categorization opt-in,
-  the RomM connection and the Stremio link. Every other field holds its value in
-  the window, and its action only says what it would post. The rest is the next
-  change, one row at a time.
+- **Not everything is written.** Five are: the categorization opt-in and its
+  scan, the RomM connection, the Stremio link, the rail rebuild, and the
+  emulation maintenance runs. `Appearance` and `TMDB` are still previews for the
+  reasons above.
 - **Scrolling follows the cursor, not the contents.** Moving the cursor scrolls
   its row into view; scrolling with the wheel does not move the cursor, so the
   two can be apart until the next Up or Down. There is no scrollbar-driven

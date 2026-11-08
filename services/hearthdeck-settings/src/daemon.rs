@@ -154,6 +154,56 @@ pub fn unlink_stremio() -> Result<(), Error> {
     Client::connect()?.delete("/v1/stremio/settings")
 }
 
+/// Asks the daemon to install the libretro cores its readiness report is
+/// missing. The names come from the daemon's own platform-to-core table; the
+/// window never chooses a package.
+pub fn install_cores() -> Result<CoreInstall, Error> {
+    Client::connect()?.post_empty("/v1/retro/cores/install")
+}
+
+/// Asks the daemon to place the missing BIOS files and source-only cores from
+/// the source the host configured. Hearthdeck ships no firmware.
+pub fn sync_bios() -> Result<BiosSync, Error> {
+    Client::connect()?.post_empty("/v1/retro/readiness/sync")
+}
+
+/// Removes the dashboard rails the last scan published. Works whether or not
+/// categorization is on.
+pub fn restore_rails() -> Result<(), Error> {
+    Client::connect()?.delete("/v1/categorization/collections")
+}
+
+/// What the daemon's core install did, package by package.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CoreInstall {
+    pub installed: Vec<String>,
+    pub failed: Vec<CoreFailure>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CoreFailure {
+    pub package: String,
+    pub reason: String,
+}
+
+/// What the daemon's BIOS sync placed, and what it could not.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct BiosSync {
+    pub fetched: Vec<String>,
+    pub failed: Vec<BiosFailure>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct BiosFailure {
+    pub filename: String,
+    pub reason: String,
+}
+
+/// How many systems the daemon can start right now, out of how many it knows.
+pub fn readiness() -> Result<(usize, usize), Error> {
+    Client::connect()?.readiness()
+}
+
 struct Client {
     http: reqwest::blocking::Client,
     base_url: String,
@@ -307,6 +357,17 @@ impl Client {
         self.categorization()
     }
 
+    fn readiness(&self) -> Result<(usize, usize), Error> {
+        let systems: Vec<RetroSystem> = self.get("/v1/retro/readiness")?;
+        Ok((
+            systems
+                .iter()
+                .filter(|system| system.core.installed)
+                .count(),
+            systems.len(),
+        ))
+    }
+
     fn snapshot(&self) -> Snapshot {
         let health = match self.get::<Health>("/v1/health") {
             Ok(health) => health,
@@ -334,20 +395,13 @@ impl Client {
                 None
             }
         };
-        let (ready_systems, total_systems) =
-            match self.get::<Vec<RetroSystem>>("/v1/retro/readiness") {
-                Ok(systems) => (
-                    systems
-                        .iter()
-                        .filter(|system| system.core.installed)
-                        .count(),
-                    systems.len(),
-                ),
-                Err(error) => {
-                    tracing::warn!(%error, "retro readiness could not be read");
-                    (0, 0)
-                }
-            };
+        let (ready_systems, total_systems) = match self.readiness() {
+            Ok(counts) => counts,
+            Err(error) => {
+                tracing::warn!(%error, "retro readiness could not be read");
+                (0, 0)
+            }
+        };
         let categorization = match self.categorization() {
             Ok(mut categorization) => {
                 categorization.capable = Some(health.capabilities.categorization);
@@ -380,6 +434,9 @@ fn refusal(status: StatusCode) -> String {
         }
         StatusCode::BAD_REQUEST => "the daemon rejected the address it was given".to_string(),
         StatusCode::BAD_GATEWAY => "the daemon could not reach the service".to_string(),
+        StatusCode::SERVICE_UNAVAILABLE => {
+            "this deployment cannot do that, or is not set up for it".to_string()
+        }
         other => format!("the daemon answered {other}"),
     }
 }
@@ -770,6 +827,65 @@ mod tests {
         let seen = server.join().expect("the stub finished");
         assert!(
             seen[0].starts_with("DELETE /v1/stremio/settings "),
+            "unexpected request: {}",
+            seen[0]
+        );
+    }
+
+    #[test]
+    fn installing_cores_posts_the_endpoint_and_reads_the_report() {
+        let (base, server) = serve(vec![(
+            200,
+            r#"{"installed":["libretro-snes9x"],"failed":[{"package":"libretro-dolphin","reason":"no such package"}]}"#,
+        )]);
+
+        let report = client(base)
+            .post_empty::<super::CoreInstall>("/v1/retro/cores/install")
+            .expect("a report");
+
+        assert_eq!(report.installed, ["libretro-snes9x"]);
+        assert_eq!(report.failed.len(), 1);
+        assert_eq!(report.failed[0].reason, "no such package");
+        let seen = server.join().expect("the stub finished");
+        assert!(
+            seen[0].starts_with("POST /v1/retro/cores/install "),
+            "unexpected request: {}",
+            seen[0]
+        );
+    }
+
+    #[test]
+    fn syncing_bios_posts_the_endpoint_and_reads_the_report() {
+        let (base, server) = serve(vec![(
+            200,
+            r#"{"fetched":["bios/SCPH1001.BIN"],"failed":[{"filename":"bios/scph5500.bin","reason":"not found"}],"readiness":[]}"#,
+        )]);
+
+        let report = client(base)
+            .post_empty::<super::BiosSync>("/v1/retro/readiness/sync")
+            .expect("a report");
+
+        assert_eq!(report.fetched, ["bios/SCPH1001.BIN"]);
+        assert_eq!(report.failed[0].filename, "bios/scph5500.bin");
+        let seen = server.join().expect("the stub finished");
+        assert!(
+            seen[0].starts_with("POST /v1/retro/readiness/sync "),
+            "unexpected request: {}",
+            seen[0]
+        );
+    }
+
+    #[test]
+    fn restoring_rails_deletes_the_published_collections() {
+        let (base, server) = serve(vec![(204, "")]);
+
+        client(base)
+            .delete("/v1/categorization/collections")
+            .expect("the daemon removed the rails");
+
+        let seen = server.join().expect("the stub finished");
+        assert!(
+            seen[0].starts_with("DELETE /v1/categorization/collections "),
             "unexpected request: {}",
             seen[0]
         );
