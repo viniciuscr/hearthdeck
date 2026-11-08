@@ -181,6 +181,17 @@ before asking for the handle they captured at window creation. That failure is
 what made Enter do nothing at all on the television; the render tests now press
 Enter for real and would catch its return.
 
+Pasting into a field: the kit's input binds `Ctrl+V` (and `Cmd+V`) itself, and
+that path works — a test pastes into the TMDB field headlessly. `Ctrl+Shift+V`
+and `Shift+Insert`, the other two things a Linux desktop does when someone says
+"paste", are bound here to `PasteIntoField`, which puts the clipboard into the
+focused field and reports either the result or that the clipboard could not be
+read. That fallback exists because an unreadable clipboard is otherwise silent:
+the field stays empty and nothing says why. The window's default log filter
+includes `gpui` and `gpui_linux` warnings for the same reason — a clipboard read
+or seat capability that fails is logged by the platform, and the journal is the
+only place it would ever show up.
+
 The cursor is a painted `selected` position, not platform focus — the same
 model the iced screens use for their ring cursor. `nav.rs` owns it as a plain
 value with no gpui types, so the rules are tested without a window and the pad

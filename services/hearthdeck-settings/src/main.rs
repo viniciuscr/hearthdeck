@@ -64,7 +64,8 @@ gpui::actions!(
         MoveDown,
         PreviousPage,
         NextPage,
-        Confirm
+        Confirm,
+        PasteIntoField
     ]
 );
 
@@ -315,10 +316,6 @@ impl Inputs {
             TextField::RommUrl => &self.romm_url,
             TextField::TmdbKey => &self.tmdb_key,
         }
-    }
-
-    fn all(&self) -> [&Entity<InputState>; 2] {
-        [&self.romm_url, &self.tmdb_key]
     }
 }
 
@@ -1255,14 +1252,42 @@ impl SettingsWindow {
         cx.quit();
     }
 
+    /// Which text row owns the caret, if any.
+    fn focused_field(&self, window: &Window, cx: &App) -> Option<TextField> {
+        let focused = window.focused(cx)?;
+        [TextField::RommUrl, TextField::TmdbKey]
+            .into_iter()
+            .find(|field| self.inputs.text(*field).read(cx).focus_handle(cx) == focused)
+    }
+
     fn text_field_focused(&self, window: &Window, cx: &App) -> bool {
-        let Some(focused) = window.focused(cx) else {
-            return false;
+        self.focused_field(window, cx).is_some()
+    }
+
+    /// Puts the clipboard into the focused field, and says so when there is
+    /// nothing to put.
+    ///
+    /// The kit binds Ctrl+V itself; this is the fallback for the two other ways
+    /// a Linux desktop pastes (`Ctrl+Shift+V`, `Shift+Insert`), and it exists
+    /// because a clipboard that cannot be read is otherwise silent - the field
+    /// simply stays empty and the user has no way to tell why.
+    fn paste_into_focused_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(field) = self.focused_field(window, cx) else {
+            self.notice = Some("Select a field with Enter before pasting.".to_string());
+            cx.notify();
+            return;
         };
-        self.inputs
-            .all()
-            .iter()
-            .any(|input| input.read(cx).focus_handle(cx) == focused)
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            self.notice =
+                Some("The clipboard is empty, or this session cannot read it.".to_string());
+            cx.notify();
+            return;
+        };
+        let pasted = text.chars().count();
+        let input = self.inputs.text(field).clone();
+        input.update(cx, |state, cx| state.set_value(text, window, cx));
+        self.notice = Some(format!("Pasted {pasted} character(s)."));
+        cx.notify();
     }
 
     fn sidebar(&self, cx: &Context<Self>, theme: &Theme) -> AnyElement {
@@ -1854,6 +1879,11 @@ fn install_shortcuts(cx: &mut App, view: Entity<SettingsWindow>, window: AnyWind
         KeyBinding::new("left", PreviousPage, None),
         KeyBinding::new("right", NextPage, None),
         KeyBinding::new("enter", Confirm, None),
+        // The kit's input binds Ctrl+V and Cmd+V in its own context. These are
+        // the other two ways a Linux desktop pastes, and they land here so a
+        // clipboard that cannot be read says so instead of doing nothing.
+        KeyBinding::new("ctrl-shift-v", PasteIntoField, None),
+        KeyBinding::new("shift-insert", PasteIntoField, None),
     ]);
 
     // Cursor movement is plain state, so it needs no window; confirming and
@@ -1898,6 +1928,15 @@ fn install_shortcuts(cx: &mut App, view: Entity<SettingsWindow>, window: AnyWind
             });
         });
     });
+    let paste_view = view.clone();
+    cx.on_action(move |_: &PasteIntoField, cx: &mut App| {
+        let view = paste_view.clone();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                view.update(cx, |this, cx| this.paste_into_focused_field(window, cx));
+            });
+        });
+    });
     cx.on_action(move |_: &CloseWindow, cx: &mut App| {
         let view = view.clone();
         cx.defer(move |cx| {
@@ -1911,8 +1950,15 @@ fn install_shortcuts(cx: &mut App, view: Entity<SettingsWindow>, window: AnyWind
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("hearthdeck_settings=info")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                // The platform crates are in the filter on purpose: the pieces
+                // that can fail silently - a clipboard read, a seat capability -
+                // log from gpui, and a window that explains nothing is worse
+                // than a noisy journal.
+                tracing_subscriber::EnvFilter::new(
+                    "hearthdeck_settings=info,gpui=warn,gpui_linux=warn",
+                )
+            }),
         )
         .init();
 
@@ -2307,5 +2353,53 @@ mod render_tests {
 
         let typed = cx.read(|app| view.read(app).inputs.romm_url.read(app).value().to_string());
         assert_eq!(typed, "romm.local", "typing lands in the focused field");
+    }
+
+    #[gpui::test]
+    fn a_pasted_token_lands_in_the_focused_field(cx: &mut TestAppContext) {
+        let (view, cx) = open(cx);
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+
+        // `Connections` → fourth row down is the TMDB key field.
+        cx.simulate_keystrokes("right");
+        for _ in 0..4 {
+            cx.simulate_keystrokes("down");
+        }
+        cx.simulate_keystrokes("enter");
+        draw(cx);
+
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("tmdb-token".to_string()));
+        cx.simulate_keystrokes("ctrl-v");
+
+        let pasted = cx.read(|app| view.read(app).inputs.tmdb_key.read(app).value().to_string());
+        assert_eq!(pasted, "tmdb-token", "Ctrl+V lands in the focused field");
+
+        // The other two Linux paste muscle memories reach the same field, and
+        // they replace what is there rather than silently doing nothing.
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("v4-token".to_string()));
+        cx.simulate_keystrokes("ctrl-shift-v");
+        let replaced = cx.read(|app| view.read(app).inputs.tmdb_key.read(app).value().to_string());
+        assert_eq!(replaced, "v4-token", "Ctrl+Shift+V pastes too");
+    }
+
+    #[gpui::test]
+    fn a_paste_with_nothing_on_the_clipboard_says_so(cx: &mut TestAppContext) {
+        let (view, cx) = open(cx);
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+        cx.simulate_keystrokes("right");
+        cx.simulate_keystrokes("enter");
+        draw(cx);
+
+        cx.simulate_keystrokes("ctrl-shift-v");
+
+        let notice = cx
+            .read(|app| view.read(app).notice.clone())
+            .unwrap_or_default();
+        assert!(
+            notice.contains("clipboard"),
+            "an unreadable clipboard is reported, not silent: {notice:?}"
+        );
     }
 }
