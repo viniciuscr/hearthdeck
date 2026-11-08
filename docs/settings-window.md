@@ -186,13 +186,22 @@ model the iced screens use for their ring cursor. `nav.rs` owns it as a plain
 value with no gpui types, so the rules are tested without a window and the pad
 transport lands by calling the methods the keyboard already calls.
 
-**The controller is not wired yet, on purpose.** The broker grants delivery per
-role, and the library app drops to `Delivery::Observe` when its window loses
-focus (`ownership.rs` returns no d-pad for `Observe`), so the pad goes quiet the
-moment this window takes focus. Wiring it means either the library app keeping
-`Delivery::Frontend` while the child is up and forwarding semantic actions over
-a socket, or a new `Role::Settings` in `hearthdeck-protocol`. Both are decisions
-with their own contract change; neither is hidden inside the window.
+**The controller is forwarded, not re-read.** The broker gives the pad to one
+process, so the window does not open a second controller reader — that would
+evict the library app's connection and create a second navigation vocabulary.
+Instead the library app keeps `Delivery::Frontend` while the child is up, and for
+every semantic action it receives it does one thing: if the settings window is
+running, it writes the action's name to
+`$XDG_RUNTIME_DIR/hearthdeck-settings-input.sock` instead of acting on it. The
+window binds that socket, turns each word into the *same* gpui action its keys are
+bound to (`up` → `MoveUp`, `back` → `CloseWindow`), and dispatches it. The pad and
+the keyboard therefore meet at one handler, and there is no navigation logic in
+the transport at all.
+
+While a text field owns the caret the pad gets only `Back`, which is the same
+order the keyboard's Escape follows: dismiss the field, then leave. A window with
+no socket still runs — the pad is an addition, never a dependency — and a library
+app that drops to another role simply stops forwarding.
 
 ## Why not the kit's `setting::Settings` component
 
@@ -242,8 +251,10 @@ installs the binary beside the other Hearthdeck binaries.
 
 ## Known limits
 
-- **No controller input yet.** See above: it needs a transport decision before
-  it is a code change.
+- **The pad reaches the window through the library app.** If the library app is
+  not running — the window started by hand — there is no controller input, only a
+  keyboard. `Keyboard` and the other library-only actions are not forwarded; the
+  window does not open an on-screen keyboard of its own.
 - **Nothing is a preview any more.** Every row writes through the daemon. The one
   asymmetry left is transport: TMDB's key goes to the loopback admin listener
   because the contract serves it there, while everything else uses the API port

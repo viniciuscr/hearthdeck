@@ -3,8 +3,8 @@
 //! Settings ships as its own GPUI process: gpui renders through its own window
 //! and event loop, so it cannot be mounted inside an iced `Element`. The split
 //! is drawn where it is cheap - the window only reads - and this module owns the
-//! half of it the shell has to know: which binary, whether to launch it, and
-//! whether one is already up.
+//! half of it the shell has to know: which binary, whether to launch it, whether
+//! one is already up, and how the pad reaches it.
 //!
 //! Two environment variables decide, and neither is needed in a normal start:
 //!
@@ -12,14 +12,29 @@
 //!   one, for running an uninstalled build.
 //! - `HEARTHDECK_SETTINGS_UI=iced` -- the rollback: keep the in-app page even
 //!   when the window is installed.
+//!
+//! The pad is forwarded, not re-read: the broker gives the controller to one
+//! process (this one), so this module relays the semantic action it already
+//! received - `up`, `confirm`, `back` - over a socket the window binds. The
+//! window turns each word into the same action its keys are bound to, so both
+//! surfaces run one navigation vocabulary.
 
+use std::io::Write;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Sender, channel};
+use std::time::Duration;
+
+use crate::subscriptions::gamepad::GamepadEvent;
 
 /// Where the package installs the settings window.
 const PACKAGED_BINARY: &str = "/usr/lib/hearthdeck/hearthdeck-settings";
+
+/// The socket the window binds, named in the child's environment.
+const INPUT_ENV: &str = "HEARTHDECK_SETTINGS_INPUT";
 
 /// What opening Settings did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +58,8 @@ pub struct SettingsWindow {
     /// per launch is cheap here - the window opens once in a while - and it
     /// means no zombie and no `Child` bookkeeping in `update`.
     running: Option<Arc<AtomicBool>>,
+    /// Where forwarded pad actions go while the window is up.
+    input: Option<Sender<GamepadEvent>>,
 }
 
 impl SettingsWindow {
@@ -70,6 +87,7 @@ impl SettingsWindow {
             binary,
             forced_in_app,
             running: None,
+            input: None,
         }
     }
 
@@ -78,6 +96,25 @@ impl SettingsWindow {
     #[cfg(test)]
     pub fn in_app() -> Self {
         Self::from_parts(None, true)
+    }
+
+    /// Whether the window is up, which is what decides whether the shell keeps
+    /// the pad to itself or hands it on.
+    pub fn is_running(&self) -> bool {
+        self.is_open()
+    }
+
+    /// Hand one semantic action to the window, if it is up. `false` means the
+    /// shell keeps it - no window, or the write failed - so the caller's normal
+    /// navigation runs unchanged.
+    pub fn forward(&self, event: GamepadEvent) -> bool {
+        if !self.is_open() {
+            return false;
+        }
+        let Some(input) = &self.input else {
+            return false;
+        };
+        input.send(event).is_ok()
     }
 
     /// Open the settings surface, launching the window when there is one.
@@ -91,7 +128,12 @@ impl SettingsWindow {
         if self.is_open() {
             return Open::AlreadyRunning;
         }
-        let child = match Command::new(&binary).spawn() {
+        let socket = input_socket();
+        let mut command = Command::new(&binary);
+        if let Some(socket) = &socket {
+            command.env(INPUT_ENV, socket);
+        }
+        let child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 tracing::warn!(
@@ -117,6 +159,7 @@ impl SettingsWindow {
             flag.store(false, Ordering::Relaxed);
         });
         self.running = Some(running);
+        self.input = socket.map(forward_actions);
         Open::Launched
     }
 
@@ -127,10 +170,86 @@ impl SettingsWindow {
     }
 }
 
+/// Where the window binds its input socket. `None` when there is no runtime
+/// directory, which only means the pad cannot reach it.
+fn input_socket() -> Option<PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|dir| PathBuf::from(dir).join("hearthdeck-settings-input.sock"))
+}
+
+/// Relays forwarded actions to the window on its own thread, connecting when the
+/// first one arrives - the window binds its socket a moment after it starts.
+fn forward_actions(socket: PathBuf) -> Sender<GamepadEvent> {
+    let (sender, receiver) = channel::<GamepadEvent>();
+    std::thread::spawn(move || {
+        let mut stream: Option<UnixStream> = None;
+        while let Ok(event) = receiver.recv() {
+            let Some(name) = crate::subscriptions::gamepad::name(event) else {
+                continue;
+            };
+            if stream.is_none() {
+                stream = connect(&socket);
+            }
+            let Some(active) = stream.as_mut() else {
+                continue;
+            };
+            if writeln!(active, "{name}").is_err() {
+                stream = None;
+            }
+        }
+    });
+    sender
+}
+
+/// A bounded wait: the window binds after `spawn` returns, and a window that
+/// never comes up must not leave this thread retrying forever.
+fn connect(socket: &Path) -> Option<UnixStream> {
+    for _ in 0..20 {
+        if let Ok(stream) = UnixStream::connect(socket) {
+            return Some(stream);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Open, SettingsWindow};
+    use super::{Open, SettingsWindow, forward_actions};
+    use crate::subscriptions::gamepad::GamepadEvent;
+    use std::io::BufRead as _;
     use std::path::PathBuf;
+
+    /// With no window up the shell keeps the pad: forwarding reports it did not
+    /// take the action, so normal navigation runs untouched.
+    #[test]
+    fn nothing_is_forwarded_when_no_window_is_up() {
+        assert!(!SettingsWindow::in_app().forward(GamepadEvent::Confirm));
+    }
+
+    /// The relay writes the words the window's parser reads, in order, over a
+    /// real socket - the two halves of the contract, together.
+    #[test]
+    fn forwarded_actions_reach_the_socket_in_order() {
+        let path = std::env::temp_dir().join(format!(
+            "hearthdeck-forward-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("a listening socket");
+
+        let sender = forward_actions(path.clone());
+        sender.send(GamepadEvent::MoveDown).expect("a send");
+        sender.send(GamepadEvent::Confirm).expect("a send");
+        drop(sender);
+
+        let (stream, _) = listener.accept().expect("the relay connects");
+        let mut lines = std::io::BufReader::new(stream).lines();
+        assert_eq!(lines.next().expect("a line").expect("a line"), "down");
+        assert_eq!(lines.next().expect("a line").expect("a line"), "confirm");
+        let _ = std::fs::remove_file(&path);
+    }
 
     /// With nothing installed and nothing named, the destination stays the
     /// in-app page: the window is an addition, never a dependency.

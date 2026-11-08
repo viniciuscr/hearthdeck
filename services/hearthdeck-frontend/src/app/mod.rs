@@ -958,6 +958,13 @@ impl Application for App {
                 }
             }
             Message::GamepadEvent(event) => {
+                // The settings window is up: the pad is driving it, not the page
+                // behind it. The window speaks the same action vocabulary, so
+                // this is one write - not a second navigation scheme, and not a
+                // second controller reader.
+                if self.settings_window.forward(event) {
+                    return Task::none();
+                }
                 // A text field owns the caret, so the on-screen keyboard is up
                 // and the pad is how its keys get pressed. Nothing else reaches
                 // the screen until the caret is gone - and Back is the one
@@ -1142,7 +1149,13 @@ impl Application for App {
             use hearthdeck_protocol::input::Delivery;
             let delivery = if self.text_entry.is_active() {
                 Delivery::TextEntry
-            } else if self.input_ownership.frontend_has_control() || self.romm.sign_in.is_some() {
+            } else if self.input_ownership.frontend_has_control()
+                || self.romm.sign_in.is_some()
+                // The settings window takes the compositor's focus, but it has
+                // no controller reader of its own: the shell keeps the pad and
+                // forwards it, so it must keep asking for it.
+                || self.settings_window.is_running()
+            {
                 Delivery::Frontend
             } else if matches!(
                 self.input_ownership,

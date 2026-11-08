@@ -27,16 +27,17 @@
 //! the rows attach to the same three steps, one at a time.
 
 mod daemon;
+mod input;
 mod nav;
 
 use std::ffi::CString;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context, Entity,
-    Focusable as _, InteractiveElement as _, IntoElement, KeyBinding, ListAlignment, ListState,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, div, list, point,
+    Action as _, AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context,
+    Entity, Focusable as _, InteractiveElement as _, IntoElement, KeyBinding, ListAlignment,
+    ListState, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, TitlebarOptions, Window, WindowBounds, WindowOptions, div, list, point,
     prelude::FluentBuilder as _, px, size,
 };
 use gpui_component::alert::Alert;
@@ -1781,6 +1782,66 @@ impl Render for SettingsWindow {
 /// Every key this window answers to. `main` and the render tests both call it,
 /// so the path under test is the path that ships.
 ///
+/// The gpui action a forwarded pad press means. It is the *same* action the
+/// keyboard binds to, so the pad and the keys reach one handler, not two.
+fn pad_action(remote: input::Remote) -> Box<dyn gpui::Action> {
+    use input::Remote;
+    match remote {
+        Remote::Up => MoveUp.boxed_clone(),
+        Remote::Down => MoveDown.boxed_clone(),
+        Remote::Left => PreviousPage.boxed_clone(),
+        Remote::Right => NextPage.boxed_clone(),
+        Remote::Confirm => Confirm.boxed_clone(),
+        Remote::Back => CloseWindow.boxed_clone(),
+    }
+}
+
+/// Reads what the library app forwards and dispatches it as the action that key
+/// would have produced.
+///
+/// While a text field owns the caret the pad gets only Back - the same order the
+/// keyboard's Escape follows: dismiss the field, then leave.
+fn pump_pad(
+    cx: &mut App,
+    view: Entity<SettingsWindow>,
+    window: AnyWindowHandle,
+    received: std::sync::mpsc::Receiver<input::Remote>,
+) {
+    let received = std::sync::Arc::new(std::sync::Mutex::new(received));
+    cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+        loop {
+            // A short wait keeps this off the main thread without holding one of
+            // the executor's workers for the window's whole life.
+            let waiting = std::sync::Arc::clone(&received);
+            let remote = cx
+                .background_executor()
+                .spawn(async move {
+                    let Ok(receiver) = waiting.lock() else {
+                        return None;
+                    };
+                    receiver
+                        .recv_timeout(std::time::Duration::from_millis(100))
+                        .ok()
+                })
+                .await;
+            let Some(remote) = remote else {
+                continue;
+            };
+            let _ = window.update(cx, |_, window, cx| {
+                let typing = {
+                    let this = view.read(cx);
+                    this.text_field_focused(window, cx)
+                };
+                if typing && remote != input::Remote::Back {
+                    return;
+                }
+                window.dispatch_action(pad_action(remote), cx);
+            });
+        }
+    })
+    .detach();
+}
+
 /// The window handle is captured here rather than asked for with
 /// `App::active_window()`: that asks the platform which of *its* windows is
 /// active, and a fullscreen kiosk window is not always reported as one. The
@@ -1901,7 +1962,13 @@ fn main() {
                 }),
             };
             let view = cx.new(|_| SettingsWindow::new(snapshot, disk, inputs));
-            install_shortcuts(cx, view.clone(), window.window_handle());
+            let window_handle = window.window_handle();
+            install_shortcuts(cx, view.clone(), window_handle);
+            // The pad, when the library app forwarded one. A missing socket is
+            // not an error: the window is fully usable from a keyboard.
+            if let Some(received) = input::listen() {
+                pump_pad(cx, view.clone(), window_handle, received);
+            }
 
             cx.new(|cx| gpui_base::Root::new(view, window, cx))
         });
@@ -1978,6 +2045,30 @@ mod tests {
                     rows: labels.iter().map(|label| plain_row(label)).collect(),
                 })
                 .collect(),
+        }
+    }
+
+    #[test]
+    fn every_pad_action_is_the_action_the_keyboard_binds() {
+        use super::input::Remote;
+        use super::{CloseWindow, Confirm, MoveDown, MoveUp, NextPage, PreviousPage, pad_action};
+        use std::any::TypeId;
+
+        // The pad does not get its own handlers: each word becomes the very
+        // action `install_shortcuts` binds a key to, so both reach one place.
+        for (remote, expected) in [
+            (Remote::Up, TypeId::of::<MoveUp>()),
+            (Remote::Down, TypeId::of::<MoveDown>()),
+            (Remote::Left, TypeId::of::<PreviousPage>()),
+            (Remote::Right, TypeId::of::<NextPage>()),
+            (Remote::Confirm, TypeId::of::<Confirm>()),
+            (Remote::Back, TypeId::of::<CloseWindow>()),
+        ] {
+            assert_eq!(
+                pad_action(remote).as_any().type_id(),
+                expected,
+                "{remote:?} maps to its own action"
+            );
         }
     }
 
@@ -2073,7 +2164,7 @@ mod tests {
 #[cfg(test)]
 mod render_tests {
     use super::*;
-    use gpui::{Action as _, TestAppContext, VisualTestContext};
+    use gpui::{TestAppContext, VisualTestContext};
 
     fn open(cx: &mut TestAppContext) -> (Entity<SettingsWindow>, &mut VisualTestContext) {
         open_with(Snapshot::default(), cx)

@@ -33,6 +33,7 @@ events still pass through the existing global Back and focus contracts.
 | State | Delivery |
 | --- | --- |
 | Frontend focused, no capture | Semantic events to frontend; compatibility output off |
+| Settings window open over the frontend | Semantic events to the frontend, which forwards them to the window; compatibility output off |
 | Launch handoff or unrelated window focused | No frontend navigation; release synthetic keys |
 | Native game | Physical gamepad stays available to game; observe system chords only |
 | Desktop-profile app | Existing keyboard/mouse mapping; no frontend navigation |
