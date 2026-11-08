@@ -137,9 +137,8 @@ for a refusal, `Alert::info` for a result; the per-row failure tag is still open
 and a per-row `Failed` tag now marks the action that was refused. PL-01's
 fullness colour is the only part of it left.
 
-**Still open in this phase:** CT-05 (the missing-systems list, which needs data
-the snapshot does not carry), CT-06 (localisation), CS-07 (motion), PL-01's
-fullness colour, and the CS-05 / FB-04 / CT-07 / PL-02 / PL-03 nits.
+**Still open in this phase:** CT-06 (localisation), CS-07 (motion), and the
+CS-05 / FB-04 / CT-07 / PL-03 nits.
 
 - [x] **FX-05 · one tone covers six states.** `Tone::Off` is "Off", "Idle",
       "Timer off", "Unknown", "Not installed" and "Unavailable"; "Running" wears
@@ -179,14 +178,15 @@ fullness colour, and the CS-05 / FB-04 / CT-07 / PL-02 / PL-03 nits.
 - [x] **CT-04 · "Enable off-site backup" under an "Off-site backup" card**, plus a
       chip repeating the switch. Fix: row label "Nightly copy"; chip reports the
       timer — `Scheduled` / `Not scheduled`.
-- [ ] **CT-05 · Emulation hides what is missing** ("3 of 12 systems ready") and
-      offers a blind install. Fix: one row per missing system, capped at 5 + "and
-      4 more".
+- [x] **CT-05 · Emulation hides what is missing** ("3 of 12 systems ready") and
+      offers a blind install. Shipped: the readiness read now carries each
+      system's first missing thing (the core package, or the BIOS file), the card
+      lists up to five as "SNES — core bsnes" and one "and N more" row.
 - [ ] **CT-06 · no localisation.** Every string is `&'static str`; iced is Fluent.
       Fix: keep the shape, source from keys.
 - [x] **PL-01 · storage ring is 48px with a 12px percentage and no total.** Shipped
       64px, 16px percentage, "X free of Y", "Home volume". The fullness colour is
-      still open.
+      now colours by fullness: green under 80%, amber to 90%, red above.
 - [ ] **CS-04 · wrong token family**: `theme.ring` as a row border, sidebar using
       `foreground` instead of `sidebar_foreground`/`sidebar_accent_foreground`.
 - [ ] **CS-07 · no motion on navigation, but the switch animates.** Fix: 180ms

@@ -886,26 +886,48 @@ impl SettingsWindow {
             },
             Page {
                 kind: PageKind::Emulation,
-                groups: vec![Group {
-                    title: "Readiness",
-                    status: None,
-                    rows: vec![
-                        Row {
-                            label: "Systems",
-                            description: Some("What RetroArch can start right now."),
-                            control: Control::Fact(Value::Text(readiness)),
-                        },
-                        Row {
-                            label: "Missing cores",
-                            description: Some("Cores the daemon knows how to fetch."),
-                            control: Control::Action(RowAction::InstallCores),
-                        },
-                        Row {
-                            label: "BIOS files",
-                            description: Some("Extra firmware, for the systems that need it."),
-                            control: Control::Action(RowAction::SyncBios),
-                        },
-                    ],
+                groups: vec![{
+                    let mut rows = vec![Row {
+                        label: "Systems",
+                        description: Some("What RetroArch can start right now."),
+                        control: Control::Fact(Value::Text(readiness)),
+                    }];
+                    // Name what is missing, so "Install missing cores" is a
+                    // decision and not a guess. Five is as many as a card can
+                    // carry before it stops being scannable.
+                    for system in self.snapshot.missing_systems.iter().take(5) {
+                        rows.push(Row {
+                            label: "Not ready",
+                            description: None,
+                            control: Control::Fact(Value::Text(format!(
+                                "{} — {}",
+                                system.name, system.reason
+                            ))),
+                        });
+                    }
+                    let more = self.snapshot.missing_systems.len().saturating_sub(5);
+                    if more > 0 {
+                        rows.push(Row {
+                            label: "Not ready",
+                            description: None,
+                            control: Control::Fact(Value::Text(format!("and {more} more"))),
+                        });
+                    }
+                    rows.push(Row {
+                        label: "Missing cores",
+                        description: Some("Cores the daemon knows how to fetch."),
+                        control: Control::Action(RowAction::InstallCores),
+                    });
+                    rows.push(Row {
+                        label: "BIOS files",
+                        description: Some("Extra firmware, for the systems that need it."),
+                        control: Control::Action(RowAction::SyncBios),
+                    });
+                    Group {
+                        title: "Readiness",
+                        status: None,
+                        rows,
+                    }
                 }],
             },
             Page {
@@ -2502,7 +2524,13 @@ impl SettingsWindow {
                 .child(
                     ProgressCircle::new("storage")
                         .value(*used_percent)
-                        .color(theme.progress_bar)
+                        .color(if *used_percent >= 90.0 {
+                            theme.danger
+                        } else if *used_percent >= 80.0 {
+                            theme.warning
+                        } else {
+                            theme.success
+                        })
                         .w(px(RING_SIZE))
                         .h(px(RING_SIZE))
                         .child(
@@ -3458,6 +3486,36 @@ mod render_tests {
     /// The list item at `index`, by the selector its element carries.
     fn selector(index: usize) -> &'static str {
         Box::leak(format!("list-item-{index}").into_boxed_str())
+    }
+
+    /// The Emulation card names what is missing, so the install action is a
+    /// decision rather than a blind press.
+    #[gpui::test]
+    fn the_emulation_page_names_what_is_missing(cx: &mut TestAppContext) {
+        let snapshot = Snapshot {
+            daemon: true,
+            missing_systems: vec![daemon::MissingSystem {
+                name: "SNES".to_string(),
+                reason: "core bsnes".to_string(),
+            }],
+            ..Snapshot::default()
+        };
+        let (view, cx) = open_with(snapshot, cx);
+
+        let page = cx.read(|app| {
+            view.read(app)
+                .pages()
+                .into_iter()
+                .find(|page| page.kind == PageKind::Emulation)
+                .expect("an emulation page")
+        });
+        let named = page.groups[0].rows.iter().any(|row| {
+            matches!(
+                &row.control,
+                Control::Fact(Value::Text(text)) if text.contains("SNES — core bsnes")
+            )
+        });
+        assert!(named, "the card says which system and what it needs");
     }
 
     /// A daemon that never answered must not be rendered as the user's

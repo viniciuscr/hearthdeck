@@ -42,6 +42,9 @@ pub struct Snapshot {
     pub stremio_linked_at: Option<String>,
     pub ready_systems: usize,
     pub total_systems: usize,
+    /// The systems that cannot start, with the first thing each is missing. The
+    /// Emulation card names them so "Install missing cores" is not a blind press.
+    pub missing_systems: Vec<MissingSystem>,
     /// `None` when the daemon did not answer the categorization read: the row
     /// then shows nothing rather than claiming the feature is off.
     pub categorization: Option<Categorization>,
@@ -542,14 +545,26 @@ impl Client {
     }
 
     fn readiness(&self) -> Result<(usize, usize), Error> {
+        let report = self.readiness_report()?;
+        Ok((report.ready, report.total))
+    }
+
+    fn readiness_report(&self) -> Result<Readiness, Error> {
         let systems: Vec<RetroSystem> = self.get("/v1/retro/readiness")?;
-        Ok((
-            systems
-                .iter()
-                .filter(|system| system.core.installed)
-                .count(),
-            systems.len(),
-        ))
+        let mut report = Readiness {
+            total: systems.len(),
+            ..Readiness::default()
+        };
+        for system in &systems {
+            match missing_reason(system) {
+                Some(reason) => report.missing.push(MissingSystem {
+                    name: system.name(),
+                    reason,
+                }),
+                None => report.ready += 1,
+            }
+        }
+        Ok(report)
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -579,11 +594,11 @@ impl Client {
                 None
             }
         };
-        let (ready_systems, total_systems) = match self.readiness() {
-            Ok(counts) => counts,
+        let (ready_systems, total_systems, missing_systems) = match self.readiness_report() {
+            Ok(report) => (report.ready, report.total, report.missing),
             Err(error) => {
                 tracing::warn!(%error, "retro readiness could not be read");
-                (0, 0)
+                (0, 0, Vec::new())
             }
         };
         let categorization = match self.categorization() {
@@ -626,6 +641,7 @@ impl Client {
             stremio_linked_at,
             ready_systems,
             total_systems,
+            missing_systems,
             categorization,
             tmdb_configured,
             backup,
@@ -715,12 +731,74 @@ struct RommSettings {
 
 #[derive(Deserialize)]
 struct RetroSystem {
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    platform: String,
     core: RetroCore,
+    #[serde(default)]
+    bios: Vec<RetroBiosFile>,
 }
 
 #[derive(Deserialize)]
 struct RetroCore {
     installed: bool,
+    #[serde(default)]
+    package: String,
+}
+
+#[derive(Deserialize)]
+struct RetroBiosFile {
+    #[serde(default)]
+    filename: String,
+    #[serde(default)]
+    required: bool,
+    #[serde(default)]
+    present: bool,
+    #[serde(default)]
+    verified: bool,
+}
+
+impl RetroSystem {
+    fn name(&self) -> String {
+        if self.display_name.is_empty() {
+            self.platform.clone()
+        } else {
+            self.display_name.clone()
+        }
+    }
+}
+
+/// The first thing a system is missing, in the order the page can fix it: a core
+/// first, then a required BIOS file. `None` means it can start now.
+fn missing_reason(system: &RetroSystem) -> Option<String> {
+    if !system.core.installed {
+        return Some(if system.core.package.is_empty() {
+            "missing core".to_string()
+        } else {
+            format!("core {}", system.core.package)
+        });
+    }
+    let file = system
+        .bios
+        .iter()
+        .find(|file| file.required && (!file.present || !file.verified))?;
+    Some(format!("BIOS {}", file.filename))
+}
+
+/// What can start, and what cannot and why.
+#[derive(Clone, Debug, Default)]
+pub struct Readiness {
+    pub ready: usize,
+    pub total: usize,
+    pub missing: Vec<MissingSystem>,
+}
+
+/// A system that cannot start yet, and the first thing it is missing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissingSystem {
+    pub name: String,
+    pub reason: String,
 }
 
 #[cfg(test)]
@@ -835,6 +913,36 @@ mod tests {
 
         let requests = server.join().expect("the stub thread");
         assert!(requests[0].starts_with("POST /v1/backup/run"));
+    }
+
+    #[test]
+    fn a_system_names_the_first_thing_it_is_missing() {
+        let systems: Vec<super::RetroSystem> = serde_json::from_str(
+            r#"[
+                {"platform":"snes","display_name":"SNES","core":{"installed":false,"package":"bsnes"},"bios":[]},
+                {"platform":"psx","display_name":"","core":{"installed":true,"package":"swanstation"},"bios":[{"filename":"scph5501.bin","required":true,"present":false,"verified":false}]},
+                {"platform":"nes","display_name":"NES","core":{"installed":true,"package":"mesen"},"bios":[]}
+            ]"#,
+        )
+        .expect("readiness");
+
+        assert_eq!(systems[0].name(), "SNES");
+        assert_eq!(
+            super::missing_reason(&systems[0]).as_deref(),
+            Some("core bsnes"),
+            "a missing core comes first: it is what Install fixes"
+        );
+        assert_eq!(
+            systems[1].name(),
+            "psx",
+            "a system with no display name falls back to its platform"
+        );
+        assert_eq!(
+            super::missing_reason(&systems[1]).as_deref(),
+            Some("BIOS scph5501.bin"),
+            "the console runs, so the BIOS is what it needs"
+        );
+        assert_eq!(super::missing_reason(&systems[2]), None, "nothing missing");
     }
 
     #[test]
