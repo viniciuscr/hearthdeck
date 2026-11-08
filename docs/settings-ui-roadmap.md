@@ -137,8 +137,9 @@ for a refusal, `Alert::info` for a result; the per-row failure tag is still open
 and a per-row `Failed` tag now marks the action that was refused. PL-01's
 fullness colour is the only part of it left.
 
-**Still open in this phase:** CT-06 (localisation) and PL-03 (the sidebar icon
-size, which needs a `Size` the kit does not export).
+**Still open in this phase:** CT-06 (localisation — a whole-window change, not a
+polish item) and PL-03 (the sidebar icon size, which needs a `Size` the kit does
+not export).
 
 - [x] **FX-05 · one tone covers six states.** `Tone::Off` is "Off", "Idle",
       "Timer off", "Unknown", "Not installed" and "Unavailable"; "Running" wears
@@ -187,8 +188,9 @@ size, which needs a `Size` the kit does not export).
 - [x] **PL-01 · storage ring is 48px with a 12px percentage and no total.** Shipped
       64px, 16px percentage, "X free of Y", "Home volume". The fullness colour is
       now colours by fullness: green under 80%, amber to 90%, red above.
-- [ ] **CS-04 · wrong token family**: `theme.ring` as a row border, sidebar using
-      `foreground` instead of `sidebar_foreground`/`sidebar_accent_foreground`.
+- [x] **CS-04 · wrong token family**: the row border uses `list_active_border`
+      (Phase 3) and the rail now paints with `sidebar_foreground` /
+      `sidebar_accent_foreground` instead of the page's text tokens.
 - [x] **CS-07 · no motion on navigation, but the switch animates.** Shipped: a
       180ms `PAGE_FADE` of the list only (a fade-in - the outgoing page is replaced
       in the same frame, and the first paint fades too), keyed by page index so a

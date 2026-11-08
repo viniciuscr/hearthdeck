@@ -2127,6 +2127,7 @@ impl SettingsWindow {
                     .pb_4()
                     .text_size(px(TYPE_CARD))
                     .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.sidebar_foreground)
                     .child("Settings"),
             )
             .children(PageKind::ALL.iter().enumerate().map(|(index, kind)| {
@@ -2141,18 +2142,18 @@ impl SettingsWindow {
                     .rounded(theme.radius)
                     .when(active, |this| this.bg(theme.sidebar_accent))
                     .child(Icon::new(kind.icon()).text_color(if active {
-                        theme.foreground
+                        theme.sidebar_accent_foreground
                     } else {
-                        theme.muted_foreground
+                        theme.sidebar_foreground
                     }))
                     .child(
                         div()
                             .text_size(px(TYPE_LABEL))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if active {
-                                theme.foreground
+                                theme.sidebar_accent_foreground
                             } else {
-                                theme.muted_foreground
+                                theme.sidebar_foreground
                             })
                             .child(kind.title()),
                     )
@@ -2167,7 +2168,7 @@ impl SettingsWindow {
             .child(
                 div()
                     .text_size(px(TYPE_CAPTION))
-                    .text_color(theme.muted_foreground)
+                    .text_color(theme.sidebar_foreground)
                     .child(if self.snapshot.daemon {
                         "Connected to the daemon"
                     } else {
