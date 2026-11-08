@@ -297,8 +297,9 @@ pub struct BiosFailure {
 }
 
 /// How many systems the daemon can start right now, out of how many it knows.
-pub fn readiness() -> Result<(usize, usize), Error> {
-    Client::connect()?.readiness()
+/// What can start, and what cannot and why, for the card that lists both.
+pub fn read_readiness() -> Result<Readiness, Error> {
+    Client::connect()?.readiness_report()
 }
 
 struct Client {
@@ -542,11 +543,6 @@ impl Client {
             "/v1/categorization/disable"
         })?;
         self.categorization()
-    }
-
-    fn readiness(&self) -> Result<(usize, usize), Error> {
-        let report = self.readiness_report()?;
-        Ok((report.ready, report.total))
     }
 
     fn readiness_report(&self) -> Result<Readiness, Error> {

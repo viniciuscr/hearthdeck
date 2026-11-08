@@ -1870,7 +1870,7 @@ impl SettingsWindow {
         cx.spawn(async move |this, cx| {
             let (report, readiness) = cx
                 .background_executor()
-                .spawn(async { (daemon::install_cores(), daemon::readiness().ok()) })
+                .spawn(async { (daemon::install_cores(), daemon::read_readiness().ok()) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = None;
@@ -1905,7 +1905,7 @@ impl SettingsWindow {
         cx.spawn(async move |this, cx| {
             let (report, readiness) = cx
                 .background_executor()
-                .spawn(async { (daemon::sync_bios(), daemon::readiness().ok()) })
+                .spawn(async { (daemon::sync_bios(), daemon::read_readiness().ok()) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = None;
@@ -1955,10 +1955,14 @@ impl SettingsWindow {
         .detach();
     }
 
-    fn apply_readiness(&mut self, readiness: Option<(usize, usize)>) {
-        if let Some((ready, total)) = readiness {
-            self.snapshot.ready_systems = ready;
-            self.snapshot.total_systems = total;
+    /// Applies a readiness read after an install or a BIOS sync: the counts *and*
+    /// the list of what is still missing, or the card would claim a fix that the
+    /// names beside it contradict.
+    fn apply_readiness(&mut self, readiness: Option<daemon::Readiness>) {
+        if let Some(readiness) = readiness {
+            self.snapshot.ready_systems = readiness.ready;
+            self.snapshot.total_systems = readiness.total;
+            self.snapshot.missing_systems = readiness.missing;
         }
     }
 
