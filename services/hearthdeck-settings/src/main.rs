@@ -149,6 +149,7 @@ enum RowAction {
     StremioLink,
     StremioUnlink,
     SaveTmdbKey,
+    ImportTmdbKey,
     RestoreRails,
     ScanLibrary,
     InstallCores,
@@ -164,6 +165,7 @@ impl RowAction {
             Self::StremioLink => "Link account",
             Self::StremioUnlink => "Unlink",
             Self::SaveTmdbKey => "Save key",
+            Self::ImportTmdbKey => "Read key from file",
             Self::RestoreRails => "Restore dashboard",
             Self::ScanLibrary => "Scan now",
             Self::InstallCores => "Install missing cores",
@@ -595,6 +597,23 @@ impl SettingsWindow {
                                 ),
                                 control: Control::Action(RowAction::SaveTmdbKey),
                             },
+                            // A file is the way in when the clipboard cannot reach
+                            // this window: put the token there with scp or a shell,
+                            // then read it here. No path to type on a television.
+                            Row {
+                                label: "Key file",
+                                description: Some("Where this window looks for a token to read."),
+                                control: Control::Fact(Value::Text(
+                                    tmdb_key_file()
+                                        .map(|path| path.display().to_string())
+                                        .unwrap_or_else(|| "no home directory".to_string()),
+                                )),
+                            },
+                            Row {
+                                label: "Read key from file",
+                                description: Some("Imports the token above and saves it."),
+                                control: Control::Action(RowAction::ImportTmdbKey),
+                            },
                         ],
                     },
                 ],
@@ -713,6 +732,7 @@ impl SettingsWindow {
             RowAction::StremioLink => self.start_link(LinkService::Stremio, cx),
             RowAction::StremioUnlink => self.unlink(LinkService::Stremio, cx),
             RowAction::SaveTmdbKey => self.save_tmdb_key(cx),
+            RowAction::ImportTmdbKey => self.import_tmdb_key(cx),
             RowAction::InstallCores => self.install_cores(cx),
             RowAction::SyncBios => self.sync_bios(cx),
             RowAction::RestoreRails => self.restore_rails(cx),
@@ -1123,8 +1143,48 @@ impl SettingsWindow {
         .detach();
     }
 
-    /// Installs the cores the daemon's readiness report is missing, then re-reads
-    /// readiness so the page shows what can play now.
+    /// Saves the token from [`tmdb_key_file`]. The window never asks for a path:
+    /// typing one on a television is the problem this exists to avoid.
+    fn import_tmdb_key(&mut self, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
+        let Some(path) = tmdb_key_file() else {
+            self.notice = Some("No home directory to read a key file from.".to_string());
+            cx.notify();
+            return;
+        };
+        self.busy = Some(RowAction::ImportTmdbKey);
+        self.notice = Some(format!("Reading {}...", path.display()));
+        cx.notify();
+        let shown = path.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let key = read_key_file(&path)?;
+                    daemon::save_tmdb_key(key).map_err(|error| error.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = None;
+                match result {
+                    Ok(()) => {
+                        this.snapshot.tmdb_configured = Some(true);
+                        this.notice =
+                            Some(format!("The TMDB key was saved from {}.", shown.display()));
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "the TMDB key file could not be used");
+                        this.notice = Some(format!("TMDB key not read: {error}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn install_cores(&mut self, cx: &mut Context<Self>) {
         if self.busy.is_some() {
             return;
@@ -1656,6 +1716,27 @@ fn clear_field(cx: &mut Context<SettingsWindow>, field: &Entity<InputState>) {
     });
 }
 
+/// Where a token is read from when the clipboard cannot reach this window:
+/// `HEARTHDECK_TMDB_KEY_FILE`, else `tmdb.key` in the home directory. A file can
+/// be put there with `scp` or a shell, which a television cannot do for itself.
+fn tmdb_key_file() -> Option<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("HEARTHDECK_TMDB_KEY_FILE") {
+        return Some(std::path::PathBuf::from(path));
+    }
+    std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join("tmdb.key"))
+}
+
+/// The token a key file holds, trimmed. A file of spaces is not a key.
+fn read_key_file(path: &std::path::Path) -> Result<String, String> {
+    let text =
+        std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let key = text.trim();
+    if key.is_empty() {
+        return Err(format!("{} is empty", path.display()));
+    }
+    Ok(key.to_string())
+}
+
 /// What an install report says in one line, naming the first package that
 /// failed so the line is something to act on.
 fn describe_install(report: &daemon::CoreInstall) -> String {
@@ -2092,6 +2173,34 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn a_key_file_is_trimmed_and_an_empty_one_is_refused() {
+        let path = std::env::temp_dir().join(format!(
+            "hearthdeck-key-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+
+        std::fs::write(&path, "  k3y-t0ken\n").expect("a key file");
+        assert_eq!(
+            super::read_key_file(&path),
+            Ok("k3y-t0ken".to_string()),
+            "the token is trimmed of its newline"
+        );
+
+        std::fs::write(&path, "   \n\n").expect("an empty key file");
+        assert!(
+            super::read_key_file(&path).is_err(),
+            "a file of spaces is not a key"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            super::read_key_file(&path).is_err(),
+            "a missing file is reported, not panicked on"
+        );
     }
 
     #[test]

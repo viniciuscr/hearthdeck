@@ -192,6 +192,16 @@ includes `gpui` and `gpui_linux` warnings for the same reason — a clipboard re
 or seat capability that fails is logged by the platform, and the journal is the
 only place it would ever show up.
 
+**The clipboard is not the only way in.** A desktop whose X11↔Wayland clipboard
+bridge is missing (an XWayland Firefox feeding a native Wayland client) will hand
+this window nothing, however many shortcuts are bound — that bridge belongs to
+the compositor, not to this code. So the TMDB card also carries a *key file* row
+and a **Read key from file** action: the path is `HEARTHDECK_TMDB_KEY_FILE`, else
+`~/tmdb.key`, and the token is trimmed and saved through the same admin-port write
+the field uses. The path is shown, never typed — putting the file there is the job
+of `scp` or a shell, both of which work from a terminal where clipboard paste is
+not in question.
+
 The cursor is a painted `selected` position, not platform focus — the same
 model the iced screens use for their ring cursor. `nav.rs` owns it as a plain
 value with no gpui types, so the rules are tested without a window and the pad
