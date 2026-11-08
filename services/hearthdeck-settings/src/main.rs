@@ -615,7 +615,7 @@ impl SettingsWindow {
                 (
                     "Reading",
                     "Reading the daemon and this machine.",
-                    Tone::Attention,
+                    Tone::Busy,
                 )
             } else {
                 (
@@ -786,7 +786,7 @@ impl SettingsWindow {
                             .as_ref()
                             .is_some_and(|pending| pending.service == LinkService::Stremio)
                         {
-                            ("Waiting", Tone::Attention)
+                            ("Waiting", Tone::Busy)
                         } else {
                             ("Not linked", Tone::Off)
                         }),
@@ -1195,12 +1195,12 @@ impl SettingsWindow {
             // fail nightly. Turning it off never does: a remote that vanished
             // must not leave a running timer un-disablable.
             ToggleField::Backup => {
-                self.backup_pending.is_none()
-                    && self
-                        .snapshot
-                        .backup
-                        .as_ref()
-                        .is_some_and(|backup| backup.remote_available || backup.enabled)
+                // The backup "pending" is a draft, not a write in flight, so the
+                // switch stays live: flipping it back is how a draft is undone.
+                self.snapshot
+                    .backup
+                    .as_ref()
+                    .is_some_and(|backup| backup.remote_available || backup.enabled)
             }
         }
     }
@@ -2430,7 +2430,9 @@ impl SettingsWindow {
                         .text_size(px(TYPE_VALUE))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.foreground)
+                        .max_w(px(560.))
                         .whitespace_nowrap()
+                        .truncate()
                         .child(format!("{available} free of {total}")),
                 )
                 .into_any_element(),
@@ -2465,8 +2467,8 @@ impl SettingsWindow {
                     .when(editing == Editing::None, |this| {
                         this.child(hint("↑↓", "Move", theme))
                             .child(hint("←→", "Page", theme))
-                            .child(hint("A", "Select or edit", theme))
-                            .child(hint("B", "Back", theme))
+                            .child(hint("A / Enter", "Select or edit", theme))
+                            .child(hint("B / Esc", "Back", theme))
                     }),
             )
             .into_any_element()
@@ -2671,7 +2673,9 @@ fn mirrored(pending: Option<bool>, daemon: Option<bool>) -> bool {
     pending.or(daemon).unwrap_or(false)
 }
 
-/// One keyboard hint: the key in a small cap, then what it does.
+/// One control hint: the input in a small cap, then what it does. The label names
+/// both the pad button and the key, because the window cannot tell which one the
+/// user actually has.
 fn hint(key: &'static str, meaning: &'static str, theme: &Theme) -> AnyElement {
     h_flex()
         .items_center()
@@ -2713,7 +2717,10 @@ impl Render for SettingsWindow {
         if self.list_page != page_index || self.list.item_count() != items.len() {
             self.list.reset(items.len());
             self.list_page = page_index;
-            self.scrolled_to = None;
+            // A page opens at its top. Scrolling to the cursor here would push the
+            // first cards off screen on a page whose only action is at the bottom;
+            // the reveal below follows a cursor that actually moves.
+            self.scrolled_to = Some((page_index, self.nav.row()));
         }
 
         // Keep the cursor's row on screen. This is what makes a page taller than
@@ -3248,16 +3255,33 @@ mod tests {
 
     #[test]
     fn the_stremio_row_says_which_state_the_account_is_in() {
-        assert_eq!(
-            stremio_account(Some("2026-01-02"), false),
-            "Linked since 2026-01-02"
+        // A real RFC 3339 stamp, so this exercises the local-time formatting rather
+        // than falling through to the raw string.
+        let linked = stremio_account(Some("2026-01-02T03:04:05Z"), false);
+        assert!(linked.starts_with("Linked since "), "{linked}");
+        assert!(
+            !linked.contains('T') && linked.contains(','),
+            "a stamp is rendered for a person, not quoted: {linked}"
         );
         assert_eq!(stremio_account(None, true), "Waiting for approval");
         assert_eq!(stremio_account(None, false), "Not linked");
-        assert_eq!(
-            stremio_account(Some("2026-01-02"), true),
-            "Linked since 2026-01-02",
+        assert!(
+            stremio_account(Some("2026-01-02T03:04:05Z"), true).starts_with("Linked since "),
             "a linked account outranks a stale offer"
+        );
+    }
+
+    #[test]
+    fn a_daemon_timestamp_is_rendered_in_local_time() {
+        let formatted = super::local_time("2026-11-08T02:00:00Z");
+        assert!(
+            formatted.contains(':') && !formatted.contains('T'),
+            "a person reads a clock, not RFC 3339: {formatted}"
+        );
+        assert_eq!(
+            super::local_time("not a timestamp"),
+            "not a timestamp",
+            "an unparseable value is shown as it came"
         );
     }
 
