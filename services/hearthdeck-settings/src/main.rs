@@ -1443,6 +1443,7 @@ impl SettingsWindow {
                         this.watch_backup(cx);
                     }
                     Err(error) => {
+                        tracing::warn!(%error, "the backup run could not be started");
                         this.notice = Some(format!("Backup not started: {error}"));
                     }
                 }
@@ -1459,11 +1460,14 @@ impl SettingsWindow {
                 .background_executor()
                 .spawn(async { daemon::read_backup() })
                 .await;
-            let _ = this.update(cx, |this, cx| {
-                if let Ok((view, status)) = read {
+            let _ = this.update(cx, |this, cx| match read {
+                Ok((view, status)) => {
                     this.snapshot.backup = Some(view);
                     this.snapshot.backup_status = Some(status);
                     cx.notify();
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "the backup state could not be re-read");
                 }
             });
         })
@@ -1491,8 +1495,11 @@ impl SettingsWindow {
                     .await;
                 let step = watch_step(&mut state, &read);
                 let updated = this.update(cx, |this, cx| {
-                    if let Ok(status) = &read {
-                        this.snapshot.backup_status = Some(status.clone());
+                    match &read {
+                        Ok(status) => {
+                            this.snapshot.backup_status = Some(status.clone());
+                        }
+                        Err(error) => tracing::debug!(%error, "a backup status poll failed"),
                     }
                     cx.notify();
                 });
@@ -1509,6 +1516,9 @@ impl SettingsWindow {
                 }
                 cx.background_executor().timer(watch_interval(polls)).await;
             };
+            if end == Some(WatchEnd::Unreadable) {
+                tracing::warn!("stopped following the backup run: the daemon could not be read");
+            }
             let _ = this.update(cx, |this, cx| {
                 this.watching_backup = false;
                 this.notice = Some(match end {

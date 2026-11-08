@@ -231,6 +231,26 @@ When the new Settings screen lands:
   dropdown widget; schedule editing should use the existing `◀ value ▶`
   step control or two numeric rows.
 
+### Where failures show up
+
+Every refusal is also a line in the daemon's own log, naming the command or the
+unit that failed: `journalctl --user -u hearthdeck-daemon.service`. That is the
+first place to look when a save is refused or the card says the manager could not
+be reached.
+
+The runner's own words — rclone's error, the job it skipped and why — are in the
+backup unit's journal, which the session log collector already follows:
+
+```bash
+journalctl --user -u hearthdeck-backup.service -n 50
+grep -i backup ~/hearthdeck.log
+```
+
+The settings window logs three things itself: a write it could not make, a state
+it could not re-read, and a run it stopped following. It is a child of the
+library app, so those lines land in the library app's output rather than the
+daemon's — `journalctl --user -b | grep -i backup` finds them.
+
 ## Migration and safety notes
 
 - The old Settings screen gets no backup section and there is no fallback

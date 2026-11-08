@@ -13,7 +13,7 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone as _, Utc};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::{
     BackupSettings, BackupStatus, SERVICE_UNIT, SettingsView, Store, TIMER_UNIT, ValidationError,
@@ -143,7 +143,15 @@ impl Control<'_> {
         let remote_available = self.remote_available(&requested.remote).await?;
         validate(&requested, remote_available)?;
 
-        self.store.write(&requested)?;
+        if let Err(error) = self.store.write(&requested) {
+            warn!(
+                %error,
+                remote = %requested.remote,
+                root = %requested.root,
+                "the backup configuration could not be written"
+            );
+            return Err(error.into());
+        }
         self.systemctl(&["--user", "daemon-reload"], "reload its units")
             .await?;
         if requested.enabled {
@@ -273,12 +281,16 @@ impl Control<'_> {
                 .iter()
                 .map(|property| format!("--property={property}")),
         );
-        let output = self
-            .runner
-            .run(SYSTEMCTL, &args)
-            .await
-            .map_err(|error| ControlError::Systemd(error.to_string()))?;
+        let output = self.runner.run(SYSTEMCTL, &args).await.map_err(|error| {
+            warn!(%error, unit, "the user service manager could not be asked about the backup");
+            ControlError::Systemd(error.to_string())
+        })?;
         if !output.success {
+            warn!(
+                unit,
+                stderr = %output.stderr.trim(),
+                "the user service manager did not answer for the backup unit"
+            );
             // An empty answer is not the same as an idle unit: a manager that
             // cannot answer must surface as a 502, not as "off" with a 200.
             return Err(ControlError::Systemd(format!(
@@ -333,6 +345,7 @@ impl Control<'_> {
                 ]),
             )
             .await
+            .map_err(|error| debug!(%error, "the last finish time is unavailable"))
             .ok()?;
         if !output.success {
             return None;
@@ -363,6 +376,7 @@ impl Control<'_> {
                 ]),
             )
             .await
+            .map_err(|error| debug!(%error, "the last error line is unavailable"))
             .ok()?;
         if !output.success {
             return None;
@@ -380,8 +394,16 @@ impl Control<'_> {
             .runner
             .run(SYSTEMCTL, &strings(args))
             .await
-            .map_err(|error| ControlError::Systemd(format!("{what}: {error}")))?;
+            .map_err(|error| {
+                warn!(%error, command = ?args, "the user service manager could not be run");
+                ControlError::Systemd(format!("{what}: {error}"))
+            })?;
         if !output.success {
+            warn!(
+                command = ?args,
+                stderr = %output.stderr.trim(),
+                "the user service manager refused a backup command"
+            );
             return Err(ControlError::Systemd(format!(
                 "{what}: {}",
                 output.stderr.trim()
