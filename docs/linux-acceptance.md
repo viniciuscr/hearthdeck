@@ -120,7 +120,7 @@ Select **Hearthdeck Kiosk** in the display manager. Confirm Hearthdeck opens
 fullscreen with no desktop shell behind it (no panel, wallpaper, or other
 window ever appears), then launch a graphical application and verify it opens
 and fills the screen, connected directly to this same session (not a nested
-Gamescope instance - see `docs/kiosk-session.md` for why that changed). Exit
+Gamescope instance - see `docs/archive/kiosk-session.md` for why that changed). Exit
 Hearthdeck Kiosk and confirm its managed application services stop and the
 session returns to the display manager's login screen.
 

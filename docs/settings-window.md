@@ -9,10 +9,9 @@ keeps.
 
 GPUI renders through its own window and event loop. There is no host/renderer
 seam between it and libcosmic/iced — no iced `Element` can contain a gpui tree —
-so a screen cannot be half-migrated inside one window. The split is therefore
-drawn where it is cheap: **the window only reads.** RomM sign-in, Stremio
-linking, categorization and BIOS sync stay in the iced page, which already owns
-those flows and their daemon calls.
+so a screen cannot be half-migrated inside one window. The window therefore owns
+the whole destination: every row writes, through the same daemon API the iced page
+uses, and the iced page stays only as the rollback.
 
 `services/hearthdeck-settings/` is the window. `app/settings_window.rs` is the
 shell's half: which binary, whether to launch it, whether one is already up.
@@ -323,8 +322,6 @@ installs the binary beside the other Hearthdeck binaries.
 - **Text entry is unproven on the box.** GPUI's Wayland backend implements
   `zwp_text_input_v3`, so cosmic-osk should type into a GPUI field; it has not
   been tried on the TV, and no write flow depends on it yet.
-- **The iced page still owns the real flows.** RomM sign-in, Stremio linking,
-  categorization and BIOS sync keep working there until each is ported.
 - **No visual capture in this change.** `cosmic-screenshot` aborts in this
   environment, so the layout was checked by running the window, not by a
   screenshot.

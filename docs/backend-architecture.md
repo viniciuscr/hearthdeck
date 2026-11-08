@@ -300,7 +300,7 @@ The bridge launches desktop applications, RetroArch and Heroic through transient
 systemd user services in the active display session. It does not impose a nested
 Gamescope wrapper; Heroic's own per-game launch settings remain authoritative.
 See [arch-package.md](arch-package.md#hearthdeck-session) for the current session
-and [kiosk-session.md](kiosk-session.md) for historical incident notes.
+and [archive/kiosk-session.md](archive/kiosk-session.md) for historical incident notes.
 
 All units live in [deploy/systemd](../deploy/systemd/); packaging paths are
 symlinks to those canonical files. `just install-services` copies the backend

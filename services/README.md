@@ -60,7 +60,7 @@ clients, rather than getting a nested Gamescope instance of their own -
 confirmed on real hardware that a second Gamescope process joining this
 session as a Wayland peer is composited but never actually shown, while a
 plain client is shown automatically the same way Hearthdeck itself is (see
-`docs/kiosk-session.md`). PipeWire/WirePlumber audio, NetworkManager
+`docs/archive/kiosk-session.md`). PipeWire/WirePlumber audio, NetworkManager
 networking, and BlueZ Bluetooth remain host services outside the Hearthdeck
 process tree.
 

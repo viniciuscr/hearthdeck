@@ -4,7 +4,7 @@ This is the working design doc and roadmap for reading a Stremio account's
 **Continue Watching** list, linking that account by QR code, and putting the
 result on the dashboard. It owns the Stremio decisions.
 `backend-architecture.md` owns the provider/catalog shape these decisions plug
-into; `kiosk-session.md` owns the launch rules the last phase must satisfy.
+into; `archive/kiosk-session.md` owns the launch rules the last phase must satisfy.
 
 Everything under "Verified against the live service" was confirmed by a
 read-only probe against a real account, not recalled from documentation or
@@ -36,7 +36,7 @@ Three deliverables, in the order they unblock each other:
 - **A failed provider refresh must not delete rows it does not own.**
   `CatalogStore::replace_source` already gives this; do not bypass it.
 - **Launch behaviour is not "done" until it is seen on real hardware.**
-  `kiosk-session.md` is explicit that green CI proves only that code compiles.
+  `archive/kiosk-session.md` is explicit that green CI proves only that code compiles.
 - **Secrets are never logged.** The daemon logs launch plans and provider
   outcomes freely; the `authKey` must never appear in any of it.
 
@@ -439,7 +439,7 @@ existing `collections` table upgrade does.
    film and an episode, then confirm Stremio resumes at the right position
    rather than merely opening. This is Phase 1 and it gates Phase 6.
 2. **Does Stremio launch cleanly inside this session at all?** It is a
-   Qt/CEF-style application; `kiosk-session.md`'s hardware rule applies before
+   Qt/CEF-style application; `archive/kiosk-session.md`'s hardware rule applies before
    this is called working.
 3. **Progress on a card.** The rail cards have no progress affordance today; the
    rail needs one (a bar, or a "23 min left" line) or the data is wasted.

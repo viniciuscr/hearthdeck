@@ -268,7 +268,7 @@ rebuilding from cold often (multiple checkouts, CI, or a frequently-cleaned `tar
 - [Product Foundations](docs/product-foundations.md) - Design principles and contracts
 - [Backend Architecture](docs/backend-architecture.md) - Service design and API structure
 - [Metadata Enrichment](docs/metadata-enrichment.md) - Catalog and provider implementation
-- [Kiosk Session](docs/kiosk-session.md) - Linux desktop integration notes
+- [Kiosk Session](docs/archive/kiosk-session.md) - Retired Gamescope session history
 
 ## Questions?
 

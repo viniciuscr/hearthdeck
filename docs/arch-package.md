@@ -9,7 +9,7 @@ CachyOS. It installs:
   aggregate-log acceptance checks.
 - `/usr/lib/hearthdeck/hearthdeck-autologin`: enables or disables greetd
   autologin into the Hearthdeck session, so a keyboardless box boots past the
-  login screen; see `docs/kiosk-session.md`.
+  login screen; see `docs/archive/kiosk-session.md`.
 - `/usr/lib/hearthdeck/`: the local bridge, daemon, controller compatibility
   broker, and Hearthdeck session script.
 - `/usr/lib/hearthdeck/hearthdeck-romm`: the `up`/`down` driver `romm.service`
@@ -159,7 +159,7 @@ for the `ROMM_COMPOSE_ARGS` override and why the unit has no restart policy).
 
 ## Hearthdeck session
 
-See `docs/kiosk-session.md` for the startup history and the "do not" lessons;
+See `docs/archive/kiosk-session.md` for the startup history and the "do not" lessons;
 note that document now describes the retired Gamescope session.
 
 **Hearthdeck** is a minimal COSMIC session: `cosmic-comp` runs with the
@@ -185,7 +185,7 @@ default and was confirmed, on real hardware, to never actually get shown: a
 second Gamescope process joining this session as a Wayland peer is
 composited but never focused/displayed, while a plain client is shown
 automatically the same way Hearthdeck itself is. See
-`docs/kiosk-session.md` for the full account.
+`docs/archive/kiosk-session.md` for the full account.
 
 Heroic game launches work in Kiosk mode too, but Heroic itself - not each
 individual game - is the resource being managed: the bridge tracks it under

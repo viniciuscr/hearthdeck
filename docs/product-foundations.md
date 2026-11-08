@@ -284,7 +284,7 @@ connect to that display through bridge-owned transient systemd user services;
 Hearthdeck does not wrap them in a second compositor. Heroic retains control of
 its own per-game wrappers. The overlay and optional cosmic-osk are separate
 session clients. See [arch-package.md](arch-package.md#hearthdeck-session);
-[kiosk-session.md](kiosk-session.md) preserves the retired Gamescope history.
+[archive/kiosk-session.md](archive/kiosk-session.md) preserves the retired Gamescope history.
 
 ### Refresh And Failure Model
 

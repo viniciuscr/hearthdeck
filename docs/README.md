@@ -31,7 +31,6 @@ docs carry the *why* the code cannot.
 | [`frontend-library.md`](frontend-library.md) | The library grid: RomM scopes, prefetch, display order, counts, virtualization, artwork path |
 | [`frontend-rewrite.md`](frontend-rewrite.md) | COSMIC frontend boundaries, shared widgets, screen state and design decisions |
 | [`backend-architecture.md`](backend-architecture.md) | Daemon/bridge shape, discovery providers, catalog flow, API, trust boundaries |
-| [`kiosk-session.md`](kiosk-session.md) | Retired Gamescope session incident history; not the current session topology |
 | [`units-and-logs.md`](units-and-logs.md) | systemd user-unit traps, the logging pipeline, runbooks |
 | [`observability.md`](observability.md) | Logging model, events, investigation order |
 | [`metadata-enrichment.md`](metadata-enrichment.md) | Metadata sources, priority, freshness |
@@ -55,8 +54,8 @@ docs carry the *why* the code cannot.
 | [`linux-acceptance.md`](linux-acceptance.md) | Manual acceptance checklist |
 | [`immich-backup.md`](immich-backup.md) | Phone photo/video backup: Podman Quadlet stack, external SSD layout, upgrades, restore, reinstall |
 | [`romm-backup.md`](romm-backup.md) | RomM database dump, external SSD layout, machine-wipe restore, disk-loss limits |
-| [`backup-settings.md`](backup-settings.md) | Off-site rclone backup: package/user split, safety rules, Settings contract for the new UI |
+| [`backup-settings.md`](backup-settings.md) | Off-site rclone backup: package/user split, safety rules, and the Backup page's contract |
 | [`cloudflare-tunnel.md`](cloudflare-tunnel.md) | Public HTTPS access to Immich: Cloudflare Tunnel Quadlet, token handling, boot behaviour |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md), [`../DEVELOPER_QUICKSTART.md`](../DEVELOPER_QUICKSTART.md), [`../PRE_PUSH_WORKFLOW.md`](../PRE_PUSH_WORKFLOW.md) | Build, dev, and PR flow |
 | [`../.github/copilot-instructions.md`](../.github/copilot-instructions.md) | Project map and the summary style for changes |
-| `archive/` | Superseded docs, kept for history only. Never a source of current truth. |
+| `archive/` | Superseded docs, kept for history only: the pre-rewrite frontend review, the retired Gamescope session (`archive/kiosk-session.md`), and the closed settings UI roadmap. Never a source of current truth. |

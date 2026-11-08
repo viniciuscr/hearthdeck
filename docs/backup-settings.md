@@ -4,23 +4,22 @@ Optional nightly upload of game saves, database dumps and Hearthdeck metadata to
 an rclone remote. This doc owns the split between the packaged tooling, the
 per-user configuration, and the Settings section that will expose it.
 
-**Status:** the tooling is packaged and installed **disabled**. The Settings
-section is deliberately not implemented in the current screen because the
-frontend is being rewritten; the contract below is what the new screen should
-implement. There is no install script and no manual enable step: package
-installation makes the feature available, and the Settings toggle is the only
-thing that turns it on.
+**Status:** the tooling is packaged and installed **disabled**, and the settings
+window's **Backup** page is what turns it on. There is no install script and no
+manual enable step: package installation makes the feature available, and that
+page is the only activation path.
 
 ## What the user configures
 
-The section has four controls and one read-only status area:
+The page has four controls and a read-only last-run card:
 
 | Control | Meaning | Default |
 | --- | --- | --- |
-| Enable off-site backup | Enables the systemd timer | off |
+| Nightly copy (switch) | Arms the timer. It is a **draft** until Save, and the card's chip reads `Unsaved` until then | off |
 | Remote | Name of an existing rclone remote (`rclone listremotes`) | `pcloud` |
 | Destination root | Folder under that remote | `hearthdeck-backups` |
-| Schedule | Local hour and minute for the nightly run | 04:30 |
+| Schedule | Local hour and minute, stepped with the d-pad | 04:30 |
+| Save and apply | Writes both files, reloads the units and moves the timer | — |
 | Last run | Result, finish time, next run | read-only |
 | Run now | Starts one run immediately | — |
 
@@ -28,10 +27,10 @@ Do **not** collect cloud credentials in Hearthdeck. rclone owns them in
 `~/.config/rclone/rclone.conf`; the UI selects a remote by name. This mirrors the
 Stremio rule that the shell never holds the account credential.
 
-The section must show the precondition plainly: if the selected remote is not in
-`rclone listremotes`, the Enable toggle is disabled with an explanation and a
-short "how to add it" caption (`rclone config`). Enabling a timer with no remote
-would only produce nightly failures.
+The page shows the precondition plainly: if the selected remote is not in
+`rclone listremotes`, a "Remote not found" row sits directly above the switch, the
+switch is disabled, and the save is refused with 409 rather than stored.
+Enabling a timer with no remote would only produce nightly failures.
 
 ## What is backed up
 
@@ -79,12 +78,13 @@ HEARTHDECK_BACKUP_REMOTE=pcloud
 HEARTHDECK_BACKUP_ROOT=hearthdeck-backups
 ```
 
-## Backend contract (for the new Settings screen)
+## Backend contract
 
-Add a daemon module `backup` with a systemd adapter, following the existing
+The daemon module is `backup` (`backup.rs` for the files and the schedule,
+`backup/control.rs` for the systemd adapter), following the
 `categorizer/control.rs`, `romm_link/control.rs` and `stremio/control.rs` split.
-The daemon already spawns fixed `systemctl --user` and `journalctl --user`
-commands; keep that pattern and never accept a unit name or argv from the API.
+The daemon spawns fixed `systemctl --user` and `journalctl --user` commands and
+never accepts a unit name or argv from the API.
 
 ### Routes
 
@@ -214,22 +214,13 @@ not a 500.
 Errors come from the API as `{"error": "..."}`; map 409 to the precondition
 caption and 503 to the not-installed state. Never show a credential.
 
-## Frontend integration notes
+## Where the UI lives
 
-When the new Settings screen lands:
-
-- Add `screens/settings/backup.rs` with its own `Message`, `Flow`/`State` and
-  `update`-returned effects. Do not put daemon I/O in the view.
-- Register the section in `screens/settings/mod.rs` and route effects through
-  `app/settings_source.rs`, like RomM and Stremio.
-- Add daemon client methods in `providers/daemon.rs`.
-- Settings is currently non-walkable by the controller, so an interactive
-  section needs the focus walk extended first. The backup section is not
-  allowed to be pointer-only on a TV-first product.
-- Reuse `titled_section`, `described_item`, `action_button`, `summary`,
-  `error_line`, and the `toggler` pattern from categorization. There is no
-  dropdown widget; schedule editing should use the existing `◀ value ▶`
-  step control or two numeric rows.
+The section is the **Backup** page of the GPUI settings window
+(`services/hearthdeck-settings`; see `docs/settings-window.md`), not the iced
+page: a card of rows for the destination and the schedule, a `TimeField` for the
+clock, and `Save and apply` / `Run now` actions. The iced page carries no backup
+section, and there is no second activation path.
 
 ### Where failures show up
 

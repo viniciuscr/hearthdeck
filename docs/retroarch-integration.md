@@ -4,7 +4,7 @@ This is the working design doc and roadmap for turning RetroArch into Hearthdeck
 console-emulation launch backend, with RomM staying the ROMs/metadata provider. It
 is a living document: decisions here are the current best answer, not permanent
 law. Update it as we learn more, the same way `docs/backend-architecture.md` and
-`docs/kiosk-session.md` get amended when reality disagrees with the plan.
+`docs/archive/kiosk-session.md` get amended when reality disagrees with the plan.
 
 Status: design phase. Nothing described as "Decided" below is implemented yet
 unless a phase is marked done.
@@ -17,7 +17,7 @@ actually runs a game when the user presses "Play" on a RomM item, launched and
 supervised the same disciplined way Hearthdeck already launches desktop apps:
 typed request in, no shell string ever crosses the daemon/bridge boundary,
 tracked as a session, and stoppable, connecting directly to the Kiosk session
-the way every other launch does (see `kiosk-session.md`; the earlier nested
+the way every other launch does (see `archive/kiosk-session.md`; the earlier nested
 Gamescope-per-launch was removed as it was never shown on hardware).
 
 ## Non-negotiable constraints (carried over from existing product rules)
@@ -29,7 +29,7 @@ Gamescope-per-launch was removed as it was never shown on hardware).
 - Every game launch connects **directly to the Kiosk session**, the same
   `DISPLAY`/`WAYLAND_DISPLAY` Hearthdeck itself uses, rather than a nested
   Gamescope instance. This is not this document's rule to set — it is
-  `kiosk-session.md`'s, and it applies to RetroArch exactly as it does to
+  `archive/kiosk-session.md`'s, and it applies to RetroArch exactly as it does to
   desktop apps and Heroic. RetroArch is not a background daemon; it is a
   per-session process, started on demand and torn down when the game ends,
   never resident when nothing is playing.
@@ -582,7 +582,7 @@ Each phase is scoped to be doable in one sitting and independently useful.
   match on `BridgeRequest` is exhaustive: `launch_retro_game` in
   `platform/linux.rs` execs `retroarch` directly (decision 1) via
   `launch_with_systemd`, connecting directly to the Kiosk session the same way
-  every other launch does (see `kiosk-session.md`), against a
+  every other launch does (see `archive/kiosk-session.md`), against a
   Hearthdeck-owned config directory (decision 2) and a validated,
   allowlisted core path plus a validated, Hearthdeck-cache-scoped ROM path
   — the daemon-side resolution that produces those two paths is still

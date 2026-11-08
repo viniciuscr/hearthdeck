@@ -90,9 +90,10 @@ automatically. See
 
 ## Kiosk Session
 
-See `docs/kiosk-session.md` for the full session architecture, an incident
-writeup of exactly how this regressed once already, and a "do not" list
-before changing anything about how it starts.
+The shipped session, the unit traps and the logging pipeline live in
+`docs/units-and-logs.md`. `docs/archive/kiosk-session.md` keeps the retired
+Gamescope session's incident history and its "do not" list, for the lessons that
+still hold.
 
 The Arch package installs a **Hearthdeck Kiosk** Wayland session with no
 desktop shell. Its session script runs Gamescope directly on the DRM/KMS seat
