@@ -33,9 +33,9 @@ use std::time::Duration;
 
 use chrono::Timelike as _;
 use gpui::{
-    Action as _, AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, ClickEvent, Context,
-    Entity, Focusable as _, FontWeight, InteractiveElement as _, IntoElement, KeyBinding,
-    ListAlignment, ListState, ParentElement as _, Render, SharedString,
+    Action as _, Animation, AnimationExt as _, AnyElement, AnyWindowHandle, App, AppContext as _,
+    Bounds, ClickEvent, Context, Entity, Focusable as _, FontWeight, InteractiveElement as _,
+    IntoElement, KeyBinding, ListAlignment, ListState, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
     WindowOptions, div, list, point, prelude::FluentBuilder as _, px, relative, size,
 };
@@ -78,6 +78,11 @@ const TYPE_VALUE: f32 = 21.0;
 const TYPE_BODY: f32 = 18.0;
 const TYPE_CAPTION: f32 = 16.0;
 const TYPE_CODE: f32 = 48.0;
+/// The schedule field: an hour and a minute, not a URL.
+const TIME_FIELD_WIDTH: f32 = 190.0;
+/// The space between two cards, and the larger one under the page heading.
+const CARD_GAP: u16 = 24;
+const HEADER_GAP: u16 = 32;
 /// The kit sizes its own controls - a Button's label, an Input's text - from
 /// `rem`, and does not export a way to set them individually. One rem size for
 /// the window lifts their smallest step (0.875rem) to 16.6px, so no control is
@@ -358,7 +363,7 @@ fn flat_items(page: &Page) -> (Vec<Item>, Vec<usize>) {
     let mut items = Vec::new();
     let mut rows = Vec::new();
     for (group_ix, group) in page.groups.iter().enumerate() {
-        items.push(Item::Gap(if group_ix == 0 { 32 } else { 24 }));
+        items.push(Item::Gap(if group_ix == 0 { HEADER_GAP } else { CARD_GAP }));
         items.push(Item::Header { group: group_ix });
         for (row_ix, _) in group.rows.iter().enumerate() {
             rows.push(items.len());
@@ -370,7 +375,7 @@ fn flat_items(page: &Page) -> (Vec<Item>, Vec<usize>) {
             });
         }
     }
-    items.push(Item::Gap(24));
+    items.push(Item::Gap(CARD_GAP));
     (items, rows)
 }
 
@@ -483,6 +488,15 @@ fn home_usage() -> Option<DiskUsage> {
 }
 
 /// Same output as the frontend's `system_status::human_size`.
+/// "1 core", "4 cores": a count that reads like a sentence rather than a form.
+fn plural(count: usize, singular: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {singular}s")
+    }
+}
+
 /// A timestamp the daemon sends (RFC 3339, UTC) as something a person reads:
 /// "7 Nov, 14:43" in local time. An unparseable string is shown as it came.
 fn local_time(raw: &str) -> String {
@@ -686,7 +700,7 @@ impl SettingsWindow {
                 available: human_size(disk.available),
                 total: human_size(disk.total),
             },
-            None => Value::Text("unavailable".to_string()),
+            None => Value::Text("Unavailable".to_string()),
         };
 
         let mut romm_rows = vec![Row {
@@ -2090,7 +2104,7 @@ impl SettingsWindow {
         let pasted = text.chars().count();
         let input = self.inputs.text(field).clone();
         input.update(cx, |state, cx| state.set_value(text, window, cx));
-        self.notice = Some(format!("Pasted {pasted} character(s)."));
+        self.notice = Some(format!("Pasted {}.", plural(pasted, "character")));
         cx.notify();
     }
 
@@ -2236,7 +2250,15 @@ impl SettingsWindow {
                         })
                         .size_full(),
                     )
-                    .vertical_scrollbar(&list_state),
+                    .vertical_scrollbar(&list_state)
+                    // A page change cross-fades the list only: never the heading,
+                    // and never the list's height. The id carries the page index,
+                    // so the animation restarts exactly when the page does.
+                    .with_animation(
+                        SharedString::from(format!("page-fade-{page_index}")),
+                        Animation::new(std::time::Duration::from_millis(180)),
+                        |this, delta| this.opacity(delta),
+                    ),
             )
             .into_any_element()
     }
@@ -2467,7 +2489,7 @@ impl SettingsWindow {
                     .into_any_element()
             }
             Control::Time => div()
-                .w(px(190.))
+                .w(px(TIME_FIELD_WIDTH))
                 .child(TimeField::new(&self.inputs.backup_schedule))
                 .into_any_element(),
             Control::Action(action) => {
@@ -2728,10 +2750,13 @@ fn describe_install(report: &daemon::CoreInstall) -> String {
         .unwrap_or_default();
     match (installed, failures) {
         (0, 0) => "Every core was already installed.".to_string(),
-        (installed, 0) => format!("Installed {installed} core(s)."),
+        (installed, 0) => format!("Installed {}.", plural(installed, "core")),
         (0, failures) => format!("No core could be installed ({failures} failed){first}"),
         (installed, failures) => {
-            format!("Installed {installed} core(s); {failures} failed{first}")
+            format!(
+                "Installed {}; {failures} failed{first}",
+                plural(installed, "core")
+            )
         }
     }
 }
@@ -2747,9 +2772,12 @@ fn describe_sync(report: &daemon::BiosSync) -> String {
         .unwrap_or_default();
     match (fetched, failures) {
         (0, 0) => "Nothing was missing.".to_string(),
-        (fetched, 0) => format!("Placed {fetched} file(s)."),
+        (fetched, 0) => format!("Placed {}.", plural(fetched, "file")),
         (0, failures) => format!("Nothing could be placed ({failures} failed){first}"),
-        (fetched, failures) => format!("Placed {fetched} file(s); {failures} failed{first}"),
+        (fetched, failures) => format!(
+            "Placed {}; {failures} failed{first}",
+            plural(fetched, "file")
+        ),
     }
 }
 
@@ -3159,14 +3187,14 @@ mod tests {
         );
 
         report.installed.push("libretro-snes9x".to_string());
-        assert_eq!(describe_install(&report), "Installed 1 core(s).");
+        assert_eq!(describe_install(&report), "Installed 1 core.");
 
         report.failed.push(CoreFailure {
             package: "libretro-dolphin".to_string(),
             reason: "no such package".to_string(),
         });
         let line = describe_install(&report);
-        assert!(line.starts_with("Installed 1 core(s); 1 failed"), "{line}");
+        assert!(line.starts_with("Installed 1 core; 1 failed"), "{line}");
         assert!(line.contains("libretro-dolphin: no such package"), "{line}");
     }
 
@@ -3178,14 +3206,14 @@ mod tests {
         assert_eq!(describe_sync(&report), "Nothing was missing.");
 
         report.fetched.push("bios/SCPH1001.BIN".to_string());
-        assert_eq!(describe_sync(&report), "Placed 1 file(s).");
+        assert_eq!(describe_sync(&report), "Placed 1 file.");
 
         report.failed.push(BiosFailure {
             filename: "bios/scph5500.bin".to_string(),
             reason: "not found".to_string(),
         });
         let line = describe_sync(&report);
-        assert!(line.starts_with("Placed 1 file(s); 1 failed"), "{line}");
+        assert!(line.starts_with("Placed 1 file; 1 failed"), "{line}");
         assert!(line.contains("bios/scph5500.bin: not found"), "{line}");
     }
 

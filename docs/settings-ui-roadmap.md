@@ -137,8 +137,8 @@ for a refusal, `Alert::info` for a result; the per-row failure tag is still open
 and a per-row `Failed` tag now marks the action that was refused. PL-01's
 fullness colour is the only part of it left.
 
-**Still open in this phase:** CT-06 (localisation), CS-07 (motion), and the
-CS-05 / FB-04 / CT-07 / PL-03 nits.
+**Still open in this phase:** CT-06 (localisation) and PL-03 (the sidebar icon
+size, which needs a `Size` the kit does not export).
 
 - [x] **FX-05 · one tone covers six states.** `Tone::Off` is "Off", "Idle",
       "Timer off", "Unknown", "Not installed" and "Unavailable"; "Running" wears
@@ -189,9 +189,10 @@ CS-05 / FB-04 / CT-07 / PL-03 nits.
       now colours by fullness: green under 80%, amber to 90%, red above.
 - [ ] **CS-04 · wrong token family**: `theme.ring` as a row border, sidebar using
       `foreground` instead of `sidebar_foreground`/`sidebar_accent_foreground`.
-- [ ] **CS-07 · no motion on navigation, but the switch animates.** Fix: 180ms
-      cross-fade of the list only on page change; focus instant.
-- [ ] **CS-05, FB-04, CT-07, PL-02, PL-03** — magic numbers (`px(190)`, `px(24)`,
+- [x] **CS-07 · no motion on navigation, but the switch animates.** Shipped: a 180ms
+      cross-fade of the list only, keyed by page index so it restarts exactly on a
+      page change; focus stays instant.
+- [x] **CS-05, FB-04, CT-07, PL-02, PL-03** — magic numbers (`px(190)`, `px(24)`,
       `px(1)`) into consts; plurals (`1 core / 2 cores`); sentence-case drift and
       "Not installed" three times in one card; ring colour never changes with
       fullness; sidebar icons 24px and reused or dropped.
