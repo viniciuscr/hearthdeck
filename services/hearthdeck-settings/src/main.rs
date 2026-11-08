@@ -391,6 +391,17 @@ impl Inputs {
     }
 }
 
+/// Which control, if any, owns the caret - the footer says something different for
+/// each, because they consume the arrows differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Editing {
+    None,
+    /// A single-line text field: arrows move the caret, nothing steps a value.
+    Text,
+    /// The schedule: left/right pick a part, up/down step it.
+    Schedule,
+}
+
 /// What a row needs to know about the cursor: which page it is on, where it sits
 /// in the flat page, whether it is the focused row, and its index among the rows
 /// the cursor can reach (`None` for a fact, which can never be focused).
@@ -1127,6 +1138,21 @@ impl SettingsWindow {
 
     /// A toggle whose state was never read is drawn disabled rather than
     /// focused and dead, and so is one while its write is in flight.
+    /// Why a switch cannot move, when the reason is the daemon's state. A write in
+    /// flight is not a missing remote, so this stays `None` while one is pending.
+    fn toggle_blocked_reason(&self, field: ToggleField) -> Option<&'static str> {
+        match field {
+            ToggleField::Backup => {
+                let backup = self.snapshot.backup.as_ref()?;
+                (!backup.remote_available && !backup.enabled).then_some("Needs a remote")
+            }
+            ToggleField::Categorization => {
+                let categorization = self.snapshot.categorization.as_ref()?;
+                (categorization.capable == Some(false)).then_some("Unavailable")
+            }
+        }
+    }
+
     fn toggle_enabled(&self, field: ToggleField) -> bool {
         match field {
             ToggleField::Categorization => {
@@ -1852,6 +1878,15 @@ impl SettingsWindow {
                 if self.toggle_enabled(field) {
                     let value = !self.toggle_value(field);
                     self.set_toggle(field, value, cx);
+                } else {
+                    // The row is still a cursor row, so pressing Enter has to say
+                    // something rather than feel broken.
+                    self.notice = Some(
+                        self.toggle_blocked_reason(field)
+                            .unwrap_or("That switch cannot move right now.")
+                            .to_string(),
+                    );
+                    cx.notify();
                 }
             }
             Some(Control::Time) => {
@@ -1865,16 +1900,27 @@ impl SettingsWindow {
 
     /// Escape: a text field is dismissed first, and only then the window - the
     /// order every writable field in Hearthdeck follows.
+    /// Which kind of control owns the caret, if any. The footer's wording depends
+    /// on it: a single-line input binds up/down to nothing, while the schedule uses
+    /// left/right to pick a part.
+    fn editing_kind(&self, window: &Window, cx: &App) -> Editing {
+        if self.focused_field(window, cx).is_some() {
+            return Editing::Text;
+        }
+        let Some(focused) = window.focused(cx) else {
+            return Editing::None;
+        };
+        if self.inputs.backup_schedule.read(cx).focus_handle(cx) == focused {
+            Editing::Schedule
+        } else {
+            Editing::None
+        }
+    }
+
     /// Whether an editable control owns the caret - a text field or the
     /// schedule. Escape blurs one of these before it closes the window.
     fn editing(&self, window: &Window, cx: &App) -> bool {
-        if self.focused_field(window, cx).is_some() {
-            return true;
-        }
-        let Some(focused) = window.focused(cx) else {
-            return false;
-        };
-        self.inputs.backup_schedule.read(cx).focus_handle(cx) == focused
+        self.editing_kind(window, cx) != Editing::None
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2012,10 +2058,11 @@ impl SettingsWindow {
             .min_w_0()
             .overflow_hidden()
             .child(
-                v_flex().w_full().items_center().px_8().pt_8().pb_6().child(
+                v_flex().w_full().px_8().pt_8().pb_6().child(
                     v_flex()
                         .w_full()
                         .max_w(px(CONTENT_MAX_WIDTH))
+                        .mx_auto()
                         .gap_2()
                         .child(
                             div()
@@ -2085,6 +2132,7 @@ impl SettingsWindow {
             let mut card = v_flex()
                 .w_full()
                 .max_w(px(CONTENT_MAX_WIDTH))
+                .mx_auto()
                 .bg(theme.tokens.group_box);
             if top {
                 card = card.rounded_t(theme.radius);
@@ -2098,9 +2146,8 @@ impl SettingsWindow {
             Item::Gap(height) => div().h(px(f32::from(height))).into_any_element(),
             Item::Header { group } => {
                 let group = &pages[page_index].groups[group];
-                h_flex()
+                div()
                     .w_full()
-                    .justify_center()
                     .px_8()
                     .child(
                         card(true, false)
@@ -2128,9 +2175,8 @@ impl SettingsWindow {
                 if row > 0 && !focused {
                     surface = surface.border_t_1().border_color(theme.border);
                 }
-                h_flex()
+                div()
                     .w_full()
-                    .justify_center()
                     .px_8()
                     .child(surface.child(self.row_element(
                         view,
@@ -2253,15 +2299,12 @@ impl SettingsWindow {
                 let view = view.clone();
                 let enabled = self.toggle_enabled(field);
                 // "Off because you turned it off" and "off because it cannot work"
-                // must not be the same pixels.
-                let reason = match field {
-                    ToggleField::Backup => "Needs a remote",
-                    ToggleField::Categorization => "Unavailable",
-                };
+                // must not be the same pixels - and a write in flight is neither.
+                let reason = self.toggle_blocked_reason(field);
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .when(!enabled, |this| {
+                    .when_some(reason, |this, reason| {
                         this.child(
                             Tag::warning()
                                 .py_1p5()
@@ -2346,7 +2389,7 @@ impl SettingsWindow {
         }
     }
 
-    fn footer(&self, cx: &Context<Self>, theme: &Theme, editing: bool) -> AnyElement {
+    fn footer(&self, cx: &Context<Self>, theme: &Theme, editing: Editing) -> AnyElement {
         h_flex()
             .w_full()
             .items_center()
@@ -2362,12 +2405,16 @@ impl SettingsWindow {
                     .gap_5()
                     .text_size(px(TYPE_CAPTION))
                     .text_color(theme.muted_foreground)
-                    .when(editing, |this| {
+                    .when(editing == Editing::Text, |this| {
                         this.child(hint("← →", "Caret", theme))
+                            .child(hint("Esc", "Done", theme))
+                    })
+                    .when(editing == Editing::Schedule, |this| {
+                        this.child(hint("← →", "Part", theme))
                             .child(hint("↑ ↓", "Value", theme))
                             .child(hint("Esc", "Done", theme))
                     })
-                    .when(!editing, |this| {
+                    .when(editing == Editing::None, |this| {
                         this.child(hint("Up/Down", "Move", theme))
                             .child(hint("Left/Right", "Page", theme))
                             .child(hint("Enter", "Select or edit", theme))
@@ -2645,12 +2692,30 @@ impl Render for SettingsWindow {
                     .h_full()
                     .min_w_0()
                     .child(self.content(cx, theme, &pages, page_index, items))
-                    .when_some(self.notice.clone(), |this, notice| {
-                        this.child(div().px_8().pb_2().child(
-                            Alert::info("settings-notice", notice).text_size(px(TYPE_CAPTION)),
-                        ))
-                    })
-                    .child(self.footer(cx, theme, self.editing(window, cx))),
+                    // A fixed strip, whether or not there is a notice: a strip
+                    // that appears is a viewport that shrinks under the cursor,
+                    // and the row just pressed can be pushed off screen.
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .h(px(56.))
+                            .items_center()
+                            .justify_center()
+                            .px_8()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .max_w(px(CONTENT_MAX_WIDTH))
+                                    .mx_auto()
+                                    .when_some(self.notice.clone(), |this, notice| {
+                                        this.child(
+                                            Alert::info("settings-notice", notice)
+                                                .text_size(px(TYPE_CAPTION)),
+                                        )
+                                    }),
+                            ),
+                    )
+                    .child(self.footer(cx, theme, self.editing_kind(window, cx))),
             )
     }
 }

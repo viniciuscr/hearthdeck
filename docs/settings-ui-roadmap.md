@@ -71,9 +71,8 @@ ring.
 
 ## Phase 3 — Layout and focus — done
 
-Shipped: a centred 1280 column (centred with `items_center`/`justify_center` -
-this gpui has no `mx_auto`), a card inset so the ring floats rather than touching
-the card edge, the cursor skipping fact rows entirely, three focus cues (surface,
+Shipped: a centred 1280 column (`.mx_auto()` on the capped block and on every
+card), a card inset so the ring floats rather than touching the card edge, the cursor skipping fact rows entirely, three focus cues (surface,
 2px border, 4px accent bar, semibold label), the footer switching to
 caret/value/done while a field owns the keys, a dead switch explaining itself,
 the 360px rail with 56px items, a fixed 56px notice strip, and values capped at
@@ -112,8 +111,11 @@ export.
 - [x] **LY-06 · the notice resizes the viewport** and can hide the row just
       pressed, with no re-scroll. Fix: a fixed 56px strip, always present, one
       line, ellipsis.
-- [x] **LY-07 · values have no max width.** Fix: `max_w(560)`, no wrap, ellipsis;
-      full value in a tooltip.
+- [x] **LY-07 · values have no max width.** Shipped `max_w(560)`, no wrap,
+      ellipsis. The "full value in a tooltip" half is **not** shipped: this kit has
+      no attach-a-tooltip helper on a plain element (`Tooltip::new` builds one, but
+      nothing mounts it here). Either mount a `Popover`/`Tooltip` by hand or accept
+      the ellipsis — decide in Phase 4.
 - [x] **PL-04 · the focused row keeps `border_t_1`**, doubling the line where it
       meets the separator. Fix: skip the separator on the focused row.
 
