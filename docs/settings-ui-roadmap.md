@@ -119,44 +119,60 @@ export.
 - [x] **PL-04 · the focused row keeps `border_t_1`**, doubling the line where it
       meets the separator. Fix: skip the separator on the focused row.
 
-## Phase 4 — Say what things mean
+## Phase 4 — Say what things mean — partly done
 
-- [ ] **FX-05 · one tone covers six states.** `Tone::Off` is "Off", "Idle",
+Shipped: one tone vocabulary with `Busy` (a run or a link in progress is info, not
+warning) and a failed run as danger; a `Nightly copy` row whose chip reports the
+timer (`Scheduled`/`Not scheduled`) and an `Unsaved` chip while the draft is
+pending; the schedule's copy fixed to "Enter to edit; then..."; an "Enter to
+change" caption on every row that can be edited; the unreachable Close button
+gone and the hints in pad language; Refresh that says "Refreshing..." and is
+disabled while it is; timestamps in local time ("7 Nov, 14:43"); the card order
+fixed on Status (Daemon first) and Backup (Last run first); the storage ring at
+64px with "X free of Y".
+
+**Still open in this phase:** AF-04 (Back asks twice with unsaved changes),
+AF-07 (device code at 48px — the link rows are next), FB-02 (`Alert` by outcome
+and a per-row failure tag), CT-05 (the missing-systems list, which needs data the
+snapshot does not carry), CT-06 (localisation), CS-07 (motion), PL-01's
+fullness colour, and the CS-05 / FB-04 / CT-07 / PL-02 / PL-03 nits.
+
+- [x] **FX-05 · one tone covers six states.** `Tone::Off` is "Off", "Idle",
       "Timer off", "Unknown", "Not installed" and "Unavailable"; "Running" wears
       `warning`; a failed run gets "Idle". Fix: add `Tone::Busy` → `Tag::info()`;
       a last run whose result is not `success` → `Tag::danger` "Last run failed";
       neutral means "off, and that is fine".
-- [ ] **AF-01 · no row says it can be edited.** Fix: a 16px caption "Enter to
+- [x] **AF-01 · no row says it can be edited.** Fix: a 16px caption "Enter to
       change" (or `›`) on every non-Fact row.
-- [ ] **AF-02 · the schedule's copy is wrong.** "Up and down change the hour, left
+- [x] **AF-02 · the schedule's copy is wrong.** "Up and down change the hour, left
       and right pick the part" — but left/right change page until Enter has
       focused the field. Fix: "Enter to edit; then up/down set the hour,
       left/right the part."
-- [ ] **AF-03 · two switches, two behaviours.** Categorization writes on flip;
+- [x] **AF-03 · two switches, two behaviours.** Categorization writes on flip;
       backup is a draft. Fix: `Tag::warning` "Unsaved" on the card while
       `backup_pending.is_some()`.
 - [ ] **AF-04 · Back discards typed values and drafts silently.** Fix: first Back
       shows "Unsaved changes — Back again to close"; second closes.
-- [ ] **AF-05 · the footer's Close button is unreachable by the cursor** and
+- [x] **AF-05 · the footer's Close button is unreachable by the cursor** and
       duplicates Escape. Fix: delete it; put `Esc Back` / `B Back` in the hints.
-- [ ] **AF-06 · footer hints are keyboard-only** and never mention Back. Fix:
+- [x] **AF-06 · footer hints are keyboard-only** and never mention Back. Fix:
       `↑↓ Move · ←→ Page · A Select · B Back`, pad glyph leading, key secondary.
 - [ ] **AF-07 · the device code is 18px and the URL is inert.** iced had 52px plus
       a QR. Fix: `Value::Code` at 48px mono, wide tracking, on its own row; show
       host/path only, never the full code-laden URL.
-- [ ] **AF-08 · Refresh stays enabled while refreshing** and a second press does
+- [x] **AF-08 · Refresh stays enabled while refreshing** and a second press does
       nothing. Fix: disable, label "Refreshing…", `Button::loading(true)`.
 - [ ] **FB-02 · every outcome is one cyan `Alert::info`**, and errors are detached
       from the row that caused them. Fix: `Alert::success/error/info` by outcome
       plus a per-row `Tag::danger` "Failed".
-- [ ] **CT-01 · raw RFC3339 UTC on screen.** `2025-11-08T02:00:00.123456789Z`, in
+- [x] **CT-01 · raw RFC3339 UTC on screen.** `2025-11-08T02:00:00.123456789Z`, in
       UTC beside a local schedule. Fix: format `Local` — "Tomorrow, 03:00",
       "7 Nov, 14:43".
-- [ ] **CT-02 · Backup puts the form above the health**, so "did it work?" is
+- [x] **CT-02 · Backup puts the form above the health**, so "did it work?" is
       below the fold. Fix: Last run first.
-- [ ] **CT-03 · Status leads with Refresh**, above Daemon; three one-row cards.
+- [x] **CT-03 · Status leads with Refresh**, above Daemon; three one-row cards.
       Fix: Daemon → Storage → This window.
-- [ ] **CT-04 · "Enable off-site backup" under an "Off-site backup" card**, plus a
+- [x] **CT-04 · "Enable off-site backup" under an "Off-site backup" card**, plus a
       chip repeating the switch. Fix: row label "Nightly copy"; chip reports the
       timer — `Scheduled` / `Not scheduled`.
 - [ ] **CT-05 · Emulation hides what is missing** ("3 of 12 systems ready") and
@@ -164,8 +180,9 @@ export.
       4 more".
 - [ ] **CT-06 · no localisation.** Every string is `&'static str`; iced is Fluent.
       Fix: keep the shape, source from keys.
-- [ ] **PL-01 · storage ring is 48px with a 12px percentage and no total.** Fix:
-      64px, 16px percentage, "412.3 GB free of 1.8 TB", "Home volume".
+- [x] **PL-01 · storage ring is 48px with a 12px percentage and no total.** Shipped
+      64px, 16px percentage, "X free of Y", "Home volume". The fullness colour is
+      still open.
 - [ ] **CS-04 · wrong token family**: `theme.ring` as a row border, sidebar using
       `foreground` instead of `sidebar_foreground`/`sidebar_accent_foreground`.
 - [ ] **CS-07 · no motion on navigation, but the switch animates.** Fix: 180ms

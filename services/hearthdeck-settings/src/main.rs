@@ -87,7 +87,7 @@ const TYPE_REM: f32 = 19.0;
 const SIDEBAR_WIDTH: f32 = 360.0;
 /// How wide the reading column may get on a wide display.
 const CONTENT_MAX_WIDTH: f32 = 1280.0;
-const RING_SIZE: f32 = 48.0;
+const RING_SIZE: f32 = 64.0;
 /// The width a text field takes on the right of its row.
 const FIELD_WIDTH: f32 = 380.0;
 /// The size the window restores to; fullscreen itself is the compositor's call.
@@ -260,6 +260,7 @@ enum Value {
     Storage {
         used_percent: f32,
         available: String,
+        total: String,
     },
 }
 
@@ -315,6 +316,8 @@ enum Tone {
     Good,
     Attention,
     Off,
+    /// Work in progress: a run, a link waiting for approval.
+    Busy,
     /// A failure or an unknown state: never "off, and that is fine".
     Danger,
 }
@@ -477,6 +480,18 @@ fn home_usage() -> Option<DiskUsage> {
 }
 
 /// Same output as the frontend's `system_status::human_size`.
+/// A timestamp the daemon sends (RFC 3339, UTC) as something a person reads:
+/// "7 Nov, 14:43" in local time. An unparseable string is shown as it came.
+fn local_time(raw: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .map(|time| {
+            time.with_timezone(&chrono::Local)
+                .format("%-e %b, %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|_| raw.to_string())
+}
+
 fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = bytes as f64;
@@ -654,6 +669,7 @@ impl SettingsWindow {
             Some(disk) => Value::Storage {
                 used_percent: disk.used_percent(),
                 available: human_size(disk.available),
+                total: human_size(disk.total),
             },
             None => Value::Text("unavailable".to_string()),
         };
@@ -710,15 +726,6 @@ impl SettingsWindow {
                 kind: PageKind::Status,
                 groups: vec![
                     Group {
-                        title: "This window",
-                        status: None,
-                        rows: vec![Row {
-                            label: "Refresh",
-                            description: Some("Read the daemon and this machine again."),
-                            control: Control::Action(RowAction::Refresh),
-                        }],
-                    },
-                    Group {
                         title: "Daemon",
                         status: Some(if self.snapshot.daemon {
                             ("Connected", Tone::Good)
@@ -742,9 +749,18 @@ impl SettingsWindow {
                         title: "Storage",
                         status: None,
                         rows: vec![Row {
-                            label: "Free space",
-                            description: Some("On this machine's home volume."),
+                            label: "Home volume",
+                            description: Some("Free space on this machine."),
                             control: Control::Fact(storage),
+                        }],
+                    },
+                    Group {
+                        title: "This window",
+                        status: None,
+                        rows: vec![Row {
+                            label: "Refresh",
+                            description: Some("Read the daemon and this machine again."),
+                            control: Control::Action(RowAction::Refresh),
                         }],
                     },
                 ],
@@ -894,7 +910,7 @@ impl SettingsWindow {
                     Some(backup) => {
                         let mut rows = vec![
                             Row {
-                                label: "Enable off-site backup",
+                                label: "Nightly copy",
                                 description: Some(
                                     "Runs nightly through the systemd timer. Save carries it with the destination.",
                                 ),
@@ -915,7 +931,7 @@ impl SettingsWindow {
                             Row {
                                 label: "Schedule",
                                 description: Some(
-                                    "Local time. Up and down change the hour, left and right pick the part.",
+                                    "Enter to edit; then up and down set the hour, left and right pick the part.",
                                 ),
                                 control: Control::Time,
                             },
@@ -941,7 +957,7 @@ impl SettingsWindow {
                             rows.push(Row {
                                 label: "Updated",
                                 description: None,
-                                control: Control::Fact(Value::Text(updated_at.clone())),
+                                control: Control::Fact(Value::Text(local_time(updated_at))),
                             });
                         }
 
@@ -952,7 +968,8 @@ impl SettingsWindow {
                                 description: None,
                                 control: Control::Fact(Value::Text(
                                     status
-                                        .and_then(|status| status.next_run.clone())
+                                        .and_then(|status| status.next_run.as_deref())
+                                        .map(local_time)
                                         .unwrap_or_else(|| "Not scheduled".to_string()),
                                 )),
                             },
@@ -971,7 +988,8 @@ impl SettingsWindow {
                                 description: None,
                                 control: Control::Fact(Value::Text(
                                     status
-                                        .and_then(|status| status.last_finished_at.clone())
+                                        .and_then(|status| status.last_finished_at.as_deref())
+                                        .map(local_time)
                                         .unwrap_or_else(|| "Never".to_string()),
                                 )),
                             },
@@ -996,10 +1014,12 @@ impl SettingsWindow {
                         vec![
                             Group {
                                 title: "Off-site backup",
-                                status: Some(if backup.enabled {
-                                    ("On", Tone::Good)
+                                status: Some(if self.backup_pending.is_some() {
+                                    ("Unsaved", Tone::Attention)
+                                } else if backup.enabled {
+                                    ("Scheduled", Tone::Good)
                                 } else {
-                                    ("Off", Tone::Off)
+                                    ("Not scheduled", Tone::Off)
                                 }),
                                 rows,
                             },
@@ -1007,13 +1027,20 @@ impl SettingsWindow {
                                 title: "Last run",
                                 status: Some(match status {
                                     Some(status) if status.service_active => {
-                                        ("Running", Tone::Attention)
+                                        ("Running", Tone::Busy)
+                                    }
+                                    Some(status)
+                                        if status.last_result.as_deref().is_some_and(
+                                            |result| !matches!(result, "success" | ""),
+                                        ) =>
+                                    {
+                                        ("Last run failed", Tone::Danger)
                                     }
                                     Some(status) if !status.timer_active => {
                                         ("Timer off", Tone::Off)
                                     }
                                     Some(_) => ("Idle", Tone::Off),
-                                    None => ("Unknown", Tone::Off),
+                                    None => ("Unknown", Tone::Danger),
                                 }),
                                 rows: last,
                             },
@@ -1100,6 +1127,7 @@ impl SettingsWindow {
             return false;
         }
         match action {
+            RowAction::Refresh => !self.refreshing,
             RowAction::RunBackup => !self
                 .snapshot
                 .backup_status
@@ -2273,6 +2301,20 @@ impl SettingsWindow {
                         )
                     }),
             )
+            .when(
+                matches!(
+                    control,
+                    Control::Text(_) | Control::Toggle(_) | Control::Time
+                ),
+                |this| {
+                    this.child(
+                        div()
+                            .text_size(px(TYPE_CAPTION))
+                            .text_color(theme.muted_foreground)
+                            .child("Enter to change"),
+                    )
+                },
+            )
             .child(self.control_element(&view, &control, page_index, row_index, theme))
             // A pointer sets the cursor where it clicked, and does what Enter
             // would have done: nothing on this page is pointer-only.
@@ -2338,7 +2380,11 @@ impl SettingsWindow {
                 Button::new(SharedString::from(format!(
                     "action-{page_index}-{row_index}"
                 )))
-                .label(action.label())
+                .label(if action == RowAction::Refresh && self.refreshing {
+                    "Refreshing…"
+                } else {
+                    action.label()
+                })
                 .disabled(!self.action_enabled(action))
                 .on_click(move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
                     view.update(cx, |this, cx| this.run(action, cx));
@@ -2362,6 +2408,7 @@ impl SettingsWindow {
             Value::Storage {
                 used_percent,
                 available,
+                total,
             } => h_flex()
                 .items_center()
                 .gap_3()
@@ -2383,13 +2430,14 @@ impl SettingsWindow {
                         .text_size(px(TYPE_VALUE))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.foreground)
-                        .child(available.clone()),
+                        .whitespace_nowrap()
+                        .child(format!("{available} free of {total}")),
                 )
                 .into_any_element(),
         }
     }
 
-    fn footer(&self, cx: &Context<Self>, theme: &Theme, editing: Editing) -> AnyElement {
+    fn footer(&self, theme: &Theme, editing: Editing) -> AnyElement {
         h_flex()
             .w_full()
             .items_center()
@@ -2415,16 +2463,11 @@ impl SettingsWindow {
                             .child(hint("Esc", "Done", theme))
                     })
                     .when(editing == Editing::None, |this| {
-                        this.child(hint("Up/Down", "Move", theme))
-                            .child(hint("Left/Right", "Page", theme))
-                            .child(hint("Enter", "Select or edit", theme))
-                            .child(hint("Escape", "Close", theme))
+                        this.child(hint("↑↓", "Move", theme))
+                            .child(hint("←→", "Page", theme))
+                            .child(hint("A", "Select or edit", theme))
+                            .child(hint("B", "Back", theme))
                     }),
-            )
-            .child(
-                Button::new("close")
-                    .label("Close")
-                    .on_click(cx.listener(|_, _, _, cx| cx.quit())),
             )
             .into_any_element()
     }
@@ -2603,6 +2646,7 @@ fn group_title(group: &Group, theme: &Theme) -> AnyElement {
                 Tone::Good => Tag::success(),
                 Tone::Attention => Tag::warning(),
                 Tone::Off => Tag::new(),
+                Tone::Busy => Tag::info(),
                 Tone::Danger => Tag::danger(),
             };
             this.child(tag.py_1p5().px_3().text_size(px(TYPE_CAPTION)).child(label))
@@ -2614,7 +2658,7 @@ fn group_title(group: &Group, theme: &Theme) -> AnyElement {
 /// or nothing linked yet. A linked account outranks a stale offer.
 fn stremio_account(linked_at: Option<&str>, waiting: bool) -> String {
     match (linked_at, waiting) {
-        (Some(linked_at), _) => format!("Linked since {linked_at}"),
+        (Some(linked_at), _) => format!("Linked since {}", local_time(linked_at)),
         (None, true) => "Waiting for approval".to_string(),
         (None, false) => "Not linked".to_string(),
     }
@@ -2715,7 +2759,7 @@ impl Render for SettingsWindow {
                                     }),
                             ),
                     )
-                    .child(self.footer(cx, theme, self.editing_kind(window, cx))),
+                    .child(self.footer(theme, self.editing_kind(window, cx))),
             )
     }
 }
