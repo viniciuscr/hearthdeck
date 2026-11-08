@@ -84,9 +84,9 @@ const TYPE_CAPTION: f32 = 16.0;
 const TYPE_REM: f32 = 19.0;
 
 /// The page column, sized for a television rather than a laptop window.
-const SIDEBAR_WIDTH: f32 = 320.0;
+const SIDEBAR_WIDTH: f32 = 360.0;
 /// How wide the reading column may get on a wide display.
-const CONTENT_MAX_WIDTH: f32 = 1100.0;
+const CONTENT_MAX_WIDTH: f32 = 1280.0;
 const RING_SIZE: f32 = 48.0;
 /// The width a text field takes on the right of its row.
 const FIELD_WIDTH: f32 = 380.0;
@@ -270,8 +270,32 @@ struct Page {
 }
 
 impl Page {
+    #[cfg(test)]
     fn row_count(&self) -> usize {
         self.groups.iter().map(|group| group.rows.len()).sum()
+    }
+
+    /// The flat row indexes the cursor may land on.
+    ///
+    /// A fact row is drawn but never focused: Enter on it does nothing, and a
+    /// cursor that stops on a dead row is worse than one that steps over it.
+    fn cursor_rows(&self) -> Vec<usize> {
+        let mut flat = 0;
+        let mut rows = Vec::new();
+        for group in &self.groups {
+            for row in &group.rows {
+                if !matches!(row.control, Control::Fact(_)) {
+                    rows.push(flat);
+                }
+                flat += 1;
+            }
+        }
+        rows
+    }
+
+    /// Where a flat row sits among the cursor rows, or `None` for a fact.
+    fn cursor_index_of(&self, flat: usize) -> Option<usize> {
+        self.cursor_rows().iter().position(|index| *index == flat)
     }
 }
 
@@ -307,8 +331,9 @@ struct Row {
 /// items keeps one card.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Item {
-    /// The space between two cards.
-    Gap,
+    /// The space between two cards, in px: 32 above the first card, 24 between
+    /// the rest, so the header separates from the stack.
+    Gap(u16),
     /// A card's heading.
     Header { group: usize },
     /// One row inside a card.
@@ -327,7 +352,7 @@ fn flat_items(page: &Page) -> (Vec<Item>, Vec<usize>) {
     let mut items = Vec::new();
     let mut rows = Vec::new();
     for (group_ix, group) in page.groups.iter().enumerate() {
-        items.push(Item::Gap);
+        items.push(Item::Gap(if group_ix == 0 { 32 } else { 24 }));
         items.push(Item::Header { group: group_ix });
         for (row_ix, _) in group.rows.iter().enumerate() {
             rows.push(items.len());
@@ -339,7 +364,7 @@ fn flat_items(page: &Page) -> (Vec<Item>, Vec<usize>) {
             });
         }
     }
-    items.push(Item::Gap);
+    items.push(Item::Gap(24));
     (items, rows)
 }
 
@@ -364,6 +389,17 @@ impl Inputs {
             TextField::BackupRoot => &self.backup_root,
         }
     }
+}
+
+/// What a row needs to know about the cursor: which page it is on, where it sits
+/// in the flat page, whether it is the focused row, and its index among the rows
+/// the cursor can reach (`None` for a fact, which can never be focused).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RowFocus {
+    page: usize,
+    flat: usize,
+    cursor: Option<usize>,
+    focused: bool,
 }
 
 /// Values the first read brings, applied on the next render: a text field cannot
@@ -874,7 +910,8 @@ impl SettingsWindow {
                             },
                         ];
                         if !backup.remote_available {
-                            rows.push(Row {
+                            // Above the switch it explains, not below it.
+                            rows.insert(0, Row {
                                 label: "Remote not found",
                                 description: Some(
                                     "Add it in rclone first (`rclone config`), then refresh this page.",
@@ -981,7 +1018,7 @@ impl SettingsWindow {
     fn selection(&self) -> Option<Control> {
         let pages = self.pages();
         let page = pages.get(self.nav.page())?;
-        let mut row = self.nav.row();
+        let mut row = *page.cursor_rows().get(self.nav.row())?;
         for group in &page.groups {
             if row < group.rows.len() {
                 return Some(group.rows[row].control.clone());
@@ -1893,7 +1930,7 @@ impl SettingsWindow {
             .w(px(SIDEBAR_WIDTH))
             .h_full()
             .flex_shrink_0()
-            .gap_1()
+            .gap_2()
             .p_6()
             .border_r_1()
             .border_color(theme.border)
@@ -1911,9 +1948,9 @@ impl SettingsWindow {
                     .id(SharedString::from(format!("page-{index}")))
                     .w_full()
                     .items_center()
+                    .min_h(px(56.))
                     .gap_3()
                     .px_4()
-                    .py_3()
                     .rounded(theme.radius)
                     .when(active, |this| this.bg(theme.sidebar_accent))
                     .child(Icon::new(kind.icon()).text_color(if active {
@@ -1975,7 +2012,7 @@ impl SettingsWindow {
             .min_w_0()
             .overflow_hidden()
             .child(
-                v_flex().w_full().px_8().pt_8().pb_4().child(
+                v_flex().w_full().items_center().px_8().pt_8().pb_6().child(
                     v_flex()
                         .w_full()
                         .max_w(px(CONTENT_MAX_WIDTH))
@@ -2058,11 +2095,12 @@ impl SettingsWindow {
             card
         };
         match item {
-            Item::Gap => div().h(px(24.)).into_any_element(),
+            Item::Gap(height) => div().h(px(f32::from(height))).into_any_element(),
             Item::Header { group } => {
                 let group = &pages[page_index].groups[group];
-                div()
+                h_flex()
                     .w_full()
+                    .justify_center()
                     .px_8()
                     .child(
                         card(true, false)
@@ -2079,18 +2117,32 @@ impl SettingsWindow {
                 flat,
                 last,
             } => {
-                let group = &pages[page_index].groups[group];
-                let row = &group.rows[row];
-                let focused = page_index == self.nav.page() && flat == self.nav.row();
-                div()
+                let page = &pages[page_index];
+                let row_data = &page.groups[group].rows[row];
+                let focused = page_index == self.nav.page()
+                    && page.cursor_rows().get(self.nav.row()).copied() == Some(flat);
+                let cursor = page.cursor_index_of(flat);
+                let mut surface = card(false, last).p_2();
+                // The separator belongs between rows, not under the cursor: a
+                // hairline inside the focus ring reads as a double border.
+                if row > 0 && !focused {
+                    surface = surface.border_t_1().border_color(theme.border);
+                }
+                h_flex()
                     .w_full()
+                    .justify_center()
                     .px_8()
-                    .child(
-                        card(false, last)
-                            .border_t_1()
-                            .border_color(theme.border)
-                            .child(self.row_element(view, row, page_index, flat, focused, theme)),
-                    )
+                    .child(surface.child(self.row_element(
+                        view,
+                        row_data,
+                        RowFocus {
+                            page: page_index,
+                            flat,
+                            cursor,
+                            focused,
+                        },
+                        theme,
+                    )))
                     .into_any_element()
             }
         }
@@ -2100,11 +2152,15 @@ impl SettingsWindow {
         &self,
         view: Entity<Self>,
         row: &Row,
-        page_index: usize,
-        row_index: usize,
-        focused: bool,
+        focus: RowFocus,
         theme: &Theme,
     ) -> AnyElement {
+        let RowFocus {
+            page: page_index,
+            flat: row_index,
+            cursor,
+            focused,
+        } = focus;
         let control = row.control.clone();
         // The row's click only carries rows whose control has no click of its
         // own: a switch and a button already do something when pressed, and
@@ -2113,7 +2169,12 @@ impl SettingsWindow {
         let view_for_click = view.clone();
         let on_click = move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
             view_for_click.update(cx, |this, cx| {
-                this.nav.select(page_index, row_index);
+                // A fact has no cursor position; clicking it must not move the
+                // cursor onto a row that Enter cannot act on.
+                let Some(cursor) = cursor else {
+                    return;
+                };
+                this.nav.select(page_index, cursor);
                 if confirm_on_click {
                     this.confirm(window, cx);
                 }
@@ -2128,13 +2189,20 @@ impl SettingsWindow {
             .px_4()
             .py_3()
             .rounded(theme.radius)
-            .border_1()
+            // Three cues, not one hue: a surface, a real border and a bar, so
+            // the focused row survives a greyscale screenshot at three metres.
+            .border_2()
             .border_color(if focused {
-                theme.ring
+                theme.list_active_border
             } else {
                 theme.transparent
             })
             .when(focused, |this| this.bg(theme.list_active))
+            .child(div().w(px(4.)).h(px(40.)).rounded_full().bg(if focused {
+                theme.accent
+            } else {
+                theme.transparent
+            }))
             .child(
                 v_flex()
                     .flex_1()
@@ -2142,7 +2210,11 @@ impl SettingsWindow {
                     .child(
                         div()
                             .text_size(px(TYPE_LABEL))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(if focused {
+                                FontWeight::SEMIBOLD
+                            } else {
+                                FontWeight::MEDIUM
+                            })
                             .child(row.label),
                     )
                     .when_some(row.description, |this, description| {
@@ -2179,16 +2251,39 @@ impl SettingsWindow {
             Control::Toggle(field) => {
                 let field = *field;
                 let view = view.clone();
-                Switch::new(SharedString::from(format!(
-                    "switch-{page_index}-{row_index}"
-                )))
-                .checked(self.toggle_value(field))
-                .disabled(!self.toggle_enabled(field))
-                .on_click(move |checked: &bool, _: &mut Window, cx: &mut App| {
-                    let value = *checked;
-                    view.update(cx, |this, cx| this.set_toggle(field, value, cx));
-                })
-                .into_any_element()
+                let enabled = self.toggle_enabled(field);
+                // "Off because you turned it off" and "off because it cannot work"
+                // must not be the same pixels.
+                let reason = match field {
+                    ToggleField::Backup => "Needs a remote",
+                    ToggleField::Categorization => "Unavailable",
+                };
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .when(!enabled, |this| {
+                        this.child(
+                            Tag::warning()
+                                .py_1p5()
+                                .px_3()
+                                .text_size(px(TYPE_CAPTION))
+                                .child(reason),
+                        )
+                    })
+                    .child(
+                        Switch::new(SharedString::from(format!(
+                            "switch-{page_index}-{row_index}"
+                        )))
+                        .checked(self.toggle_value(field))
+                        .disabled(!enabled)
+                        .on_click(
+                            move |checked: &bool, _: &mut Window, cx: &mut App| {
+                                let value = *checked;
+                                view.update(cx, |this, cx| this.set_toggle(field, value, cx));
+                            },
+                        ),
+                    )
+                    .into_any_element()
             }
             Control::Time => div()
                 .w(px(190.))
@@ -2216,6 +2311,9 @@ impl SettingsWindow {
                 .text_size(px(TYPE_VALUE))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.foreground)
+                .max_w(px(560.))
+                .whitespace_nowrap()
+                .truncate()
                 .child(text.clone())
                 .into_any_element(),
             Value::Storage {
@@ -2248,7 +2346,7 @@ impl SettingsWindow {
         }
     }
 
-    fn footer(&self, cx: &Context<Self>, theme: &Theme) -> AnyElement {
+    fn footer(&self, cx: &Context<Self>, theme: &Theme, editing: bool) -> AnyElement {
         h_flex()
             .w_full()
             .items_center()
@@ -2264,10 +2362,17 @@ impl SettingsWindow {
                     .gap_5()
                     .text_size(px(TYPE_CAPTION))
                     .text_color(theme.muted_foreground)
-                    .child(hint("Up/Down", "Move", theme))
-                    .child(hint("Left/Right", "Page", theme))
-                    .child(hint("Enter", "Select or edit", theme))
-                    .child(hint("Escape", "Close", theme)),
+                    .when(editing, |this| {
+                        this.child(hint("← →", "Caret", theme))
+                            .child(hint("↑ ↓", "Value", theme))
+                            .child(hint("Esc", "Done", theme))
+                    })
+                    .when(!editing, |this| {
+                        this.child(hint("Up/Down", "Move", theme))
+                            .child(hint("Left/Right", "Page", theme))
+                            .child(hint("Enter", "Select or edit", theme))
+                            .child(hint("Escape", "Close", theme))
+                    }),
             )
             .child(
                 Button::new("close")
@@ -2502,7 +2607,10 @@ impl Render for SettingsWindow {
         self.apply_prefill(window, cx);
         let theme = cx.theme();
         let pages = self.pages();
-        let counts = pages.iter().map(Page::row_count).collect::<Vec<_>>();
+        let counts = pages
+            .iter()
+            .map(|page| page.cursor_rows().len())
+            .collect::<Vec<_>>();
         // The content is the source of truth for how many rows exist, so the
         // cursor is pulled back inside it before anything is drawn.
         self.nav.resize(&counts);
@@ -2519,7 +2627,8 @@ impl Render for SettingsWindow {
 
         // Keep the cursor's row on screen. This is what makes a page taller than
         // the display navigable with no pointer at all.
-        if let Some(item) = row_items.get(self.nav.row())
+        let selected = pages[page_index].cursor_rows().get(self.nav.row()).copied();
+        if let Some(item) = selected.and_then(|flat| row_items.get(flat))
             && self.scrolled_to != Some((page_index, self.nav.row()))
         {
             self.list.scroll_to_reveal_item(*item);
@@ -2541,7 +2650,7 @@ impl Render for SettingsWindow {
                             Alert::info("settings-notice", notice).text_size(px(TYPE_CAPTION)),
                         ))
                     })
-                    .child(self.footer(cx, theme)),
+                    .child(self.footer(cx, theme, self.editing(window, cx))),
             )
     }
 }
@@ -2995,12 +3104,12 @@ mod tests {
 
         assert_eq!(
             items.first(),
-            Some(&Item::Gap),
-            "a card starts clear of the heading"
+            Some(&Item::Gap(32)),
+            "the first card starts clear of the heading, and further than the rest"
         );
         assert_eq!(
             items.last(),
-            Some(&Item::Gap),
+            Some(&Item::Gap(24)),
             "the page ends clear of the footer"
         );
         assert!(
@@ -3349,9 +3458,10 @@ mod render_tests {
         cx.simulate_resize(size(px(1280.), px(720.)));
         draw(cx);
 
-        // `Connections` → fourth row down is the TMDB key field.
+        // `Connections` → the TMDB key field, counting only actionable rows:
+        // server address, sign in, link Stremio, then the key.
         cx.simulate_keystrokes("right");
-        for _ in 0..4 {
+        for _ in 0..3 {
             cx.simulate_keystrokes("down");
         }
         cx.simulate_keystrokes("enter");

@@ -69,38 +69,52 @@ ring.
 - [x] **CS-06 · stock palette, not Hearthdeck's.** Same fix as CS-03; the accent,
       focus and elevation ladder must match the library behind it.
 
-## Phase 3 — Layout and focus
+## Phase 3 — Layout and focus — done
 
-- [ ] **LY-01 · the reading column is not centred.** `max_w(1100)` with no
+Shipped: a centred 1280 column (centred with `items_center`/`justify_center` -
+this gpui has no `mx_auto`), a card inset so the ring floats rather than touching
+the card edge, the cursor skipping fact rows entirely, three focus cues (surface,
+2px border, 4px accent bar, semibold label), the footer switching to
+caret/value/done while a field owns the keys, a dead switch explaining itself,
+the 360px rail with 56px items, a fixed 56px notice strip, and values capped at
+560px with an ellipsis.
+
+Two items the kit blocks, recorded rather than forced: `Switch` has no public
+size and `Icon`'s `Sizable` is unreachable (`Size` lives in a private module), so
+the switch track stays the kit's 36x20 and the sidebar icon stays its default.
+The 19px rem already lifts their *text*; the track and the glyph need an upstream
+export.
+
+- [x] **LY-01 · the reading column is not centred.** `max_w(1100)` with no
       `mx_auto` leaves 436px of dead black at 1920. Fix: `CONTENT_MAX_WIDTH =
       1280`, `.mx_auto()` on the title block and every card.
-- [ ] **FX-01 · the cursor lands on rows that do nothing.** `Fact` rows take focus
+- [x] **FX-01 · the cursor lands on rows that do nothing.** `Fact` rows take focus
       and the full ring; Enter is silent. Fix: count only Text/Toggle/Time/Action
       in `Nav`; draw facts without fill or ring.
-- [ ] **FX-02 · focus is a 1px grey hairline** (`theme.ring`, `#737373`). Fix:
+- [x] **FX-02 · focus is a 1px grey hairline** (`theme.ring`, `#737373`). Fix:
       `border_2` in `list_active_border`, keep the `list_active` fill, add a 4px
       accent left bar, label SEMIBOLD — four cues, and it survives grayscale.
-- [ ] **FX-03 · "a field owns the keys" looks like "a row is focused".** Fix:
+- [x] **FX-03 · "a field owns the keys" looks like "a row is focused".** Fix:
       while editing, swap the footer for `←→ caret · ↑↓ value · Esc Done` and put
       a 2px `ring` on the row.
-- [ ] **FX-04 · a disabled switch gives no reason** and is only a dimmed 36×20
+- [x] **FX-04 · a disabled switch gives no reason** and is only a dimmed 36×20
       track. Fix: `Switch::with_size(Size::Large)` (44×24) plus a 16px `Tag`
       "Unavailable" / "Needs a remote"; move the `Remote not found` row directly
       above the switch.
-- [ ] **LY-02 · the focus ring is drawn flush to the card edge** and collides with
+- [x] **LY-02 · the focus ring is drawn flush to the card edge** and collides with
       the separator. Fix: card `p_2` inset; rows keep `px_5 py_4`.
-- [ ] **LY-03 · the title block does not read as a header.** Fix: `pt_8 pb_6` and
+- [x] **LY-03 · the title block does not read as a header.** Fix: `pt_8 pb_6` and
       a 32px first gap, the largest space on the page.
-- [ ] **LY-04 · sidebar items are ~46px with 4px between them.** Fix:
+- [x] **LY-04 · sidebar items are ~46px with 4px between them.** Fix:
       `min_h(56)`, gap 8, `px_4`, icon 24.
-- [ ] **LY-05 · sidebar is 320px (16.7% of 1920)** — the narrowest element on
+- [x] **LY-05 · sidebar is 320px (16.7% of 1920)** — the narrowest element on
       screen is the one Left/Right drives. Fix: 360.
-- [ ] **LY-06 · the notice resizes the viewport** and can hide the row just
+- [x] **LY-06 · the notice resizes the viewport** and can hide the row just
       pressed, with no re-scroll. Fix: a fixed 56px strip, always present, one
       line, ellipsis.
-- [ ] **LY-07 · values have no max width.** Fix: `max_w(560)`, no wrap, ellipsis;
+- [x] **LY-07 · values have no max width.** Fix: `max_w(560)`, no wrap, ellipsis;
       full value in a tooltip.
-- [ ] **PL-04 · the focused row keeps `border_t_1`**, doubling the line where it
+- [x] **PL-04 · the focused row keeps `border_t_1`**, doubling the line where it
       meets the separator. Fix: skip the separator on the focused row.
 
 ## Phase 4 — Say what things mean
