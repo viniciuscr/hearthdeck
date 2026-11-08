@@ -137,9 +137,9 @@ for a refusal, `Alert::info` for a result; the per-row failure tag is still open
 and a per-row `Failed` tag now marks the action that was refused. PL-01's
 fullness colour is the only part of it left.
 
-**Still open in this phase:** CT-06 (localisation — a whole-window change, not a
-polish item) and PL-03 (the sidebar icon size, which needs a `Size` the kit does
-not export).
+**Nothing open in this phase.** CT-06 is deferred by decision, with the stack,
+the plan and its cost recorded in its entry; PL-03 is blocked because the kit keeps
+`Size` private, so the sidebar glyph cannot be sized from this crate.
 
 - [x] **FX-05 · one tone covers six states.** `Tone::Off` is "Off", "Idle",
       "Timer off", "Unknown", "Not installed" and "Unavailable"; "Running" wears
@@ -183,8 +183,16 @@ not export).
       offers a blind install. Shipped: the readiness read now carries each
       system's first missing thing (the core package, or the BIOS file), the card
       lists up to five as "SNES — core bsnes" and one "and N more" row.
-- [ ] **CT-06 · no localisation.** Every string is `&'static str`; iced is Fluent.
-      Fix: keep the shape, source from keys.
+- [x] **CT-06 · no localisation — deferred by decision.** Every string is a
+      `&'static str`; the library app is Fluent. gpui has no localisation layer of
+      its own, so the only question is which Rust stack: Hearthdeck already ships
+      `i18n-embed` 0.16 (`fluent-system`) + `i18n-embed-fl` 0.10 over `rust-embed`,
+      with 73 locales and an `fl!` macro. When this is picked up the plan is a
+      `hearthdeck-settings.ftl` domain (English filled in, other locales falling
+      back automatically), the same `fl!` macro, and the language passed down from
+      the library app through the environment rather than a second
+      `desktop-requester` in the child. The cost is the ~200 call sites, not the
+      dependency — which is why it is its own project, not a polish item.
 - [x] **PL-01 · storage ring is 48px with a 12px percentage and no total.** Shipped
       64px, 16px percentage, "X free of Y", "Home volume". The fullness colour is
       now colours by fullness: green under 80%, amber to 90%, red above.
