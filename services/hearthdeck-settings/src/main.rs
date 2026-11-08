@@ -556,6 +556,9 @@ struct SettingsWindow {
     /// Whether that line reports a refusal rather than a result. The two must not
     /// look the same at three metres.
     notice_failed: bool,
+    /// The action row the last refusal belongs to, so the eye lands where the
+    /// problem is instead of hunting the strip.
+    failed_action: Option<RowAction>,
     /// Set by the first Back that would discard something, so the second one is
     /// the answer rather than a surprise.
     close_armed: bool,
@@ -583,6 +586,7 @@ impl SettingsWindow {
             scrolled_to: None,
             notice: None,
             notice_failed: false,
+            failed_action: None,
             close_armed: false,
         }
     }
@@ -1081,12 +1085,19 @@ impl SettingsWindow {
     fn say(&mut self, text: impl Into<String>) {
         self.notice = Some(text.into());
         self.notice_failed = false;
+        self.failed_action = None;
     }
 
     /// A line under the page that reports a refusal. Same place, different weight.
     fn fail(&mut self, text: impl Into<String>) {
         self.notice = Some(text.into());
         self.notice_failed = true;
+    }
+
+    /// The same, for a refusal that belongs to one row.
+    fn fail_on(&mut self, action: RowAction, text: impl Into<String>) {
+        self.failed_action = Some(action);
+        self.fail(text);
     }
 
     /// Reads the daemon and the disk on a background thread: both are blocking,
@@ -1123,6 +1134,7 @@ impl SettingsWindow {
     }
 
     fn run(&mut self, action: RowAction, cx: &mut Context<Self>) {
+        self.failed_action = None;
         if !self.action_enabled(action) {
             self.notice = Some(action.blocked().to_string());
             cx.notify();
@@ -1596,7 +1608,10 @@ impl SettingsWindow {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the TMDB key could not be saved");
-                        this.fail(format!("TMDB key not saved: {error}"));
+                        this.fail_on(
+                            RowAction::SaveTmdbKey,
+                            format!("TMDB key not saved: {error}"),
+                        );
                     }
                 }
                 cx.notify();
@@ -1648,7 +1663,7 @@ impl SettingsWindow {
                         // Nothing was written, so the draft is not worth keeping:
                         // the switch drops back to what the daemon actually holds.
                         this.backup_pending = None;
-                        this.fail(format!("Backup not saved: {error}"));
+                        this.fail_on(RowAction::SaveBackup, format!("Backup not saved: {error}"));
                         // A PUT can fail *after* writing the files - the timer
                         // could not be moved - so the page reads back what the
                         // daemon actually holds instead of the old values.
@@ -1685,7 +1700,7 @@ impl SettingsWindow {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the backup run could not be started");
-                        this.fail(format!("Backup not started: {error}"));
+                        this.fail_on(RowAction::RunBackup, format!("Backup not started: {error}"));
                     }
                 }
                 cx.notify();
@@ -1811,7 +1826,10 @@ impl SettingsWindow {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the TMDB key file could not be used");
-                        this.fail(format!("TMDB key not read: {error}"));
+                        this.fail_on(
+                            RowAction::ImportTmdbKey,
+                            format!("TMDB key not read: {error}"),
+                        );
                     }
                 }
                 cx.notify();
@@ -1841,7 +1859,10 @@ impl SettingsWindow {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the core install failed");
-                        this.fail(format!("Cores not installed: {error}"));
+                        this.fail_on(
+                            RowAction::InstallCores,
+                            format!("Cores not installed: {error}"),
+                        );
                     }
                 }
                 cx.notify();
@@ -1873,7 +1894,7 @@ impl SettingsWindow {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the BIOS sync failed");
-                        this.fail(format!("BIOS not synced: {error}"));
+                        this.fail_on(RowAction::SyncBios, format!("BIOS not synced: {error}"));
                     }
                 }
                 cx.notify();
@@ -2427,6 +2448,18 @@ impl SettingsWindow {
                 Button::new(SharedString::from(format!(
                     "action-{page_index}-{row_index}"
                 )))
+                .when(
+                    self.failed_action == Some(action) && self.notice_failed,
+                    |this| {
+                        this.child(
+                            Tag::danger()
+                                .py_1p5()
+                                .px_3()
+                                .text_size(px(TYPE_CAPTION))
+                                .child("Failed"),
+                        )
+                    },
+                )
                 .label(if action == RowAction::Refresh && self.refreshing {
                     "Refreshing…"
                 } else {

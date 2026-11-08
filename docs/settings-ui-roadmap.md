@@ -134,12 +134,12 @@ fixed on Status (Daemon first) and Backup (Last run first); the storage ring at
 Shipped since: AF-04 (the first Back with a draft or an edited field asks, the
 second closes), AF-07 (the device code is 48px monospaced), FB-02 (`Alert::error`
 for a refusal, `Alert::info` for a result; the per-row failure tag is still open),
-and PL-01's fullness colour is the only part of it left.
+and a per-row `Failed` tag now marks the action that was refused. PL-01's
+fullness colour is the only part of it left.
 
-**Still open in this phase:** the per-row failure tag from FB-02, CT-05 (the
-missing-systems list, which needs data the snapshot does not carry), CT-06
-(localisation), CS-07 (motion), PL-01's fullness colour, and the CS-05 / FB-04 /
-CT-07 / PL-02 / PL-03 nits.
+**Still open in this phase:** CT-05 (the missing-systems list, which needs data
+the snapshot does not carry), CT-06 (localisation), CS-07 (motion), PL-01's
+fullness colour, and the CS-05 / FB-04 / CT-07 / PL-02 / PL-03 nits.
 
 - [x] **FX-05 · one tone covers six states.** `Tone::Off` is "Off", "Idle",
       "Timer off", "Unknown", "Not installed" and "Unavailable"; "Running" wears
