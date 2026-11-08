@@ -44,6 +44,8 @@ docs carry the *why* the code cannot.
 | [`input-ownership.md`](input-ownership.md) | Controller broker, keyboard handoff, host acceptance and recovery |
 | [`retroarch-integration.md`](retroarch-integration.md) | RomM/RetroArch decisions, `romm.service` startup, open questions, phased roadmap |
 | [`stremio-integration.md`](stremio-integration.md) | Stremio account linking, the verified `api.strem.io` shapes, Continue Watching rail, credential storage decision |
+| [`settings-window.md`](settings-window.md) | Settings as a GPUI process: why the split, the Back/focus contract, the two rollbacks, packaging |
+| [`spikes/gpui-progress.md`](spikes/gpui-progress.md) | gpui/gpui-kit verdict: component quality, crate cost, and why it cannot be dropped into an iced screen |
 
 ## Reference and process
 

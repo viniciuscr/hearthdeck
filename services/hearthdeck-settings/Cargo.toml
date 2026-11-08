@@ -1,0 +1,45 @@
+[package]
+name = "hearthdeck-settings"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Hearthdeck's settings window, drawn with GPUI"
+publish = false
+
+# GPUI is used directly rather than through the `gpui-kit` facade. The facade
+# hard-enables `gpui-pre-platform`'s `x11` feature next to `wayland`, and Cargo
+# features are additive, so every kit user links the X11 backend (`libxkbcommon-x11`,
+# `libxcb`) whether or not the session has X in it. This window is a Wayland
+# client on a Wayland session, so the backend is requested by name and X11 is
+# simply not built.
+[dependencies]
+gpui = { package = "gpui-pre", version = "0.3.11" }
+gpui-base = "0.9"
+gpui-component = "0.9"
+gpui-platform = { package = "gpui-pre-platform", version = "0.3.11", features = [
+  "wayland",
+] }
+nix = { version = "0.30", features = ["fs"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "blocking",
+  "json",
+  "rustls-tls",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+
+# The headless window harness: it draws the page and reports element bounds, so
+# a layout that draws nothing fails a test instead of failing on the television.
+# `test-support` is a dev-only feature, so it pulls GPUI's `x11` backend into
+# test builds only - the packaged binary still links Wayland alone.
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "0.3.11", features = ["test-support"] }
+
+# Deliberately its own workspace, though it lives under `services/`. GPUI brings
+# its own large dependency tree; joining `services/Cargo.toml` would make every
+# `just check` and every CI run compile it, for a window that shares no code with
+# the daemon. `packaging/arch/PKGBUILD` builds it with `--manifest-path`.
+[workspace]

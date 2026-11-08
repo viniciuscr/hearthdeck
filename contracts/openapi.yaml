@@ -33,6 +33,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Diagnostics'
+  /v1/pairing:
+    post:
+      operationId: createPairing
+      description: >-
+        Mints a pairing code. Loopback admin listener only: a remote device may
+        submit a code, but only the host itself can create one.
+      responses:
+        '200':
+          description: A code the host displays, and when it stops working
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PairingCode'
   /v1/pairing/complete:
     post:
       operationId: completePairing
@@ -795,6 +808,56 @@ paths:
           description: >-
             Unlinked: the session is gone, and the catalog rows that source owned
             are removed with it, so no rail can outlive the account it came from.
+  /v1/tmdb/settings:
+    description: >-
+      The credential the new-arrivals banner is read with. Served on the loopback
+      admin listener only, like `/v1/pairing`: it is set once from the host
+      itself, which keeps a key out of the LAN and out of a controller keyboard.
+    get:
+      operationId: getTmdbSettings
+      responses:
+        '200':
+          description: >-
+            Reduced to whether a key is stored and when, or null when none is.
+            The key is never returned.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TmdbSettings'
+                  - type: 'null'
+    put:
+      operationId: setTmdbSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [api_key]
+              properties:
+                api_key:
+                  type: string
+                  description: >-
+                    A v3 key or a v4 read token; both are accepted, because TMDB
+                    accepts them differently and a user may have either.
+      responses:
+        '200':
+          description: Stored, and a refresh of the arrivals source requested.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TmdbSettings'
+        '400':
+          description: The value could not be a TMDB credential, so nothing was stored.
+    delete:
+      operationId: clearTmdbSettings
+      description: >-
+        Removes the credential and the arrivals it published, so no banner can
+        outlive the key that filled it.
+      responses:
+        '204':
+          description: Cleared.
 components:
   securitySchemes:
     bearerAuth:
@@ -1317,6 +1380,21 @@ components:
             Hearthdeck's own window, not Stremio's: the upstream expiry is
             undocumented, and a live code and a dead one answer identically, so
             only this countdown can end the wait.
+    PairingCode:
+      type: object
+      required: [code, expires_at]
+      properties:
+        code: { type: string }
+        expires_at: { type: string, format: date-time }
+    TmdbSettings:
+      type: object
+      description: >-
+        Whether a TMDB credential is stored. Deliberately has no field for the key:
+        it is read by the discovery provider and nothing else.
+      required: [configured, updated_at]
+      properties:
+        configured: { type: boolean }
+        updated_at: { type: string, format: date-time }
     StremioConnection:
       type: object
       description: >-

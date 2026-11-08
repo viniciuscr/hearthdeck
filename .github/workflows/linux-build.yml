@@ -48,13 +48,19 @@ jobs:
             /home/builder/.cargo/git
             /home/builder/.cargo/registry
             services/target/release
-          key: arch-package-rust-v2-${{ runner.arch }}-rust-1.97.1-${{ hashFiles('services/Cargo.lock') }}
+            services/hearthdeck-settings/target/release
+          key: arch-package-rust-v3-${{ runner.arch }}-rust-1.97.1-${{ hashFiles('services/Cargo.lock', 'services/hearthdeck-settings/Cargo.lock') }}
           restore-keys: |
-            arch-package-rust-v2-${{ runner.arch }}-rust-1.97.1-
+            arch-package-rust-v3-${{ runner.arch }}-rust-1.97.1-
 
       - name: Make restored cache writable
         run: |
-          chown -R builder:builder /home/builder/.cargo "$GITHUB_WORKSPACE/services/target" 2>/dev/null || true
+          chown -R builder:builder /home/builder/.cargo "$GITHUB_WORKSPACE/services/target" "$GITHUB_WORKSPACE/services/hearthdeck-settings/target" 2>/dev/null || true
+
+      - name: Check the settings window
+        run: |
+          su --login builder --command "cd '$GITHUB_WORKSPACE' && PATH='/home/builder/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/bin' cargo fmt --manifest-path services/hearthdeck-settings/Cargo.toml --check"
+          su --login builder --command "cd '$GITHUB_WORKSPACE' && PATH='/home/builder/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/bin' cargo clippy --manifest-path services/hearthdeck-settings/Cargo.toml --all-targets -- -D warnings"
 
       - name: Build pacman package
         run: |
@@ -91,6 +97,7 @@ jobs:
             /home/builder/.cargo/git
             /home/builder/.cargo/registry
             services/target/release
+            services/hearthdeck-settings/target/release
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
 
       - name: Archive pacman package

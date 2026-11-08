@@ -23,6 +23,7 @@ mod sessions;
 mod settings;
 mod state;
 mod stremio;
+mod tmdb;
 mod traits;
 
 use std::{net::TcpListener as StdTcpListener, sync::Arc};
@@ -81,7 +82,7 @@ async fn main() -> Result<()> {
 
     let state = AppState::new(config.clone(), database);
     let discovery = discovery::DiscoveryService::start(
-        discovery_providers(&config, state.stremio.clone()),
+        discovery_providers(&config, state.stremio.clone(), state.tmdb.clone()),
         state.catalog.clone(),
         state.events.clone(),
     );
@@ -220,6 +221,7 @@ pub(crate) use hearthdeck_protocol::sources::DESKTOP_APPS as DESKTOP_APPS_SOURCE
 fn discovery_providers(
     config: &Config,
     stremio: stremio::StremioRepository,
+    tmdb: tmdb::TmdbRepository,
 ) -> Vec<Arc<dyn discovery::DiscoveryProvider>> {
     vec![
         Arc::new(
@@ -236,15 +238,15 @@ fn discovery_providers(
             stremio,
             config.bridge_socket_path.clone(),
         )),
-        // Publishes what has just arrived on Stremio, for the dashboard's hero
-        // banner. Anonymous — it reads a public addon catalog, not the account —
-        // but it needs the bridge for the same reason as above: a banner slide
-        // launches the Stremio desktop entry.
-        Arc::new(
-            discovery::providers::stremio_arrivals::StremioArrivalsProvider::new(
-                config.bridge_socket_path.clone(),
-            ),
-        ),
+        // Publishes the titles that have just become watchable at home, for the
+        // dashboard's hero banner. It reads TMDB rather than a Stremio catalog
+        // because a catalog's "new" is a cinema release calendar, and it needs the
+        // bridge for the same reason as above: a banner slide launches the Stremio
+        // desktop entry.
+        Arc::new(discovery::providers::arrivals::NewArrivalsProvider::new(
+            tmdb,
+            config.bridge_socket_path.clone(),
+        )),
     ]
 }
 

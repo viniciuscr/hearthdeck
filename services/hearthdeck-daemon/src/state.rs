@@ -17,6 +17,7 @@ use crate::{
     romm_link::DeviceLinkState,
     settings::SettingsRepository,
     stremio::{LinkState, StremioRepository},
+    tmdb::TmdbRepository,
 };
 
 #[derive(Clone)]
@@ -33,6 +34,9 @@ pub struct AppState {
     /// within minutes or not at all.
     pub stremio: StremioRepository,
     pub stremio_link: LinkState,
+    /// The TMDB credential the arrivals banner is read with. A secret, read only
+    /// by the arrivals provider; the settings route serves its timestamps.
+    pub tmdb: TmdbRepository,
     /// The RomM device approval a user may be waiting on.
     pub romm_link: DeviceLinkState,
     pub discovery: Option<DiscoveryService>,
@@ -50,6 +54,13 @@ impl AppState {
         crate::stremio::control::Control {
             session: &self.stremio,
             link: &self.stremio_link,
+            catalog: &self.catalog,
+        }
+    }
+
+    pub fn tmdb_connection(&self) -> crate::tmdb::Control<'_> {
+        crate::tmdb::Control {
+            settings: &self.tmdb,
             catalog: &self.catalog,
         }
     }
@@ -145,6 +156,7 @@ impl AppState {
             settings: SettingsRepository::new(database.pool().clone()),
             stremio: StremioRepository::new(database.pool().clone()),
             stremio_link: LinkState::new(),
+            tmdb: TmdbRepository::new(database.pool().clone()),
             romm_link: DeviceLinkState::new(),
             discovery: None,
             enrichment: None,
