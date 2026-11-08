@@ -1,0 +1,10 @@
+# Hearthdeck metadata under ~/.local/share/hearthdeck.
+# The database is snapshotted separately, game saves have their own jobs, the
+# model weights are 808 MB and the staging tree is a retired workaround.
+
+- /models/**
+- /pcloud-staging/**
+- /retroarch/**
+- /hearthdeck.db
+- /hearthdeck.db-shm
+- /hearthdeck.db-wal

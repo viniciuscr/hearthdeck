@@ -1,0 +1,5 @@
+# Dreamcast VMUs only. dc_boot.bin is the BIOS and dc_nvmem.bin is console
+# settings; neither is a save and neither belongs off-site.
+
++ vmu_save_*.bin
+- *

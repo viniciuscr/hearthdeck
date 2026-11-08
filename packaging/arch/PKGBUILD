@@ -37,6 +37,10 @@ optdepends=(
   'cosmic-osk: on-screen keyboard so a gamepad can type in any text field'
   'plymouth: Hearthdeck boot splash for the kernel and systemd boot screen'
   'podman-compose: start an optional local RomM stack with the Hearthdeck session'
+  # Off-site backup is opt-in and configured per user (cloud remote + OAuth),
+  # so rclone is not a hard dependency. The runner, filters and timer are
+  # packaged, but the timer stays disabled until a remote is configured.
+  'rclone: off-site backup of game saves and database dumps'
 )
 install="${pkgname}.install"
 backup=('etc/pacman.d/hearthdeck.conf')
@@ -85,6 +89,18 @@ package() {
   install -Dm644 deploy/systemd/hearthdeck-log.service "$pkgdir/usr/lib/systemd/user/hearthdeck-log.service"
   install -Dm644 packaging/arch/romm.service "$pkgdir/usr/lib/systemd/user/romm.service"
   install -Dm644 deploy/systemd/romm.path "$pkgdir/usr/lib/systemd/user/romm.path"
+
+  # Optional off-site backup. The timer is never enabled by the package:
+  # installing must not start uploading, and a nightly job with no remote only
+  # fails. Settings is the single activation path; it writes backup.env and the
+  # timer drop-in. Keeping the runner and filters here means pacman updates them.
+  install -Dm755 deploy/backup/hearthdeck-backup "$pkgdir/usr/lib/hearthdeck/hearthdeck-backup"
+  install -Dm644 deploy/backup/jobs.conf "$pkgdir/usr/lib/hearthdeck/hearthdeck-backup.d/jobs.conf"
+  install -d "$pkgdir/usr/lib/hearthdeck/hearthdeck-backup.d/filters"
+  install -m644 deploy/backup/filters/*.rclone "$pkgdir/usr/lib/hearthdeck/hearthdeck-backup.d/filters/"
+  install -Dm644 packaging/arch/hearthdeck-backup.service "$pkgdir/usr/lib/systemd/user/hearthdeck-backup.service"
+  install -Dm644 packaging/arch/hearthdeck-backup.timer "$pkgdir/usr/lib/systemd/user/hearthdeck-backup.timer"
+  install -Dm644 docs/backup-settings.md "$pkgdir/usr/share/doc/hearthdeck/backup-settings.md"
   install -Dm644 deploy/systemd/daemon.env.example "$pkgdir/usr/share/doc/hearthdeck/daemon.env.example"
   install -Dm644 deploy/systemd/romm.env.example "$pkgdir/usr/share/doc/hearthdeck/romm.env.example"
   install -Dm644 packaging/arch/input.env.example "$pkgdir/usr/share/doc/hearthdeck/input.env.example"

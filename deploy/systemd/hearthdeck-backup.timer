@@ -1,0 +1,12 @@
+[Unit]
+Description=Nightly Hearthdeck off-site backup
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+RandomizedDelaySec=15m
+AccuracySec=1m
+Unit=hearthdeck-backup.service
+
+[Install]
+WantedBy=timers.target

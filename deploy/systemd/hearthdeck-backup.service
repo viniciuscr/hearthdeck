@@ -1,0 +1,16 @@
+[Unit]
+Description=Hearthdeck nightly off-site backup
+Documentation=file:%h/.config/hearthdeck-backup/jobs.conf
+
+[Service]
+Type=oneshot
+Environment=HOME=%h
+EnvironmentFile=-%h/.config/hearthdeck-backup/backup.env
+ExecStart=/usr/lib/hearthdeck/hearthdeck-backup
+Nice=10
+IOSchedulingClass=idle
+IOSchedulingPriority=7
+CPUWeight=20
+IOWeight=20
+MemoryMax=512M
+TimeoutStartSec=6h

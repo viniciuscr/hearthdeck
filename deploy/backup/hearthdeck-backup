@@ -1,0 +1,309 @@
+#!/usr/bin/env bash
+# hearthdeck-backup - nightly off-site backup via rclone.
+#
+# Design goals:
+#   * one job list (jobs.conf) decides what goes where, so a source can move to
+#     a different cloud by changing one line;
+#   * rclone copy for saves and metadata, so the remote is append/update-only
+#     and can never lose a good copy because the local file disappeared;
+#   * rclone sync only for rotating dump folders and DB snapshots, guarded so an
+#     empty or unmounted source is skipped instead of mirrored as deletions;
+#   * low impact: two transfers, two checkers, idle I/O class, no daemon.
+#
+# Run by the packaged hearthdeck-backup.timer. Also usable by hand:
+#
+#   hearthdeck-backup --dry-run
+#   hearthdeck-backup
+#
+# Exit status is 0 only when every job ran or was cleanly skipped by design.
+set -euo pipefail
+
+CONFIG_DIR=${HEARTHDECK_BACKUP_CONFIG:-$HOME/.config/hearthdeck-backup}
+DEFAULTS_DIR=${HEARTHDECK_BACKUP_DEFAULTS:-/usr/lib/hearthdeck/hearthdeck-backup.d}
+JOBS_FILE=${HEARTHDECK_BACKUP_JOBS:-$CONFIG_DIR/jobs.conf}
+if [[ ! -f $JOBS_FILE ]]; then
+  JOBS_FILE=$DEFAULTS_DIR/jobs.conf
+fi
+FILTER_DIR=${HEARTHDECK_BACKUP_FILTERS:-}
+if [[ -z $FILTER_DIR ]]; then
+  if [[ -d $CONFIG_DIR/filters ]]; then
+    FILTER_DIR=$CONFIG_DIR/filters
+  else
+    FILTER_DIR=$DEFAULTS_DIR/filters
+  fi
+fi
+MOUNT_ROOT=${HEARTHDECK_BACKUP_MOUNT:-/mnt/external}
+SENTINEL=${HEARTHDECK_BACKUP_SENTINEL:-"$MOUNT_ROOT/.hearthdeck-backup"}
+STATE_DIR=${HEARTHDECK_BACKUP_STATE:-$HOME/.local/state/hearthdeck-backup}
+SNAPSHOT_DIR=$STATE_DIR/db
+SNAPSHOT_KEEP=${HEARTHDECK_BACKUP_SNAPSHOT_KEEP:-14}
+DUMP_MAX_AGE=${HEARTHDECK_BACKUP_DUMP_MAX_AGE:-259200}   # 72h
+DB_PATH=${HEARTHDECK_DATABASE_PATH:-$HOME/.local/share/hearthdeck/hearthdeck.db}
+# Jobs read these so the destination can be changed without editing formulas.
+HEARTHDECK_BACKUP_REMOTE=${HEARTHDECK_BACKUP_REMOTE:-pcloud}
+HEARTHDECK_BACKUP_ROOT=${HEARTHDECK_BACKUP_ROOT:-hearthdeck-backups}
+export HEARTHDECK_BACKUP_REMOTE HEARTHDECK_BACKUP_ROOT
+DRY_RUN=0
+
+usage() {
+  cat <<'EOF'
+Usage: hearthdeck-backup [--dry-run] [--help]
+
+  --dry-run  validate sources and show what rclone would transfer
+  --help     show this help
+EOF
+}
+
+while (($#)); do
+  case $1 in
+  --dry-run | -n) DRY_RUN=1 ;;
+  --help | -h) usage; exit 0 ;;
+  *)
+    printf 'hearthdeck-backup: unknown argument: %s\n' "$1" >&2
+    usage >&2
+    exit 2
+    ;;
+  esac
+  shift
+done
+
+# Newline-delimited JSON, matching the other Hearthdeck services so journald
+# keeps the reason a run failed instead of a bare non-zero exit.
+log_event() {
+  local level=$1 message=$2 job=${3:-} source=${4:-} reason=${5:-} detail=${6:-}
+  jq -cn \
+    --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)" \
+    --arg level "$level" \
+    --arg message "$message" \
+    --arg target hearthdeck_backup \
+    --arg job "$job" \
+    --arg source "$source" \
+    --arg reason "$reason" \
+    --arg detail "$detail" \
+    '{timestamp:$timestamp, level:$level, message:$message, target:$target}
+     + (if $job == "" then {} else {job:$job} end)
+     + (if $source == "" then {} else {source:$source} end)
+     + (if $reason == "" then {} else {reason:$reason} end)
+     + (if $detail == "" then {} else {detail:$detail} end)'
+}
+
+die() {
+  log_event ERROR "$1" "" "${2:-}" "${3:-}" "${4:-}"
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1" "" missing_command "$1"
+}
+
+need jq
+need sqlite3
+need gzip
+need flock
+need rclone
+
+[[ -f $JOBS_FILE ]] || die "job list not found" "$JOBS_FILE" config_missing
+[[ -d $FILTER_DIR ]] || die "filter directory not found" "$FILTER_DIR" config_missing
+
+install -d -m 700 "$STATE_DIR" "$SNAPSHOT_DIR"
+
+# One run at a time. A slow upload must not stack runs on a thin client.
+exec 9>"$STATE_DIR/.lock"
+if ! flock -n 9; then
+  log_event WARN "another backup run is active; skipping this one"
+  exit 0
+fi
+
+# An unmounted /mnt/external leaves an empty directory behind. Running a sync
+# against it would queue remote deletions, so external jobs are skipped whole.
+EXTERNAL_OK=0
+if mountpoint -q "$MOUNT_ROOT" && [[ -f $SENTINEL ]]; then
+  EXTERNAL_OK=1
+else
+  log_event ERROR "external backup disk is not available; its jobs are skipped" \
+    "" "$MOUNT_ROOT" external_unavailable "$SENTINEL"
+fi
+
+# Consistent copy of the live SQLite database. Copying the .db file directly
+# while the daemon writes can capture a torn database; .backup uses SQLite's
+# own snapshot API and includes committed WAL content.
+create_db_snapshot() {
+  local db=$DB_PATH
+  local stamp out check old
+
+  if [[ ! -f $db ]]; then
+    log_event ERROR "Hearthdeck database not found" hearthdeck-db "$db" db_missing
+    return 1
+  fi
+
+  if ((DRY_RUN)); then
+    log_event INFO "would create a consistent Hearthdeck DB snapshot" hearthdeck-db "$db"
+    return 0
+  fi
+
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  out=$SNAPSHOT_DIR/hearthdeck-$stamp.db
+
+  if ! sqlite3 "$db" ".backup '$out'" 2>/dev/null; then
+    rm -f "$out"
+    log_event ERROR "could not snapshot the Hearthdeck database" hearthdeck-db "$db" snapshot_failed
+    return 1
+  fi
+
+  check=$(sqlite3 "$out" 'PRAGMA quick_check;' 2>/dev/null | head -1 || true)
+  if [[ $check != ok ]]; then
+    rm -f "$out"
+    log_event ERROR "Hearthdeck DB snapshot failed its integrity check" hearthdeck-db "$out" snapshot_corrupt
+    return 1
+  fi
+
+  # Keep the newest N snapshots. The remote sync mirrors this retention.
+  while IFS= read -r old; do
+    rm -f -- "$old"
+  done < <(find "$SNAPSHOT_DIR" -maxdepth 1 -type f -name 'hearthdeck-*.db' \
+    -printf '%T@ %p\n' | sort -n | head -n "-$SNAPSHOT_KEEP" | cut -d' ' -f2-)
+
+  log_event INFO "Hearthdeck DB snapshot created" hearthdeck-db "$out"
+  return 0
+}
+
+# True when the source still has at least one file the job would upload.
+# Used as the last line of defence before a sync.
+has_payload() {
+  local src=$1 filter=$2
+  case $filter in
+  sqlgz.rclone) compgen -G "$src/*.sql.gz" >/dev/null ;;
+  sqlite.rclone) compgen -G "$src/*.db" >/dev/null ;;
+  *) [[ -n $(find "$src" -type f -print -quit 2>/dev/null) ]] ;;
+  esac
+}
+
+# The newest dump must be readable and recent. This catches a broken dump job
+# and a half-written file before a sync is allowed to touch the remote.
+validate_dumps() {
+  local src=$1 latest age
+  latest=$(find "$src" -maxdepth 1 -type f -name '*.sql.gz' \
+    -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
+
+  if [[ -z $latest ]]; then
+    log_event ERROR "no SQL dumps to back up" "$JOB_NAME" "$src" no_dumps
+    return 1
+  fi
+  if ! gzip -t "$latest" 2>/dev/null; then
+    log_event ERROR "newest SQL dump is corrupt; sync refused" "$JOB_NAME" "$latest" dump_corrupt
+    return 1
+  fi
+
+  age=$(( $(date +%s) - $(stat -c %Y "$latest") ))
+  if ((age > DUMP_MAX_AGE)); then
+    log_event ERROR "newest SQL dump is stale; sync refused" "$JOB_NAME" "$latest" dump_stale "$((age / 3600))h old"
+    return 1
+  fi
+  return 0
+}
+
+# shellcheck source=/dev/null
+source "$JOBS_FILE"
+
+declare -a FAILURES=()
+SNAPSHOT_OK=0
+
+log_event INFO "backup run started" "" "" "" "$([[ $DRY_RUN == 1 ]] && echo 'dry run' || echo 'live')"
+
+if create_db_snapshot; then
+  SNAPSHOT_OK=1
+fi
+
+for spec in "${JOBS[@]}"; do
+  IFS='|' read -r JOB_NAME JOB_SRC JOB_DEST JOB_MODE JOB_FILTER JOB_EXTRA <<<"$spec"
+
+  if [[ -z ${JOB_NAME:-} || -z ${JOB_SRC:-} || -z ${JOB_DEST:-} || -z ${JOB_MODE:-} ]]; then
+    log_event ERROR "malformed job entry" "${JOB_NAME:-}" "" malformed_job "$spec"
+    FAILURES+=("${JOB_NAME:-unknown}")
+    continue
+  fi
+
+  # A source on the external disk cannot be trusted while it is not mounted.
+  if [[ $JOB_SRC == "$MOUNT_ROOT"/* ]] && ((!EXTERNAL_OK)); then
+    log_event ERROR "skipped: external disk unavailable" "$JOB_NAME" "$JOB_SRC" external_unavailable
+    FAILURES+=("$JOB_NAME")
+    continue
+  fi
+
+  if [[ ! -d $JOB_SRC ]]; then
+    log_event ERROR "skipped: source directory missing" "$JOB_NAME" "$JOB_SRC" source_missing
+    FAILURES+=("$JOB_NAME")
+    continue
+  fi
+
+  JOB_FILTER=${JOB_FILTER:--}
+  FILTER_ARGS=()
+  if [[ $JOB_FILTER != - ]]; then
+    FILTER_PATH=$FILTER_DIR/$JOB_FILTER
+    if [[ ! -f $FILTER_PATH ]]; then
+      log_event ERROR "skipped: filter file missing" "$JOB_NAME" "$FILTER_PATH" filter_missing
+      FAILURES+=("$JOB_NAME")
+      continue
+    fi
+    FILTER_ARGS=(--filter-from "$FILTER_PATH")
+  fi
+
+  # The snapshot job only has data if this run (or a previous one) produced a
+  # valid snapshot. Syncing an empty directory would delete the remote copies.
+  # In a dry run the snapshot is deliberately not created, so the check would
+  # be meaningless; the live source database is checked by the snapshot step.
+  if [[ $JOB_FILTER == sqlite.rclone ]] && ((!SNAPSHOT_OK)); then
+    log_event ERROR "skipped: no DB snapshot was created" "$JOB_NAME" "$JOB_SRC" snapshot_unavailable
+    FAILURES+=("$JOB_NAME")
+    continue
+  fi
+
+  if [[ $JOB_MODE == sync ]] && ! { [[ $JOB_FILTER == sqlite.rclone ]] && ((DRY_RUN)); }; then
+    if ! has_payload "$JOB_SRC" "$JOB_FILTER"; then
+      log_event ERROR "skipped: source is empty, refusing to sync deletions" "$JOB_NAME" "$JOB_SRC" source_empty
+      FAILURES+=("$JOB_NAME")
+      continue
+    fi
+    if [[ $JOB_FILTER == sqlgz.rclone ]] && ! validate_dumps "$JOB_SRC"; then
+      FAILURES+=("$JOB_NAME")
+      continue
+    fi
+  fi
+
+  CMD=(rclone "$JOB_MODE" "$JOB_SRC" "$JOB_DEST"
+    --transfers 2
+    --checkers 2
+    --retries 3
+    --low-level-retries 5
+    --log-level INFO
+    --stats 0)
+  CMD+=("${FILTER_ARGS[@]}")
+
+  # Sync is only used for rotating dump/snapshot folders. Cap the number of
+  # deletions so a source bug cannot turn into a remote wipe.
+  if [[ $JOB_MODE == sync ]]; then
+    CMD+=(--max-delete 20)
+  fi
+
+  if [[ -n $JOB_EXTRA ]]; then
+    read -r -a EXTRA_ARGS <<<"$JOB_EXTRA"
+    CMD+=("${EXTRA_ARGS[@]}")
+  fi
+  ((DRY_RUN)) && CMD+=(--dry-run)
+
+  log_event INFO "starting $JOB_MODE" "$JOB_NAME" "$JOB_SRC" "" "$JOB_DEST"
+  if "${CMD[@]}"; then
+    log_event INFO "finished" "$JOB_NAME" "$JOB_SRC"
+  else
+    rc=$?
+    log_event ERROR "rclone failed" "$JOB_NAME" "$JOB_SRC" rclone_failed "exit $rc"
+    FAILURES+=("$JOB_NAME")
+  fi
+done
+
+if ((${#FAILURES[@]})); then
+  log_event ERROR "backup run finished with failures" "" "" failures "${FAILURES[*]}"
+  exit 1
+fi
+
+log_event INFO "backup run finished"

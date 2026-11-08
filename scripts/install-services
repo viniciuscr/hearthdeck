@@ -15,7 +15,7 @@ done
 mkdir -p "$units" "$bin"
 for unit in hearthdeck.target hearthdeck-bridge.socket hearthdeck-bridge.service \
   hearthdeck-daemon.service hearthdeck-input.service hearthdeck-log.service \
-  romm.service romm.path; do
+  hearthdeck-backup.service hearthdeck-backup.timer romm.service romm.path; do
   install -m644 "deploy/systemd/$unit" "$units/$unit"
 done
 for name in bridge daemon input ai; do
@@ -32,5 +32,14 @@ mkdir -p "$units/romm.service.d"
 printf '%s\n' '[Service]' 'ExecStart=' 'ExecStart=%h/.local/bin/hearthdeck-romm up' \
   'ExecStop=' 'ExecStop=%h/.local/bin/hearthdeck-romm down' \
   > "$units/romm.service.d/90-hearthdeck-checkout.conf"
+
+# The packaged unit runs /usr/lib/hearthdeck/hearthdeck-backup. A source
+# checkout does not have it, so point the unit at the checkout copy and its
+# packaged job list/filters there, rather than the installed defaults.
+mkdir -p "$units/hearthdeck-backup.service.d"
+printf '%s\n' '[Service]' 'ExecStart=' \
+  "ExecStart=$PWD/deploy/backup/hearthdeck-backup" \
+  "Environment=HEARTHDECK_BACKUP_DEFAULTS=$PWD/deploy/backup" \
+  > "$units/hearthdeck-backup.service.d/90-hearthdeck-checkout.conf"
 
 systemctl --user daemon-reload

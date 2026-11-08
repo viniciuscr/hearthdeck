@@ -1,0 +1,6 @@
+# Rotating SQL dumps (Immich, RomM).
+# Only the compressed dump files leave the disk. Markers, logs and partial
+# files in the same folder are never uploaded.
+
++ *.sql.gz
+- *

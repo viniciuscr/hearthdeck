@@ -1,0 +1,6 @@
+# RetroArch save states. Only the state file and its preview image are user
+# data; anything else that appears in the tree is not a save state.
+# *.state* covers .state, .state.auto, slot states and .state.png.
+
++ *.state*
+- *
