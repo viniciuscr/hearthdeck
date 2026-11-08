@@ -240,17 +240,21 @@ impl Control<'_> {
     }
 
     async fn require_installed(&self) -> Result<(), ControlError> {
-        let installed = self
-            .runner
-            .run(SYSTEMCTL, &strings(&["--user", "cat", SERVICE_UNIT]))
-            .await
-            .map(|output| output.success)
-            .unwrap_or(false);
-        if installed {
-            Ok(())
-        } else {
-            Err(ControlError::NotInstalled)
+        // Both units, not just the service: a machine with the service but no
+        // timer cannot back anything up on a schedule, and the contract calls a
+        // missing unit a 503 rather than a broken manager.
+        for unit in [SERVICE_UNIT, TIMER_UNIT] {
+            let installed = self
+                .runner
+                .run(SYSTEMCTL, &strings(&["--user", "cat", unit]))
+                .await
+                .map(|output| output.success)
+                .unwrap_or(false);
+            if !installed {
+                return Err(ControlError::NotInstalled);
+            }
         }
+        Ok(())
     }
 
     /// One `systemctl show` per unit, several properties: the status read must
@@ -418,6 +422,8 @@ mod tests {
         calls: Mutex<Vec<String>>,
         remotes: Vec<&'static str>,
         installed: bool,
+        /// A manager that cannot answer at all: `systemctl show` fails.
+        manager_down: bool,
         /// What the manager would report, and what enable/disable changes: the
         /// timer's state is the setting, and a running oneshot is `activating`.
         timer: Mutex<&'static str>,
@@ -430,6 +436,7 @@ mod tests {
         fn installed() -> Self {
             Self {
                 installed: true,
+                manager_down: false,
                 remotes: vec!["pcloud"],
                 timer: Mutex::new("inactive"),
                 service: Mutex::new("inactive"),
@@ -487,6 +494,13 @@ mod tests {
                     } else if joined.contains(" disable --now ") {
                         *self.timer.lock().expect("the timer state") = "inactive";
                         ok(String::new())
+                    } else if joined.contains(" show ") && self.manager_down {
+                        CommandOutput {
+                            success: false,
+                            stdout: String::new(),
+                            stderr: "Failed to connect to bus: No such file or directory"
+                                .to_string(),
+                        }
                     } else if joined.contains(" show ") {
                         let state = if joined.contains(TIMER_UNIT) {
                             *self.timer.lock().expect("the timer state")
@@ -678,6 +692,34 @@ mod tests {
             Some("hearthdeck-backup: rclone upload failed"),
             "the journal's last line is what the UI offers"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A manager that cannot answer must not be read as "off": the routes
+    /// promise a 502, and an empty answer would silently claim the timer is idle.
+    #[tokio::test]
+    async fn a_manager_that_cannot_answer_is_an_error_not_an_idle_timer() {
+        let (store, root) = store();
+        let runner = FakeRunner {
+            manager_down: true,
+            ..FakeRunner::installed()
+        };
+        let cache = StatusCache::new();
+        let control = Control {
+            store: &store,
+            runner: &runner,
+            cache: &cache,
+        };
+
+        assert!(matches!(
+            control.settings().await,
+            Err(ControlError::Systemd(_))
+        ));
+        assert!(matches!(
+            control.status().await,
+            Err(ControlError::Systemd(_))
+        ));
 
         let _ = std::fs::remove_dir_all(&root);
     }

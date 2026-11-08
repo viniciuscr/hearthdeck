@@ -1514,12 +1514,12 @@ impl SettingsWindow {
                 this.notice = Some(match end {
                     Some(WatchEnd::Finished) => "The last run finished.".to_string(),
                     Some(WatchEnd::NeverStarted) => {
-                        "The run did not start within a minute.".to_string()
+                        "No run was seen within a minute of starting it.".to_string()
                     }
                     Some(WatchEnd::Unreadable) => {
                         "Stopped following the run: the daemon could not be read.".to_string()
                     }
-                    None => "Stopped following the run after six hours.".to_string(),
+                    None => "Stopped following the run after about six hours.".to_string(),
                 });
                 cx.notify();
             });
@@ -2152,7 +2152,9 @@ const FAILURE_LIMIT: u32 = 3;
 /// which covers the service's own six-hour start timeout without becoming a
 /// machine-gun of `systemctl` calls.
 const WATCH_FAST_POLLS: u32 = 100;
-const WATCH_MAX_POLLS: u32 = 800;
+/// 100 fast polls (5 minutes) plus 710 half-minute ones: six hours, which is the
+/// service's own start timeout.
+const WATCH_MAX_POLLS: u32 = 810;
 
 /// What one status read means for the watcher.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2192,8 +2194,14 @@ fn watch_step(
             WatchStep::Continue
         }
         // Only a run that was seen working can be said to have finished.
-        Ok(_) if state.seen_running => WatchStep::Stop(WatchEnd::Finished),
+        Ok(_) if state.seen_running => {
+            state.failures = 0;
+            WatchStep::Stop(WatchEnd::Finished)
+        }
         Ok(_) => {
+            // A read that worked breaks the run of failures, so three scattered
+            // hiccups over six hours do not add up to giving up.
+            state.failures = 0;
             state.idle_reads += 1;
             if state.idle_reads >= IDLE_GRACE_READS {
                 WatchStep::Stop(WatchEnd::NeverStarted)
