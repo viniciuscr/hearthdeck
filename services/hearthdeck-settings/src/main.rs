@@ -19,12 +19,9 @@
 //! - It pairs with the loopback daemon itself, exactly as the library app does,
 //!   so nothing secret crosses the process boundary.
 //!
-//! **Most of the editing UI is still a preview.** Every field is real - it takes
-//! focus, it types, a switch flips, a choice cycles - but only one of them
-//! reaches the daemon today: the categorization opt-in on the Library page. It
-//! is the proof of the write path - read the daemon's state, write, report what
-//! the daemon says afterwards, revert the control when it refuses. The rest of
-//! the rows attach to the same three steps, one at a time.
+//! **Every row writes.** A field, a switch, a schedule, a link: each one reads
+//! the daemon's state, writes, reports what the daemon answered, and reverts the
+//! control when the daemon refuses. Nothing here is a preview.
 
 mod daemon;
 mod input;
@@ -279,6 +276,8 @@ enum Tone {
     Good,
     Attention,
     Off,
+    /// A failure or an unknown state: never "off, and that is fine".
+    Danger,
 }
 
 #[derive(Clone)]
@@ -352,6 +351,43 @@ impl Inputs {
     }
 }
 
+/// Values the first read brings, applied on the next render: a text field cannot
+/// be filled without a window, and the read now finishes after the window exists.
+struct Prefill {
+    romm_url: String,
+    backup_remote: String,
+    backup_root: String,
+    schedule: Option<chrono::NaiveTime>,
+}
+
+impl Prefill {
+    fn from_snapshot(snapshot: &Snapshot) -> Self {
+        let backup = snapshot.backup.as_ref().map(daemon::BackupView::settings);
+        Self {
+            romm_url: snapshot
+                .romm
+                .as_ref()
+                .map(|romm| romm.base_url.clone())
+                .unwrap_or_default(),
+            backup_remote: backup
+                .as_ref()
+                .map(|settings| settings.remote.clone())
+                .unwrap_or_default(),
+            backup_root: backup
+                .as_ref()
+                .map(|settings| settings.root.clone())
+                .unwrap_or_default(),
+            schedule: backup.as_ref().and_then(|settings| {
+                chrono::NaiveTime::from_hms_opt(
+                    u32::from(settings.schedule.hour),
+                    u32::from(settings.schedule.minute),
+                    0,
+                )
+            }),
+        }
+    }
+}
+
 struct DiskUsage {
     total: u64,
     available: u64,
@@ -410,6 +446,9 @@ struct SettingsWindow {
     backup_pending: Option<bool>,
     /// Set while a started run is being followed, so one watcher at a time.
     watching_backup: bool,
+    /// Whether the first successful read has already filled the form.
+    prefilled: bool,
+    pending_prefill: Option<Prefill>,
     /// The value the window asked the daemon for while that write is in flight.
     /// The switch shows it, so the control answers the press immediately, and
     /// drops back to the daemon's own answer when the write lands or fails.
@@ -447,6 +486,8 @@ impl SettingsWindow {
             categorization_pending: None,
             backup_pending: None,
             watching_backup: false,
+            prefilled: false,
+            pending_prefill: None,
             pending_link: None,
             link_generation: 0,
             linking: None,
@@ -458,10 +499,71 @@ impl SettingsWindow {
         }
     }
 
+    /// Fills the form from the first read. A text field cannot be set without a
+    /// window, so this runs at render rather than in the read's completion.
+    fn apply_prefill(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(prefill) = self.pending_prefill.take() else {
+            return;
+        };
+        let romm = self.inputs.romm_url.clone();
+        romm.update(cx, |state, cx| {
+            state.set_value(prefill.romm_url, window, cx)
+        });
+        let remote = self.inputs.backup_remote.clone();
+        remote.update(cx, |state, cx| {
+            state.set_value(prefill.backup_remote, window, cx);
+        });
+        let root = self.inputs.backup_root.clone();
+        root.update(cx, |state, cx| {
+            state.set_value(prefill.backup_root, window, cx);
+        });
+        if let Some(schedule) = prefill.schedule {
+            self.inputs
+                .backup_schedule
+                .update(cx, |state, cx| state.set_time(schedule, window, cx));
+        }
+        cx.notify();
+    }
+
     /// Everything the window draws, re-derived from the snapshot. Building it
     /// from state rather than caching it is what keeps a refresh honest: there
     /// is no second copy of the page to fall out of step with the read.
     fn pages(&self) -> Vec<Page> {
+        // A daemon that never answered is a fact about this window, not about the
+        // user's setup. Rendering "Not set up" over services that are fine is
+        // worse than an error: it looks like a fact. Every page collapses to one
+        // card that says what happened and offers the retry.
+        if !self.snapshot.daemon {
+            let (label, description, tone) = if self.refreshing {
+                (
+                    "Reading",
+                    "Reading the daemon and this machine.",
+                    Tone::Attention,
+                )
+            } else {
+                (
+                    "Unavailable",
+                    "Could not reach the daemon. Enter to try again.",
+                    Tone::Danger,
+                )
+            };
+            return PageKind::ALL
+                .iter()
+                .map(|kind| Page {
+                    kind: *kind,
+                    groups: vec![Group {
+                        title: "Daemon",
+                        status: Some((label, tone)),
+                        rows: vec![Row {
+                            label: "Backend",
+                            description: Some(description),
+                            control: Control::Action(RowAction::Refresh),
+                        }],
+                    }],
+                })
+                .collect();
+        }
+
         let daemon = if self.snapshot.daemon {
             "Connected".to_string()
         } else {
@@ -892,6 +994,15 @@ impl SettingsWindow {
                 this.snapshot = snapshot;
                 this.disk = disk;
                 this.refreshing = false;
+                // "Reading..." was true while the read was in flight and is a lie
+                // the moment it lands.
+                this.notice = None;
+                // The first read brings the values the form edits, and a field
+                // cannot be filled without a window - so it waits for the render.
+                if this.snapshot.daemon && !this.prefilled {
+                    this.prefilled = true;
+                    this.pending_prefill = Some(Prefill::from_snapshot(&this.snapshot));
+                }
                 cx.notify();
             });
         })
@@ -1805,12 +1916,15 @@ impl SettingsWindow {
                     }))
             }))
             .child(div().flex_1())
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child("Preview: edits stay in this window for now."),
-            )
+            // What the window can say about itself: whether it is talking to the
+            // daemon. It is not a description of the rows - those write.
+            .child(div().text_sm().text_color(theme.muted_foreground).child(
+                if self.snapshot.daemon {
+                    "Connected to the daemon"
+                } else {
+                    "Daemon unavailable"
+                },
+            ))
             .into_any_element()
     }
 
@@ -2292,6 +2406,7 @@ fn group_title(group: &Group, theme: &Theme) -> AnyElement {
                 Tone::Good => Tag::success(),
                 Tone::Attention => Tag::warning(),
                 Tone::Off => Tag::new(),
+                Tone::Danger => Tag::danger(),
             };
             this.child(tag.text_sm().child(label))
         })
@@ -2336,7 +2451,10 @@ fn hint(key: &'static str, meaning: &'static str, theme: &Theme) -> AnyElement {
 }
 
 impl Render for SettingsWindow {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The first read lands after the window exists, so the form it prefills
+        // is filled here, where a window is available.
+        self.apply_prefill(window, cx);
         let theme = cx.theme();
         let pages = self.pages();
         let counts = pages.iter().map(Page::row_count).collect::<Vec<_>>();
@@ -2566,33 +2684,11 @@ fn main() {
         )
         .init();
 
-    let snapshot = read_snapshot();
+    // Open first, read after. Eight sequential daemon reads with a five-second
+    // timeout each must never stand between the user's press and a window: the
+    // page draws from an empty snapshot with "Reading..." and fills itself in.
+    let snapshot = Snapshot::default();
     let disk = home_usage();
-    // A saved connection prefills the form, so signing in again starts from the
-    // address the daemon already holds.
-    let saved_romm = snapshot
-        .romm
-        .as_ref()
-        .map(|romm| romm.base_url.clone())
-        .unwrap_or_default();
-    // The backup destination and schedule prefill the form, so the user edits
-    // what the daemon holds instead of retyping it.
-    let saved_backup = snapshot.backup.as_ref().map(daemon::BackupView::settings);
-    let saved_schedule = saved_backup.as_ref().and_then(|settings| {
-        chrono::NaiveTime::from_hms_opt(
-            u32::from(settings.schedule.hour),
-            u32::from(settings.schedule.minute),
-            0,
-        )
-    });
-    let saved_remote = saved_backup
-        .as_ref()
-        .map(|settings| settings.remote.clone())
-        .unwrap_or_default();
-    let saved_root = saved_backup
-        .as_ref()
-        .map(|settings| settings.root.clone())
-        .unwrap_or_default();
 
     gpui_platform::application().run(move |cx: &mut App| {
         gpui_component::init(cx);
@@ -2618,34 +2714,18 @@ fn main() {
         // `Root`, which is what gives components their overlay and focus layers.
         let opened = cx.open_window(options, move |window, cx| {
             let inputs = Inputs {
-                romm_url: cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("http://romm.local:8080")
-                        .default_value(saved_romm.clone())
-                }),
+                romm_url: cx
+                    .new(|cx| InputState::new(window, cx).placeholder("http://romm.local:8080")),
                 tmdb_key: cx.new(|cx| {
                     InputState::new(window, cx)
                         .placeholder("TMDB API key")
                         .masked(true)
                 }),
-                backup_remote: cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("pcloud")
-                        .default_value(saved_remote.clone())
-                }),
-                backup_root: cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("hearthdeck-backups")
-                        .default_value(saved_root.clone())
-                }),
-                backup_schedule: cx.new(|cx| {
-                    let mut state =
-                        TimeFieldState::new(window, cx).precision(TimePrecision::Minute);
-                    if let Some(time) = saved_schedule {
-                        state.set_time(time, window, cx);
-                    }
-                    state
-                }),
+                backup_remote: cx.new(|cx| InputState::new(window, cx).placeholder("pcloud")),
+                backup_root: cx
+                    .new(|cx| InputState::new(window, cx).placeholder("hearthdeck-backups")),
+                backup_schedule: cx
+                    .new(|cx| TimeFieldState::new(window, cx).precision(TimePrecision::Minute)),
             };
             let view = cx.new(|_| SettingsWindow::new(snapshot, disk, inputs));
             let window_handle = window.window_handle();
@@ -2655,6 +2735,9 @@ fn main() {
             if let Some(received) = input::listen() {
                 pump_pad(cx, view.clone(), window_handle, received);
             }
+            // The window is on screen before this runs, so a slow or dead daemon
+            // shows "Reading..." instead of a window that never appears.
+            view.update(cx, |this, cx| this.refresh(cx));
 
             cx.new(|cx| gpui_base::Root::new(view, window, cx))
         });
@@ -2935,8 +3018,16 @@ mod render_tests {
     use super::*;
     use gpui::{TestAppContext, VisualTestContext};
 
+    /// A daemon that answered: the pages draw their real rows. Tests that need an
+    /// unreachable daemon build that snapshot themselves.
     fn open(cx: &mut TestAppContext) -> (Entity<SettingsWindow>, &mut VisualTestContext) {
-        open_with(Snapshot::default(), cx)
+        open_with(
+            Snapshot {
+                daemon: true,
+                ..Snapshot::default()
+            },
+            cx,
+        )
     }
 
     fn open_with(
@@ -2971,6 +3062,35 @@ mod render_tests {
     /// The list item at `index`, by the selector its element carries.
     fn selector(index: usize) -> &'static str {
         Box::leak(format!("list-item-{index}").into_boxed_str())
+    }
+
+    /// A daemon that never answered must not be rendered as the user's
+    /// configuration: no "Not set up", no switch drawn off, one card that says
+    /// what happened and offers the retry.
+    #[gpui::test]
+    fn an_unreachable_daemon_is_one_card_not_a_false_configuration(cx: &mut TestAppContext) {
+        let (view, cx) = open_with(Snapshot::default(), cx);
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+
+        let pages = cx.read(|app| view.read(app).pages());
+        for page in &pages {
+            assert_eq!(
+                page.row_count(),
+                1,
+                "{} must not claim the user's setup",
+                page.kind.title()
+            );
+            let row = &page.groups[0].rows[0];
+            assert!(matches!(row.control, Control::Action(RowAction::Refresh)));
+            assert!(
+                row.description
+                    .unwrap_or_default()
+                    .contains("Could not reach"),
+                "the card says what happened: {:?}",
+                row.description
+            );
+        }
     }
 
     /// Turning the timer off is always allowed: a remote that vanished from
