@@ -4,10 +4,12 @@ Optional nightly upload of game saves, database dumps and Hearthdeck metadata to
 an rclone remote. This doc owns the split between the packaged tooling, the
 per-user configuration, and the Settings section that will expose it.
 
-**Status:** the tooling is packaged and usable today via
-`deploy/backup/install-backup.sh`. The Settings section is deliberately not
-implemented in the current screen because the frontend is being rewritten; the
-contract below is what the new screen should implement.
+**Status:** the tooling is packaged and installed **disabled**. The Settings
+section is deliberately not implemented in the current screen because the
+frontend is being rewritten; the contract below is what the new screen should
+implement. There is no install script and no manual enable step: package
+installation makes the feature available, and the Settings toggle is the only
+thing that turns it on.
 
 ## What the user configures
 
@@ -200,8 +202,10 @@ When the new Settings screen lands:
 
 ## Migration and safety notes
 
-- The old Settings screen gets no backup section; `deploy/backup/install-backup.sh`
-  is the supported path until the rewrite is ready.
+- The old Settings screen gets no backup section and there is no fallback
+  installer. Installation only ships the disabled units; the new Settings
+  toggle is what enables the timer, writes `backup.env` and the schedule
+  drop-in. Do not add a second activation path.
 - `jobs.conf` is sourced as bash. The daemon must not write it from API input.
   Future free-form job editing requires moving the runner to a structured
   format first.

@@ -95,6 +95,13 @@ class DeploymentTests(unittest.TestCase):
                 "[Service]\nExecStart=\nExecStart=%h/.local/bin/hearthdeck-romm up\n"
                 "ExecStop=\nExecStop=%h/.local/bin/hearthdeck-romm down\n",
             )
+            backup = units / "hearthdeck-backup.service.d/90-hearthdeck-checkout.conf"
+            self.assertEqual(
+                backup.read_text(),
+                "[Service]\nExecStart=\n"
+                f"ExecStart={checkout}/deploy/backup/hearthdeck-backup\n"
+                f"Environment=HEARTHDECK_BACKUP_DEFAULTS={checkout}/deploy/backup\n",
+            )
             migration = subprocess.run(
                 [
                     "bash", "-c",
@@ -111,7 +118,8 @@ class DeploymentTests(unittest.TestCase):
                 self.assertFalse((units / unit).exists())
                 self.assertTrue((units / f"{unit}.pre-package.bak").exists())
             for unit in ("hearthdeck-bridge.service", "hearthdeck-daemon.service",
-                         "hearthdeck-input.service", "romm.service"):
+                         "hearthdeck-input.service", "hearthdeck-backup.service",
+                         "romm.service"):
                 override = units / f"{unit}.d/90-hearthdeck-checkout.conf"
                 self.assertFalse(override.exists())
                 self.assertTrue(override.with_suffix(".conf.pre-package.bak").exists())

@@ -15,29 +15,25 @@ without it.
 
 ## Install
 
-Run as the desktop user, not root:
+Package installation is the whole setup:
 
 ```bash
 sudo pacman -S --needed rclone
-deploy/backup/install-backup.sh
+sudo pacman -S hearthdeck
 ```
 
-The installer:
+It installs the runner, the default jobs and filters, and both units **disabled**.
+There is no separate installer and no enable command to run. Off-site backup is a
+feature you turn on from Settings once the section ships; that toggle is the only
+activation path. Until then the unit stays inert, so a fresh machine never starts
+uploading because a package was installed.
 
-- writes `~/.config/hearthdeck-backup/backup.env` with the remote and
-  destination root (only if absent);
-- enables `hearthdeck-backup.timer` **only** when that rclone remote already
-  exists.
-
-Without the remote it stops and prints the `rclone config` steps. Configure the
-remote, then run the installer again, or enable the timer by hand:
+The remote itself is still an rclone prerequisite. Configure it in rclone, then
+select it in Settings:
 
 ```bash
 rclone config            # new remote, name it pcloud, type pcloud
 rclone lsd pcloud:
-
-systemctl --user enable --now hearthdeck-backup.timer
-/usr/lib/hearthdeck/hearthdeck-backup --dry-run
 ```
 
 For pCloud EU accounts, set the advanced option `hostname = eapi.pcloud.com`
@@ -101,7 +97,9 @@ rclone copy pcloud:hearthdeck-backups/hearthdeck/db ~/restore/db
 ls -t ~/restore/db/*.db | head -1
 ```
 
-## Manual run
+## Debugging a run
+
+These commands exercise an enabled configuration; they do not enable anything.
 
 ```bash
 /usr/lib/hearthdeck/hearthdeck-backup --dry-run   # validate, show transfers

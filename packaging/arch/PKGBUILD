@@ -82,10 +82,10 @@ package() {
   install -Dm644 packaging/arch/romm.service "$pkgdir/usr/lib/systemd/user/romm.service"
   install -Dm644 deploy/systemd/romm.path "$pkgdir/usr/lib/systemd/user/romm.path"
 
-  # Optional off-site backup. The timer is not enabled by the package: the user
-  # configures an rclone remote and enables it (Settings, or install-backup.sh).
-  # Keeping the runner and filters here means pacman updates them; only the
-  # destination and job overrides live in the home directory.
+  # Optional off-site backup. The timer is never enabled by the package:
+  # installing must not start uploading, and a nightly job with no remote only
+  # fails. Settings is the single activation path; it writes backup.env and the
+  # timer drop-in. Keeping the runner and filters here means pacman updates them.
   install -Dm755 deploy/backup/hearthdeck-backup "$pkgdir/usr/lib/hearthdeck/hearthdeck-backup"
   install -Dm644 deploy/backup/jobs.conf "$pkgdir/usr/lib/hearthdeck/hearthdeck-backup.d/jobs.conf"
   install -d "$pkgdir/usr/lib/hearthdeck/hearthdeck-backup.d/filters"
