@@ -102,10 +102,29 @@ pub struct Categorization {
     pub capable: Option<bool>,
 }
 
-/// Reads everything the window draws, in one pass. A daemon that cannot be
+/// Where the daemon is. Local by default; a tunnel to another machine names its
+/// own API address and the forwarded admin port.
+#[derive(Clone, Debug)]
+pub struct Endpoint {
+    pub base_url: String,
+    pub admin_port: u16,
+}
+
+impl Endpoint {
+    /// The daemon this process was pointed at, or the one on this machine.
+    pub fn local() -> Self {
+        Self {
+            base_url: std::env::var("HEARTHDECK_BACKEND_URL")
+                .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string()),
+            admin_port: ADMIN_PORT,
+        }
+    }
+}
+
+/// The same read, from the daemon at `endpoint`. A daemon that cannot be
 /// reached yields the default snapshot, which the view draws as "unavailable".
-pub fn read_snapshot() -> Snapshot {
-    match Client::connect() {
+pub fn read_snapshot_at(endpoint: &Endpoint) -> Snapshot {
+    match Client::connect_to(endpoint.clone(), None) {
         Ok(client) => client.snapshot(),
         Err(error) => {
             tracing::warn!(%error, "the daemon could not be reached");
@@ -227,25 +246,24 @@ struct Client {
 
 impl Client {
     fn connect() -> Result<Self, Error> {
-        let base_url = std::env::var("HEARTHDECK_BACKEND_URL")
-            .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+        let endpoint = Endpoint::local();
         let token = std::env::var("HEARTHDECK_PAIRING_TOKEN")
             .ok()
             .filter(|token| !token.is_empty());
-        Self::connect_to(base_url, token)
+        Self::connect_to(endpoint, token)
     }
 
-    /// The base URL and token named explicitly. Tests use it to point at a local
+    /// The endpoint and token named explicitly. Tests use it to point at a local
     /// stub, and to skip the pairing handshake they do not need.
-    fn connect_to(base_url: String, token: Option<String>) -> Result<Self, Error> {
+    fn connect_to(endpoint: Endpoint, token: Option<String>) -> Result<Self, Error> {
         let http = reqwest::blocking::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()?;
         let mut client = Self {
             http,
-            base_url,
+            base_url: endpoint.base_url,
             token,
-            admin_port: ADMIN_PORT,
+            admin_port: endpoint.admin_port,
         };
         client.pair_if_needed()?;
         Ok(client)
@@ -272,7 +290,7 @@ impl Client {
         }
         let mut admin = api.clone();
         admin
-            .set_port(Some(ADMIN_PORT))
+            .set_port(Some(self.admin_port))
             .map_err(|()| "the admin port cannot be set")?;
         admin.set_path("/v1/pairing");
         api.set_path("/v1/pairing/complete");
@@ -664,7 +682,16 @@ mod tests {
     }
 
     fn client(base: String) -> Client {
-        Client::connect_to(base, Some("test-token".to_string())).expect("a stub client")
+        // The stub serves the admin listener on the same port, so both the API
+        // and the pairing handshake land on it.
+        Client::connect_to(
+            super::Endpoint {
+                admin_port: admin_port(&base),
+                base_url: base,
+            },
+            Some("test-token".to_string()),
+        )
+        .expect("a stub client")
     }
 
     /// The stub's port, so a test can point the admin listener at the same
@@ -801,9 +828,15 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().expect("an address"));
         drop(listener);
 
-        let snapshot = Client::connect_to(base, Some("test-token".to_string()))
-            .expect("a client")
-            .snapshot();
+        let snapshot = Client::connect_to(
+            super::Endpoint {
+                base_url: base.clone(),
+                admin_port: admin_port(&base),
+            },
+            Some("test-token".to_string()),
+        )
+        .expect("a client")
+        .snapshot();
 
         assert!(!snapshot.daemon);
         assert!(snapshot.categorization.is_none());

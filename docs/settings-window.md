@@ -270,6 +270,25 @@ for a window that shares no code with the daemon. `packaging/arch/PKGBUILD`
 builds it with `--manifest-path services/hearthdeck-settings/Cargo.toml` and
 installs the binary beside the other Hearthdeck binaries.
 
+## A daemon on another machine
+
+`HEARTHDECK_REMOTE=user@host` makes this window look at another box's daemon,
+through an `ssh -L` tunnel it opens itself (`src/remote.rs`). The daemon keeps
+binding loopback: the tunnel forwards its 38400 and 38401 to two free local
+ports, and the window pairs through the forwarded admin port exactly as it does
+at home.
+
+ssh is both the transport and the authentication — your key, your user, nothing
+else. `BatchMode=yes` is deliberate: keys or an agent, never a password prompt,
+because a window has nobody to ask. A tunnel that cannot open is logged and the
+window still opens, showing the daemon as unavailable rather than refusing to
+start.
+
+This is `podman-remote`'s model, and it is the light alternative to a LAN mode
+with TLS, certificates and a browser-trusted origin. It reaches a laptop, a Steam
+Deck, or any Linux box with an ssh client and a key. It does not reach a phone:
+gpui has no Android backend, and its iOS target needs macOS and Xcode to build.
+
 ## Known limits
 
 - **The pad reaches the window through the library app.** If the library app is

@@ -29,6 +29,7 @@
 mod daemon;
 mod input;
 mod nav;
+mod remote;
 
 use std::ffi::CString;
 use std::time::Duration;
@@ -53,7 +54,7 @@ use gpui_component::{
 };
 use nix::sys::statvfs::statvfs;
 
-use daemon::{Categorization, DeviceOffer, LinkStatus, Snapshot, read_snapshot};
+use daemon::{Categorization, DeviceOffer, Endpoint, LinkStatus, Snapshot, read_snapshot_at};
 use nav::Nav;
 
 gpui::actions!(
@@ -399,11 +400,29 @@ struct SettingsWindow {
     scrolled_to: Option<(usize, usize)>,
     /// What the last action row said it would do. One line, under the page.
     notice: Option<String>,
+    /// Where the daemon is: this machine, or the far end of a tunnel.
+    endpoint: Endpoint,
+    /// The machine this window is looking at, when it is not this one. Shown on
+    /// the status page, and `None` for a local daemon.
+    remote: Option<String>,
+    /// The tunnel that makes `endpoint` reachable. Kept for as long as the
+    /// window lives, because dropping it kills the forwards.
+    _tunnel: Option<remote::Tunnel>,
 }
 
 impl SettingsWindow {
-    fn new(snapshot: Snapshot, disk: Option<DiskUsage>, inputs: Inputs) -> Self {
+    fn new(
+        snapshot: Snapshot,
+        disk: Option<DiskUsage>,
+        inputs: Inputs,
+        endpoint: Endpoint,
+        remote_target: Option<String>,
+        tunnel: Option<remote::Tunnel>,
+    ) -> Self {
         Self {
+            endpoint,
+            remote: remote_target,
+            _tunnel: tunnel,
             snapshot,
             disk,
             nav: Nav::default(),
@@ -524,18 +543,32 @@ impl SettingsWindow {
                         } else {
                             ("Unavailable", Tone::Off)
                         }),
-                        rows: vec![
-                            Row {
-                                label: "Backend",
-                                description: Some("The loopback service this window reads."),
-                                control: Control::Fact(Value::Text(daemon)),
-                            },
-                            Row {
-                                label: "Retro readiness",
-                                description: Some("Installed cores against the systems found."),
-                                control: Control::Fact(Value::Text(readiness.clone())),
-                            },
-                        ],
+                        rows: {
+                            let mut rows = vec![
+                                Row {
+                                    label: "Backend",
+                                    description: Some("The loopback service this window reads."),
+                                    control: Control::Fact(Value::Text(daemon)),
+                                },
+                                Row {
+                                    label: "Retro readiness",
+                                    description: Some("Installed cores against the systems found."),
+                                    control: Control::Fact(Value::Text(readiness.clone())),
+                                },
+                            ];
+                            // A tunneled daemon is still a loopback daemon - from
+                            // the far side. The row says whose it is.
+                            if let Some(remote) = &self.remote {
+                                rows.push(Row {
+                                    label: "Remote",
+                                    description: Some(
+                                        "Reached over ssh, so the daemon never leaves its own loopback.",
+                                    ),
+                                    control: Control::Fact(Value::Text(remote.clone())),
+                                });
+                            }
+                            rows
+                        },
                     },
                     Group {
                         title: "Storage",
@@ -703,10 +736,11 @@ impl SettingsWindow {
         self.refreshing = true;
         self.notice = Some("Reading the daemon and this machine again.".to_string());
         cx.notify();
+        let endpoint = self.endpoint.clone();
         cx.spawn(async move |this, cx| {
             let (snapshot, disk) = cx
                 .background_executor()
-                .spawn(async { (read_snapshot(), home_usage()) })
+                .spawn(async move { (read_snapshot_at(&endpoint), home_usage()) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.snapshot = snapshot;
@@ -2043,7 +2077,33 @@ fn main() {
         )
         .init();
 
-    let snapshot = read_snapshot();
+    // A tunnel is this window's whole remote story: the daemon keeps binding
+    // loopback, and ssh forwards both of its ports to this machine. Your ssh
+    // key is the authentication - there is nothing else to configure.
+    let (endpoint, tunnel, remote_target) = match std::env::var("HEARTHDECK_REMOTE") {
+        Ok(target) if !target.trim().is_empty() => {
+            let target = target.trim().to_string();
+            match remote::Tunnel::open(&target) {
+                Ok(tunnel) => {
+                    let endpoint = Endpoint {
+                        base_url: tunnel.api().to_string(),
+                        admin_port: tunnel.admin_port(),
+                    };
+                    tracing::info!(%target, api = %endpoint.base_url, "reaching the daemon through ssh");
+                    (endpoint, Some(tunnel), Some(target))
+                }
+                Err(error) => {
+                    // The window still opens, and says what went wrong on the
+                    // page: a dead tunnel must look like a dead daemon, not a
+                    // window that refuses to start.
+                    tracing::error!(%error, "the remote daemon is unreachable");
+                    (Endpoint::local(), None, Some(target))
+                }
+            }
+        }
+        _ => (Endpoint::local(), None, None),
+    };
+    let snapshot = read_snapshot_at(&endpoint);
     let disk = home_usage();
     // A saved connection prefills the form, so signing in again starts from the
     // address the daemon already holds.
@@ -2088,7 +2148,9 @@ fn main() {
                         .masked(true)
                 }),
             };
-            let view = cx.new(|_| SettingsWindow::new(snapshot, disk, inputs));
+            let view = cx.new(|_| {
+                SettingsWindow::new(snapshot, disk, inputs, endpoint, remote_target, tunnel)
+            });
             let window_handle = window.window_handle();
             install_shortcuts(cx, view.clone(), window_handle);
             // The pad, when the library app forwarded one. A missing socket is
@@ -2336,7 +2398,9 @@ mod render_tests {
                 romm_url: cx.new(|cx| InputState::new(window, cx)),
                 tmdb_key: cx.new(|cx| InputState::new(window, cx)),
             };
-            let view = cx.new(|_| SettingsWindow::new(snapshot, None, inputs));
+            let view = cx.new(|_| {
+                SettingsWindow::new(snapshot, None, inputs, Endpoint::local(), None, None)
+            });
             install_shortcuts(cx, view.clone(), window.window_handle());
             opened = Some(view.clone());
             gpui_base::Root::new(view, window, cx)
