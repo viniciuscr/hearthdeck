@@ -81,36 +81,28 @@ Adding a setting is adding a row, not adding a screen.
 
 ## Editing: what is wired
 
-**Five settings are wired. All use the same three steps: read the daemon's state,
-write, then report what the daemon says afterwards.**
+**Every row is wired. The connections share one approval flow.**
 
-`Library` → `Group the library` is a switch the daemon owns: the value comes from
-`GET /v1/categorization`, the press becomes `POST /v1/categorization/enable` (or
-`/disable`), and the control settles on the daemon's answer. While the write is in
-flight the switch shows the value that was asked for; if the daemon refuses, the
-error is printed under the page and the switch falls back to the daemon's answer,
-which never changed. `Scan now` posts `/v1/categorization/scan`, is disabled while
-the opt-in is off, and reports the refusal (409) when it comes.
+`Connections` → `RomM` and `Stremio` run the **same** flow, because the daemon
+answers both with the same shapes: `Link …` posts the service's `/link` endpoint
+(RomM also sends the server address), the code and its link become rows of their
+own, and the window polls the matching `GET …/link` every two seconds.
+`waiting` updates the countdown, `linked` stores what the daemon reports and
+drops the rows, and `expired`, `denied` or `idle` say so and offer the button
+again. Each poll belongs to a generation counter, so replacing or unlinking a
+pending code stops the older loop instead of writing over the newer one. Typing a
+password is gone: both services are approved on another device, and neither the
+session nor a password ever crosses this process.
 
-`Connections` → `RomM` signs in the way the iced page always has: the address,
-username and password are posted **once** to `POST /v1/retro/login`, the daemon
-exchanges them for a RomM client token and stores that token, and the password is
-never stored anywhere. On success the window keeps only the connection the daemon
-reports, empties the password field, and shows the address under `Saved
-connection`; the `Forget connection` row appears only while a connection exists
-and posts `DELETE /v1/retro/settings`. A saved connection prefills the address
-field at launch, so signing in again starts from where the daemon already is.
+`Unlink` / `Forget connection` post the matching `DELETE` and appear only while a
+connection exists. A saved RomM address prefills the field at launch, so linking
+again starts from where the daemon already is.
 
-`Connections` → `Stremio` is a flow, not a field. `Link account` posts
-`POST /v1/stremio/link`; the code and the link it comes with become rows of their
-own (the link already carries the code, so it is shown for a phone), and the
-window polls `GET /v1/stremio/link` every two seconds while the offer stands.
-`waiting` updates the countdown, `linked` stores the account and drops the rows,
-`expired` and `idle` say so and offer the button again. Each poll belongs to a
-generation counter, so replacing or unlinking a pending code stops the older
-loop instead of writing over the newer one. `Unlink account` appears only while an
-account is linked and posts `DELETE /v1/stremio/settings`. Nothing here ever sees
-the Stremio session: the daemon holds it.
+`Connections` → `TMDB` is the one **pasted credential**: a masked field and
+`Save key`, written to `PUT /v1/tmdb/settings` on the loopback **admin** listener
+— the port the contract serves it on, and the one this window already uses to
+pair. It is the only write here that does not carry the pairing token. The card's
+chip reads `Set` / `Not set` / `Unavailable` from the same endpoint.
 
 `Library` → `Restore rails` deletes the collections the last scan published
 (`DELETE /v1/categorization/collections`), so the dashboard falls back to what it
@@ -124,24 +116,44 @@ the card's `Systems` row shows what can play now. The window never chooses a
 package: the daemon names them from its own platform-to-core table, and the
 bridge re-validates them before the privileged helper runs.
 
-**The rest is still a preview.** The `TMDB` key is the only text value with no
-write path, and its action answers with one line under the page saying where the
-key really comes from, so the shape of the feedback is visible before the path
-exists.
+`Library` → `Group the library` is a switch the daemon owns: the value comes from
+`GET /v1/categorization`, the press becomes `POST /v1/categorization/enable` (or
+`/disable`), and the control settles on the daemon's answer. While the write is in
+flight the switch shows the value that was asked for; if the daemon refuses, the
+error is printed under the page and the switch falls back to the daemon's answer,
+which never changed. `Scan now` posts `/v1/categorization/scan`, is disabled while
+the opt-in is off, and reports the refusal (409) when it comes.
 
-`TMDB`'s key is deliberately **not** wired here. `contracts/openapi.yaml` serves
-`/v1/tmdb/settings` on the loopback admin listener only, because the key is set
-once from the host and is kept "out of the LAN and out of a controller keyboard".
-The field is drawn so the form can be judged, and its action says where the key
-really comes from.
+`Library` → `Restore rails` deletes the collections the last scan published
+(`DELETE /v1/categorization/collections`), so the dashboard falls back to what it
+derives itself.
 
-What is left to wire:
-
-- `TMDB` — the key is served on the loopback admin listener by contract, so a
-  write from here needs a decision about that contract, not just a call.
+`Emulation` → `Install missing cores` posts `/v1/retro/cores/install` and
+`Sync BIOS` posts `/v1/retro/readiness/sync`. Both answer with a per-package or
+per-file report, which the window turns into one line under the page — naming the
+first package or file that failed — and then re-reads `/v1/retro/readiness`, so
+the card's `Systems` row shows what can play now. The window never chooses a
+package: the daemon names them from its own platform-to-core table, and the
+bridge re-validates them before the privileged helper runs.
 
 `Appearance` is not in this window on purpose: palette, backdrop and motion stay
 in the library app, which is where they are chosen and stored.
+
+### Why TMDB is a paste, and the others are not
+
+TMDB has no credential exchange to call: a key or v4 read token is generated in
+the user's TMDB account page, so `POST …/login` has nothing to mint it from.
+RomM *does* have both a password exchange and a device approval — the window uses
+the approval, so a password is never typed on the television — and Stremio has
+only the approval. That leaves two acquisition modes, and every service picks one:
+
+| Mode | Endpoint shape | Services |
+| --- | --- | --- |
+| Device approval | `POST …/link` + poll `GET …/link` | RomM, Stremio |
+| Pasted credential | one write, then read the stored state | TMDB |
+
+Both modes share the same view vocabulary — a `Control::Action` row plus, for the
+approval, the three code rows `link_rows` builds for either service.
 
 ## Focus and input
 
@@ -232,9 +244,10 @@ installs the binary beside the other Hearthdeck binaries.
 
 - **No controller input yet.** See above: it needs a transport decision before
   it is a code change.
-- **One preview is left.** `TMDB`'s key is the only control with no write path,
-  for the contract reason above. `Appearance` left the window entirely: it lives
-  in the library app.
+- **Nothing is a preview any more.** Every row writes through the daemon. The one
+  asymmetry left is transport: TMDB's key goes to the loopback admin listener
+  because the contract serves it there, while everything else uses the API port
+  and the pairing token.
 - **Scrolling follows the cursor, not the contents.** Moving the cursor scrolls
   its row into view; scrolling with the wheel does not move the cursor, so the
   two can be apart until the next Up or Down. There is no scrollbar-driven

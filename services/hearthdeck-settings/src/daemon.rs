@@ -45,6 +45,9 @@ pub struct Snapshot {
     /// `None` when the daemon did not answer the categorization read: the row
     /// then shows nothing rather than claiming the feature is off.
     pub categorization: Option<Categorization>,
+    /// Whether the daemon holds a TMDB key. `None` when the loopback admin
+    /// listener could not be reached - which is where the contract serves it.
+    pub tmdb_configured: Option<bool>,
 }
 
 /// The RomM connection the daemon holds.
@@ -54,13 +57,15 @@ pub struct Romm {
     pub configured: bool,
 }
 
-/// A Stremio link the user approves on another device.
+/// A device approval: the code to show, and where to approve it. RomM and
+/// Stremio answer with the same shape, which is why the window has one flow for
+/// both.
 ///
-/// The daemon's answer also carries `qr`, an image URL; nothing here draws it, so
-/// it is not modelled - a field nothing reads rots.
+/// The daemon's Stremio answer also carries `qr`, an image URL; nothing here
+/// draws it, so it is not modelled - a field nothing reads rots.
 #[derive(Clone, Debug, Deserialize)]
-pub struct StremioOffer {
-    /// The four characters the user enters in the Stremio app or site.
+pub struct DeviceOffer {
+    /// The characters the user enters, or the link carries.
     pub code: String,
     /// The link to open, which already carries the code.
     pub link: String,
@@ -68,26 +73,22 @@ pub struct StremioOffer {
     pub expires_in_seconds: u64,
 }
 
-/// Where a pending link stands. No case carries the session key: a linked
-/// account is reported as linked, and the credential stays in the daemon.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum StremioLink {
+/// Where a pending approval stands, for either service. No case carries the
+/// credential: a linked account is reported as linked, and the session stays in
+/// the daemon.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkStatus {
     /// No link is pending: never asked for, or already resolved.
     Idle,
     /// The code ran out before it was approved.
     Expired,
+    /// The other side refused the approval.
+    Denied,
     /// Waiting on the user, who is approving the code on another device.
     Waiting { seconds_left: u64 },
-    /// Linked and stored by the daemon.
-    Linked { connection: StremioConnection },
-}
-
-/// The linked Stremio account, as the daemon reports it. There is no field for
-/// the session: the daemon holds that and never sends it.
-#[derive(Clone, Debug, Deserialize)]
-pub struct StremioConnection {
-    pub linked_at: String,
+    /// Linked and stored by the daemon. `account` is what the row shows: when
+    /// Stremio was linked, or which RomM server was.
+    Linked { account: String },
 }
 
 /// The categorization opt-in: the one setting this window writes.
@@ -124,11 +125,15 @@ pub fn scan_categorization() -> Result<(), Error> {
     Client::connect()?.post("/v1/categorization/scan")
 }
 
-/// Signs in to RomM once. The username and password are used for that exchange
-/// only - the daemon stores the client token it mints, never the credentials -
-/// and nothing here logs or keeps them.
-pub fn sign_in_romm(base_url: String, username: String, password: String) -> Result<Romm, Error> {
-    Client::connect()?.sign_in_romm(&base_url, &username, &password)
+/// Asks the daemon for a RomM device code. The user approves it in RomM's web UI
+/// on another device, so no password ever crosses this window.
+pub fn start_romm_link(base_url: String) -> Result<DeviceOffer, Error> {
+    Client::connect()?.start_romm_link(&base_url)
+}
+
+/// One poll of the pending RomM approval.
+pub fn romm_link_status() -> Result<LinkStatus, Error> {
+    Client::connect()?.romm_link_status()
 }
 
 /// Forgets the stored RomM connection and the token that came with it.
@@ -138,14 +143,21 @@ pub fn clear_romm() -> Result<(), Error> {
 
 /// Asks for a Stremio link code. The user approves it on a device where they are
 /// already signed in; no endpoint here accepts a password.
-pub fn start_stremio_link() -> Result<StremioOffer, Error> {
+pub fn start_stremio_link() -> Result<DeviceOffer, Error> {
     Client::connect()?.post_empty("/v1/stremio/link")
 }
 
 /// One poll of the pending link. The daemon talks to Stremio, so neither the
 /// code nor the session crosses this call.
-pub fn stremio_link_status() -> Result<StremioLink, Error> {
-    Client::connect()?.get("/v1/stremio/link")
+pub fn stremio_link_status() -> Result<LinkStatus, Error> {
+    Client::connect()?.stremio_link_status()
+}
+
+/// Stores a TMDB key. The contract serves that endpoint on the loopback admin
+/// listener rather than the API, so this is the one write that does not carry
+/// the pairing token.
+pub fn save_tmdb_key(api_key: String) -> Result<(), Error> {
+    Client::connect()?.save_tmdb_key(&api_key)
 }
 
 /// Unlinks: the session is gone, and the rows that source owned are removed with
@@ -208,6 +220,9 @@ struct Client {
     http: reqwest::blocking::Client,
     base_url: String,
     token: Option<String>,
+    /// Where the loopback admin listener is. A field rather than the constant so
+    /// a test can point it at its own stub.
+    admin_port: u16,
 }
 
 impl Client {
@@ -230,9 +245,17 @@ impl Client {
             http,
             base_url,
             token,
+            admin_port: ADMIN_PORT,
         };
         client.pair_if_needed()?;
         Ok(client)
+    }
+
+    /// The admin listener, as a test's stub serves it.
+    #[cfg(test)]
+    fn with_admin_port(mut self, admin_port: u16) -> Self {
+        self.admin_port = admin_port;
+        self
     }
 
     /// The loopback handshake, the same two calls `hearthdeck_client` makes.
@@ -324,19 +347,76 @@ impl Client {
         Ok(self.send(self.http.post(self.url(path)))?.json()?)
     }
 
-    fn sign_in_romm(&self, base_url: &str, username: &str, password: &str) -> Result<Romm, Error> {
-        let settings: RommSettings = self.post_json(
-            "/v1/retro/login",
-            &serde_json::json!({
-                "base_url": base_url,
-                "username": username,
-                "password": password,
-            }),
-        )?;
-        Ok(Romm {
-            base_url: settings.base_url,
-            configured: settings.configured,
+    fn start_romm_link(&self, base_url: &str) -> Result<DeviceOffer, Error> {
+        self.post_json(
+            "/v1/retro/link",
+            &serde_json::json!({ "base_url": base_url }),
+        )
+    }
+
+    fn romm_link_status(&self) -> Result<LinkStatus, Error> {
+        let status: RommLinkResponse = self.get("/v1/retro/link")?;
+        Ok(match status {
+            RommLinkResponse::Idle => LinkStatus::Idle,
+            RommLinkResponse::Expired => LinkStatus::Expired,
+            RommLinkResponse::Denied => LinkStatus::Denied,
+            RommLinkResponse::Waiting { seconds_left } => LinkStatus::Waiting { seconds_left },
+            RommLinkResponse::Linked { settings } => LinkStatus::Linked {
+                account: settings.base_url,
+            },
         })
+    }
+
+    fn stremio_link_status(&self) -> Result<LinkStatus, Error> {
+        let status: StremioLinkResponse = self.get("/v1/stremio/link")?;
+        Ok(match status {
+            StremioLinkResponse::Idle => LinkStatus::Idle,
+            StremioLinkResponse::Expired => LinkStatus::Expired,
+            StremioLinkResponse::Waiting { seconds_left } => LinkStatus::Waiting { seconds_left },
+            StremioLinkResponse::Linked { connection } => LinkStatus::Linked {
+                account: connection.linked_at,
+            },
+        })
+    }
+
+    /// The loopback admin listener, where `/v1/pairing` and `/v1/tmdb/settings`
+    /// live. It is a different port from the API and takes no bearer token,
+    /// which is why the TMDB write cannot reuse `send`.
+    fn admin_url(&self, path: &str) -> Result<String, Error> {
+        let mut url = Url::parse(&self.base_url)?;
+        if !matches!(
+            url.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1" | "[::1]")
+        ) {
+            return Err("the admin listener is loopback only".into());
+        }
+        url.set_port(Some(self.admin_port))
+            .map_err(|()| "the admin port cannot be set")?;
+        url.set_path(path);
+        Ok(url.to_string())
+    }
+
+    fn save_tmdb_key(&self, api_key: &str) -> Result<(), Error> {
+        let response = self
+            .http
+            .put(self.admin_url("/v1/tmdb/settings")?)
+            .json(&serde_json::json!({ "api_key": api_key }))
+            .send()?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        Err(refusal(status).into())
+    }
+
+    fn tmdb_configured(&self) -> Result<bool, Error> {
+        let settings: Option<TmdbSettings> = self
+            .http
+            .get(self.admin_url("/v1/tmdb/settings")?)
+            .send()?
+            .error_for_status()?
+            .json()?;
+        Ok(settings.is_some_and(|settings| settings.configured))
     }
 
     fn categorization(&self) -> Result<Categorization, Error> {
@@ -413,6 +493,14 @@ impl Client {
             }
         };
 
+        let tmdb_configured = match self.tmdb_configured() {
+            Ok(configured) => Some(configured),
+            Err(error) => {
+                tracing::warn!(%error, "the TMDB credential could not be read");
+                None
+            }
+        };
+
         Snapshot {
             daemon: true,
             romm,
@@ -420,6 +508,7 @@ impl Client {
             ready_systems,
             total_systems,
             categorization,
+            tmdb_configured,
         }
     }
 }
@@ -464,6 +553,37 @@ struct Capabilities {
 #[derive(Deserialize)]
 struct CategorizationResponse {
     enabled: bool,
+}
+
+/// The two link answers differ only in what a successful link reports, so each
+/// is mapped onto the one [`LinkStatus`] the window draws.
+#[derive(Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum StremioLinkResponse {
+    Idle,
+    Expired,
+    Waiting { seconds_left: u64 },
+    Linked { connection: StremioConnection },
+}
+
+#[derive(Deserialize)]
+struct StremioConnection {
+    linked_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum RommLinkResponse {
+    Idle,
+    Expired,
+    Denied,
+    Waiting { seconds_left: u64 },
+    Linked { settings: RommSettings },
+}
+
+#[derive(Deserialize)]
+struct TmdbSettings {
+    configured: bool,
 }
 
 #[derive(Deserialize)]
@@ -545,6 +665,15 @@ mod tests {
 
     fn client(base: String) -> Client {
         Client::connect_to(base, Some("test-token".to_string())).expect("a stub client")
+    }
+
+    /// The stub's port, so a test can point the admin listener at the same
+    /// server instead of the real 38401.
+    fn admin_port(base: &str) -> u16 {
+        base.rsplit(':')
+            .next()
+            .and_then(|port| port.parse().ok())
+            .expect("a stub port")
     }
 
     #[test]
@@ -690,62 +819,6 @@ mod tests {
     }
 
     #[test]
-    fn signing_in_posts_the_form_once_and_keeps_only_the_connection() {
-        let (base, server) = serve(vec![(
-            200,
-            r#"{"base_url":"http://127.0.0.1:8080","configured":true,"updated_at":"2026-11-07T00:00:00Z"}"#,
-        )]);
-
-        let connection = client(base)
-            .sign_in_romm("http://127.0.0.1:8080", "someone", "secret")
-            .expect("the daemon accepted the sign-in");
-
-        assert_eq!(connection.base_url, "http://127.0.0.1:8080");
-        assert!(connection.configured, "the daemon reports it is signed in");
-
-        let seen = server.join().expect("the stub finished");
-        assert!(
-            seen[0].starts_with("POST /v1/retro/login "),
-            "unexpected request: {}",
-            seen[0]
-        );
-        assert!(
-            seen[0]
-                .to_ascii_lowercase()
-                .contains("authorization: bearer test-token"),
-            "the sign-in carries the pairing token"
-        );
-        let body = seen[0].split("\r\n\r\n").nth(1).unwrap_or_default();
-        assert!(
-            body.contains("\"base_url\":\"http://127.0.0.1:8080\""),
-            "the form's address is what is posted: {body}"
-        );
-        assert!(
-            body.contains("\"username\":\"someone\""),
-            "the form's username is what is posted: {body}"
-        );
-        assert!(
-            body.contains("\"password\":\"secret\""),
-            "the form's password is what is posted: {body}"
-        );
-    }
-
-    #[test]
-    fn a_refused_sign_in_says_the_service_could_not_be_reached() {
-        let (base, server) = serve(vec![(502, "")]);
-
-        let error = client(base)
-            .sign_in_romm("http://127.0.0.1:8080", "someone", "secret")
-            .expect_err("a bad gateway is not a sign-in");
-
-        assert!(
-            error.to_string().contains("could not reach"),
-            "unexpected error: {error}"
-        );
-        server.join().expect("the stub finished");
-    }
-
-    #[test]
     fn forgetting_the_connection_deletes_the_settings() {
         let (base, server) = serve(vec![(204, "")]);
 
@@ -769,7 +842,7 @@ mod tests {
         )]);
 
         let offer = client(base)
-            .post_empty::<super::StremioOffer>("/v1/stremio/link")
+            .post_empty::<super::DeviceOffer>("/v1/stremio/link")
             .expect("an offer");
 
         assert_eq!(offer.code, "ABCD");
@@ -784,7 +857,57 @@ mod tests {
     }
 
     #[test]
-    fn a_poll_reports_the_pending_code_then_the_linked_account() {
+    fn a_romm_link_posts_the_address_and_reads_the_code() {
+        let (base, server) = serve(vec![(
+            200,
+            r#"{"code":"WXYZ","link":"http://127.0.0.1:8080/link","expires_in_seconds":120}"#,
+        )]);
+
+        let offer = client(base.clone())
+            .start_romm_link("http://127.0.0.1:8080")
+            .expect("an offer");
+
+        assert_eq!(offer.code, "WXYZ");
+        assert_eq!(offer.expires_in_seconds, 120);
+        let seen = server.join().expect("the stub finished");
+        assert!(
+            seen[0].starts_with("POST /v1/retro/link "),
+            "unexpected request: {}",
+            seen[0]
+        );
+        let body = seen[0].split("\r\n\r\n").nth(1).unwrap_or_default();
+        assert!(
+            body.contains("\"base_url\":\"http://127.0.0.1:8080\""),
+            "the address is what the link is asked for: {body}"
+        );
+    }
+
+    #[test]
+    fn a_romm_poll_reports_denied_and_then_linked() {
+        let (base, server) = serve(vec![
+            (200, r#"{"status":"denied"}"#),
+            (
+                200,
+                r#"{"status":"linked","settings":{"base_url":"http://127.0.0.1:8080","configured":true,"updated_at":"2026-11-07T00:00:00Z"}}"#,
+            ),
+        ]);
+        let client = client(base);
+
+        assert_eq!(
+            client.romm_link_status().expect("a status"),
+            super::LinkStatus::Denied
+        );
+        assert_eq!(
+            client.romm_link_status().expect("a status"),
+            super::LinkStatus::Linked {
+                account: "http://127.0.0.1:8080".to_string()
+            }
+        );
+        server.join().expect("the stub finished");
+    }
+
+    #[test]
+    fn a_stremio_poll_reports_waiting_then_the_linked_account() {
         let (base, server) = serve(vec![
             (
                 200,
@@ -797,23 +920,69 @@ mod tests {
         ]);
         let client = client(base);
 
-        match client
-            .get::<super::StremioLink>("/v1/stremio/link")
-            .expect("the pending link")
-        {
-            super::StremioLink::Waiting { seconds_left } => assert_eq!(seconds_left, 42),
-            other => panic!("unexpected status: {other:?}"),
-        }
-        match client
-            .get::<super::StremioLink>("/v1/stremio/link")
-            .expect("the linked account")
-        {
-            super::StremioLink::Linked { connection } => {
-                assert_eq!(connection.linked_at, "2026-11-07T00:00:00Z");
+        assert_eq!(
+            client.stremio_link_status().expect("a status"),
+            super::LinkStatus::Waiting { seconds_left: 42 }
+        );
+        assert_eq!(
+            client.stremio_link_status().expect("a status"),
+            super::LinkStatus::Linked {
+                account: "2026-11-07T00:00:00Z".to_string()
             }
-            other => panic!("unexpected status: {other:?}"),
-        }
+        );
         server.join().expect("the stub finished");
+    }
+
+    #[test]
+    fn saving_a_tmdb_key_writes_through_the_admin_listener() {
+        let (base, server) = serve(vec![(
+            200,
+            r#"{"configured":true,"updated_at":"2026-11-07T00:00:00Z"}"#,
+        )]);
+        let port = admin_port(&base);
+
+        client(base)
+            .with_admin_port(port)
+            .save_tmdb_key("tmdb-key")
+            .expect("the key was stored");
+
+        let seen = server.join().expect("the stub finished");
+        assert!(
+            seen[0].starts_with("PUT /v1/tmdb/settings "),
+            "unexpected request: {}",
+            seen[0]
+        );
+        assert!(
+            !seen[0]
+                .to_ascii_lowercase()
+                .contains("authorization: bearer"),
+            "the admin listener takes no pairing token: {}",
+            seen[0]
+        );
+        let body = seen[0].split("\r\n\r\n").nth(1).unwrap_or_default();
+        assert!(body.contains("\"api_key\":\"tmdb-key\""), "{body}");
+    }
+
+    #[test]
+    fn the_tmdb_state_is_read_from_the_admin_listener() {
+        let (base, server) = serve(vec![(
+            200,
+            r#"{"configured":true,"updated_at":"2026-11-07T00:00:00Z"}"#,
+        )]);
+        let port = admin_port(&base);
+
+        let configured = client(base)
+            .with_admin_port(port)
+            .tmdb_configured()
+            .expect("a state");
+
+        assert!(configured, "the daemon reports a stored key");
+        let seen = server.join().expect("the stub finished");
+        assert!(
+            seen[0].starts_with("GET /v1/tmdb/settings "),
+            "unexpected request: {}",
+            seen[0]
+        );
     }
 
     #[test]

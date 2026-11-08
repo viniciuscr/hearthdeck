@@ -52,7 +52,7 @@ use gpui_component::{
 };
 use nix::sys::statvfs::statvfs;
 
-use daemon::{Categorization, Snapshot, StremioLink, StremioOffer, read_snapshot};
+use daemon::{Categorization, DeviceOffer, LinkStatus, Snapshot, read_snapshot};
 use nav::Nav;
 
 gpui::actions!(
@@ -135,8 +135,6 @@ impl PageKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TextField {
     RommUrl,
-    RommUser,
-    RommPassword,
     TmdbKey,
 }
 
@@ -144,7 +142,7 @@ enum TextField {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowAction {
     Refresh,
-    RommSignIn,
+    RommLink,
     RommForget,
     StremioLink,
     StremioUnlink,
@@ -159,7 +157,7 @@ impl RowAction {
     fn label(self) -> &'static str {
         match self {
             Self::Refresh => "Refresh",
-            Self::RommSignIn => "Sign in",
+            Self::RommLink => "Link RomM",
             Self::RommForget => "Forget connection",
             Self::StremioLink => "Link account",
             Self::StremioUnlink => "Unlink",
@@ -178,41 +176,32 @@ impl RowAction {
             _ => "That is already running.",
         }
     }
+}
 
-    /// What the row says when it is run. Until the write path lands, every
-    /// action except Refresh only reports where it would post.
-    fn preview(self) -> &'static str {
+/// Which service a pending approval belongs to. Both answer with the same
+/// offer and the same status, so the window runs one flow for both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinkService {
+    RomM,
+    Stremio,
+}
+
+impl LinkService {
+    fn label(self) -> &'static str {
         match self {
-            Self::Refresh => "Reading the daemon and this machine again.",
-            Self::RommSignIn => "RomM sign-in would post these credentials to the daemon.",
-            Self::RommForget => "Forgetting the connection would drop the stored RomM token.",
-            Self::StremioLink => "Stremio linking would ask the daemon for a code.",
-            Self::StremioUnlink => "Unlinking would drop the stored Stremio token.",
-            Self::SaveTmdbKey => {
-                "TMDB's key is set on the host's admin port, not from this window."
-            }
-            Self::RestoreRails => "The daemon would rebuild the dashboard's rails.",
-            Self::ScanLibrary => "A categorization scan would start on the daemon.",
-            Self::InstallCores => "The daemon would install the missing RetroArch cores.",
-            Self::SyncBios => "The daemon would sync the BIOS files for the ready systems.",
+            Self::RomM => "RomM",
+            Self::Stremio => "Stremio",
         }
     }
 }
 
-/// Which RomM request is in flight, so its button is drawn disabled until the
-/// daemon answers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RommTask {
-    SignIn,
-    Forget,
-}
-
-/// Which Stremio request is in flight. Polling a pending code is not a task:
-/// it runs until the code resolves or the offer is dropped.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StremioTask {
-    Link,
-    Unlink,
+/// A pending approval: the code to show, how long the daemon says it has, and
+/// the generation that identifies the poll loop watching it.
+struct PendingLink {
+    service: LinkService,
+    offer: DeviceOffer,
+    seconds_left: Option<u64>,
+    generation: u64,
 }
 
 /// The right-hand side of a row.
@@ -316,8 +305,6 @@ fn flat_items(page: &Page) -> (Vec<Item>, Vec<usize>) {
 /// frame: a caret that is rebuilt is a caret that loses its place.
 struct Inputs {
     romm_url: Entity<InputState>,
-    romm_user: Entity<InputState>,
-    romm_password: Entity<InputState>,
     tmdb_key: Entity<InputState>,
 }
 
@@ -325,19 +312,12 @@ impl Inputs {
     fn text(&self, field: TextField) -> &Entity<InputState> {
         match field {
             TextField::RommUrl => &self.romm_url,
-            TextField::RommUser => &self.romm_user,
-            TextField::RommPassword => &self.romm_password,
             TextField::TmdbKey => &self.tmdb_key,
         }
     }
 
-    fn all(&self) -> [&Entity<InputState>; 4] {
-        [
-            &self.romm_url,
-            &self.romm_user,
-            &self.romm_password,
-            &self.tmdb_key,
-        ]
+    fn all(&self) -> [&Entity<InputState>; 2] {
+        [&self.romm_url, &self.tmdb_key]
     }
 }
 
@@ -399,19 +379,16 @@ struct SettingsWindow {
     /// The switch shows it, so the control answers the press immediately, and
     /// drops back to the daemon's own answer when the write lands or fails.
     categorization_pending: Option<bool>,
-    /// The RomM request in flight, if any: its buttons are drawn disabled until
-    /// the daemon answers.
-    romm_pending: Option<RommTask>,
-    /// The Stremio link code waiting to be approved, and the seconds the daemon
-    /// says are left. `None` when no link is pending.
-    stremio_offer: Option<StremioOffer>,
-    stremio_seconds_left: Option<u64>,
-    /// Bumped whenever a pending link is replaced, so the older poll loop stops
-    /// instead of writing over the newer one.
-    stremio_generation: u64,
-    stremio_pending: Option<StremioTask>,
-    /// The daemon maintenance run in flight - a core install, a BIOS sync, a
-    /// rail rebuild - so its row is disabled until the report comes back.
+    /// The approval waiting on the user, whichever service asked for it. One
+    /// field, because RomM and Stremio answer with the same shapes.
+    pending_link: Option<PendingLink>,
+    /// Bumped whenever a pending approval is replaced, so the older poll loop
+    /// stops instead of writing over the newer one.
+    link_generation: u64,
+    /// The service whose code was asked for and has not arrived yet.
+    linking: Option<LinkService>,
+    /// The daemon request in flight - a link, an unlink, a maintenance run - so
+    /// its row is disabled until the daemon answers.
     busy: Option<RowAction>,
     /// The scrolling page: one item per card heading, card row, or gap. A list,
     /// not a column, because `scroll_to_reveal_item` is what keeps the cursor's
@@ -433,11 +410,9 @@ impl SettingsWindow {
             inputs,
             refreshing: false,
             categorization_pending: None,
-            romm_pending: None,
-            stremio_offer: None,
-            stremio_seconds_left: None,
-            stremio_generation: 0,
-            stremio_pending: None,
+            pending_link: None,
+            link_generation: 0,
+            linking: None,
             busy: None,
             list: ListState::new(0, ListAlignment::Top, px(400.)),
             list_page: 0,
@@ -470,7 +445,9 @@ impl SettingsWindow {
         };
         let stremio = stremio_account(
             self.snapshot.stremio_linked_at.as_deref(),
-            self.stremio_offer.is_some(),
+            self.pending_link
+                .as_ref()
+                .is_some_and(|pending| pending.service == LinkService::Stremio),
         );
         let storage = match &self.disk {
             Some(disk) => Value::Storage {
@@ -480,41 +457,31 @@ impl SettingsWindow {
             None => Value::Text("unavailable".to_string()),
         };
 
-        let mut romm_rows = vec![
-            Row {
-                label: "Server address",
-                description: Some("Where your RomM library is served."),
-                control: Control::Text(TextField::RommUrl),
-            },
-            Row {
-                label: "Username",
-                description: Some("The RomM account Hearthdeck signs in as."),
-                control: Control::Text(TextField::RommUser),
-            },
-            Row {
-                label: "Password",
-                description: Some("Used once for the sign-in; the daemon keeps only the token."),
-                control: Control::Text(TextField::RommPassword),
-            },
-            Row {
-                label: "Sign in",
-                description: Some("Exchanges these credentials for a RomM token."),
-                control: Control::Action(RowAction::RommSignIn),
-            },
-        ];
-        // Only a connection that exists can be forgotten, and the row's presence
-        // is what tells the user which state they are in.
+        let mut romm_rows = vec![Row {
+            label: "Server address",
+            description: Some("Where your RomM library is served."),
+            control: Control::Text(TextField::RommUrl),
+        }];
+        romm_rows.extend(self.link_rows(LinkService::RomM));
         if self.snapshot.romm.is_some() {
             romm_rows.push(Row {
+                label: "Saved connection",
+                description: None,
+                control: Control::Fact(Value::Text(romm)),
+            });
+        }
+        romm_rows.push(if self.snapshot.romm.is_some() {
+            Row {
                 label: "Forget connection",
                 description: Some("Removes the stored token from the daemon."),
                 control: Control::Action(RowAction::RommForget),
-            });
-        }
-        romm_rows.push(Row {
-            label: "Saved connection",
-            description: None,
-            control: Control::Fact(Value::Text(romm)),
+            }
+        } else {
+            Row {
+                label: "Link RomM",
+                description: Some("A code is shown here to approve in RomM."),
+                control: Control::Action(RowAction::RommLink),
+            }
         });
 
         let mut stremio_rows = vec![Row {
@@ -522,41 +489,20 @@ impl SettingsWindow {
             description: None,
             control: Control::Fact(Value::Text(stremio)),
         }];
-        // A pending code is a state, not a dialog: the rows say what to type and
-        // where, and disappear when the code resolves.
-        if let Some(offer) = &self.stremio_offer {
-            stremio_rows.push(Row {
-                label: "Code",
-                description: Some("Enter this in the Stremio app, or open the link below."),
-                control: Control::Fact(Value::Text(offer.code.clone())),
-            });
-            stremio_rows.push(Row {
-                label: "Approve at",
-                description: None,
-                control: Control::Fact(Value::Text(offer.link.clone())),
-            });
-            stremio_rows.push(Row {
-                label: "Waiting",
-                description: Some("Until the code is approved or runs out."),
-                control: Control::Fact(Value::Text(match self.stremio_seconds_left {
-                    Some(seconds) => format!("{seconds}s left"),
-                    None => "checking...".to_string(),
-                })),
-            });
-        }
-        if self.snapshot.stremio_linked_at.is_some() {
-            stremio_rows.push(Row {
+        stremio_rows.extend(self.link_rows(LinkService::Stremio));
+        stremio_rows.push(if self.snapshot.stremio_linked_at.is_some() {
+            Row {
                 label: "Unlink account",
                 description: Some("Stops reading the Stremio addons and removes their rows."),
                 control: Control::Action(RowAction::StremioUnlink),
-            });
-        } else if self.stremio_offer.is_none() {
-            stremio_rows.push(Row {
+            }
+        } else {
+            Row {
                 label: "Link account",
                 description: Some("A code is shown here to approve elsewhere."),
                 control: Control::Action(RowAction::StremioLink),
-            });
-        }
+            }
+        });
 
         vec![
             Page {
@@ -618,7 +564,11 @@ impl SettingsWindow {
                         title: "Stremio",
                         status: Some(if self.snapshot.stremio_linked_at.is_some() {
                             ("Linked", Tone::Good)
-                        } else if self.stremio_offer.is_some() {
+                        } else if self
+                            .pending_link
+                            .as_ref()
+                            .is_some_and(|pending| pending.service == LinkService::Stremio)
+                        {
                             ("Waiting", Tone::Attention)
                         } else {
                             ("Not linked", Tone::Off)
@@ -627,16 +577,24 @@ impl SettingsWindow {
                     },
                     Group {
                         title: "TMDB",
-                        status: Some(("Preview", Tone::Off)),
+                        status: Some(match self.snapshot.tmdb_configured {
+                            Some(true) => ("Set", Tone::Good),
+                            Some(false) => ("Not set", Tone::Off),
+                            None => ("Unavailable", Tone::Off),
+                        }),
                         rows: vec![
                             Row {
                                 label: "API key",
-                                description: Some("Used for artwork and release dates."),
+                                description: Some(
+                                    "Paste a v3 key or a v4 read token from your TMDB account.",
+                                ),
                                 control: Control::Text(TextField::TmdbKey),
                             },
                             Row {
                                 label: "Save key",
-                                description: None,
+                                description: Some(
+                                    "Stored on this machine, never sent anywhere else.",
+                                ),
                                 control: Control::Action(RowAction::SaveTmdbKey),
                             },
                         ],
@@ -726,7 +684,7 @@ impl SettingsWindow {
             return;
         }
         self.refreshing = true;
-        self.notice = Some(RowAction::Refresh.preview().to_string());
+        self.notice = Some("Reading the daemon and this machine again.".to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let (snapshot, disk) = cx
@@ -752,31 +710,24 @@ impl SettingsWindow {
         match action {
             RowAction::Refresh => self.refresh(cx),
             RowAction::ScanLibrary => self.scan_categorization(cx),
-            RowAction::RommSignIn => self.sign_in_romm(cx),
-            RowAction::RommForget => self.forget_romm(cx),
-            RowAction::StremioLink => self.start_stremio_link(cx),
-            RowAction::StremioUnlink => self.unlink_stremio(cx),
+            RowAction::RommLink => self.start_link(LinkService::RomM, cx),
+            RowAction::RommForget => self.unlink(LinkService::RomM, cx),
+            RowAction::StremioLink => self.start_link(LinkService::Stremio, cx),
+            RowAction::StremioUnlink => self.unlink(LinkService::Stremio, cx),
+            RowAction::SaveTmdbKey => self.save_tmdb_key(cx),
             RowAction::InstallCores => self.install_cores(cx),
             RowAction::SyncBios => self.sync_bios(cx),
             RowAction::RestoreRails => self.restore_rails(cx),
-            _ => {
-                self.notice = Some(action.preview().to_string());
-                cx.notify();
-            }
         }
     }
 
     fn action_enabled(&self, action: RowAction) -> bool {
+        if self.busy.is_some() || self.linking.is_some() {
+            return false;
+        }
         match action {
             RowAction::ScanLibrary => self.categorization_enabled(),
-            RowAction::RommSignIn | RowAction::RommForget => self.romm_pending.is_none(),
-            RowAction::StremioLink => {
-                self.stremio_pending.is_none() && self.stremio_offer.is_none()
-            }
-            RowAction::StremioUnlink => self.stremio_pending.is_none(),
-            RowAction::InstallCores | RowAction::SyncBios | RowAction::RestoreRails => {
-                self.busy.is_none()
-            }
+            RowAction::RommLink | RowAction::StremioLink => self.pending_link.is_none(),
             _ => true,
         }
     }
@@ -882,47 +833,99 @@ impl SettingsWindow {
         .detach();
     }
 
-    /// The RomM form's three values, trimmed. The password is not trimmed: a
-    /// leading or trailing space may be part of it.
-    fn romm_form(&self, cx: &App) -> (String, String, String) {
-        (
-            self.inputs.romm_url.read(cx).value().trim().to_string(),
-            self.inputs.romm_user.read(cx).value().trim().to_string(),
-            self.inputs.romm_password.read(cx).value().to_string(),
-        )
+    /// The rows a pending approval adds, whichever service asked. One helper,
+    /// because the daemon answers both with the same shape.
+    fn link_rows(&self, service: LinkService) -> Vec<Row> {
+        let Some(pending) = self
+            .pending_link
+            .as_ref()
+            .filter(|pending| pending.service == service)
+        else {
+            return Vec::new();
+        };
+        vec![
+            Row {
+                label: "Code",
+                description: Some("Enter this in the app, or open the link below."),
+                control: Control::Fact(Value::Text(pending.offer.code.clone())),
+            },
+            Row {
+                label: "Approve at",
+                description: None,
+                control: Control::Fact(Value::Text(pending.offer.link.clone())),
+            },
+            Row {
+                label: "Waiting",
+                description: Some("Until the code is approved or runs out."),
+                control: Control::Fact(Value::Text(match pending.seconds_left {
+                    Some(seconds) => format!("{seconds}s left"),
+                    None => "checking...".to_string(),
+                })),
+            },
+        ]
     }
 
-    /// Signs in once and keeps only what the daemon saves: the window never
-    /// stores the credentials, and empties the password field when they worked.
-    fn sign_in_romm(&mut self, cx: &mut Context<Self>) {
-        if self.romm_pending.is_some() {
+    /// Asks the daemon for a code, then waits on it. RomM needs the address of
+    /// the server to ask; Stremio needs nothing.
+    fn start_link(&mut self, service: LinkService, cx: &mut Context<Self>) {
+        if self.linking.is_some() || self.pending_link.is_some() {
             return;
         }
-        let (base_url, username, password) = self.romm_form(cx);
-        if base_url.is_empty() || username.is_empty() || password.is_empty() {
-            self.notice = Some("Fill in the address, the username and the password.".to_string());
-            cx.notify();
-            return;
-        }
-        self.romm_pending = Some(RommTask::SignIn);
-        self.notice = Some("Signing in to RomM...".to_string());
+        let base_url = match service {
+            LinkService::RomM => {
+                let url = self.inputs.romm_url.read(cx).value().trim().to_string();
+                if url.is_empty() {
+                    self.notice = Some("Fill in the RomM server address first.".to_string());
+                    cx.notify();
+                    return;
+                }
+                Some(url)
+            }
+            LinkService::Stremio => None,
+        };
+        self.linking = Some(service);
+        self.notice = Some(format!(
+            "Asking the daemon for a {} code...",
+            service.label()
+        ));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { daemon::sign_in_romm(base_url, username, password) })
+                .spawn(async move {
+                    match base_url {
+                        Some(url) => daemon::start_romm_link(url),
+                        None => daemon::start_stremio_link(),
+                    }
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.romm_pending = None;
+                this.linking = None;
                 match result {
-                    Ok(connection) => {
-                        this.notice = Some(format!("Signed in to {}.", connection.base_url));
-                        this.snapshot.romm = Some(connection);
-                        clear_field(cx, &this.inputs.romm_password);
+                    Ok(offer) => {
+                        this.notice = Some(format!(
+                            "Approve code {} in {}.",
+                            offer.code,
+                            service.label()
+                        ));
+                        this.link_generation = this.link_generation.wrapping_add(1);
+                        let generation = this.link_generation;
+                        this.pending_link = Some(PendingLink {
+                            service,
+                            seconds_left: Some(offer.expires_in_seconds),
+                            offer,
+                            generation,
+                        });
+                        this.poll_link(service, generation, cx);
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "the RomM sign-in failed");
-                        this.notice = Some(format!("Sign-in failed: {error}"));
+                        tracing::warn!(
+                            %error,
+                            "the {} link could not be started",
+                            service.label()
+                        );
+                        this.notice =
+                            Some(format!("{} link not started: {error}", service.label()));
                     }
                 }
                 cx.notify();
@@ -931,27 +934,149 @@ impl SettingsWindow {
         .detach();
     }
 
-    fn forget_romm(&mut self, cx: &mut Context<Self>) {
-        if self.romm_pending.is_some() {
+    /// Polls until the code is approved, refused, expired, or replaced. The loop
+    /// stops as soon as its generation is no longer the pending one.
+    fn poll_link(&mut self, service: LinkService, generation: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                let status = cx
+                    .background_executor()
+                    .spawn(async move {
+                        match service {
+                            LinkService::RomM => daemon::romm_link_status(),
+                            LinkService::Stremio => daemon::stremio_link_status(),
+                        }
+                    })
+                    .await;
+                let keep = this
+                    .update(cx, |this, cx| {
+                        this.apply_link_status(service, generation, status, cx)
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    break;
+                }
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+            }
+        })
+        .detach();
+    }
+
+    /// Applies one poll. Returns whether the loop should keep going.
+    fn apply_link_status(
+        &mut self,
+        service: LinkService,
+        generation: u64,
+        status: Result<LinkStatus, daemon::Error>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let current = self
+            .pending_link
+            .as_ref()
+            .is_some_and(|pending| pending.service == service && pending.generation == generation);
+        if !current {
+            return false;
+        }
+        match status {
+            Ok(LinkStatus::Waiting { seconds_left }) => {
+                if let Some(pending) = self.pending_link.as_mut() {
+                    pending.seconds_left = Some(seconds_left);
+                }
+                cx.notify();
+                true
+            }
+            Ok(LinkStatus::Linked { account }) => {
+                self.notice = Some(format!("{} linked: {account}.", service.label()));
+                match service {
+                    LinkService::RomM => {
+                        self.snapshot.romm = Some(daemon::Romm {
+                            base_url: account,
+                            configured: true,
+                        });
+                    }
+                    LinkService::Stremio => self.snapshot.stremio_linked_at = Some(account),
+                }
+                self.pending_link = None;
+                cx.notify();
+                false
+            }
+            Ok(LinkStatus::Expired) => {
+                self.notice = Some(format!(
+                    "The {} code expired; ask for a new one.",
+                    service.label()
+                ));
+                self.pending_link = None;
+                cx.notify();
+                false
+            }
+            Ok(LinkStatus::Denied) => {
+                self.notice = Some(format!("{} refused the approval.", service.label()));
+                self.pending_link = None;
+                cx.notify();
+                false
+            }
+            Ok(LinkStatus::Idle) => {
+                self.notice = Some(format!("The {} link was cancelled.", service.label()));
+                self.pending_link = None;
+                cx.notify();
+                false
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "the {} link status could not be read",
+                    service.label()
+                );
+                self.notice = Some(format!("{}: {error}", service.label()));
+                self.pending_link = None;
+                cx.notify();
+                false
+            }
+        }
+    }
+
+    /// Drops a stored connection. Two services, two endpoints, one flow.
+    fn unlink(&mut self, service: LinkService, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
             return;
         }
-        self.romm_pending = Some(RommTask::Forget);
-        self.notice = Some("Removing the RomM connection...".to_string());
+        self.busy = Some(match service {
+            LinkService::RomM => RowAction::RommForget,
+            LinkService::Stremio => RowAction::StremioUnlink,
+        });
+        self.notice = Some(format!("Removing the {} connection...", service.label()));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async { daemon::clear_romm() })
+                .spawn(async move {
+                    match service {
+                        LinkService::RomM => daemon::clear_romm(),
+                        LinkService::Stremio => daemon::unlink_stremio(),
+                    }
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.romm_pending = None;
+                this.busy = None;
                 match result {
                     Ok(()) => {
-                        this.notice = Some("The RomM connection was removed.".to_string());
-                        this.snapshot.romm = None;
+                        this.notice =
+                            Some(format!("The {} connection was removed.", service.label()));
+                        match service {
+                            LinkService::RomM => this.snapshot.romm = None,
+                            LinkService::Stremio => this.snapshot.stremio_linked_at = None,
+                        }
+                        // Nothing is waiting on a code any more, and an older
+                        // poll must not bring the account back.
+                        this.link_generation = this.link_generation.wrapping_add(1);
+                        this.pending_link = None;
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "the RomM connection could not be removed");
+                        tracing::warn!(
+                            %error,
+                            "the {} connection could not be removed",
+                            service.label()
+                        );
                         this.notice = Some(format!("Not removed: {error}"));
                     }
                 }
@@ -961,95 +1086,41 @@ impl SettingsWindow {
         .detach();
     }
 
-    fn unlink_stremio(&mut self, cx: &mut Context<Self>) {
-        if self.stremio_pending.is_some() {
+    /// Saves a pasted TMDB key. The contract serves that endpoint on the admin
+    /// listener, so it is the one write that does not carry the pairing token.
+    fn save_tmdb_key(&mut self, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
             return;
         }
-        self.stremio_pending = Some(StremioTask::Unlink);
-        self.notice = Some("Removing the Stremio account...".to_string());
+        let key = self.inputs.tmdb_key.read(cx).value().trim().to_string();
+        if key.is_empty() {
+            self.notice = Some("Paste the TMDB key first.".to_string());
+            cx.notify();
+            return;
+        }
+        self.busy = Some(RowAction::SaveTmdbKey);
+        self.notice = Some("Saving the TMDB key...".to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async { daemon::unlink_stremio() })
+                .spawn(async move { daemon::save_tmdb_key(key) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.stremio_pending = None;
+                this.busy = None;
                 match result {
                     Ok(()) => {
-                        this.notice = Some("The Stremio account was unlinked.".to_string());
-                        this.snapshot.stremio_linked_at = None;
-                        // Nothing is waiting on a code any more, and an older
-                        // poll must not bring the account back.
-                        this.stremio_generation = this.stremio_generation.wrapping_add(1);
-                        this.stremio_offer = None;
-                        this.stremio_seconds_left = None;
+                        this.snapshot.tmdb_configured = Some(true);
+                        this.notice = Some("The TMDB key was saved.".to_string());
+                        clear_field(cx, &this.inputs.tmdb_key);
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "the Stremio account could not be unlinked");
-                        this.notice = Some(format!("Not unlinked: {error}"));
+                        tracing::warn!(%error, "the TMDB key could not be saved");
+                        this.notice = Some(format!("TMDB key not saved: {error}"));
                     }
                 }
                 cx.notify();
             });
-        })
-        .detach();
-    }
-
-    /// Asks the daemon for a link code, then waits on it.
-    fn start_stremio_link(&mut self, cx: &mut Context<Self>) {
-        if self.stremio_pending.is_some() {
-            return;
-        }
-        self.stremio_pending = Some(StremioTask::Link);
-        self.notice = Some("Asking the daemon for a Stremio code...".to_string());
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async { daemon::start_stremio_link() })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.stremio_pending = None;
-                match result {
-                    Ok(offer) => {
-                        this.notice = Some(format!("Approve code {} in Stremio.", offer.code));
-                        this.stremio_seconds_left = Some(offer.expires_in_seconds);
-                        this.stremio_offer = Some(offer);
-                        this.stremio_generation = this.stremio_generation.wrapping_add(1);
-                        this.poll_stremio_link(cx);
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "the Stremio link could not be started");
-                        this.notice = Some(format!("Stremio link not started: {error}"));
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    /// Polls until the code is approved, expires, or the offer is replaced. The
-    /// loop stops as soon as its generation is no longer the current one.
-    fn poll_stremio_link(&mut self, cx: &mut Context<Self>) {
-        let generation = self.stremio_generation;
-        cx.spawn(async move |this, cx| {
-            loop {
-                let status = cx
-                    .background_executor()
-                    .spawn(async { daemon::stremio_link_status() })
-                    .await;
-                let keep = this
-                    .update(cx, |this, cx| {
-                        this.apply_link_status(generation, status, cx)
-                    })
-                    .unwrap_or(false);
-                if !keep {
-                    break;
-                }
-                cx.background_executor().timer(Duration::from_secs(2)).await;
-            }
         })
         .detach();
     }
@@ -1152,55 +1223,6 @@ impl SettingsWindow {
         if let Some((ready, total)) = readiness {
             self.snapshot.ready_systems = ready;
             self.snapshot.total_systems = total;
-        }
-    }
-
-    /// Applies one poll. Returns whether the loop should keep going.
-    fn apply_link_status(
-        &mut self,
-        generation: u64,
-        status: Result<StremioLink, daemon::Error>,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if generation != self.stremio_generation || self.stremio_offer.is_none() {
-            return false;
-        }
-        match status {
-            Ok(StremioLink::Waiting { seconds_left }) => {
-                self.stremio_seconds_left = Some(seconds_left);
-                cx.notify();
-                true
-            }
-            Ok(StremioLink::Linked { connection }) => {
-                self.notice = Some("Stremio account linked.".to_string());
-                self.snapshot.stremio_linked_at = Some(connection.linked_at);
-                self.stremio_offer = None;
-                self.stremio_seconds_left = None;
-                cx.notify();
-                false
-            }
-            Ok(StremioLink::Expired) => {
-                self.notice = Some("The Stremio code expired; ask for a new one.".to_string());
-                self.stremio_offer = None;
-                self.stremio_seconds_left = None;
-                cx.notify();
-                false
-            }
-            Ok(StremioLink::Idle) => {
-                self.notice = Some("The Stremio link was cancelled.".to_string());
-                self.stremio_offer = None;
-                self.stremio_seconds_left = None;
-                cx.notify();
-                false
-            }
-            Err(error) => {
-                tracing::warn!(%error, "the Stremio link status could not be read");
-                self.notice = Some(format!("Stremio: {error}"));
-                self.stremio_offer = None;
-                self.stremio_seconds_left = None;
-                cx.notify();
-                false
-            }
         }
     }
 
@@ -1872,12 +1894,6 @@ fn main() {
                         .placeholder("http://romm.local:8080")
                         .default_value(saved_romm.clone())
                 }),
-                romm_user: cx.new(|cx| InputState::new(window, cx).placeholder("Username")),
-                romm_password: cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("Password")
-                        .masked(true)
-                }),
                 tmdb_key: cx.new(|cx| {
                     InputState::new(window, cx)
                         .placeholder("TMDB API key")
@@ -2041,12 +2057,7 @@ mod tests {
     fn every_text_row_addresses_its_own_field() {
         // Adding a text field without a row, or listing one twice, is a mistake
         // the page cannot catch at runtime - so the vocabulary is checked here.
-        let fields = [
-            TextField::RommUrl,
-            TextField::RommUser,
-            TextField::RommPassword,
-            TextField::TmdbKey,
-        ];
+        let fields = [TextField::RommUrl, TextField::TmdbKey];
         for (index, field) in fields.iter().enumerate() {
             assert!(
                 !fields[..index].contains(field),
@@ -2077,8 +2088,6 @@ mod render_tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let inputs = Inputs {
                 romm_url: cx.new(|cx| InputState::new(window, cx)),
-                romm_user: cx.new(|cx| InputState::new(window, cx)),
-                romm_password: cx.new(|cx| InputState::new(window, cx)),
                 tmdb_key: cx.new(|cx| InputState::new(window, cx)),
             };
             let view = cx.new(|_| SettingsWindow::new(snapshot, None, inputs));
