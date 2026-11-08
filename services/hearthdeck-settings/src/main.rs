@@ -91,16 +91,14 @@ enum PageKind {
     Status,
     Connections,
     Library,
-    Appearance,
     Emulation,
 }
 
 impl PageKind {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 4] = [
         Self::Status,
         Self::Connections,
         Self::Library,
-        Self::Appearance,
         Self::Emulation,
     ];
 
@@ -109,7 +107,6 @@ impl PageKind {
             Self::Status => "Status",
             Self::Connections => "Connections",
             Self::Library => "Library",
-            Self::Appearance => "Appearance",
             Self::Emulation => "Emulation",
         }
     }
@@ -119,7 +116,6 @@ impl PageKind {
             Self::Status => "What Hearthdeck sees of the daemon and this machine.",
             Self::Connections => "The accounts Hearthdeck talks to on your behalf.",
             Self::Library => "How the library is gathered and grouped.",
-            Self::Appearance => "How the library app looks and moves.",
             Self::Emulation => "The cores RetroArch needs, and what is ready to play.",
         }
     }
@@ -129,7 +125,6 @@ impl PageKind {
             Self::Status => IconName::Info,
             Self::Connections => IconName::Globe,
             Self::Library => IconName::FolderOpen,
-            Self::Appearance => IconName::Palette,
             Self::Emulation => IconName::Cpu,
         }
     }
@@ -144,24 +139,6 @@ enum TextField {
     RommPassword,
     TmdbKey,
 }
-
-/// A switch row. The value lives in [`Draft`]: nothing else owns it yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ToggleField {
-    Categorization,
-    ReduceMotion,
-}
-
-/// A choice row: Enter cycles the value in place, which is how a television
-/// with one button does a dropdown without a popup.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ChoiceField {
-    Palette,
-    Backdrop,
-}
-
-const PALETTES: &[&str] = &["Noir", "Aurora", "Ember", "Indigo"];
-const BACKDROPS: &[&str] = &["Solid", "Edge wash", "Quiet grid"];
 
 /// What Enter does with a focused row that is not a field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,11 +221,7 @@ enum Control {
     /// A state or a measurement the window only reports.
     Fact(Value),
     Text(TextField),
-    Toggle(ToggleField),
-    Choice {
-        field: ChoiceField,
-        options: &'static [&'static str],
-    },
+    Toggle,
     Action(RowAction),
 }
 
@@ -339,50 +312,6 @@ fn flat_items(page: &Page) -> (Vec<Item>, Vec<usize>) {
     (items, rows)
 }
 
-/// Everything the window can edit that the daemon has not been told about yet.
-///
-/// Categorization is not here: it is the daemon's, and the window only mirrors
-/// it. What lives in the draft is what has no write path yet.
-///
-/// The defaults are the daemon's, as `docs/appearance-system.md` states them:
-/// fresh installations begin on Noir over Solid, with motion allowed.
-#[derive(Default)]
-struct Draft {
-    reduce_motion: bool,
-    palette: usize,
-    backdrop: usize,
-}
-
-impl Draft {
-    fn choice(&self, field: ChoiceField) -> usize {
-        match field {
-            ChoiceField::Palette => self.palette,
-            ChoiceField::Backdrop => self.backdrop,
-        }
-    }
-
-    fn options(field: ChoiceField) -> &'static [&'static str] {
-        match field {
-            ChoiceField::Palette => PALETTES,
-            ChoiceField::Backdrop => BACKDROPS,
-        }
-    }
-
-    /// The next value, wrapping - so a row with two options behaves like a
-    /// switch and a row with four is a ring, with no extra key to learn.
-    fn cycle_choice(&mut self, field: ChoiceField) {
-        let options = Self::options(field).len();
-        if options == 0 {
-            return;
-        }
-        let next = (self.choice(field) + 1) % options;
-        match field {
-            ChoiceField::Palette => self.palette = next,
-            ChoiceField::Backdrop => self.backdrop = next,
-        }
-    }
-}
-
 /// The text fields, created once with the window so their state survives every
 /// frame: a caret that is rebuilt is a caret that loses its place.
 struct Inputs {
@@ -462,7 +391,6 @@ struct SettingsWindow {
     snapshot: Snapshot,
     disk: Option<DiskUsage>,
     nav: Nav,
-    draft: Draft,
     inputs: Inputs,
     /// Set while a refresh is in flight, so the row says so and Enter cannot
     /// stack a second read behind the first.
@@ -502,7 +430,6 @@ impl SettingsWindow {
             snapshot,
             disk,
             nav: Nav::default(),
-            draft: Draft::default(),
             inputs,
             refreshing: false,
             categorization_pending: None,
@@ -728,7 +655,7 @@ impl SettingsWindow {
                                 description: Some(
                                     "Let Hearthdeck derive sections and collections from the catalog.",
                                 ),
-                                control: Control::Toggle(ToggleField::Categorization),
+                                control: Control::Toggle,
                             },
                             Row {
                                 label: "Scan now",
@@ -746,48 +673,6 @@ impl SettingsWindow {
                                 "Removes the rails the last scan published; the dashboard derives its own.",
                             ),
                             control: Control::Action(RowAction::RestoreRails),
-                        }],
-                    },
-                ],
-            },
-            Page {
-                kind: PageKind::Appearance,
-                groups: vec![
-                    Group {
-                        title: "Palette",
-                        status: None,
-                        rows: vec![Row {
-                            label: "Color identity",
-                            description: Some(
-                                "Curated dark families; the library app applies them.",
-                            ),
-                            control: Control::Choice {
-                                field: ChoiceField::Palette,
-                                options: PALETTES,
-                            },
-                        }],
-                    },
-                    Group {
-                        title: "Backdrop",
-                        status: None,
-                        rows: vec![Row {
-                            label: "Route treatment",
-                            description: Some("Static by design: no video, no shaders."),
-                            control: Control::Choice {
-                                field: ChoiceField::Backdrop,
-                                options: BACKDROPS,
-                            },
-                        }],
-                    },
-                    Group {
-                        title: "Motion",
-                        status: None,
-                        rows: vec![Row {
-                            label: "Reduce motion",
-                            description: Some(
-                                "Shortens transitions instead of playing them in full.",
-                            ),
-                            control: Control::Toggle(ToggleField::ReduceMotion),
                         }],
                     },
                 ],
@@ -905,43 +790,25 @@ impl SettingsWindow {
     }
 
     /// What the switch shows: the write in flight, else the daemon's answer.
-    fn toggle_value(&self, field: ToggleField) -> bool {
-        match field {
-            ToggleField::Categorization => mirrored(
-                self.categorization_pending,
-                self.snapshot
-                    .categorization
-                    .as_ref()
-                    .map(|categorization| categorization.enabled),
-            ),
-            ToggleField::ReduceMotion => self.draft.reduce_motion,
-        }
+    fn toggle_value(&self) -> bool {
+        mirrored(
+            self.categorization_pending,
+            self.snapshot
+                .categorization
+                .as_ref()
+                .map(|categorization| categorization.enabled),
+        )
     }
 
-    /// A toggle with no daemon behind it is still offered; one whose state was
-    /// never read is drawn disabled rather than focused and dead.
-    fn toggle_enabled(&self, field: ToggleField) -> bool {
-        match field {
-            ToggleField::Categorization => {
-                self.categorization_pending.is_none()
-                    && self
-                        .snapshot
-                        .categorization
-                        .as_ref()
-                        .is_some_and(|categorization| categorization.capable != Some(false))
-            }
-            ToggleField::ReduceMotion => true,
-        }
-    }
-
-    fn set_toggle(&mut self, field: ToggleField, value: bool, cx: &mut Context<Self>) {
-        match field {
-            ToggleField::Categorization => self.set_categorization(value, cx),
-            ToggleField::ReduceMotion => {
-                self.draft.reduce_motion = value;
-                cx.notify();
-            }
-        }
+    /// A toggle whose state was never read is drawn disabled rather than
+    /// focused and dead, and so is one while its write is in flight.
+    fn toggle_enabled(&self) -> bool {
+        self.categorization_pending.is_none()
+            && self
+                .snapshot
+                .categorization
+                .as_ref()
+                .is_some_and(|categorization| categorization.capable != Some(false))
     }
 
     /// Turns the opt-in on or off on the daemon, then settles on what it says.
@@ -1344,15 +1211,11 @@ impl SettingsWindow {
                 let input = self.inputs.text(field).clone();
                 input.update(cx, |state, cx| state.focus(window, cx));
             }
-            Some(Control::Toggle(field)) => {
-                if self.toggle_enabled(field) {
-                    let value = !self.toggle_value(field);
-                    self.set_toggle(field, value, cx);
+            Some(Control::Toggle) => {
+                if self.toggle_enabled() {
+                    let value = !self.toggle_value();
+                    self.set_categorization(value, cx);
                 }
-            }
-            Some(Control::Choice { field, .. }) => {
-                self.draft.cycle_choice(field);
-                cx.notify();
             }
             Some(Control::Action(action)) => self.run(action, cx),
             Some(Control::Fact(_)) | None => {}
@@ -1582,7 +1445,7 @@ impl SettingsWindow {
         // The row's click only carries rows whose control has no click of its
         // own: a switch and a button already do something when pressed, and
         // clicking them must not also run the row and undo it.
-        let confirm_on_click = matches!(control, Control::Text(_) | Control::Choice { .. });
+        let confirm_on_click = matches!(control, Control::Text(_));
         let view_for_click = view.clone();
         let on_click = move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
             view_for_click.update(cx, |this, cx| {
@@ -1643,47 +1506,18 @@ impl SettingsWindow {
                 .w(px(FIELD_WIDTH))
                 .child(Input::new(self.inputs.text(*field)))
                 .into_any_element(),
-            Control::Toggle(field) => {
-                let field = *field;
+            Control::Toggle => {
                 let view = view.clone();
                 Switch::new(SharedString::from(format!(
                     "switch-{page_index}-{row_index}"
                 )))
-                .checked(self.toggle_value(field))
-                .disabled(!self.toggle_enabled(field))
+                .checked(self.toggle_value())
+                .disabled(!self.toggle_enabled())
                 .on_click(move |checked: &bool, _: &mut Window, cx: &mut App| {
                     let value = *checked;
-                    view.update(cx, |this, cx| this.set_toggle(field, value, cx));
+                    view.update(cx, |this, cx| this.set_categorization(value, cx));
                 })
                 .into_any_element()
-            }
-            Control::Choice { field, options } => {
-                let selected = self
-                    .draft
-                    .choice(*field)
-                    .min(options.len().saturating_sub(1));
-                let value = options.get(selected).copied().unwrap_or("--");
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .px_3()
-                            .py_2()
-                            .rounded(theme.radius)
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.secondary)
-                            .text_lg()
-                            .child(value),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("Enter to change"),
-                    )
-                    .into_any_element()
             }
             Control::Action(action) => {
                 let action = *action;
@@ -2064,8 +1898,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        BACKDROPS, ChoiceField, Control, Draft, Group, Item, PALETTES, Page, PageKind, Row,
-        TextField, Value, describe_install, describe_sync, flat_items, mirrored, stremio_account,
+        Control, Group, Item, Page, PageKind, Row, TextField, Value, describe_install,
+        describe_sync, flat_items, mirrored, stremio_account,
     };
 
     #[test]
@@ -2204,55 +2038,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_draft_is_the_documented_default() {
-        let draft = Draft::default();
-
-        assert!(
-            !draft.reduce_motion,
-            "motion is allowed until asked otherwise"
-        );
-        assert_eq!(draft.choice(ChoiceField::Palette), 0, "Noir");
-        assert_eq!(draft.choice(ChoiceField::Backdrop), 0, "Solid");
-    }
-
-    #[test]
-    fn a_choice_wraps_after_its_last_option() {
-        let mut draft = Draft::default();
-        assert_eq!(draft.choice(ChoiceField::Palette), 0);
-
-        for _ in 0..PALETTES.len() {
-            draft.cycle_choice(ChoiceField::Palette);
-        }
-        assert_eq!(
-            draft.choice(ChoiceField::Palette),
-            0,
-            "cycling every option returns to the first"
-        );
-    }
-
-    #[test]
-    fn choices_cycle_one_at_a_time() {
-        let mut draft = Draft::default();
-
-        draft.cycle_choice(ChoiceField::Backdrop);
-
-        assert_eq!(draft.choice(ChoiceField::Backdrop), 1);
-        assert_eq!(
-            draft.choice(ChoiceField::Palette),
-            0,
-            "the other choice keeps its value"
-        );
-    }
-
-    #[test]
-    fn the_choices_offer_the_options_the_appearance_doc_lists() {
-        assert_eq!(PALETTES.len(), 4);
-        assert_eq!(BACKDROPS.len(), 3);
-        assert_eq!(Draft::options(ChoiceField::Palette), PALETTES);
-        assert_eq!(Draft::options(ChoiceField::Backdrop), BACKDROPS);
-    }
-
-    #[test]
     fn every_text_row_addresses_its_own_field() {
         // Adding a text field without a row, or listing one twice, is a mistake
         // the page cannot catch at runtime - so the vocabulary is checked here.
@@ -2277,9 +2062,16 @@ mod tests {
 #[cfg(test)]
 mod render_tests {
     use super::*;
-    use gpui::{TestAppContext, VisualTestContext};
+    use gpui::{Action as _, TestAppContext, VisualTestContext};
 
     fn open(cx: &mut TestAppContext) -> (Entity<SettingsWindow>, &mut VisualTestContext) {
+        open_with(Snapshot::default(), cx)
+    }
+
+    fn open_with(
+        snapshot: Snapshot,
+        cx: &mut TestAppContext,
+    ) -> (Entity<SettingsWindow>, &mut VisualTestContext) {
         cx.update(gpui_component::init);
         let mut opened = None;
         let (_, cx) = cx.add_window_view(|window, cx| {
@@ -2289,7 +2081,7 @@ mod render_tests {
                 romm_password: cx.new(|cx| InputState::new(window, cx)),
                 tmdb_key: cx.new(|cx| InputState::new(window, cx)),
             };
-            let view = cx.new(|_| SettingsWindow::new(Snapshot::default(), None, inputs));
+            let view = cx.new(|_| SettingsWindow::new(snapshot, None, inputs));
             install_shortcuts(cx, view.clone(), window.window_handle());
             opened = Some(view.clone());
             gpui_base::Root::new(view, window, cx)
@@ -2367,28 +2159,36 @@ mod render_tests {
 
     #[gpui::test]
     fn enter_flips_the_focused_toggle(cx: &mut TestAppContext) {
-        let (view, cx) = open(cx);
+        use super::daemon::Categorization;
+
+        // The switch is the daemon's, so the snapshot has to say it was read.
+        let snapshot = Snapshot {
+            daemon: true,
+            categorization: Some(Categorization {
+                enabled: false,
+                capable: Some(true),
+            }),
+            ..Snapshot::default()
+        };
+        let (view, cx) = open_with(snapshot, cx);
         cx.simulate_resize(size(px(1280.), px(720.)));
         draw(cx);
 
-        // `Appearance` is the fourth page; its third card is `Motion`.
-        for _ in 0..3 {
-            cx.simulate_keystrokes("right");
-        }
-        for _ in 0..2 {
-            cx.simulate_keystrokes("down");
-        }
+        // `Library` is the third page; its first row is the categorisation switch.
+        cx.simulate_keystrokes("right");
+        cx.simulate_keystrokes("right");
         draw(cx);
         assert!(
-            !cx.read(|app| view.read(app).draft.reduce_motion),
+            !cx.read(|app| view.read(app).toggle_value()),
             "the switch starts off"
         );
 
-        cx.simulate_keystrokes("enter");
-        draw(cx);
+        // Dispatched without parking, so the daemon's write has not answered
+        // yet: the switch must already show the value that was asked for.
+        cx.update(|window, cx| window.dispatch_action(Confirm.boxed_clone(), cx));
 
         assert!(
-            cx.read(|app| view.read(app).draft.reduce_motion),
+            cx.read(|app| view.read(app).toggle_value()),
             "Enter flips the row the cursor is on"
         );
     }

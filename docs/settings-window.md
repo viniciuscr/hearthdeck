@@ -42,8 +42,8 @@ destination, which is what it is.
 
 One layout, two levels:
 
-- a page column on the left (`Status`, `Connections`, `Library`, `Appearance`,
-  `Emulation`), sized for a sofa;
+- a page column on the left (`Status`, `Connections`, `Library`, `Emulation`),
+  sized for a sofa;
 - the reading column on the right, capped at `CONTENT_MAX_WIDTH`, holding the
   page title, its groups, and their rows.
 
@@ -124,10 +124,10 @@ the card's `Systems` row shows what can play now. The window never chooses a
 package: the daemon names them from its own platform-to-core table, and the
 bridge re-validates them before the privileged helper runs.
 
-**Everything else is still a preview.** Text values live in the window's
-`InputState`s, palette, backdrop and reduce-motion in its `Draft`, and every
-other action answers with one line under the page saying what it would post, so
-the shape of the feedback is visible before the write path exists.
+**The rest is still a preview.** The `TMDB` key is the only text value with no
+write path, and its action answers with one line under the page saying where the
+key really comes from, so the shape of the feedback is visible before the path
+exists.
 
 `TMDB`'s key is deliberately **not** wired here. `contracts/openapi.yaml` serves
 `/v1/tmdb/settings` on the loopback admin listener only, because the key is set
@@ -135,14 +135,13 @@ once from the host and is kept "out of the LAN and out of a controller keyboard"
 The field is drawn so the form can be judged, and its action says where the key
 really comes from.
 
-What is left to wire, row by row:
+What is left to wire:
 
-- `Appearance` — palette, backdrop, reduce motion. The names come from
-  `docs/appearance-system.md`, but **the daemon exposes no appearance endpoint
-  today**: the values live in the library app's own config, so wiring them means
-  adding an API, not calling one.
 - `TMDB` — the key is served on the loopback admin listener by contract, so a
   write from here needs a decision about that contract, not just a call.
+
+`Appearance` is not in this window on purpose: palette, backdrop and motion stay
+in the library app, which is where they are chosen and stored.
 
 ## Focus and input
 
@@ -233,10 +232,9 @@ installs the binary beside the other Hearthdeck binaries.
 
 - **No controller input yet.** See above: it needs a transport decision before
   it is a code change.
-- **Not everything is written.** Five are: the categorization opt-in and its
-  scan, the RomM connection, the Stremio link, the rail rebuild, and the
-  emulation maintenance runs. `Appearance` and `TMDB` are still previews for the
-  reasons above.
+- **One preview is left.** `TMDB`'s key is the only control with no write path,
+  for the contract reason above. `Appearance` left the window entirely: it lives
+  in the library app.
 - **Scrolling follows the cursor, not the contents.** Moving the cursor scrolls
   its row into view; scrolling with the wheel does not move the cursor, so the
   two can be apart until the next Up or Down. There is no scrollbar-driven
