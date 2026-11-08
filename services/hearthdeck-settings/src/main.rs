@@ -1408,6 +1408,10 @@ impl SettingsWindow {
                         // the switch drops back to what the daemon actually holds.
                         this.backup_pending = None;
                         this.notice = Some(format!("Backup not saved: {error}"));
+                        // A PUT can fail *after* writing the files - the timer
+                        // could not be moved - so the page reads back what the
+                        // daemon actually holds instead of the old values.
+                        this.refresh_backup(cx);
                     }
                 }
                 cx.notify();
@@ -1467,40 +1471,56 @@ impl SettingsWindow {
     }
 
     /// Follows a started run until the service stops, so the last-run card fills
-    /// in by itself. Bounded: ten minutes of polling, then it gives up and the
-    /// next refresh is the user's.
+    /// in by itself.
+    ///
+    /// Read first, then wait: the route starts the unit with `--no-block`, so the
+    /// job may not be `activating` yet when the first answer arrives, and a run
+    /// that finishes quickly would be missed entirely by a sleep-first loop.
     fn watch_backup(&mut self, cx: &mut Context<Self>) {
         if self.watching_backup {
             return;
         }
         self.watching_backup = true;
         cx.spawn(async move |this, cx| {
-            for _ in 0..200 {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(3))
-                    .await;
-                let status = cx
+            let mut state = WatchState::default();
+            let mut polls = 0u32;
+            let end = loop {
+                let read = cx
                     .background_executor()
                     .spawn(async { daemon::read_backup_status() })
                     .await;
-                let running = this
-                    .update(cx, |this, cx| {
-                        let Ok(status) = status else {
-                            return false;
-                        };
-                        let running = status.service_active;
-                        this.snapshot.backup_status = Some(status);
-                        cx.notify();
-                        running
-                    })
-                    .unwrap_or(false);
-                if !running {
-                    break;
+                let step = watch_step(&mut state, &read);
+                let updated = this.update(cx, |this, cx| {
+                    if let Ok(status) = &read {
+                        this.snapshot.backup_status = Some(status.clone());
+                    }
+                    cx.notify();
+                });
+                if updated.is_err() {
+                    // The window is gone; there is nothing left to follow.
+                    return;
                 }
-            }
+                if let WatchStep::Stop(end) = step {
+                    break Some(end);
+                }
+                polls += 1;
+                if polls >= WATCH_MAX_POLLS {
+                    break None;
+                }
+                cx.background_executor().timer(watch_interval(polls)).await;
+            };
             let _ = this.update(cx, |this, cx| {
                 this.watching_backup = false;
-                this.notice = Some("The last run is up to date.".to_string());
+                this.notice = Some(match end {
+                    Some(WatchEnd::Finished) => "The last run finished.".to_string(),
+                    Some(WatchEnd::NeverStarted) => {
+                        "The run did not start within a minute.".to_string()
+                    }
+                    Some(WatchEnd::Unreadable) => {
+                        "Stopped following the run: the daemon could not be read.".to_string()
+                    }
+                    None => "Stopped following the run after six hours.".to_string(),
+                });
                 cx.notify();
             });
         })
@@ -2123,6 +2143,83 @@ fn read_key_file(path: &std::path::Path) -> Result<String, String> {
     Ok(key.to_string())
 }
 
+/// How many idle reads a started run gets before the window stops waiting for it
+/// to appear: `--no-block` returns before the job is `activating`.
+const IDLE_GRACE_READS: u32 = 20;
+/// Consecutive unreadable polls before the window stops guessing.
+const FAILURE_LIMIT: u32 = 3;
+/// Fast polls (three seconds) for the first five minutes, then thirty seconds,
+/// which covers the service's own six-hour start timeout without becoming a
+/// machine-gun of `systemctl` calls.
+const WATCH_FAST_POLLS: u32 = 100;
+const WATCH_MAX_POLLS: u32 = 800;
+
+/// What one status read means for the watcher.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WatchStep {
+    /// Keep following: the run is working, or has not shown up yet.
+    Continue,
+    Stop(WatchEnd),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WatchEnd {
+    /// The run was seen working and is no longer.
+    Finished,
+    /// The run never appeared within the grace window.
+    NeverStarted,
+    /// The daemon could not be read for a few polls in a row.
+    Unreadable,
+}
+
+#[derive(Default)]
+struct WatchState {
+    seen_running: bool,
+    idle_reads: u32,
+    failures: u32,
+}
+
+/// The watcher's whole decision, kept pure so it can be tested without a timer.
+fn watch_step(
+    state: &mut WatchState,
+    read: &Result<daemon::BackupStatus, daemon::Error>,
+) -> WatchStep {
+    match read {
+        Ok(status) if status.service_active => {
+            state.seen_running = true;
+            state.idle_reads = 0;
+            state.failures = 0;
+            WatchStep::Continue
+        }
+        // Only a run that was seen working can be said to have finished.
+        Ok(_) if state.seen_running => WatchStep::Stop(WatchEnd::Finished),
+        Ok(_) => {
+            state.idle_reads += 1;
+            if state.idle_reads >= IDLE_GRACE_READS {
+                WatchStep::Stop(WatchEnd::NeverStarted)
+            } else {
+                WatchStep::Continue
+            }
+        }
+        Err(_) => {
+            state.failures += 1;
+            if state.failures >= FAILURE_LIMIT {
+                WatchStep::Stop(WatchEnd::Unreadable)
+            } else {
+                WatchStep::Continue
+            }
+        }
+    }
+}
+
+fn watch_interval(polls: u32) -> std::time::Duration {
+    if polls < WATCH_FAST_POLLS {
+        std::time::Duration::from_secs(3)
+    } else {
+        std::time::Duration::from_secs(30)
+    }
+}
+
 /// What an install report says in one line, naming the first package that
 /// failed so the line is something to act on.
 fn describe_install(report: &daemon::CoreInstall) -> String {
@@ -2552,8 +2649,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        Control, Group, Item, Page, PageKind, Row, TextField, Value, describe_install,
-        describe_sync, flat_items, mirrored, stremio_account,
+        Control, FAILURE_LIMIT, Group, IDLE_GRACE_READS, Item, Page, PageKind, Row, TextField,
+        Value, WatchEnd, WatchState, WatchStep, daemon, describe_install, describe_sync,
+        flat_items, mirrored, stremio_account, watch_step,
     };
 
     #[test]
@@ -2644,6 +2742,60 @@ mod tests {
         assert!(
             super::read_key_file(&path).is_err(),
             "a missing file is reported, not panicked on"
+        );
+    }
+
+    #[test]
+    fn the_watcher_waits_for_a_run_that_has_not_started_yet() {
+        let mut state = WatchState::default();
+        assert_eq!(
+            watch_step(&mut state, &Ok(daemon::BackupStatus::default())),
+            WatchStep::Continue,
+            "`--no-block` returns before the job is activating"
+        );
+    }
+
+    #[test]
+    fn the_watcher_stops_when_a_seen_run_finishes() {
+        let mut state = WatchState::default();
+        let running = daemon::BackupStatus {
+            service_active: true,
+            ..Default::default()
+        };
+        assert_eq!(watch_step(&mut state, &Ok(running)), WatchStep::Continue);
+        assert_eq!(
+            watch_step(&mut state, &Ok(daemon::BackupStatus::default())),
+            WatchStep::Stop(WatchEnd::Finished)
+        );
+    }
+
+    #[test]
+    fn a_run_that_never_appears_is_given_up_on() {
+        let mut state = WatchState::default();
+        // The last read inside the grace window is the one that gives up, so the
+        // loop stops one short of it.
+        for _ in 0..IDLE_GRACE_READS - 1 {
+            assert_eq!(
+                watch_step(&mut state, &Ok(daemon::BackupStatus::default())),
+                WatchStep::Continue
+            );
+        }
+        assert_eq!(
+            watch_step(&mut state, &Ok(daemon::BackupStatus::default())),
+            WatchStep::Stop(WatchEnd::NeverStarted)
+        );
+    }
+
+    #[test]
+    fn unreadable_polls_stop_the_watcher_instead_of_claiming_success() {
+        let mut state = WatchState::default();
+        let failed = || Err::<daemon::BackupStatus, daemon::Error>("no daemon".into());
+        for _ in 0..(FAILURE_LIMIT - 1) {
+            assert_eq!(watch_step(&mut state, &failed()), WatchStep::Continue);
+        }
+        assert_eq!(
+            watch_step(&mut state, &failed()),
+            WatchStep::Stop(WatchEnd::Unreadable)
         );
     }
 

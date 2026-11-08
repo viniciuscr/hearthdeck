@@ -1573,7 +1573,9 @@ components:
             daemon wrote. Null while the timer is not active.
         last_result:
           type: string
-          description: The service's own `Result` property.
+          description: >-
+            The service's `Result`, with the exit status appended when it is not
+            zero - `failed (exit 1)`.
         last_finished_at:
           type: string
           format: date-time

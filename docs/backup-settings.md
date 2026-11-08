@@ -143,10 +143,11 @@ because `InactiveEnterTimestamp` is localized too. `last_result` is the service'
 `Result`, with `ExecMainStatus` appended when it is not zero -
 `failed (exit 1)`.
 
-Source it from `systemctl --user show` (`ActiveState`, `Result`,
-`ExecMainStatus`, `InactiveEnterTimestamp`, `NextElapseUSecRealtime`) plus a
-bounded journal tail. Cache the answer for a few seconds, like diagnostics does,
-so a polling UI cannot spawn `systemctl` storms.
+Source it from one `systemctl --user show` per unit (`ActiveState`, `Result`,
+`ExecMainStatus`) plus a bounded journal tail. A manager that cannot answer is a
+502, not an idle timer: an empty answer is not the same as an inactive unit.
+Cache the answer for a few seconds, like diagnostics does, so a polling UI cannot
+spawn `systemctl` storms.
 
 `POST /v1/backup/run` starts `hearthdeck-backup.service` and returns `202
 Accepted`; it must not wait for the run. The UI polls `status` until the service

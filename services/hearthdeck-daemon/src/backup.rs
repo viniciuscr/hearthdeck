@@ -292,7 +292,8 @@ fn unquote(value: &str) -> String {
 /// A file it did not write reads as absent rather than as a guess.
 fn parse_schedule(drop_in: &str) -> Option<Schedule> {
     // The writer emits `OnCalendar=` (a reset) before the real entry, and a
-    // hand-edited file may hold several. The last one is the schedule in force.
+    // hand-edited file may hold several. The last assignment wins, and a reset
+    // clears what came before it - so the parser tracks both.
     let mut schedule = None;
     for line in drop_in.lines() {
         let Some(value) = line.trim().strip_prefix("OnCalendar=") else {
@@ -300,6 +301,7 @@ fn parse_schedule(drop_in: &str) -> Option<Schedule> {
         };
         let value = value.trim();
         if value.is_empty() {
+            schedule = None;
             continue;
         }
         let Some((_, time)) = value.rsplit_once(' ') else {
@@ -543,6 +545,11 @@ mod tests {
             parse_schedule("[Timer]\nOnCalendar=*-*-* 04:30:00\nOnCalendar=*-*-* 02:05:00\n"),
             Some(Schedule { hour: 2, minute: 5 }),
             "the last entry is the one in force"
+        );
+        assert_eq!(
+            parse_schedule("[Timer]\nOnCalendar=*-*-* 04:30:00\nOnCalendar=\n"),
+            None,
+            "a trailing reset leaves no schedule"
         );
         assert_eq!(parse_schedule("[Timer]\nOnCalendar=*-*-* 99:30:00\n"), None);
         assert_eq!(parse_schedule("garbage"), None);

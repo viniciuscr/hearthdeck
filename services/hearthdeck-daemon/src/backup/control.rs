@@ -122,10 +122,7 @@ impl Control<'_> {
     pub async fn settings(&self) -> Result<SettingsView, ControlError> {
         self.require_installed().await?;
         let stored = self.store.read();
-        let timer = self
-            .show_properties(TIMER_UNIT, &["ActiveState"])
-            .await
-            .unwrap_or_default();
+        let timer = self.show_properties(TIMER_UNIT, &["ActiveState"]).await?;
         let enabled = is_running(&timer);
         let remote_available = self.remote_available(&stored.remote).await?;
         Ok(SettingsView {
@@ -181,14 +178,10 @@ impl Control<'_> {
         }
         self.require_installed().await?;
         let stored = self.store.read();
-        let timer = self
-            .show_properties(TIMER_UNIT, &["ActiveState"])
-            .await
-            .unwrap_or_default();
+        let timer = self.show_properties(TIMER_UNIT, &["ActiveState"]).await?;
         let service = self
             .show_properties(SERVICE_UNIT, &["ActiveState", "Result", "ExecMainStatus"])
-            .await
-            .unwrap_or_default();
+            .await?;
         // `ActiveState`, not `is-active`: a `Type=oneshot` unit is `activating`
         // for the whole run, and an `is-active` equality check would call that
         // "not running" - which is the state the UI most wants to show.
@@ -281,6 +274,14 @@ impl Control<'_> {
             .run(SYSTEMCTL, &args)
             .await
             .map_err(|error| ControlError::Systemd(error.to_string()))?;
+        if !output.success {
+            // An empty answer is not the same as an idle unit: a manager that
+            // cannot answer must surface as a 502, not as "off" with a 200.
+            return Err(ControlError::Systemd(format!(
+                "read {unit}: {}",
+                output.stderr.trim()
+            )));
+        }
         let wanted = properties;
         Ok(output
             .stdout
