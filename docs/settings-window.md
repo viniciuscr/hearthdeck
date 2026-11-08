@@ -112,7 +112,10 @@ derives itself.
 `Sync BIOS` posts `/v1/retro/readiness/sync`. Both answer with a per-package or
 per-file report, which the window turns into one line under the page — naming the
 first package or file that failed — and then re-reads `/v1/retro/readiness`, so
-the card's `Systems` row shows what can play now. The window never chooses a
+the card's `Systems` row shows what can play now — and the card names up to five
+systems that cannot start and the first thing each is missing (a core package, a
+core file that must be built, or a BIOS file that is absent or unverified), so
+the install action is a decision rather than a blind press. The window never chooses a
 package: the daemon names them from its own platform-to-core table, and the
 bridge re-validates them before the privileged helper runs.
 

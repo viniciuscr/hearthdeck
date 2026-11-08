@@ -755,7 +755,9 @@ impl SettingsWindow {
                             },
                             Row {
                                 label: "Retro readiness",
-                                description: Some("Installed cores against the systems found."),
+                                description: Some(
+                                    "Systems whose core and required BIOS are ready.",
+                                ),
                                 control: Control::Fact(Value::Text(readiness.clone())),
                             },
                         ],
@@ -2528,9 +2530,11 @@ impl SettingsWindow {
                 .child(
                     ProgressCircle::new("storage")
                         .value(*used_percent)
-                        .color(if *used_percent >= 90.0 {
+                        // Thresholds on the number the label shows, or 79.6%
+                        // reads "80%" beside a green ring.
+                        .color(if used_percent.round() >= 90.0 {
                             theme.danger
-                        } else if *used_percent >= 80.0 {
+                        } else if used_percent.round() >= 80.0 {
                             theme.warning
                         } else {
                             theme.success

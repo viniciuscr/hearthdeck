@@ -732,7 +732,6 @@ struct RetroSystem {
     #[serde(default)]
     platform: String,
     core: RetroCore,
-    #[serde(default)]
     bios: Vec<RetroBiosFile>,
 }
 
@@ -741,13 +740,14 @@ struct RetroCore {
     installed: bool,
     #[serde(default)]
     package: String,
+    #[serde(default)]
+    core_filename: String,
 }
 
 #[derive(Deserialize)]
 struct RetroBiosFile {
     #[serde(default)]
     filename: String,
-    #[serde(default)]
     required: bool,
     #[serde(default)]
     present: bool,
@@ -769,11 +769,18 @@ impl RetroSystem {
 /// first, then a required BIOS file. `None` means it can start now.
 fn missing_reason(system: &RetroSystem) -> Option<String> {
     if !system.core.installed {
-        return Some(if system.core.package.is_empty() {
-            "missing core".to_string()
-        } else {
-            format!("core {}", system.core.package)
-        });
+        // A source-only core has no package, so neither action can fetch it: name
+        // the file, or the row says nothing and suggests a fix that will not work.
+        return Some(
+            match (
+                system.core.package.as_str(),
+                system.core.core_filename.as_str(),
+            ) {
+                ("", "") => "missing core".to_string(),
+                ("", filename) => format!("core {filename} (build from source)"),
+                (package, _) => format!("core {package}"),
+            },
+        );
     }
     let file = system
         .bios
@@ -917,7 +924,9 @@ mod tests {
             r#"[
                 {"platform":"snes","display_name":"SNES","core":{"installed":false,"package":"bsnes"},"bios":[]},
                 {"platform":"psx","display_name":"","core":{"installed":true,"package":"swanstation"},"bios":[{"filename":"scph5501.bin","required":true,"present":false,"verified":false}]},
-                {"platform":"nes","display_name":"NES","core":{"installed":true,"package":"mesen"},"bios":[]}
+                {"platform":"nes","display_name":"NES","core":{"installed":true,"package":"mesen"},"bios":[]},
+                {"platform":"ps2","display_name":"PlayStation 2","core":{"installed":false,"package":"","core_filename":"pcsx2_libretro.so"},"bios":[]},
+                {"platform":"saturn","display_name":"Saturn","core":{"installed":true,"package":"mednafen"},"bios":[{"filename":"sega_101.bin","required":true,"present":true,"verified":false}]}
             ]"#,
         )
         .expect("readiness");
@@ -939,6 +948,16 @@ mod tests {
             "the console runs, so the BIOS is what it needs"
         );
         assert_eq!(super::missing_reason(&systems[2]), None, "nothing missing");
+        assert_eq!(
+            super::missing_reason(&systems[3]).as_deref(),
+            Some("core pcsx2_libretro.so (build from source)"),
+            "a source-only core names the file, since no action can fetch it"
+        );
+        assert_eq!(
+            super::missing_reason(&systems[4]).as_deref(),
+            Some("BIOS sega_101.bin"),
+            "a present but unverified dump is still missing"
+        );
     }
 
     #[test]
