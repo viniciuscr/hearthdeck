@@ -77,6 +77,7 @@ const TYPE_LABEL: f32 = 21.0;
 const TYPE_VALUE: f32 = 21.0;
 const TYPE_BODY: f32 = 18.0;
 const TYPE_CAPTION: f32 = 16.0;
+const TYPE_CODE: f32 = 48.0;
 /// The kit sizes its own controls - a Button's label, an Input's text - from
 /// `rem`, and does not export a way to set them individually. One rem size for
 /// the window lifts their smallest step (0.875rem) to 16.6px, so no control is
@@ -257,6 +258,8 @@ enum Control {
 #[derive(Clone)]
 enum Value {
     Text(String),
+    /// A code to type on another device: big, monospaced, tracked wide.
+    Code(String),
     Storage {
         used_percent: f32,
         available: String,
@@ -550,6 +553,12 @@ struct SettingsWindow {
     scrolled_to: Option<(usize, usize)>,
     /// What the last action row said it would do. One line, under the page.
     notice: Option<String>,
+    /// Whether that line reports a refusal rather than a result. The two must not
+    /// look the same at three metres.
+    notice_failed: bool,
+    /// Set by the first Back that would discard something, so the second one is
+    /// the answer rather than a surprise.
+    close_armed: bool,
 }
 
 impl SettingsWindow {
@@ -573,6 +582,8 @@ impl SettingsWindow {
             list_page: 0,
             scrolled_to: None,
             notice: None,
+            notice_failed: false,
+            close_armed: false,
         }
     }
 
@@ -1066,6 +1077,18 @@ impl SettingsWindow {
         None
     }
 
+    /// A line under the page that reports a result.
+    fn say(&mut self, text: impl Into<String>) {
+        self.notice = Some(text.into());
+        self.notice_failed = false;
+    }
+
+    /// A line under the page that reports a refusal. Same place, different weight.
+    fn fail(&mut self, text: impl Into<String>) {
+        self.notice = Some(text.into());
+        self.notice_failed = true;
+    }
+
     /// Reads the daemon and the disk on a background thread: both are blocking,
     /// and a dead daemon must not freeze the window it is reporting on.
     fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -1262,7 +1285,7 @@ impl SettingsWindow {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the categorization write failed");
-                        this.notice = Some(format!("Categorization unchanged: {error}"));
+                        this.fail(format!("Categorization unchanged: {error}"));
                     }
                 }
                 cx.notify();
@@ -1304,7 +1327,7 @@ impl SettingsWindow {
             Row {
                 label: "Code",
                 description: Some("Enter this in the app, or open the link below."),
-                control: Control::Fact(Value::Text(pending.offer.code.clone())),
+                control: Control::Fact(Value::Code(pending.offer.code.clone())),
             },
             Row {
                 label: "Approve at",
@@ -1467,7 +1490,7 @@ impl SettingsWindow {
                 false
             }
             Ok(LinkStatus::Denied) => {
-                self.notice = Some(format!("{} refused the approval.", service.label()));
+                self.fail(format!("{} refused the approval.", service.label()));
                 self.pending_link = None;
                 cx.notify();
                 false
@@ -1484,7 +1507,7 @@ impl SettingsWindow {
                     "the {} link status could not be read",
                     service.label()
                 );
-                self.notice = Some(format!("{}: {error}", service.label()));
+                self.fail(format!("{}: {error}", service.label()));
                 self.pending_link = None;
                 cx.notify();
                 false
@@ -1534,7 +1557,7 @@ impl SettingsWindow {
                             "the {} connection could not be removed",
                             service.label()
                         );
-                        this.notice = Some(format!("Not removed: {error}"));
+                        this.fail(format!("Not removed: {error}"));
                     }
                 }
                 cx.notify();
@@ -1573,7 +1596,7 @@ impl SettingsWindow {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the TMDB key could not be saved");
-                        this.notice = Some(format!("TMDB key not saved: {error}"));
+                        this.fail(format!("TMDB key not saved: {error}"));
                     }
                 }
                 cx.notify();
@@ -1613,7 +1636,8 @@ impl SettingsWindow {
                     Ok(view) => {
                         this.snapshot.backup = Some(view);
                         this.backup_pending = None;
-                        this.notice = Some("The backup settings were saved.".to_string());
+                        this.say("The backup settings were saved.");
+                        this.close_armed = false;
                         // The schedule decides the next run, and the timer's new
                         // state decides whether there is one: read both back
                         // instead of leaving the card on the old answer.
@@ -1624,7 +1648,7 @@ impl SettingsWindow {
                         // Nothing was written, so the draft is not worth keeping:
                         // the switch drops back to what the daemon actually holds.
                         this.backup_pending = None;
-                        this.notice = Some(format!("Backup not saved: {error}"));
+                        this.fail(format!("Backup not saved: {error}"));
                         // A PUT can fail *after* writing the files - the timer
                         // could not be moved - so the page reads back what the
                         // daemon actually holds instead of the old values.
@@ -1661,7 +1685,7 @@ impl SettingsWindow {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the backup run could not be started");
-                        this.notice = Some(format!("Backup not started: {error}"));
+                        this.fail(format!("Backup not started: {error}"));
                     }
                 }
                 cx.notify();
@@ -1787,7 +1811,7 @@ impl SettingsWindow {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the TMDB key file could not be used");
-                        this.notice = Some(format!("TMDB key not read: {error}"));
+                        this.fail(format!("TMDB key not read: {error}"));
                     }
                 }
                 cx.notify();
@@ -1817,7 +1841,7 @@ impl SettingsWindow {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the core install failed");
-                        this.notice = Some(format!("Cores not installed: {error}"));
+                        this.fail(format!("Cores not installed: {error}"));
                     }
                 }
                 cx.notify();
@@ -1849,7 +1873,7 @@ impl SettingsWindow {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the BIOS sync failed");
-                        this.notice = Some(format!("BIOS not synced: {error}"));
+                        this.fail(format!("BIOS not synced: {error}"));
                     }
                 }
                 cx.notify();
@@ -1956,7 +1980,30 @@ impl SettingsWindow {
             window.blur(cx);
             return;
         }
+        // Back must not destroy work without saying so, and it must not trap the
+        // user behind a dialog either: the first press asks, the second answers.
+        if !self.close_armed && self.has_unsaved(cx) {
+            self.close_armed = true;
+            self.say("Unsaved changes — Back again to close.");
+            cx.notify();
+            return;
+        }
         cx.quit();
+    }
+
+    /// Whether closing now would lose something typed or flipped. Compared against
+    /// what the daemon's read prefilled, so an untouched form never asks.
+    fn has_unsaved(&self, cx: &App) -> bool {
+        if self.backup_pending.is_some() {
+            return true;
+        }
+        let prefill = Prefill::from_snapshot(&self.snapshot);
+        let schedule = self.inputs.backup_schedule.read(cx).time();
+        !self.inputs.tmdb_key.read(cx).value().is_empty()
+            || self.inputs.romm_url.read(cx).value() != prefill.romm_url
+            || self.inputs.backup_remote.read(cx).value() != prefill.backup_remote
+            || self.inputs.backup_root.read(cx).value() != prefill.backup_root
+            || prefill.schedule.is_some_and(|saved| saved != schedule)
     }
 
     /// Which text row owns the caret, if any.
@@ -2405,6 +2452,13 @@ impl SettingsWindow {
                 .truncate()
                 .child(text.clone())
                 .into_any_element(),
+            Value::Code(code) => div()
+                .font_family(theme.mono_font_family.clone())
+                .text_size(px(TYPE_CODE))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.foreground)
+                .child(code.clone())
+                .into_any_element(),
             Value::Storage {
                 used_percent,
                 available,
@@ -2759,10 +2813,12 @@ impl Render for SettingsWindow {
                                     .max_w(px(CONTENT_MAX_WIDTH))
                                     .mx_auto()
                                     .when_some(self.notice.clone(), |this, notice| {
-                                        this.child(
+                                        let alert = if self.notice_failed {
+                                            Alert::error("settings-notice", notice)
+                                        } else {
                                             Alert::info("settings-notice", notice)
-                                                .text_size(px(TYPE_CAPTION)),
-                                        )
+                                        };
+                                        this.child(alert.text_size(px(TYPE_CAPTION)))
                                     }),
                             ),
                     )

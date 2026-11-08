@@ -131,11 +131,15 @@ disabled while it is; timestamps in local time ("7 Nov, 14:43"); the card order
 fixed on Status (Daemon first) and Backup (Last run first); the storage ring at
 64px with "X free of Y".
 
-**Still open in this phase:** AF-04 (Back asks twice with unsaved changes),
-AF-07 (device code at 48px — the link rows are next), FB-02 (`Alert` by outcome
-and a per-row failure tag), CT-05 (the missing-systems list, which needs data the
-snapshot does not carry), CT-06 (localisation), CS-07 (motion), PL-01's
-fullness colour, and the CS-05 / FB-04 / CT-07 / PL-02 / PL-03 nits.
+Shipped since: AF-04 (the first Back with a draft or an edited field asks, the
+second closes), AF-07 (the device code is 48px monospaced), FB-02 (`Alert::error`
+for a refusal, `Alert::info` for a result; the per-row failure tag is still open),
+and PL-01's fullness colour is the only part of it left.
+
+**Still open in this phase:** the per-row failure tag from FB-02, CT-05 (the
+missing-systems list, which needs data the snapshot does not carry), CT-06
+(localisation), CS-07 (motion), PL-01's fullness colour, and the CS-05 / FB-04 /
+CT-07 / PL-02 / PL-03 nits.
 
 - [x] **FX-05 · one tone covers six states.** `Tone::Off` is "Off", "Idle",
       "Timer off", "Unknown", "Not installed" and "Unavailable"; "Running" wears
@@ -151,18 +155,18 @@ fullness colour, and the CS-05 / FB-04 / CT-07 / PL-02 / PL-03 nits.
 - [x] **AF-03 · two switches, two behaviours.** Categorization writes on flip;
       backup is a draft. Fix: `Tag::warning` "Unsaved" on the card while
       `backup_pending.is_some()`.
-- [ ] **AF-04 · Back discards typed values and drafts silently.** Fix: first Back
+- [x] **AF-04 · Back discards typed values and drafts silently.** Fix: first Back
       shows "Unsaved changes — Back again to close"; second closes.
 - [x] **AF-05 · the footer's Close button is unreachable by the cursor** and
       duplicates Escape. Fix: delete it; put `Esc Back` / `B Back` in the hints.
 - [x] **AF-06 · footer hints are keyboard-only** and never mention Back. Fix:
       `↑↓ Move · ←→ Page · A Select · B Back`, pad glyph leading, key secondary.
-- [ ] **AF-07 · the device code is 18px and the URL is inert.** iced had 52px plus
+- [x] **AF-07 · the device code is 18px and the URL is inert.** iced had 52px plus
       a QR. Fix: `Value::Code` at 48px mono, wide tracking, on its own row; show
       host/path only, never the full code-laden URL.
 - [x] **AF-08 · Refresh stays enabled while refreshing** and a second press does
       nothing. Fix: disable, label "Refreshing…", `Button::loading(true)`.
-- [ ] **FB-02 · every outcome is one cyan `Alert::info`**, and errors are detached
+- [x] **FB-02 · every outcome is one cyan `Alert::info`**, and errors are detached
       from the row that caused them. Fix: `Alert::success/error/info` by outcome
       plus a per-row `Tag::danger` "Failed".
 - [x] **CT-01 · raw RFC3339 UTC on screen.** `2025-11-08T02:00:00.123456789Z`, in
