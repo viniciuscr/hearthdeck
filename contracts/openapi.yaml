@@ -32,6 +32,8 @@ paths:
                 $ref: '#/components/schemas/BackupSettingsResponse'
         '503':
           description: This build does not include the backup units
+        '502':
+          description: The user service manager could not be reached
     put:
       operationId: updateBackupSettings
       security:
@@ -59,6 +61,8 @@ paths:
           description: The remote is not configured in rclone
         '503':
           description: This build does not include the backup units
+        '502':
+          description: The user service manager could not be reached
   /v1/backup/status:
     get:
       operationId: getBackupStatus
@@ -77,6 +81,8 @@ paths:
                 $ref: '#/components/schemas/BackupStatus'
         '503':
           description: This build does not include the backup units
+        '502':
+          description: The user service manager could not be reached
   /v1/backup/run:
     post:
       operationId: runBackupNow
@@ -90,6 +96,8 @@ paths:
           description: The run was started
         '503':
           description: This build does not include the backup units
+        '502':
+          description: The user service manager could not be reached
   /v1/health:
     get:
       operationId: getHealth

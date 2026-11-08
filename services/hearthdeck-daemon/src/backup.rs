@@ -245,7 +245,7 @@ impl Store {
         );
         write_private(&self.env_path(), env.as_bytes())?;
         let drop_in = format!(
-            "[Timer]\nOnCalendar=*-*-* {:02}:{:02}:00\n",
+            "[Timer]\nOnCalendar=\nOnCalendar=*-*-* {:02}:{:02}:00\n",
             settings.schedule.hour, settings.schedule.minute
         );
         write_private(&self.drop_in_path(), drop_in.as_bytes())
@@ -291,20 +291,32 @@ fn unquote(value: &str) -> String {
 /// Reads the hour and minute back out of the drop-in the daemon itself wrote.
 /// A file it did not write reads as absent rather than as a guess.
 fn parse_schedule(drop_in: &str) -> Option<Schedule> {
+    // The writer emits `OnCalendar=` (a reset) before the real entry, and a
+    // hand-edited file may hold several. The last one is the schedule in force.
+    let mut schedule = None;
     for line in drop_in.lines() {
         let Some(value) = line.trim().strip_prefix("OnCalendar=") else {
             continue;
         };
-        let time = value.rsplit_once(' ')?.1;
-        let mut parts = time.split(':');
-        let hour = parts.next()?.parse().ok()?;
-        let minute = parts.next()?.parse().ok()?;
-        if hour > 23 || minute > 59 {
-            return None;
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
         }
-        return Some(Schedule { hour, minute });
+        let Some((_, time)) = value.rsplit_once(' ') else {
+            continue;
+        };
+        let mut parts = time.split(':');
+        let (Some(hour), Some(minute)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let (Ok(hour), Ok(minute)) = (hour.parse::<u8>(), minute.parse::<u8>()) else {
+            continue;
+        };
+        if hour <= 23 && minute <= 59 {
+            schedule = Some(Schedule { hour, minute });
+        }
     }
-    None
+    schedule
 }
 
 /// The next time the schedule fires, in UTC.
@@ -477,7 +489,11 @@ mod tests {
             root.join("systemd/hearthdeck-backup.timer.d/50-schedule.conf"),
         )
         .expect("the drop-in");
-        assert!(drop_in.contains("OnCalendar=*-*-* 02:05:00"), "{drop_in}");
+        assert!(
+            drop_in.contains("OnCalendar=\nOnCalendar=*-*-* 02:05:00"),
+            "the reset comes before the value, or systemd keeps the packaged \
+             04:30 as well: {drop_in}"
+        );
 
         let mode = std::fs::metadata(root.join("backup/backup.env"))
             .expect("metadata")
@@ -516,14 +532,21 @@ mod tests {
     #[test]
     fn the_schedule_is_read_back_from_the_drop_in_the_daemon_wrote() {
         assert_eq!(
-            parse_schedule("[Timer]\nOnCalendar=*-*-* 04:30:00\n"),
+            parse_schedule("[Timer]\nOnCalendar=\nOnCalendar=*-*-* 04:30:00\n"),
             Some(Schedule {
                 hour: 4,
                 minute: 30
-            })
+            }),
+            "the reset line is skipped"
+        );
+        assert_eq!(
+            parse_schedule("[Timer]\nOnCalendar=*-*-* 04:30:00\nOnCalendar=*-*-* 02:05:00\n"),
+            Some(Schedule { hour: 2, minute: 5 }),
+            "the last entry is the one in force"
         );
         assert_eq!(parse_schedule("[Timer]\nOnCalendar=*-*-* 99:30:00\n"), None);
         assert_eq!(parse_schedule("garbage"), None);
+        assert_eq!(parse_schedule(""), None);
     }
 
     #[test]

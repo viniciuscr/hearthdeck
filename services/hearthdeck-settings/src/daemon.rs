@@ -212,9 +212,6 @@ pub fn stremio_link_status() -> Result<LinkStatus, Error> {
     Client::connect()?.stremio_link_status()
 }
 
-/// Stores a TMDB key. The contract serves that endpoint on the loopback admin
-/// listener rather than the API, so this is the one write that does not carry
-/// the pairing token.
 /// Writes the backup destination and schedule, and moves the timer. A refusal -
 /// the remote is not in rclone, or a field is not valid - comes back as an error
 /// the page shows verbatim.
@@ -226,6 +223,21 @@ pub fn run_backup() -> Result<(), Error> {
     Client::connect()?.run_backup()
 }
 
+/// Re-reads the page after a write, so `remote_available`, the update stamp and
+/// the timer's new state arrive together instead of being guessed.
+pub fn read_backup() -> Result<(BackupView, BackupStatus), Error> {
+    let client = Client::connect()?;
+    Ok((client.backup_settings()?, client.backup_status()?))
+}
+
+/// One status read, for the watcher that follows a run.
+pub fn read_backup_status() -> Result<BackupStatus, Error> {
+    Client::connect()?.backup_status()
+}
+
+/// Stores a TMDB key. The contract serves that endpoint on the loopback admin
+/// listener rather than the API, so this is the one write that does not carry
+/// the pairing token.
 pub fn save_tmdb_key(api_key: String) -> Result<(), Error> {
     Client::connect()?.save_tmdb_key(&api_key)
 }
@@ -415,6 +427,14 @@ impl Client {
     /// A POST with no body whose answer is the result.
     fn post_empty<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, Error> {
         Ok(self.send(self.http.post(self.url(path)))?.json()?)
+    }
+
+    fn backup_settings(&self) -> Result<BackupView, Error> {
+        self.get("/v1/backup/settings")
+    }
+
+    fn backup_status(&self) -> Result<BackupStatus, Error> {
+        self.get("/v1/backup/status")
     }
 
     fn save_backup(&self, settings: &BackupSettings) -> Result<BackupView, Error> {

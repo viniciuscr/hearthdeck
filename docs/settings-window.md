@@ -157,15 +157,19 @@ never an empty switch.
 
 `Schedule` is the kit's `TimeField` (`gpui-base`'s `TimeFieldState`), not a
 stepper written here: up and down step the selected part, left and right select
-the part, and digits type it. That is also why the pad needed no new code — while
-a field owns the caret the pad's presses are dispatched as the *keystrokes* the
-field already binds, so the d-pad steps the schedule and moves a caret through
-the same path the keyboard uses.
+the part, and digits type it. The pad does need one small piece for this —
+`pad_key`, which turns a pad press into the *keystroke* the field already binds
+while a field owns the caret. That is the whole of it: the d-pad steps the
+schedule and moves a caret through the path the keyboard uses, rather than a
+second editing scheme.
 
 `Last run` reads `GET /v1/backup/status`: the next occurrence, the service's own
-`Result`, when it finished, and the last journal line when it failed. `Run now`
-posts and returns accepted; the card fills in when the service finishes, so the
-window never blocks on a backup. Nothing on either card holds a cloud
+`Result` (with its exit status when it failed), when it finished, and the last
+journal line when it failed. `Run now` posts and returns accepted; the window
+then follows the run itself — one status read every three seconds until the
+service stops, bounded at ten minutes — so the card fills in without the window
+ever blocking on a backup. A save re-reads the destination and the status
+together, because the schedule it just wrote decides the next run. Nothing on either card holds a cloud
 credential: rclone owns those, and the window names a remote.
 
 ### Why TMDB is a paste, and the others are not

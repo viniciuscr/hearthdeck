@@ -408,6 +408,8 @@ struct SettingsWindow {
     refreshing: bool,
     /// The backup switch the user flipped but Save has not written yet.
     backup_pending: Option<bool>,
+    /// Set while a started run is being followed, so one watcher at a time.
+    watching_backup: bool,
     /// The value the window asked the daemon for while that write is in flight.
     /// The switch shows it, so the control answers the press immediately, and
     /// drops back to the daemon's own answer when the write lands or fails.
@@ -444,6 +446,7 @@ impl SettingsWindow {
             refreshing: false,
             categorization_pending: None,
             backup_pending: None,
+            watching_backup: false,
             pending_link: None,
             link_generation: 0,
             linking: None,
@@ -923,6 +926,11 @@ impl SettingsWindow {
             return false;
         }
         match action {
+            RowAction::RunBackup => !self
+                .snapshot
+                .backup_status
+                .as_ref()
+                .is_some_and(|status| status.service_active),
             RowAction::ScanLibrary => self.categorization_enabled(),
             RowAction::RommLink | RowAction::StremioLink => self.pending_link.is_none(),
             _ => true,
@@ -966,15 +974,16 @@ impl SettingsWindow {
                         .as_ref()
                         .is_some_and(|categorization| categorization.capable != Some(false))
             }
-            // A timer whose remote rclone does not know would only fail nightly,
-            // so the switch is dead until the remote exists.
+            // Turning it on needs a remote rclone knows, or the timer would only
+            // fail nightly. Turning it off never does: a remote that vanished
+            // must not leave a running timer un-disablable.
             ToggleField::Backup => {
                 self.backup_pending.is_none()
                     && self
                         .snapshot
                         .backup
                         .as_ref()
-                        .is_some_and(|backup| backup.remote_available)
+                        .is_some_and(|backup| backup.remote_available || backup.enabled)
             }
         }
     }
@@ -1388,9 +1397,16 @@ impl SettingsWindow {
                         this.snapshot.backup = Some(view);
                         this.backup_pending = None;
                         this.notice = Some("The backup settings were saved.".to_string());
+                        // The schedule decides the next run, and the timer's new
+                        // state decides whether there is one: read both back
+                        // instead of leaving the card on the old answer.
+                        this.refresh_backup(cx);
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the backup settings were refused");
+                        // Nothing was written, so the draft is not worth keeping:
+                        // the switch drops back to what the daemon actually holds.
+                        this.backup_pending = None;
                         this.notice = Some(format!("Backup not saved: {error}"));
                     }
                 }
@@ -1416,10 +1432,75 @@ impl SettingsWindow {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = None;
-                this.notice = Some(match result {
-                    Ok(()) => "The backup was started; it can take minutes.".to_string(),
-                    Err(error) => format!("Backup not started: {error}"),
-                });
+                match result {
+                    Ok(()) => {
+                        this.notice =
+                            Some("The backup was started; it can take minutes.".to_string());
+                        this.watch_backup(cx);
+                    }
+                    Err(error) => {
+                        this.notice = Some(format!("Backup not started: {error}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// One re-read of the destination and the last run, after a write.
+    fn refresh_backup(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async { daemon::read_backup() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Ok((view, status)) = read {
+                    this.snapshot.backup = Some(view);
+                    this.snapshot.backup_status = Some(status);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Follows a started run until the service stops, so the last-run card fills
+    /// in by itself. Bounded: ten minutes of polling, then it gives up and the
+    /// next refresh is the user's.
+    fn watch_backup(&mut self, cx: &mut Context<Self>) {
+        if self.watching_backup {
+            return;
+        }
+        self.watching_backup = true;
+        cx.spawn(async move |this, cx| {
+            for _ in 0..200 {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(3))
+                    .await;
+                let status = cx
+                    .background_executor()
+                    .spawn(async { daemon::read_backup_status() })
+                    .await;
+                let running = this
+                    .update(cx, |this, cx| {
+                        let Ok(status) = status else {
+                            return false;
+                        };
+                        let running = status.service_active;
+                        this.snapshot.backup_status = Some(status);
+                        cx.notify();
+                        running
+                    })
+                    .unwrap_or(false);
+                if !running {
+                    break;
+                }
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.watching_backup = false;
+                this.notice = Some("The last run is up to date.".to_string());
                 cx.notify();
             });
         })
@@ -2720,6 +2801,37 @@ mod render_tests {
     /// The list item at `index`, by the selector its element carries.
     fn selector(index: usize) -> &'static str {
         Box::leak(format!("list-item-{index}").into_boxed_str())
+    }
+
+    /// Turning the timer off is always allowed: a remote that vanished from
+    /// rclone must not leave a running timer that cannot be stopped.
+    #[gpui::test]
+    fn a_remote_that_vanished_still_lets_the_switch_off(cx: &mut TestAppContext) {
+        let (view, cx) = open_with(
+            Snapshot {
+                daemon: true,
+                backup: Some(crate::daemon::BackupView {
+                    enabled: true,
+                    remote: "pcloud".to_string(),
+                    root: "hearthdeck-backups".to_string(),
+                    schedule: crate::daemon::BackupSchedule {
+                        hour: 4,
+                        minute: 30,
+                    },
+                    remote_available: false,
+                    updated_at: None,
+                }),
+                ..Snapshot::default()
+            },
+            cx,
+        );
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+
+        assert!(
+            cx.read(|app| view.read(app).toggle_enabled(ToggleField::Backup)),
+            "an enabled timer can always be turned off"
+        );
     }
 
     /// With the units installed but the remote absent from rclone, the page says
