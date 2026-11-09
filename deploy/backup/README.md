@@ -48,6 +48,7 @@ before authenticating.
 | `/usr/lib/hearthdeck/hearthdeck-backup.d/filters/` | package | default filters |
 | `/usr/lib/systemd/user/hearthdeck-backup.{service,timer}` | package | schedule, disabled |
 | `~/.config/hearthdeck-backup/backup.env` | user | remote + destination root |
+| `~/.config/hearthdeck-backup/credentials.env` | user, written by the daemon | provider credential (`0600`), read by the unit |
 | `~/.config/hearthdeck-backup/jobs.conf` | user | optional override |
 | `~/.config/hearthdeck-backup/filters/` | user | optional override |
 | `~/.config/rclone/rclone.conf` | user | cloud credentials |

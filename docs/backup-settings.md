@@ -66,6 +66,7 @@ than 72h, or the DB snapshot could not be created. External-disk jobs require
 | `/usr/lib/systemd/user/hearthdeck-backup.service` | package | oneshot runner |
 | `/usr/lib/systemd/user/hearthdeck-backup.timer` | package | nightly schedule, disabled |
 | `~/.config/hearthdeck-backup/backup.env` | user | remote and destination root |
+| `~/.config/hearthdeck-backup/credentials.env` | user, written by the daemon | provider credential (`0600`); the unit reads it with `EnvironmentFile=-` |
 | `~/.config/hearthdeck-backup/jobs.conf` | user | optional job override |
 | `~/.config/hearthdeck-backup/filters/` | user | optional filter override |
 | `~/.config/rclone/rclone.conf` | user | cloud credentials |

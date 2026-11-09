@@ -586,6 +586,17 @@ mod tests {
         }
     }
 
+    /// A stored provider credential is only useful if a run can see it: the unit
+    /// reads the daemon's file into the environment rclone inherits.
+    #[test]
+    fn the_packaged_unit_hands_the_credential_to_a_run() {
+        let unit = include_str!("../../../../deploy/systemd/hearthdeck-backup.service");
+        assert!(
+            unit.contains("EnvironmentFile=-%h/.config/hearthdeck-backup/credentials.env"),
+            "a scheduled run must inherit the stored provider credential: {unit}"
+        );
+    }
+
     #[tokio::test]
     async fn enabling_writes_the_files_before_it_starts_the_timer() {
         let (store, root) = store();

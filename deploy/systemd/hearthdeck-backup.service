@@ -6,6 +6,7 @@ Documentation=file:%h/.config/hearthdeck-backup/jobs.conf
 Type=oneshot
 Environment=HOME=%h
 EnvironmentFile=-%h/.config/hearthdeck-backup/backup.env
+EnvironmentFile=-%h/.config/hearthdeck-backup/credentials.env
 ExecStart=/usr/lib/hearthdeck/hearthdeck-backup
 Nice=10
 IOSchedulingClass=idle

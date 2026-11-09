@@ -134,6 +134,7 @@ installed. None of them quotes the credential.
 ## Rollout
 
 1. Daemon: `providers.rs`, the four routes, OpenAPI entries, tests.
-2. Packaging: the `EnvironmentFile` line; then a real pCloud account on the box —
-   this is where the bearer-token question above gets answered.
+2. Packaging: the unit now reads `credentials.env` with `EnvironmentFile=-`, so a
+   scheduled run inherits the token; a test pins that line. Still to do here: one
+   real pCloud account on the box.
 3. Settings page card, then the TV.
