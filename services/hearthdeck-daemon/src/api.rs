@@ -1405,9 +1405,12 @@ impl From<ProviderError> for ApiError {
                 status: StatusCode::BAD_REQUEST,
                 message: message.to_string(),
             },
-            ProviderError::Refused => Self {
-                status: StatusCode::UNAUTHORIZED,
-                message: error.to_string(),
+            // 401 is this API's "not paired" and nothing else. A provider refusing
+            // a credential is a 422: the window would otherwise tell the user it is
+            // unpaired when their password is simply wrong.
+            ProviderError::Refused(message) => Self {
+                status: StatusCode::UNPROCESSABLE_ENTITY,
+                message,
             },
             ProviderError::Transport(message) => Self {
                 status: StatusCode::BAD_GATEWAY,

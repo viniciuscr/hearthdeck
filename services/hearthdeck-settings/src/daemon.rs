@@ -435,7 +435,22 @@ impl Client {
         if status.is_success() {
             return Ok(response);
         }
-        Err(refusal(status).into())
+        // The daemon's own words are the only thing that explains a refusal, so
+        // they are appended instead of being thrown away.
+        let detail = response.text().unwrap_or_default();
+        let detail = serde_json::from_str::<serde_json::Value>(&detail)
+            .ok()
+            .and_then(|body| {
+                body.get("message")
+                    .or_else(|| body.get("error"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            })
+            .filter(|message| !message.is_empty());
+        Err(match detail {
+            Some(message) => format!("{}: {message}", refusal(status)).into(),
+            None => refusal(status).into(),
+        })
     }
 
     fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, Error> {
@@ -697,6 +712,7 @@ fn refusal(status: StatusCode) -> String {
             "this window is not paired with the daemon".to_string()
         }
         StatusCode::BAD_REQUEST => "the daemon rejected the address it was given".to_string(),
+        StatusCode::UNPROCESSABLE_ENTITY => "the daemon refused it".to_string(),
         StatusCode::BAD_GATEWAY => "the daemon could not reach the service".to_string(),
         StatusCode::SERVICE_UNAVAILABLE => {
             "this deployment cannot do that, or is not set up for it".to_string()

@@ -114,8 +114,11 @@ paths:
                 $ref: '#/components/schemas/BackupProvider'
         '400':
           description: A field is not valid
-        '401':
-          description: The provider refused the credential
+        '422':
+          description: >-
+            The provider refused the credential. Deliberately not 401: that is this
+            API's "not paired", and a wrong password must not read as an unpaired
+            client.
         '404':
           description: That provider is not supported
         '502':
@@ -161,8 +164,11 @@ paths:
                 $ref: '#/components/schemas/BackupProvider'
         '400':
           description: Nothing is stored, or the stored value is malformed
-        '401':
-          description: The provider refused the stored credential
+        '422':
+          description: >-
+            The provider refused the credential. Deliberately not 401: that is this
+            API's "not paired", and a wrong password must not read as an unpaired
+            client.
         '404':
           description: That provider is not supported
         '502':

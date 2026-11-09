@@ -34,8 +34,8 @@ pub struct ProviderState {
 pub enum ProviderError {
     #[error("{0}")]
     Invalid(&'static str),
-    #[error("pCloud refused the credential")]
-    Refused,
+    #[error("pCloud refused the credential: {0}")]
+    Refused(String),
     #[error("pCloud could not be reached: {0}")]
     Transport(String),
     /// pCloud answered, but not with JSON we can use. Reported separately so a
@@ -116,6 +116,16 @@ fn result_code(body: &serde_json::Value) -> Option<i64> {
     body.get("result").and_then(|value| value.as_i64())
 }
 
+/// pCloud's own refusal text. It is a fixed message ("Log in failed."), never the
+/// credential, and it is the only thing that tells a wrong password from a 2FA
+/// account - so it is kept, shortened, and never trimmed away.
+fn error_text(body: &serde_json::Value) -> String {
+    body.get("error")
+        .and_then(|value| value.as_str())
+        .map(|text| text.chars().take(120).collect::<String>())
+        .unwrap_or_else(|| "no reason given".to_string())
+}
+
 fn transport(error: reqwest::Error) -> ProviderError {
     ProviderError::Transport(error.to_string())
 }
@@ -137,12 +147,12 @@ fn judge_login(status: u16, body: serde_json::Value) -> Result<PcloudToken, Prov
         return Err(ProviderError::Answered { status });
     }
     if result_code(&body) != Some(0) {
-        return Err(ProviderError::Refused);
+        return Err(ProviderError::Refused(error_text(&body)));
     }
     let token = body
         .get("auth")
         .and_then(|value| value.as_str())
-        .ok_or(ProviderError::Refused)?;
+        .ok_or_else(|| ProviderError::Refused(error_text(&body)))?;
     let hostname = body
         .get("hostname")
         .and_then(|value| value.as_str())
@@ -160,7 +170,7 @@ fn judge_userinfo(status: u16, body: serde_json::Value) -> Result<(), ProviderEr
     if result_code(&body) == Some(0) {
         Ok(())
     } else {
-        Err(ProviderError::Refused)
+        Err(ProviderError::Refused(error_text(&body)))
     }
 }
 
@@ -257,8 +267,19 @@ impl Providers<'_> {
         if password.is_empty() {
             return Err(ProviderError::Invalid("a pCloud password is required"));
         }
-        let token = self.api.getauth(email.trim(), password).await?;
-        self.api.userinfo(&token.token, &token.hostname).await?;
+        let token = self
+            .api
+            .getauth(email.trim(), password)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(provider = PCLOUD, %error, "provider setup failed");
+            })?;
+        self.api
+            .userinfo(&token.token, &token.hostname)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(provider = PCLOUD, %error, "provider token was refused");
+            })?;
         self.store.write(&token)?;
         Ok(self.store.state())
     }
@@ -337,7 +358,7 @@ impl PcloudApi for FakePcloud {
             seen.push(format!("getauth {email}"));
         }
         if !self.accepts || password != "correct horse" {
-            return Err(ProviderError::Refused);
+            return Err(ProviderError::Refused("wrong password".to_string()));
         }
         Ok(PcloudToken {
             token: "token-value".to_string(),
@@ -349,7 +370,7 @@ impl PcloudApi for FakePcloud {
         if self.bearer_ok {
             Ok(())
         } else {
-            Err(ProviderError::Refused)
+            Err(ProviderError::Refused("refused".to_string()))
         }
     }
 }
@@ -430,7 +451,7 @@ mod tests {
             .connect_pcloud("user@example.com", "wrong")
             .await
             .expect_err("refused");
-        assert!(matches!(error, ProviderError::Refused));
+        assert!(matches!(error, ProviderError::Refused(_)));
         assert!(!store.state().configured, "nothing was written");
 
         let _ = std::fs::remove_dir_all(&root);
@@ -452,7 +473,7 @@ mod tests {
             .connect_pcloud("user@example.com", "correct horse")
             .await
             .expect_err("refused");
-        assert!(matches!(error, ProviderError::Refused));
+        assert!(matches!(error, ProviderError::Refused(_)));
         assert!(!store.state().configured);
 
         let _ = std::fs::remove_dir_all(&root);
@@ -483,12 +504,12 @@ mod tests {
         let bad_login = serde_json::json!({"result": 2000, "error": "Log in failed."});
         assert!(matches!(
             super::judge_login(200, bad_login),
-            Err(ProviderError::Refused)
+            Err(ProviderError::Refused(_))
         ));
         let no_token = serde_json::json!({"result": 1000, "error": "Log in required."});
         assert!(matches!(
             super::judge_userinfo(200, no_token),
-            Err(ProviderError::Refused)
+            Err(ProviderError::Refused(_))
         ));
     }
 
