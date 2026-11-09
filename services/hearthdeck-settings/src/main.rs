@@ -168,8 +168,7 @@ enum TextField {
     TmdbKey,
     BackupRemote,
     BackupRoot,
-    PcloudEmail,
-    PcloudPassword,
+    PcloudToken,
 }
 
 /// A switch row. Categorization writes as soon as it is flipped; backup carries
@@ -395,8 +394,7 @@ struct Inputs {
     tmdb_key: Entity<InputState>,
     backup_remote: Entity<InputState>,
     backup_root: Entity<InputState>,
-    pcloud_email: Entity<InputState>,
-    pcloud_password: Entity<InputState>,
+    pcloud_token: Entity<InputState>,
     /// The schedule. Its state owns the up/down stepping, so the row needs no
     /// stepper of its own.
     backup_schedule: Entity<TimeFieldState>,
@@ -409,8 +407,7 @@ impl Inputs {
             TextField::TmdbKey => &self.tmdb_key,
             TextField::BackupRemote => &self.backup_remote,
             TextField::BackupRoot => &self.backup_root,
-            TextField::PcloudEmail => &self.pcloud_email,
-            TextField::PcloudPassword => &self.pcloud_password,
+            TextField::PcloudToken => &self.pcloud_token,
         }
     }
 }
@@ -776,14 +773,11 @@ impl SettingsWindow {
             }),
             rows: vec![
                 Row {
-                    label: "pCloud email",
-                    description: Some("The account Hearthdeck backs up to."),
-                    control: Control::Text(TextField::PcloudEmail),
-                },
-                Row {
-                    label: "pCloud password",
-                    description: Some("Sent once to the daemon, never kept in this window."),
-                    control: Control::Text(TextField::PcloudPassword),
+                    label: "rclone token",
+                    description: Some(
+                        "Run `rclone authorize pcloud` on a computer with a browser and paste the JSON it prints. EU accounts answer on eapi.pcloud.com, which is tried for you.",
+                    ),
+                    control: Control::Text(TextField::PcloudToken),
                 },
                 Row {
                     label: "Connect",
@@ -1699,10 +1693,9 @@ impl SettingsWindow {
         if self.busy.is_some() {
             return;
         }
-        let email = self.inputs.pcloud_email.read(cx).value().trim().to_string();
-        let password = self.inputs.pcloud_password.read(cx).value().to_string();
-        if email.is_empty() || password.is_empty() {
-            self.notice = Some("Fill in the pCloud email and password first.".to_string());
+        let token = self.inputs.pcloud_token.read(cx).value().trim().to_string();
+        if token.is_empty() {
+            self.notice = Some("Paste the token rclone printed first.".to_string());
             cx.notify();
             return;
         }
@@ -1712,7 +1705,7 @@ impl SettingsWindow {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { daemon::connect_pcloud(email, password) })
+                .spawn(async move { daemon::connect_pcloud(token) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = None;
@@ -3286,11 +3279,9 @@ fn main() {
                         .masked(true)
                 }),
                 backup_remote: cx.new(|cx| InputState::new(window, cx).placeholder("pcloud")),
-                pcloud_email: cx
-                    .new(|cx| InputState::new(window, cx).placeholder("pCloud account email")),
-                pcloud_password: cx.new(|cx| {
+                pcloud_token: cx.new(|cx| {
                     InputState::new(window, cx)
-                        .placeholder("pCloud password")
+                        .placeholder(r#"{"access_token": "..."}"#)
                         .masked(true)
                 }),
                 backup_root: cx
@@ -3659,8 +3650,7 @@ mod render_tests {
                 tmdb_key: cx.new(|cx| InputState::new(window, cx)),
                 backup_remote: cx.new(|cx| InputState::new(window, cx)),
                 backup_root: cx.new(|cx| InputState::new(window, cx)),
-                pcloud_email: cx.new(|cx| InputState::new(window, cx)),
-                pcloud_password: cx.new(|cx| InputState::new(window, cx)),
+                pcloud_token: cx.new(|cx| InputState::new(window, cx)),
                 backup_schedule: cx
                     .new(|cx| TimeFieldState::new(window, cx).precision(TimePrecision::Minute)),
             };

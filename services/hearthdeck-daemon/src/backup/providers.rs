@@ -56,10 +56,8 @@ pub struct PcloudToken {
 /// The provider's API, as a trait so the daemon can be tested without pCloud.
 #[async_trait]
 pub trait PcloudApi: Send + Sync {
-    async fn getauth(&self, email: &str, password: &str) -> Result<PcloudToken, ProviderError>;
     /// Whether pCloud accepts the token in the form rclone will send it
-    /// (`Authorization: Bearer`). This is the check that decides whether a
-    /// `getauth` token is usable at all.
+    /// (`Authorization: Bearer`), on the host named.
     async fn userinfo(&self, token: &str, hostname: &str) -> Result<(), ProviderError>;
 }
 
@@ -80,24 +78,6 @@ impl HttpPcloud {
 
 #[async_trait]
 impl PcloudApi for HttpPcloud {
-    async fn getauth(&self, email: &str, password: &str) -> Result<PcloudToken, ProviderError> {
-        // The method is `/login`; `getauth=1` asks for the token in the answer.
-        // POST body, never a query string: URLs end up in logs and in `ps`.
-        let response = self
-            .http
-            .post(format!("https://{DEFAULT_HOSTNAME}/login"))
-            .form(&[
-                ("getauth", "1"),
-                ("logout", "1"),
-                ("username", email),
-                ("password", password),
-            ])
-            .send()
-            .await
-            .map_err(transport)?;
-        judge_login(response.status().as_u16(), body_of(response).await?)
-    }
-
     async fn userinfo(&self, token: &str, hostname: &str) -> Result<(), ProviderError> {
         let response = self
             .http
@@ -126,6 +106,37 @@ fn error_text(body: &serde_json::Value) -> String {
         .unwrap_or_else(|| "no reason given".to_string())
 }
 
+/// rclone stores `{"access_token":"…","token_type":"bearer","expiry":"…"}`; a
+/// bare token is accepted too, because that is what people paste. The hostname is
+/// not in the blob, and EU accounts answer only on `eapi.pcloud.com`, so it is
+/// probed rather than guessed.
+fn parse_token(input: &str) -> Result<PcloudToken, ProviderError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(ProviderError::Invalid("paste the token rclone printed"));
+    }
+    if let Ok(blob) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        let token = blob
+            .get("access_token")
+            .and_then(|value| value.as_str())
+            .ok_or(ProviderError::Invalid(
+                "that JSON has no access_token in it",
+            ))?;
+        let hostname = blob
+            .get("hostname")
+            .and_then(|value| value.as_str())
+            .unwrap_or(DEFAULT_HOSTNAME);
+        return Ok(PcloudToken {
+            token: token.to_string(),
+            hostname: hostname.to_string(),
+        });
+    }
+    Ok(PcloudToken {
+        token: trimmed.to_string(),
+        hostname: DEFAULT_HOSTNAME.to_string(),
+    })
+}
+
 fn transport(error: reqwest::Error) -> ProviderError {
     ProviderError::Transport(error.to_string())
 }
@@ -139,28 +150,6 @@ async fn body_of(response: reqwest::Response) -> Result<serde_json::Value, Provi
         .json::<serde_json::Value>()
         .await
         .map_err(|_| ProviderError::Answered { status })
-}
-
-/// Pure, so the response contract can be pinned by a test instead of the network.
-fn judge_login(status: u16, body: serde_json::Value) -> Result<PcloudToken, ProviderError> {
-    if !(200..300).contains(&status) {
-        return Err(ProviderError::Answered { status });
-    }
-    if result_code(&body) != Some(0) {
-        return Err(ProviderError::Refused(error_text(&body)));
-    }
-    let token = body
-        .get("auth")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| ProviderError::Refused(error_text(&body)))?;
-    let hostname = body
-        .get("hostname")
-        .and_then(|value| value.as_str())
-        .unwrap_or(DEFAULT_HOSTNAME);
-    Ok(PcloudToken {
-        token: token.to_string(),
-        hostname: hostname.to_string(),
-    })
 }
 
 fn judge_userinfo(status: u16, body: serde_json::Value) -> Result<(), ProviderError> {
@@ -254,34 +243,33 @@ impl Providers<'_> {
         vec![self.store.state()]
     }
 
-    /// Validates the credential with pCloud **before** storing it, and stores only
-    /// what pCloud accepted in the form rclone will send.
-    pub async fn connect_pcloud(
-        &self,
-        email: &str,
-        password: &str,
-    ) -> Result<ProviderState, ProviderError> {
-        if email.trim().is_empty() || !email.contains('@') {
-            return Err(ProviderError::Invalid("a pCloud account email is required"));
+    /// Validates a pasted rclone token **before** storing it. The account may live
+    /// on either pCloud host, so both are tried and the one that answers is kept.
+    pub async fn connect_pcloud(&self, token: &str) -> Result<ProviderState, ProviderError> {
+        let parsed = parse_token(token)?;
+        let mut hosts = vec![parsed.hostname.clone()];
+        for host in [DEFAULT_HOSTNAME, "eapi.pcloud.com"] {
+            if !hosts.iter().any(|seen| seen == host) {
+                hosts.push(host.to_string());
+            }
         }
-        if password.is_empty() {
-            return Err(ProviderError::Invalid("a pCloud password is required"));
+        let mut last = ProviderError::Refused("pCloud did not answer".to_string());
+        for host in hosts {
+            match self.api.userinfo(&parsed.token, &host).await {
+                Ok(()) => {
+                    self.store.write(&PcloudToken {
+                        token: parsed.token,
+                        hostname: host,
+                    })?;
+                    return Ok(self.store.state());
+                }
+                Err(error) => {
+                    tracing::warn!(provider = PCLOUD, %error, host, "provider token refused");
+                    last = error;
+                }
+            }
         }
-        let token = self
-            .api
-            .getauth(email.trim(), password)
-            .await
-            .inspect_err(|error| {
-                tracing::warn!(provider = PCLOUD, %error, "provider setup failed");
-            })?;
-        self.api
-            .userinfo(&token.token, &token.hostname)
-            .await
-            .inspect_err(|error| {
-                tracing::warn!(provider = PCLOUD, %error, "provider token was refused");
-            })?;
-        self.store.write(&token)?;
-        Ok(self.store.state())
+        Err(last)
     }
 
     /// Re-verifies what is already stored, without the user retyping anything.
@@ -323,54 +311,30 @@ impl Providers<'_> {
 #[cfg(test)]
 #[derive(Default)]
 pub struct FakePcloud {
-    pub accepts: bool,
     pub bearer_ok: bool,
-    pub hostname: String,
-    seen: std::sync::Mutex<Vec<String>>,
 }
 
 #[cfg(test)]
 impl FakePcloud {
     pub fn accepting() -> Self {
-        Self {
-            accepts: true,
-            bearer_ok: true,
-            hostname: DEFAULT_HOSTNAME.to_string(),
-            seen: std::sync::Mutex::new(Vec::new()),
-        }
+        Self { bearer_ok: true }
     }
 
-    /// What the fake was asked, so a test can assert the secret never travels in
-    /// a way the daemon would have to log.
-    pub fn seen(&self) -> Vec<String> {
-        self.seen
-            .lock()
-            .map(|seen| seen.clone())
-            .unwrap_or_default()
+    pub fn refusing() -> Self {
+        Self { bearer_ok: false }
     }
 }
 
 #[cfg(test)]
 #[async_trait]
 impl PcloudApi for FakePcloud {
-    async fn getauth(&self, email: &str, password: &str) -> Result<PcloudToken, ProviderError> {
-        if let Ok(mut seen) = self.seen.lock() {
-            seen.push(format!("getauth {email}"));
-        }
-        if !self.accepts || password != "correct horse" {
-            return Err(ProviderError::Refused("wrong password".to_string()));
-        }
-        Ok(PcloudToken {
-            token: "token-value".to_string(),
-            hostname: self.hostname.clone(),
-        })
-    }
-
     async fn userinfo(&self, _token: &str, _hostname: &str) -> Result<(), ProviderError> {
         if self.bearer_ok {
             Ok(())
         } else {
-            Err(ProviderError::Refused("refused".to_string()))
+            Err(ProviderError::Refused(
+                "invalid access token provided".to_string(),
+            ))
         }
     }
 }
@@ -387,7 +351,7 @@ impl fmt::Debug for Store {
 
 #[cfg(test)]
 mod tests {
-    use super::{FakePcloud, ProviderError, Providers, Store};
+    use super::{FakePcloud, ProviderError, Providers, Store, parse_token};
     use std::path::PathBuf;
 
     fn store() -> (Store, PathBuf) {
@@ -397,6 +361,27 @@ mod tests {
             std::thread::current().id()
         ));
         (Store::new(root.join("credentials.env")), root)
+    }
+
+    #[test]
+    fn a_pasted_blob_yields_its_access_token() {
+        let blob =
+            r#"{"access_token":"abc","token_type":"bearer","expiry":"0001-01-01T00:00:00Z"}"#;
+        let token = parse_token(blob).expect("parsed");
+        assert_eq!(token.token, "abc");
+        assert_eq!(token.hostname, "api.pcloud.com");
+    }
+
+    #[test]
+    fn a_bare_token_is_accepted_because_that_is_what_people_paste() {
+        assert_eq!(parse_token("  abc  ").expect("parsed").token, "abc");
+        assert!(matches!(parse_token("   "), Err(ProviderError::Invalid(_))));
+    }
+
+    #[test]
+    fn json_without_an_access_token_is_refused_with_a_reason() {
+        let error = parse_token(r#"{"token_type":"bearer"}"#).expect_err("refused");
+        assert!(matches!(error, ProviderError::Invalid(reason) if reason.contains("access_token")));
     }
 
     #[tokio::test]
@@ -409,50 +394,27 @@ mod tests {
         };
 
         let state = providers
-            .connect_pcloud("user@example.com", "correct horse")
+            .connect_pcloud("token-value")
             .await
             .expect("accepted");
         assert!(state.configured);
-        assert!(
-            state.verified_at.is_some(),
-            "the store dates the verification"
-        );
+        assert!(state.verified_at.is_some());
 
-        let listed = providers.list();
-        assert_eq!(listed.len(), 1);
-        let listing = format!("{listed:?}");
+        let listing = format!("{:?}", providers.list());
         assert!(
             !listing.contains("token-value"),
             "the listing must never carry the credential: {listing}"
         );
 
-        let mode = std::fs::metadata(root.join("credentials.env"))
-            .expect("metadata")
-            .permissions();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(mode.mode() & 0o777, 0o600, "the file is private");
+            let mode = std::fs::metadata(root.join("credentials.env"))
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "the file is private");
         }
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[tokio::test]
-    async fn a_refused_credential_is_not_stored() {
-        let (store, root) = store();
-        let api = FakePcloud::accepting();
-        let providers = Providers {
-            store: &store,
-            api: &api,
-        };
-
-        let error = providers
-            .connect_pcloud("user@example.com", "wrong")
-            .await
-            .expect_err("refused");
-        assert!(matches!(error, ProviderError::Refused(_)));
-        assert!(!store.state().configured, "nothing was written");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -460,21 +422,18 @@ mod tests {
     #[tokio::test]
     async fn a_token_pcloud_will_not_take_as_a_bearer_is_not_stored() {
         let (store, root) = store();
-        let api = FakePcloud {
-            bearer_ok: false,
-            ..FakePcloud::accepting()
-        };
+        let api = FakePcloud::refusing();
         let providers = Providers {
             store: &store,
             api: &api,
         };
 
         let error = providers
-            .connect_pcloud("user@example.com", "correct horse")
+            .connect_pcloud("token-value")
             .await
             .expect_err("refused");
         assert!(matches!(error, ProviderError::Refused(_)));
-        assert!(!store.state().configured);
+        assert!(!store.state().configured, "nothing was written");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -489,51 +448,12 @@ mod tests {
         };
 
         providers
-            .connect_pcloud("user@example.com", "correct horse")
+            .connect_pcloud("token-value")
             .await
             .expect("accepted");
         providers.forget_pcloud().expect("forgotten");
         assert!(!store.state().configured);
 
         let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn a_refusal_that_arrives_with_200_is_a_refusal_not_a_success() {
-        // What pCloud actually answers for a bad password, and for no token.
-        let bad_login = serde_json::json!({"result": 2000, "error": "Log in failed."});
-        assert!(matches!(
-            super::judge_login(200, bad_login),
-            Err(ProviderError::Refused(_))
-        ));
-        let no_token = serde_json::json!({"result": 1000, "error": "Log in required."});
-        assert!(matches!(
-            super::judge_userinfo(200, no_token),
-            Err(ProviderError::Refused(_))
-        ));
-    }
-
-    #[test]
-    fn a_login_answer_carries_the_token_and_the_host() {
-        let body = serde_json::json!({"result": 0, "auth": "abc", "hostname": "eapi.pcloud.com"});
-        let token = super::judge_login(200, body).expect("accepted");
-        assert_eq!(token.token, "abc");
-        assert_eq!(token.hostname, "eapi.pcloud.com");
-        assert!(super::judge_userinfo(200, serde_json::json!({"result": 0})).is_ok());
-    }
-
-    #[test]
-    fn a_wrong_path_is_reported_as_an_answer_not_as_unreachable() {
-        // `/getauth` is a 404 HTML page: that must not read as a network failure.
-        assert!(matches!(
-            super::judge_login(404, serde_json::json!({})),
-            Err(ProviderError::Answered { status: 404 })
-        ));
-    }
-
-    #[test]
-    fn the_api_never_sees_the_password() {
-        let api = FakePcloud::accepting();
-        assert!(api.seen().is_empty());
     }
 }

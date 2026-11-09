@@ -20,8 +20,9 @@ television a way to set a provider up at all.
   (`RCLONE_CONFIG_PCLOUD_TYPE`, `…_TOKEN`, `…_HOSTNAME`).
 - **The settings page sends the credential and forgets it.** It never writes a
   file, never keeps the value after the request, and never receives it back.
-- **pCloud is authenticated with email and password**: the daemon calls pCloud's
-  `getauth` and stores the token it returns.
+- **pCloud is authenticated with the token rclone prints**, pasted once. There is
+  no password path: pCloud's `login` token is not an OAuth access token, and
+  presenting it as one is answered with `invalid access token provided`.
 - **A provider is configured only when it has been verified**, not when a file was
   written: setup ends with a real `rclone lsd pcloud:`.
 
@@ -139,16 +140,20 @@ installed. None of them quotes the credential.
    real pCloud account on the box.
 3. Settings page card — done: email, masked password, `Connect`, `Forget`, the `Connected`/`Not set` chip and the redacted error line, with the API host shown beside the verification time. Still to do: the TV, and a real account.
 
-## What the API actually does (measured against pCloud, not assumed)
+## What pCloud actually requires (measured, not assumed)
 
-- **The login method is `POST https://api.pcloud.com/login`** with `getauth=1`,
-  `logout=1`, `username`, `password`. `/getauth` is not a route: it answers
-  `404` with an HTML page. A wrong path is now reported as *"pCloud answered with
-  status 404"*, never as *"could not be reached"*.
-- **pCloud answers `200` even when it refuses.** `{"result":1000,"error":"Log in
-  required."}` for no token, `{"result":2000,"error":"Log in failed."}` for bad
-  credentials. Success is `result == 0`. Judging on the HTTP status alone would
-  accept a bad token, so both calls go through `judge_login` / `judge_userinfo`,
-  which are pure and pinned by tests.
-- A successful login returns `auth` (the token) and `hostname`
-  (`api.pcloud.com`, or `eapi.pcloud.com` for EU accounts).
+- **The token has to come from a browser.** rclone's own page: "The initial setup
+  for pCloud involves getting a token from pCloud which you need to do in your
+  browser. `rclone config` walks you through it." For a box without a browser,
+  `rclone authorize pcloud` on another machine prints the token to paste.
+- **The `login` token is a different credential.** `POST /login` with
+  `getauth=1&username&password` does return an `auth` value, but presenting it as
+  `Authorization: Bearer` is answered `invalid access token provided`. That is why
+  the password flow was removed rather than patched.
+- **pCloud answers `200` even when it refuses** (`result` 1000 "Log in required",
+  2000 "Log in failed"), so success is `result == 0`, never the HTTP status.
+- **EU accounts live on another host.** `eapi.pcloud.com`, not `api.pcloud.com`;
+  rclone warns that a remote configured with `rclone authorize` needs the hostname
+  set by hand "otherwise you might get a token error". The daemon therefore probes
+  the blob's host, then `api.pcloud.com`, then `eapi.pcloud.com`, and stores the
+  one that answered.

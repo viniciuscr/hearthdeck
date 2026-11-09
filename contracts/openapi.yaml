@@ -1647,16 +1647,17 @@ components:
           description: The API host that answered, which differs for EU accounts.
     BackupProviderCredential:
       type: object
-      required: [email, password]
+      required: [token]
       properties:
-        email: { type: string }
-        password:
+        token:
           type: string
           format: password
           description: >-
-            Sent once over the paired connection and stored by the daemon in a
-            0600 file it owns. Never logged, never returned, never written into
-            rclone's configuration.
+            The token rclone printed for pCloud (`rclone authorize pcloud` on a
+            machine with a browser), either as the JSON blob rclone stores or as a
+            bare token. Sent once over the paired connection; validated with pCloud
+            before anything is stored; never logged, never returned, never written
+            into rclone's own configuration.
     BackupSettings:
       type: object
       required: [enabled, remote, root, schedule]

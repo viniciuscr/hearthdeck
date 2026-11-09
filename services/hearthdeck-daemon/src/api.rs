@@ -150,13 +150,12 @@ async fn list_backup_providers(State(state): State<SharedState>) -> Json<Vec<Pro
     Json(state.backup.providers().list())
 }
 
-/// The one credential a client may submit. It is read here, handed to the daemon's
-/// provider adapter, and dropped when this function returns: it is never stored by
-/// the API layer and never echoed.
+/// The one credential a client may submit: the token rclone printed. It is read
+/// here, handed to the daemon's provider adapter, and dropped when this function
+/// returns: never stored by the API layer, never echoed.
 #[derive(serde::Deserialize)]
 struct ConnectProvider {
-    email: String,
-    password: String,
+    token: String,
 }
 
 async fn connect_backup_provider(
@@ -166,11 +165,7 @@ async fn connect_backup_provider(
 ) -> Result<Json<ProviderState>, ApiError> {
     require_provider(&provider)?;
     Ok(Json(
-        state
-            .backup
-            .providers()
-            .connect_pcloud(&body.email, &body.password)
-            .await?,
+        state.backup.providers().connect_pcloud(&body.token).await?,
     ))
 }
 

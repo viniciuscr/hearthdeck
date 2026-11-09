@@ -260,11 +260,11 @@ pub fn read_pcloud() -> Option<PcloudState> {
         .find(|state| state.id == "pcloud")
 }
 
-/// Hands the credential to the daemon once. The window keeps no copy.
-pub fn connect_pcloud(email: String, password: String) -> Result<PcloudState, Error> {
+/// Hands the rclone token to the daemon once. The window keeps no copy.
+pub fn connect_pcloud(token: String) -> Result<PcloudState, Error> {
     Client::connect()?.put_json(
         "/v1/backup/providers/pcloud",
-        &serde_json::json!({ "email": email, "password": password }),
+        &serde_json::json!({ "token": token }),
     )
 }
 
