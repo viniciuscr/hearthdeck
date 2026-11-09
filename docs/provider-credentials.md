@@ -1,7 +1,7 @@
 # Provider credentials
 
 How a cloud provider's credential gets into Hearthdeck, who owns it, and what
-rclone is allowed to see. Status: **the daemon half is implemented** — `backup/providers.rs`, the four routes and their tests. The settings-page card and the unit's `EnvironmentFile` line are next. pCloud is the
+rclone is allowed to see. Status: **implemented, tested headlessly, not yet used against a real account.** The daemon module and its four routes, the unit's `EnvironmentFile` line, and the *pCloud account* card on the Backup page are all in. What has not happened is a real pCloud login: the `getauth` → store → `userinfo` round-trip is covered by a fake only. pCloud is the
 first provider; the layer is a registry so a second one is an entry, not a second
 flow.
 
@@ -137,4 +137,4 @@ installed. None of them quotes the credential.
 2. Packaging: the unit now reads `credentials.env` with `EnvironmentFile=-`, so a
    scheduled run inherits the token; a test pins that line. Still to do here: one
    real pCloud account on the box.
-3. Settings page card, then the TV.
+3. Settings page card — done: email, masked password, `Connect`, `Forget`, the `Connected`/`Not set` chip and the redacted error line, with the API host shown beside the verification time. Still to do: the TV, and a real account.

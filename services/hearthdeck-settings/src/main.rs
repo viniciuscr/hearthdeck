@@ -168,6 +168,8 @@ enum TextField {
     TmdbKey,
     BackupRemote,
     BackupRoot,
+    PcloudEmail,
+    PcloudPassword,
 }
 
 /// A switch row. Categorization writes as soon as it is flipped; backup carries
@@ -195,6 +197,8 @@ enum RowAction {
     SyncBios,
     SaveBackup,
     RunBackup,
+    ConnectPcloud,
+    ForgetPcloud,
 }
 
 impl RowAction {
@@ -213,6 +217,8 @@ impl RowAction {
             Self::SyncBios => "Sync BIOS",
             Self::SaveBackup => "Save and apply",
             Self::RunBackup => "Run now",
+            Self::ConnectPcloud => "Connect",
+            Self::ForgetPcloud => "Forget",
         }
     }
 
@@ -389,6 +395,8 @@ struct Inputs {
     tmdb_key: Entity<InputState>,
     backup_remote: Entity<InputState>,
     backup_root: Entity<InputState>,
+    pcloud_email: Entity<InputState>,
+    pcloud_password: Entity<InputState>,
     /// The schedule. Its state owns the up/down stepping, so the row needs no
     /// stepper of its own.
     backup_schedule: Entity<TimeFieldState>,
@@ -401,6 +409,8 @@ impl Inputs {
             TextField::TmdbKey => &self.tmdb_key,
             TextField::BackupRemote => &self.backup_remote,
             TextField::BackupRoot => &self.backup_root,
+            TextField::PcloudEmail => &self.pcloud_email,
+            TextField::PcloudPassword => &self.pcloud_password,
         }
     }
 }
@@ -533,6 +543,8 @@ fn human_size(bytes: u64) -> String {
 
 struct SettingsWindow {
     snapshot: Snapshot,
+    /// The provider state the daemon last reported. `None` until a read lands.
+    pcloud: Option<daemon::PcloudState>,
     disk: Option<DiskUsage>,
     nav: Nav,
     inputs: Inputs,
@@ -585,6 +597,7 @@ impl SettingsWindow {
     fn new(snapshot: Snapshot, disk: Option<DiskUsage>, inputs: Inputs) -> Self {
         Self {
             snapshot,
+            pcloud: None,
             disk,
             nav: Nav::default(),
             inputs,
@@ -752,6 +765,57 @@ impl SettingsWindow {
                 control: Control::Action(RowAction::StremioLink),
             }
         });
+
+        // The provider card does not depend on the backup settings read: a box whose
+        // units are missing still needs a way to store the credential.
+        let pcloud_card = || Group {
+            title: "pCloud account",
+            status: Some(match &self.pcloud {
+                Some(state) if state.configured => ("Connected", Tone::Good),
+                _ => ("Not set", Tone::Off),
+            }),
+            rows: vec![
+                Row {
+                    label: "pCloud email",
+                    description: Some("The account Hearthdeck backs up to."),
+                    control: Control::Text(TextField::PcloudEmail),
+                },
+                Row {
+                    label: "pCloud password",
+                    description: Some("Sent once to the daemon, never kept in this window."),
+                    control: Control::Text(TextField::PcloudPassword),
+                },
+                Row {
+                    label: "Connect",
+                    description: Some("pCloud is asked before anything is stored."),
+                    control: Control::Action(RowAction::ConnectPcloud),
+                },
+                Row {
+                    label: "Credential",
+                    description: None,
+                    control: Control::Fact(match &self.pcloud {
+                        Some(state) if state.configured => {
+                            // The host tells EU accounts from the default one, and it
+                            // is the value rclone needs, so it belongs on the card.
+                            let host = state.hostname.as_deref().unwrap_or("api.pcloud.com");
+                            Value::Text(match &state.verified_at {
+                                Some(at) => {
+                                    format!("Stored, verified {} ({host})", local_time(at))
+                                }
+                                None => format!("Stored, not verified ({host})"),
+                            })
+                        }
+                        Some(_) => Value::Text("Not set".to_string()),
+                        None => Value::Text("Unknown".to_string()),
+                    }),
+                },
+                Row {
+                    label: "Forget credential",
+                    description: Some("Removes the stored token, not the backups."),
+                    control: Control::Action(RowAction::ForgetPcloud),
+                },
+            ],
+        };
 
         vec![
             Page {
@@ -952,17 +1016,20 @@ impl SettingsWindow {
             Page {
                 kind: PageKind::Backup,
                 groups: match &self.snapshot.backup {
-                    None => vec![Group {
-                        title: "Off-site backup",
-                        status: Some(("Not installed", Tone::Off)),
-                        rows: vec![Row {
-                            label: "Availability",
-                            description: Some(
-                                "This Hearthdeck build does not include the backup units.",
-                            ),
-                            control: Control::Fact(Value::Text("Not installed".to_string())),
-                        }],
-                    }],
+                    None => vec![
+                        pcloud_card(),
+                        Group {
+                            title: "Off-site backup",
+                            status: Some(("Not installed", Tone::Off)),
+                            rows: vec![Row {
+                                label: "Availability",
+                                description: Some(
+                                    "This Hearthdeck build does not include the backup units.",
+                                ),
+                                control: Control::Fact(Value::Text("Not installed".to_string())),
+                            }],
+                        },
+                    ],
                     Some(backup) => {
                         let mut rows = vec![
                             Row {
@@ -1068,6 +1135,7 @@ impl SettingsWindow {
                         ];
 
                         vec![
+                            pcloud_card(),
                             Group {
                                 title: "Off-site backup",
                                 status: Some(if self.backup_pending.is_some() {
@@ -1151,13 +1219,14 @@ impl SettingsWindow {
         self.notice = Some("Reading the daemon and this machine again.".to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let (snapshot, disk) = cx
+            let (snapshot, disk, pcloud) = cx
                 .background_executor()
-                .spawn(async { (read_snapshot(), home_usage()) })
+                .spawn(async { (read_snapshot(), home_usage(), daemon::read_pcloud()) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.snapshot = snapshot;
                 this.disk = disk;
+                this.pcloud = pcloud;
                 this.refreshing = false;
                 // "Reading..." was true while the read was in flight and is a lie
                 // the moment it lands.
@@ -1191,6 +1260,8 @@ impl SettingsWindow {
             RowAction::SaveTmdbKey => self.save_tmdb_key(cx),
             RowAction::SaveBackup => self.save_backup(cx),
             RowAction::RunBackup => self.start_backup(cx),
+            RowAction::ConnectPcloud => self.connect_pcloud(cx),
+            RowAction::ForgetPcloud => self.forget_pcloud(cx),
             RowAction::ImportTmdbKey => self.import_tmdb_key(cx),
             RowAction::InstallCores => self.install_cores(cx),
             RowAction::SyncBios => self.sync_bios(cx),
@@ -1210,6 +1281,7 @@ impl SettingsWindow {
                 .as_ref()
                 .is_some_and(|status| status.service_active),
             RowAction::ScanLibrary => self.categorization_enabled(),
+            RowAction::ForgetPcloud => self.pcloud.as_ref().is_some_and(|state| state.configured),
             RowAction::RommLink | RowAction::StremioLink => self.pending_link.is_none(),
             _ => true,
         }
@@ -1621,6 +1693,70 @@ impl SettingsWindow {
 
     /// Saves a pasted TMDB key. The contract serves that endpoint on the admin
     /// listener, so it is the one write that does not carry the pairing token.
+    /// Hands the credential to the daemon once and reports what came back. The
+    /// password is never stored in this window and never echoed in a notice.
+    fn connect_pcloud(&mut self, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
+        let email = self.inputs.pcloud_email.read(cx).value().trim().to_string();
+        let password = self.inputs.pcloud_password.read(cx).value().to_string();
+        if email.is_empty() || password.is_empty() {
+            self.notice = Some("Fill in the pCloud email and password first.".to_string());
+            cx.notify();
+            return;
+        }
+        self.busy = Some(RowAction::ConnectPcloud);
+        self.notice = Some("Checking the credential with pCloud...".to_string());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { daemon::connect_pcloud(email, password) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = None;
+                match result {
+                    Ok(state) => {
+                        this.notice =
+                            Some("pCloud accepted the credential; it is stored.".to_string());
+                        this.pcloud = Some(state);
+                        this.refresh(cx);
+                    }
+                    Err(error) => {
+                        this.notice = Some(format!("pCloud setup failed: {error}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn forget_pcloud(&mut self, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
+        self.busy = Some(RowAction::ForgetPcloud);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async { daemon::forget_pcloud() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = None;
+                this.notice = Some(match result {
+                    Ok(()) => "The stored pCloud credential is gone.".to_string(),
+                    Err(error) => format!("Could not forget the credential: {error}"),
+                });
+                this.pcloud = daemon::read_pcloud();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn save_tmdb_key(&mut self, cx: &mut Context<Self>) {
         if self.busy.is_some() {
             return;
@@ -3150,6 +3286,13 @@ fn main() {
                         .masked(true)
                 }),
                 backup_remote: cx.new(|cx| InputState::new(window, cx).placeholder("pcloud")),
+                pcloud_email: cx
+                    .new(|cx| InputState::new(window, cx).placeholder("pCloud account email")),
+                pcloud_password: cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder("pCloud password")
+                        .masked(true)
+                }),
                 backup_root: cx
                     .new(|cx| InputState::new(window, cx).placeholder("hearthdeck-backups")),
                 backup_schedule: cx
@@ -3516,6 +3659,8 @@ mod render_tests {
                 tmdb_key: cx.new(|cx| InputState::new(window, cx)),
                 backup_remote: cx.new(|cx| InputState::new(window, cx)),
                 backup_root: cx.new(|cx| InputState::new(window, cx)),
+                pcloud_email: cx.new(|cx| InputState::new(window, cx)),
+                pcloud_password: cx.new(|cx| InputState::new(window, cx)),
                 backup_schedule: cx
                     .new(|cx| TimeFieldState::new(window, cx).precision(TimePrecision::Minute)),
             };

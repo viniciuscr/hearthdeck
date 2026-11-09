@@ -311,6 +311,16 @@ impl Control<'_> {
     /// Whether `rclone listremotes` knows the remote. A remote that rclone has
     /// never heard of cannot be enabled, and its credentials never reach us.
     async fn remote_available(&self, remote: &str) -> Result<bool, ControlError> {
+        // A credential the daemon stores is exported into the unit's environment,
+        // so rclone needs no config entry for it. Without this the switch could
+        // never be armed from the page, because `listremotes` reads rclone.conf.
+        if remote == crate::backup::providers::PCLOUD
+            && crate::backup::providers::Store::new(self.store.credentials_path())
+                .state()
+                .configured
+        {
+            return Ok(true);
+        }
         let output = self.runner.run(RCLONE, &strings(&["listremotes"])).await;
         let Ok(output) = output else {
             warn!("rclone could not be run; treating the remote as absent");

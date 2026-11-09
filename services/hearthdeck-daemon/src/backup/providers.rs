@@ -14,7 +14,7 @@ use serde::Serialize;
 
 /// The providers a user can configure, in the order the page lists them.
 pub const PROVIDERS: [&str; 1] = ["pcloud"];
-const PCLOUD: &str = "pcloud";
+pub const PCLOUD: &str = "pcloud";
 /// pCloud answers on a second host for EU accounts; `getauth` names it.
 const DEFAULT_HOSTNAME: &str = "api.pcloud.com";
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -238,7 +238,11 @@ impl Providers<'_> {
             .ok_or(ProviderError::Invalid("pCloud is not configured"))?;
         let access = serde_json::from_str::<serde_json::Value>(&token)
             .ok()
-            .and_then(|blob| blob.get("access_token").and_then(|value| value.as_str()).map(str::to_string))
+            .and_then(|blob| {
+                blob.get("access_token")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            })
             .ok_or(ProviderError::Invalid("the stored credential is malformed"))?;
         let hostname = self
             .store
@@ -282,7 +286,10 @@ impl FakePcloud {
     /// What the fake was asked, so a test can assert the secret never travels in
     /// a way the daemon would have to log.
     pub fn seen(&self) -> Vec<String> {
-        self.seen.lock().map(|seen| seen.clone()).unwrap_or_default()
+        self.seen
+            .lock()
+            .map(|seen| seen.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -314,7 +321,10 @@ impl PcloudApi for FakePcloud {
 impl fmt::Debug for Store {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         // A store that prints its path is fine; one that prints its contents is not.
-        formatter.debug_struct("Store").field("path", &self.path).finish()
+        formatter
+            .debug_struct("Store")
+            .field("path", &self.path)
+            .finish()
     }
 }
 
@@ -346,7 +356,10 @@ mod tests {
             .await
             .expect("accepted");
         assert!(state.configured);
-        assert!(state.verified_at.is_some(), "the store dates the verification");
+        assert!(
+            state.verified_at.is_some(),
+            "the store dates the verification"
+        );
 
         let listed = providers.list();
         assert_eq!(listed.len(), 1);

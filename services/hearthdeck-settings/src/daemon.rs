@@ -241,6 +241,38 @@ pub fn read_backup_status() -> Result<BackupStatus, Error> {
 /// Stores a TMDB key. The contract serves that endpoint on the loopback admin
 /// listener rather than the API, so this is the one write that does not carry
 /// the pairing token.
+/// What the page may know about a provider. Never the credential.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PcloudState {
+    pub id: String,
+    pub configured: bool,
+    pub verified_at: Option<String>,
+    pub hostname: Option<String>,
+}
+
+/// Reads pCloud's state. `None` when the daemon, or the route, is not there.
+pub fn read_pcloud() -> Option<PcloudState> {
+    Client::connect()
+        .ok()?
+        .get::<Vec<PcloudState>>("/v1/backup/providers")
+        .ok()?
+        .into_iter()
+        .find(|state| state.id == "pcloud")
+}
+
+/// Hands the credential to the daemon once. The window keeps no copy.
+pub fn connect_pcloud(email: String, password: String) -> Result<PcloudState, Error> {
+    Client::connect()?.put_json(
+        "/v1/backup/providers/pcloud",
+        &serde_json::json!({ "email": email, "password": password }),
+    )
+}
+
+/// Forgets the stored credential.
+pub fn forget_pcloud() -> Result<(), Error> {
+    Client::connect()?.delete("/v1/backup/providers/pcloud")
+}
+
 pub fn save_tmdb_key(api_key: String) -> Result<(), Error> {
     Client::connect()?.save_tmdb_key(&api_key)
 }
@@ -421,6 +453,16 @@ impl Client {
     ) -> Result<T, Error> {
         Ok(self
             .send(self.http.post(self.url(path)).json(body))?
+            .json()?)
+    }
+
+    fn put_json<T: for<'de> Deserialize<'de>>(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<T, Error> {
+        Ok(self
+            .send(self.http.put(self.url(path)).json(body))?
             .json()?)
     }
 
