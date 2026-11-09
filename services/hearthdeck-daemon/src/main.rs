@@ -24,7 +24,6 @@ mod sessions;
 mod settings;
 mod state;
 mod stremio;
-mod tmdb;
 mod traits;
 
 use std::{net::TcpListener as StdTcpListener, sync::Arc};
@@ -83,7 +82,7 @@ async fn main() -> Result<()> {
 
     let state = AppState::new(config.clone(), database);
     let discovery = discovery::DiscoveryService::start(
-        discovery_providers(&config, state.stremio.clone(), state.tmdb.clone()),
+        discovery_providers(&config, state.stremio.clone()),
         state.catalog.clone(),
         state.events.clone(),
     );
@@ -222,7 +221,6 @@ pub(crate) use hearthdeck_protocol::sources::DESKTOP_APPS as DESKTOP_APPS_SOURCE
 fn discovery_providers(
     config: &Config,
     stremio: stremio::StremioRepository,
-    tmdb: tmdb::TmdbRepository,
 ) -> Vec<Arc<dyn discovery::DiscoveryProvider>> {
     vec![
         Arc::new(
@@ -236,16 +234,16 @@ fn discovery_providers(
         // UI is all it takes for the next refresh to have something to publish. It
         // also needs the bridge, to find the desktop entry a card launches.
         Arc::new(discovery::providers::stremio::StremioProvider::new(
-            stremio,
+            stremio.clone(),
             config.bridge_socket_path.clone(),
         )),
-        // Publishes the titles that have just become watchable at home, for the
-        // dashboard's hero banner. It reads TMDB rather than a Stremio catalog
-        // because a catalog's "new" is a cinema release calendar, and it needs the
+        // Publishes the newest titles from Stremio's own feed, but only those the
+        // linked account's addons can actually play: a title is confirmed against
+        // every installed stream addon before it becomes a slide. It needs the
         // bridge for the same reason as above: a banner slide launches the Stremio
         // desktop entry.
         Arc::new(discovery::providers::arrivals::NewArrivalsProvider::new(
-            tmdb,
+            stremio,
             config.bridge_socket_path.clone(),
         )),
     ]
@@ -382,7 +380,7 @@ async fn seed_dev_database() -> Result<()> {
                 title: "Stranger Things".into(),
                 kind: "series".into(),
                 launch_id: None,
-                icon: Some("https://image.tmdb.org/t/p/w500/stranger_things.jpg".into()),
+                icon: Some("https://images.metahub.space/poster/medium/tt4574334/img".into()),
                 metadata: serde_json::json!({"type": "series", "source": "stremio"}),
                 updated_at: chrono::Utc::now().to_rfc3339(),
             }],

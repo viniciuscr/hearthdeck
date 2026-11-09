@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use hearthdeck_protocol::{BridgeRequest, BridgeResponse, DiscoveredApplication};
@@ -28,8 +28,6 @@ use crate::{
     discovery::DiscoveryProvider,
     stremio::{SOURCE_ID, StremioRepository},
 };
-
-const API_URL: &str = "https://api.strem.io/api";
 
 /// Stremio's home row is ten items (`CATALOG_PREVIEW_SIZE` in its own client), so
 /// this is the same ten a Stremio user sees rather than an invented length.
@@ -132,7 +130,7 @@ impl DiscoveryProvider for StremioProvider {
 
 /// `post /api/datastoreMeta` — one `[id, epoch_ms]` pair per library item.
 async fn datastore_meta(auth_key: &str) -> Result<Value> {
-    datastore(
+    crate::stremio::account_call(
         "datastoreMeta",
         auth_key,
         json!({ "collection": "libraryItem" }),
@@ -142,51 +140,12 @@ async fn datastore_meta(auth_key: &str) -> Result<Value> {
 
 /// `post /api/datastoreGet` — the library itself.
 async fn datastore_get(auth_key: &str) -> Result<Value> {
-    datastore(
+    crate::stremio::account_call(
         "datastoreGet",
         auth_key,
         json!({ "collection": "libraryItem", "ids": [], "all": true }),
     )
     .await
-}
-
-/// One account-datastore call.
-///
-/// The account API answers HTTP 200 whether it succeeded or failed, so the body is
-/// what decides. Neither the request body (which carries the session key) nor an
-/// unexpected response body is ever quoted into an error: both can reach a log line
-/// and a client, and one of them holds the credential.
-async fn datastore(path: &str, auth_key: &str, body: Value) -> Result<Value> {
-    let mut payload = body;
-    payload["authKey"] = Value::String(auth_key.to_owned());
-
-    let url = format!("{API_URL}/{path}");
-    let response = reqwest::Client::new()
-        .post(&url)
-        .json(&payload)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .timeout(Duration::from_secs(15))
-        .send()
-        .await
-        .with_context(|| format!("could not reach {url}"))?;
-
-    let status = response.status();
-    let text = response
-        .text()
-        .await
-        .with_context(|| format!("could not read the answer from {url}"))?;
-    let parsed: Value = serde_json::from_str(&text)
-        .map_err(|_| anyhow!("{url} answered with HTTP {status} and a body that is not JSON"))?;
-
-    if let Some(error) = parsed.get("error").filter(|error| !error.is_null()) {
-        let message = error
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown error");
-        // A message from Stremio describes the failure without naming the key.
-        bail!("the Stremio account API refused {path}: {message}");
-    }
-    Ok(parsed)
 }
 
 /// The identity of a datastore state: the metadata's own serialization.

@@ -38,10 +38,10 @@ impl Database {
         );
         // This batch runs on every start, for a fresh database and for a deployed
         // one alike — `IF NOT EXISTS` is what makes that safe. It is how a table
-        // added after the baseline reaches an existing installation, `tmdb_settings`
-        // being the first: there is no migration ledger to hang a step on. It does
-        // not add a *column* to a table that already exists, so a later change of
-        // that shape needs its own step, not a line here.
+        // added after the baseline reaches an existing installation: there is no
+        // migration ledger to hang a step on. It does not add a *column* to a table
+        // that already exists, so a later change of that shape needs its own step,
+        // not a line here.
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS paired_clients (
@@ -106,16 +106,6 @@ impl Database {
               id INTEGER PRIMARY KEY CHECK (id = 1),
               auth_key TEXT NOT NULL,
               linked_at TEXT NOT NULL,
-              updated_at TEXT NOT NULL
-            );
-            -- The TMDB credential, shaped like `stremio_settings` above and kept
-            -- here for the same reason: it is a secret that only the arrivals
-            -- provider reads and no handler returns. The database file is narrowed
-            -- to its owner (see `restrict_to_owner`), whereas an environment
-            -- variable would be readable by every process running as that user.
-            CREATE TABLE IF NOT EXISTS tmdb_settings (
-              id INTEGER PRIMARY KEY CHECK (id = 1),
-              api_key TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS launch_activity (
@@ -188,6 +178,12 @@ impl Database {
         )
         .execute(&mut *transaction)
         .await?;
+        // The TMDB credential is retired with the provider that read it. Dropping
+        // the table is how a database that stored one stops holding a secret
+        // nothing can use; on a fresh database the statement is a no-op.
+        sqlx::query("DROP TABLE IF EXISTS tmdb_settings")
+            .execute(&mut *transaction)
+            .await?;
         // Only the current deployed schema is adopted; historical upgrades are retired.
         for statement in [
             "SELECT source_id, launch_id FROM library_items LIMIT 0",
@@ -347,19 +343,28 @@ mod tests {
         assert!(second_row.is_err(), "a second session row must be refused");
     }
 
-    /// A database created before the arrivals banner read TMDB gains its settings
-    /// table on the next migrate, and the CHECK keeps it a single row.
+    /// A database that stored the retired TMDB credential loses the table, and
+    /// the secret it held, on the next migrate.
     #[tokio::test]
-    async fn adds_the_tmdb_table_to_an_existing_database() {
+    async fn removes_the_retired_tmdb_table_from_an_existing_database() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::connect(&directory.path().join("hearthdeck.db"))
             .await
             .unwrap();
+        database.migrate().await.unwrap();
 
+        // Stand in for a database deployed while the banner read TMDB.
         sqlx::query(
-            "CREATE TABLE stremio_settings (\
-             id INTEGER PRIMARY KEY CHECK (id = 1), auth_key TEXT NOT NULL, \
-             linked_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+            "CREATE TABLE tmdb_settings (\
+             id INTEGER PRIMARY KEY CHECK (id = 1), api_key TEXT NOT NULL, \
+             updated_at TEXT NOT NULL)",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO tmdb_settings (id, api_key, updated_at) \
+             VALUES (1, 'retired_key', '2026-01-01T00:00:00Z')",
         )
         .execute(database.pool())
         .await
@@ -373,59 +378,29 @@ mod tests {
         .fetch_one(database.pool())
         .await
         .unwrap();
-        assert_eq!(present, 1);
-
-        sqlx::query(
-            "INSERT INTO tmdb_settings (id, api_key, updated_at) \
-             VALUES (1, 'first_key', '2026-01-01T00:00:00Z')",
-        )
-        .execute(database.pool())
-        .await
-        .unwrap();
-
-        // A re-migration is a no-op and keeps the stored key.
-        database.migrate().await.unwrap();
-        let api_key: Option<String> =
-            sqlx::query_scalar("SELECT api_key FROM tmdb_settings WHERE id = 1")
-                .fetch_optional(database.pool())
-                .await
-                .unwrap();
-        assert_eq!(api_key.as_deref(), Some("first_key"));
-
-        let second_row = sqlx::query(
-            "INSERT INTO tmdb_settings (id, api_key, updated_at) \
-             VALUES (2, 'other_key', '2026-01-01T00:00:00Z')",
-        )
-        .execute(database.pool())
-        .await;
-        assert!(
-            second_row.is_err(),
-            "a second credential row must be refused"
-        );
+        assert_eq!(present, 0, "the retired credential table is removed");
     }
 
-    /// A table added after the baseline must reach a database that is already
-    /// deployed: `user_version = 1`, rows in it, and no `tmdb_settings` yet. There
-    /// is no ledger to hang an upgrade step on, so what makes this work is the
-    /// CREATE batch running on every start behind `IF NOT EXISTS` — which is
+    /// A table missing from an already-deployed database is created on the next
+    /// start: `user_version = 1`, rows in the database, and no `stremio_settings`.
+    /// There is no ledger to hang an upgrade step on, so what makes this work is
+    /// the CREATE batch running on every start behind `IF NOT EXISTS` — which is
     /// exactly what this pins.
     #[tokio::test]
-    async fn a_table_added_after_the_baseline_is_created_on_a_deployed_database() {
+    async fn a_missing_table_is_created_on_a_deployed_database() {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::connect(&directory.path().join("hearthdeck.db"))
             .await
             .unwrap();
         database.migrate().await.unwrap();
 
-        // Stand in for a database deployed before the banner read TMDB.
-        sqlx::query(
-            "INSERT INTO stremio_settings (id, auth_key, linked_at, updated_at) \
-             VALUES (1, 'linked_key', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
-        )
-        .execute(database.pool())
-        .await
-        .unwrap();
-        sqlx::query("DROP TABLE tmdb_settings")
+        // Stand in for a database deployed before the Stremio table existed, and
+        // with a row of its own to preserve.
+        sqlx::query("UPDATE user_settings SET theme_mode = 'light' WHERE id = 1")
+            .execute(database.pool())
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE stremio_settings")
             .execute(database.pool())
             .await
             .unwrap();
@@ -433,14 +408,14 @@ mod tests {
         database.migrate().await.unwrap();
 
         let present: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'tmdb_settings'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'stremio_settings'",
         )
         .fetch_one(database.pool())
         .await
         .unwrap();
         assert_eq!(
             present, 1,
-            "a deployed database gains the new table on the next start"
+            "a deployed database gains the missing table on the next start"
         );
 
         let version: i64 = sqlx::query_scalar("PRAGMA user_version")
@@ -453,12 +428,12 @@ mod tests {
         );
 
         // And the rows that database already held survive.
-        let auth_key: Option<String> =
-            sqlx::query_scalar("SELECT auth_key FROM stremio_settings WHERE id = 1")
+        let theme: Option<String> =
+            sqlx::query_scalar("SELECT theme_mode FROM user_settings WHERE id = 1")
                 .fetch_optional(database.pool())
                 .await
                 .unwrap();
-        assert_eq!(auth_key.as_deref(), Some("linked_key"));
+        assert_eq!(theme.as_deref(), Some("light"));
     }
 
     /// The database holds bearer-equivalent credentials, so it is owner-only.

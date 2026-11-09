@@ -84,20 +84,14 @@ and expiry; this boundary does not change its concurrent-request semantics.
 
 `stremio/control.rs` owns connection reads, link creation, approved-session
 persistence and unlink sequencing. It borrows the session repository, pending link
-and catalog; HTTP only maps credential-free responses and typed errors. Unlink
-cancels pending approval, clears the session, then removes account-owned
-`stremio` rows. Public `stremio-arrivals` rows remain. Link completion retains
+and catalog; HTTP only maps credential-free responses and typed errors. A completed
+link asks both Stremio sources to read once, so the rail and the banner fill
+without waiting out their intervals. Unlink cancels pending approval, clears the
+session, then removes the account-owned `stremio` rows and the `stremio-arrivals`
+rows, which were confirmed against that account's addons. Link completion retains
 its existing gateway-error mapping even for persistence failures; settings and
 unlink failures remain internal errors. Link codes are not logged. The underlying
 link state still owns expiry and polling, with unchanged concurrency semantics.
-
-`tmdb/control.rs` owns the arrival banner's credential: it borrows the settings
-repository and the catalog. A save validates the key's shape before storing it and
-then asks the arrivals provider to refresh; a clear removes the key and the arrival
-rows in the same call, so a banner cannot outlive the credential that filled it.
-HTTP maps a key that could never work to a bad request and storage failures to an
-internal error. The key itself never crosses this boundary — the response type has
-no field for it.
 
 ## Database baseline
 

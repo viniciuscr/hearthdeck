@@ -156,58 +156,61 @@ Stremio's own home row uses (`CATALOG_PREVIEW_SIZE`).
 `timeOffset` and `duration` are **milliseconds** — confirmed, not assumed: 54
 durations were ≥ 100 000 and **zero** fell in the seconds range.
 
-### New arrivals: what TMDB says can be watched
+### New arrivals: what Stremio has a stream for
 
-The banner's question is "what can I watch tonight that is new", and the catalog
-this feature first shipped with cannot answer it. Cinemeta's "New" catalog is a
-**release calendar**: `catalog/<movie|series>/year/genre=<year>` lists a film the
-day it opens *in cinemas*, and nothing in the meta distinguishes "out of cinemas"
-from "still showing". Read live on 2026-11-06, the top of the film bucket was a
-title whose `released` was that same day — in cinemas, unplayable at home. A
-banner built from that feed is mostly slides nobody can watch, which is why the
-provider reads TMDB instead.
+The banner's question is "what can I watch tonight that is new", and the title
+list alone cannot answer it. Cinemeta's "New" catalog is the feed Stremio itself
+shows as new, but it is a **release calendar**:
+`catalog/<movie|series>/year/genre=<year>` lists a film the day it opens *in
+cinemas*, and nothing in the meta distinguishes "out of cinemas" from "still
+showing". So the feed is kept as the candidate list, and a second question decides
+the slides: does this account have a stream for the title? Only a title whose own
+addons answer with at least one stream becomes an arrival.
 
-TMDB is asked the availability question directly: a film has left the cinemas
-once it has a **digital or physical release date in the past** for a market.
+The stream question is asked through the **addon protocol**, against the addons
+the linked account has installed — exactly what pressing Play in Stremio would
+offer. Cinemeta is not one of them: its manifest declares `catalog`, `meta` and
+`addon_catalog`, and no `stream`.
 
 | Checked | Result |
 | --- | --- |
 | Cinemeta `catalog/movie/year/genre=2026` (live) | full metas, and **no availability field at all** — `released`, `popularities`, art, cast, nothing about where it can be seen |
-| `GET /3/discover/movie` with `with_release_type=4\|5` + `release_date.gte/lte` + `region` | documented on `developer.themoviedb.org/reference/discover-movie`; **not yet answered with a real key** |
-| `GET /3/movie/{id}?append_to_response=release_dates,external_ids,images` | documented appendable. `release_dates.results[].release_dates[].type` is the number the check reads: **4 digital, 5 physical** (2/3 are theatrical) |
-| `GET /3/discover/tv` with `first_air_date.gte/lte` | a series has no cinema window, so its own air date is the availability |
-| Auth | a v3 key rides as `api_key=`, a v4 read token — a JWT — as a bearer header. Sending one as the other is a 401 with nothing to say why |
-| `api.themoviedb.org/3` | reachable and answering (a request with no key is `401 status_code 7`) |
-
-That last row is the honest limit of the verification: everything the daemon
-reads from TMDB is written against documented shapes and covered by fixture
-tests, and the password-free check is to set a key and watch the banner fill —
-see "Re-verifying by hand".
+| `POST api.strem.io/api/addonCollectionGet` with the session `authKey` | live error envelope for a bad key (`Session does not exist`). Success is one entry per installed addon carrying `transportUrl` and `manifest`; that shape is what Stremio's own clients read and is pinned by fixture tests |
+| `GET <transport without /manifest.json>/stream/<type>/<id>.json` (live) | an addon answers `{"streams":[...]}`; a non-empty array is the title being playable, an empty one is not |
+| A public stream addon, against a live release (2026-11-09) | `{"streams":[...]}` with entries, which is how the resource shape was confirmed |
+| Cinemeta's manifest (live) | `resources` is `["catalog","meta","addon_catalog"]` — no `stream`, so the arrival feed cannot confirm itself |
 
 The daemon's own rules, which the fixtures pin:
 
-- **The window is the definition of new.** A home release inside
-  `AVAILABILITY_WINDOW_DAYS` (60) is an arrival; anything older has stopped being
-  one, and a date in the future is not one yet.
-- **The market is the host's locale.** `LC_ALL`, then `LC_TIME`, then `LANG`, and
-  `pt_BR.UTF-8` means language `pt-BR` and market `BR`; a host that declares none
-  gets `en-US`/`US` rather than an error.
-- **A market row is an answer.** If TMDB has a release row for the host's market,
-  it decides — a film with only theatrical dates there really is still in cinemas,
-  and no fallback applies. Only when TMDB has *no row for the market at all* (a
-  data gap, common in smaller markets) does the check fall back to another
-  market's home release, and the slide records which market it came from.
-- **The rank is popularity, the order is the date.** The window has already
-  answered "is this new", so the ten slides are the best-known of what survived;
-  the collection then re-sorts them by availability date on the way out, because
-  `list_source` orders on `updated_at` and that is what the record stores.
+- **The candidate list is Stremio's new feed.** The current and previous year are
+  both read, so a January dashboard is not empty; what a meta says it is decides
+  whether it belongs (a series has appeared inside the `movie` bucket); the same
+  title arriving through both buckets lands once; only an IMDb id counts, because
+  that is what a launch and a stream request both name.
+- **Newest first, and bounded.** Candidates are ordered by the metas' own
+  `released` date and the newest forty are checked. In practice the first batch
+  fills the banner; the budget exists so a week of cinema-only releases cannot turn
+  one refresh into hundreds of requests.
+- **A stream is the definition of an arrival.** A title with no non-empty
+  `streams` answer from any installed addon is not published. Four candidates are
+  asked at once, and checking stops once ten slides are confirmed.
+- **No source, no banner.** An unlinked account, or an account with no addon that
+  declares a `stream` resource, publishes an empty snapshot. There is no truthful
+  way to confirm a title without the account's own addons, and falling back to the
+  unconfirmed feed is the failure this design exists to prevent. A completed link
+  asks this source to refresh immediately, and an unlink clears its rows, so the
+  banner follows the account without an interval in between.
+- **A failed lookup is not a "no".** An addon that errors is skipped for that
+  title; if *no* addon answered for *any* candidate, the refresh refuses rather
+  than publishing an empty snapshot, so a broken addon cannot wipe a banner that
+  was working.
 - **The source id is still `stremio-arrivals`.** It is what the catalog rows and
   the `stremio:new-arrivals` collection rule are keyed by, so it is a persisted
   identifier rather than a description; a slide still launches Stremio, which is
   also why the provider still resolves the desktop entry through the bridge.
-- **No key, no banner.** There is no keyless way to ask what is watchable, so an
-  unconfigured daemon publishes an empty snapshot and logs it once, rather than
-  falling back to the cinema calendar this feature replaced.
+- **The refresh is hourly.** Release data moves by the day and a stream list moves
+  slower; probing candidates costs requests, so an hour is current for a kiosk
+  without re-asking every addon every few minutes.
 
 ## The traps
 
@@ -262,27 +265,27 @@ These were all observed in real data. Each one silently produces a wrong rail.
   bridge validates it exactly as it validates any application id.
 
 - **The year catalog is a bucket, not a recency feed.** It is ordered by a blend
-  of release date and popularity, and it is a *cinema* calendar. Both are reasons
-  it is no longer the arrivals source; it is still useful as a popularity-weighted
-  browse of the current year.
+  of release date and popularity, and it is a *cinema* calendar. It is the
+  candidate list for arrivals, not the answer; the account's stream addons decide
+  what becomes a slide.
 - **A bucket's type is not a filter.** A series appeared inside the `movie` bucket.
   What a meta says it is decides what it is.
 - **A title's id is not always a title id.** Cinemeta prefixes its ids with `tt`,
   but the library also held `yt_id:` entries; an arrival only counts if its id is
-  an IMDb one, because that is what a launch can name. TMDB arrives indirectly the
-  same way: its own id is not launchable, so every candidate carries
-  `external_ids.imdb_id` and a title without one is dropped.
+  an IMDb one, because that is what a launch and a stream request can name.
 - **`logo` and `background` are populated on arrival metas** even though they were
   absent on every Continue Watching record. That is the one dependable wide art
-  this feature has — a portrait poster cannot carry a 30 %-tall banner. TMDB
-  supplies the same two from different fields: `backdrop_path` for the backdrop,
-  and an `images.logos` entry ranked by language rather than the poster's art.
-- **A `reqwest::Error` carries the URL, and a v3 key rides in the query string.**
-  Every TMDB error is mapped through `without_url()` before it is logged or
-  reported in provider health, or the credential would be published in the one
-  place a degraded provider is described.
-- **TMDB's score is not an IMDb score.** `vote_average` is stored as
-  `tmdb_rating`; nothing in this feature may label it as an IMDb rating.
+  this feature has — a portrait poster cannot carry a 30 %-tall banner.
+- **A transport URL can carry the person's own addon configuration**, a debrid
+  key among it. Every addon error is mapped through `without_url()` and the addon
+  is named by host only, so a failure never publishes the configuration it failed
+  on.
+- **Cinemeta serves no streams.** Its manifest declares `catalog`, `meta` and
+  `addon_catalog`; a stream check against the arrival feed itself would answer
+  nothing and every slide would disappear.
+- **A missing `streams` list is not an empty one.** An addon that answers with an
+  `err`, or without `streams`, did not answer the question, so it is skipped rather
+  than counted as "no stream"; only an actual empty array is a negative answer.
 
 ## Schema drift against `stremio-core`
 
@@ -342,20 +345,24 @@ authoritative would drop usable fields:
    The planned image would be generated from the link or proxied from Stremio
    through an authenticated daemon route. The code and link remain visible
    even if the image fails. This plan is not a current transport contract.
-10. **Unlinking removes both the credential and the catalog rows** that source
-    owns, so a stale rail cannot outlive the account it came from.
+10. **Unlinking removes the credential and every row the account owns.** That is
+    the `stremio` rail and the `stremio-arrivals` banner, because the arrivals
+    were confirmed against that account's addons; neither can outlive it. A
+    completed link asks both sources to refresh once, so linking fills both
+    without waiting for an interval.
 
-11. **New arrivals are read from TMDB, and the question is availability.**
-    Neither the account datastore (it holds what is already there) nor an addon
-    catalog (a cinema release calendar) can answer "what can I watch that is new".
-    TMDB can: a film with a digital or physical release in the past, for the
-    host's market. `NewArrivalsProvider` (`source_id: "stremio-arrivals"`, kept
-    because the id is persisted) reads one discover page per type, verifies each
-    candidate's own release list, keeps the last sixty days, ranks by popularity,
-    caps at ten, and publishes records that still launch Stremio. **Implemented as
-    `discovery::providers::arrivals`**; the Cinemeta provider it replaces is gone.
-    The shapes are documented, not yet observed with a real key — see the table
-    above, which is deliberately marked that way.
+11. **New arrivals come from Stremio's new feed, confirmed against the account's
+    own stream addons.** The feed is a cinema calendar, so it supplies candidates
+    only; the linked account's installed addons answer whether there is anything
+    to play. `NewArrivalsProvider` (`source_id: "stremio-arrivals"`, kept because
+    the id is persisted) reads the year buckets, reads `addonCollectionGet` once,
+    asks the stream addons about the newest forty candidates four at a time, and
+    stops once ten slides are confirmed. A title with no non-empty `streams`
+    answer is not published; no account or no stream addon publishes nothing; if
+    no addon answers at all the refresh refuses and keeps the last snapshot.
+    **Implemented as `discovery::providers::arrivals`, with the addon protocol in
+    `stremio/addons.rs`.** The TMDB provider it replaces is gone, together with
+    its credential route and table.
 
 12. **The banner is its own collection**, `stremio:new-arrivals`, seeded beside
     `stremio:continue-watching` and resolved from those records. `CollectionItem`
@@ -372,17 +379,6 @@ authoritative would drop usable fields:
     form without an episode segment and is **not yet seen on hardware**; the film
     and episode forms are. See Open questions.
 
-14. **The TMDB credential is set from the host itself, over the loopback admin
-    listener.** `GET`/`PUT`/`DELETE /v1/tmdb/settings` on `127.0.0.1:38401`, not on
-    the paired-device listener: a key is a one-time paste from a machine with a
-    keyboard, and routing it through the LAN API would need a pairing token to do
-    something no remote client ever should. The key is stored in `tmdb_settings`
-    in the same owner-only database file as the Stremio `auth_key`, no handler
-    returns it, and `DELETE` clears the arrivals rows with it so no banner outlives
-    the key that filled it. **Implemented.** Both TMDB credential spellings are
-    accepted, because telling a user their perfectly good v4 token is "invalid"
-    is the failure mode this avoids.
-
 ## Protocol and data model changes
 
 Schema changes are hand-written in `database.rs::migrate()` — there is no
@@ -394,10 +390,6 @@ existing `collections` table upgrade does.
   (the link flow never returns one). Confirm the database file itself is `0600`
   — SQLite creates files according to the umask, so this may need an explicit
   `chmod` at creation.
-- **Table `tmdb_settings`**, single row (`id = 1`), shaped like `stremio_settings`:
-  `api_key`, `updated_at`. The arrivals banner's credential, added after the rail
-  moved to TMDB; it is stored in the same owner-only database file and has no
-  route outside the loopback admin listener.
 - **`GET /v1/stremio/settings`** → connection status **without the credential**,
   following the `getRommSettings` precedent ("RomM connection status without its
   credential"): `{linked_at, item_count, in_progress_count, last_refresh}`.
@@ -557,10 +549,14 @@ curl -s -X POST https://api.strem.io/api/datastoreGet \
 curl -s -X POST https://api.strem.io/api/datastoreMeta \
   -H 'Content-Type: application/json' -d "{\"authKey\":\"$KEY\",\"collection\":\"libraryItem\"}"
 
-# give the arrivals banner its TMDB credential: loopback admin port, no token.
-# GET the same path afterwards to confirm one is stored without reading it back.
-curl -s -X PUT http://127.0.0.1:38401/v1/tmdb/settings \
-  -H 'Content-Type: application/json' -d '{"api_key":"<v3 key or v4 read token>"}'
+# the account's installed addons, including which ones serve streams (key from
+# the daemon's own store). Each entry carries `transportUrl` and `manifest`.
+curl -s -X POST https://api.strem.io/api/addonCollectionGet \
+  -H 'Content-Type: application/json' -d "{\"authKey\":\"$KEY\"}"
+
+# one addon's answer for one title: a non-empty streams array is a playable
+# arrival. Use a transportUrl without its /manifest.json segment.
+curl -s '<transport>/stream/movie/<imdb-id>.json'
 ```
 
 Treat `$KEY` as a bearer token: do not paste it into a shell history you keep,

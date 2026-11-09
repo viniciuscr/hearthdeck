@@ -62,8 +62,8 @@ footer, where it cannot scroll away from the action that produced it.
 A card's heading carries the section name and a status chip (`Tag`) when the
 section has a state worth reading at a glance: `Daemon` says Connected or
 Unavailable, `RomM` Signed in / Needs sign-in / Not set up, `Stremio` Linked /
-Waiting / Not linked, `TMDB` Preview. The rows still carry the detail; the chip
-is what lets a glance down the page tell the three connections apart.
+Waiting / Not linked. The rows still carry the detail; the chip is what lets a
+glance down the page tell the connections apart.
 
 A row is a label, an optional sentence under it, and one control on the right.
 There are five shapes, and the shape decides what Enter does:
@@ -96,12 +96,6 @@ session nor a password ever crosses this process.
 `Unlink` / `Forget connection` post the matching `DELETE` and appear only while a
 connection exists. A saved RomM address prefills the field at launch, so linking
 again starts from where the daemon already is.
-
-`Connections` → `TMDB` is the one **pasted credential**: a masked field and
-`Save key`, written to `PUT /v1/tmdb/settings` on the loopback **admin** listener
-— the port the contract serves it on, and the one this window already uses to
-pair. It is the only write here that does not carry the pairing token. The card's
-chip reads `Set` / `Not set` / `Unavailable` from the same endpoint.
 
 `Library` → `Restore rails` deletes the collections the last scan published
 (`DELETE /v1/categorization/collections`), so the dashboard falls back to what it
@@ -174,21 +168,18 @@ ever blocking on a backup. A save re-reads the destination and the status
 together, because the schedule it just wrote decides the next run. Nothing on either card holds a cloud
 credential: rclone owns those, and the window names a remote.
 
-### Why TMDB is a paste, and the others are not
+### Why both connections are an approval
 
-TMDB has no credential exchange to call: a key or v4 read token is generated in
-the user's TMDB account page, so `POST …/login` has nothing to mint it from.
-RomM *does* have both a password exchange and a device approval — the window uses
-the approval, so a password is never typed on the television — and Stremio has
-only the approval. That leaves two acquisition modes, and every service picks one:
+RomM has both a password exchange and a device approval — the window uses the
+approval, so a password is never typed on the television — and Stremio has only
+the approval. Every account connection therefore uses one acquisition mode:
 
 | Mode | Endpoint shape | Services |
 | --- | --- | --- |
 | Device approval | `POST …/link` + poll `GET …/link` | RomM, Stremio |
-| Pasted credential | one write, then read the stored state | TMDB |
 
-Both modes share the same view vocabulary — a `Control::Action` row plus, for the
-approval, the three code rows `link_rows` builds for either service.
+That mode has one view vocabulary: a `Control::Action` row plus the three code
+rows `link_rows` builds for either service.
 
 ## Focus and input
 
@@ -217,25 +208,15 @@ what made Enter do nothing at all on the television; the render tests now press
 Enter for real and would catch its return.
 
 Pasting into a field: the kit's input binds `Ctrl+V` (and `Cmd+V`) itself, and
-that path works — a test pastes into the TMDB field headlessly. `Ctrl+Shift+V`
-and `Shift+Insert`, the other two things a Linux desktop does when someone says
-"paste", are bound here to `PasteIntoField`, which puts the clipboard into the
-focused field and reports either the result or that the clipboard could not be
-read. That fallback exists because an unreadable clipboard is otherwise silent:
-the field stays empty and nothing says why. The window's default log filter
-includes `gpui` and `gpui_linux` warnings for the same reason — a clipboard read
-or seat capability that fails is logged by the platform, and the journal is the
-only place it would ever show up.
-
-**The clipboard is not the only way in.** A desktop whose X11↔Wayland clipboard
-bridge is missing (an XWayland Firefox feeding a native Wayland client) will hand
-this window nothing, however many shortcuts are bound — that bridge belongs to
-the compositor, not to this code. So the TMDB card also carries a *key file* row
-and a **Read key from file** action: the path is `HEARTHDECK_TMDB_KEY_FILE`, else
-`~/tmdb.key`, and the token is trimmed and saved through the same admin-port write
-the field uses. The path is shown, never typed — putting the file there is the job
-of `scp` or a shell, both of which work from a terminal where clipboard paste is
-not in question.
+that path works — a test pastes into the RomM address field headlessly.
+`Ctrl+Shift+V` and `Shift+Insert`, the other two things a Linux desktop does when
+someone says "paste", are bound here to `PasteIntoField`, which puts the clipboard
+into the focused field and reports either the result or that the clipboard could
+not be read. That fallback exists because an unreadable clipboard is otherwise
+silent: the field stays empty and nothing says why. The window's default log
+filter includes `gpui` and `gpui_linux` warnings for the same reason — a clipboard
+read or seat capability that fails is logged by the platform, and the journal is
+the only place it would ever show up.
 
 The cursor is a painted `selected` position, not platform focus — the same
 model the iced screens use for their ring cursor. `nav.rs` owns it as a plain
@@ -311,10 +292,9 @@ installs the binary beside the other Hearthdeck binaries.
   not running — the window started by hand — there is no controller input, only a
   keyboard. `Keyboard` and the other library-only actions are not forwarded; the
   window does not open an on-screen keyboard of its own.
-- **Nothing is a preview any more.** Every row writes through the daemon. The one
-  asymmetry left is transport: TMDB's key goes to the loopback admin listener
-  because the contract serves it there, while everything else uses the API port
-  and the pairing token.
+- **Nothing is a preview any more.** Every row writes through the daemon, over the
+  API port with the pairing token. The loopback admin port is used only to mint
+  that token.
 - **Scrolling follows the cursor, not the contents.** Moving the cursor scrolls
   its row into view; scrolling with the wheel does not move the cursor, so the
   two can be apart until the next Up or Down. There is no scrollbar-driven

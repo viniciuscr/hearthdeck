@@ -85,6 +85,11 @@ impl Control<'_> {
         self.link.cancel().await;
         self.session.clear().await.map_err(ControlError::Storage)?;
         self.catalog.replace_source(SOURCE_ID, Vec::new()).await?;
+        // The arrivals were confirmed against this account's addons, so they are
+        // as account-owned as the library rows and must not outlive the session.
+        self.catalog
+            .replace_source(crate::discovery::providers::arrivals::SOURCE_ID, Vec::new())
+            .await?;
         info!("stremio account unlinked");
         Ok(())
     }
@@ -205,7 +210,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unlink_cancels_pending_and_removes_only_account_owned_rows() {
+    async fn unlink_cancels_pending_and_removes_every_account_owned_row() {
         let (_directory, database, session, catalog) = storage().await;
         seed_sources(&database).await;
         session.save_session("session-secret").await.unwrap();
@@ -226,7 +231,9 @@ mod tests {
                 .fetch_all(database.pool())
                 .await
                 .unwrap();
-        assert_eq!(sources, ["desktop-apps", "stremio-arrivals"]);
+        // The arrivals were confirmed against this account's addons, so they go
+        // with the session rather than waiting for the next refresh to empty them.
+        assert_eq!(sources, ["desktop-apps"]);
     }
 
     #[tokio::test]

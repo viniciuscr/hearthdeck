@@ -45,7 +45,6 @@ use crate::{
         LinkOffer, StremioConnection,
         control::{ControlError as StremioControlError, LinkStatus as StremioLinkResponse},
     },
-    tmdb::{ControlError as TmdbControlError, TmdbSettings},
 };
 
 pub fn router(state: SharedState) -> Router {
@@ -137,12 +136,6 @@ fn protected_routes() -> Router<SharedState> {
 pub fn local_router(state: SharedState) -> Router {
     Router::new()
         .route("/v1/pairing", post(create_pairing))
-        .route(
-            "/v1/tmdb/settings",
-            get(get_tmdb_settings)
-                .put(update_tmdb_settings)
-                .delete(clear_tmdb_settings),
-        )
         .with_state(state)
 }
 
@@ -658,12 +651,36 @@ async fn start_stremio_link(State(state): State<SharedState>) -> Result<Json<Lin
 async fn poll_stremio_link(
     State(state): State<SharedState>,
 ) -> Result<Json<StremioLinkResponse>, ApiError> {
-    state
+    let status = state
         .stremio_connection()
         .poll_link()
         .await
-        .map(Json)
-        .map_err(ApiError::from)
+        .map_err(ApiError::from)?;
+    // A completed link is returned once, by the poll that finishes it. The
+    // arrivals banner is confirmed with the account's own addons, so leaving it
+    // to its hourly timer would show an empty hero for up to an hour after the
+    // person linked.
+    if matches!(status, StremioLinkResponse::Linked { .. }) {
+        refresh_stremio_sources(&state).await;
+    }
+    Ok(Json(status))
+}
+
+/// Asks both Stremio sources to read now, after a link completes.
+///
+/// Best effort on purpose: the session is already stored and returned, which is
+/// what the caller asked for, and a daemon without a discovery service must not
+/// turn that into an error.
+async fn refresh_stremio_sources(state: &SharedState) {
+    let Some(discovery) = state.discovery.as_ref() else {
+        return;
+    };
+    for source in [
+        crate::stremio::SOURCE_ID,
+        crate::discovery::providers::arrivals::SOURCE_ID,
+    ] {
+        discovery.request(source).await;
+    }
 }
 
 async fn get_stremio_settings(
@@ -680,51 +697,6 @@ async fn get_stremio_settings(
 async fn unlink_stremio(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
     state.stremio_connection().clear().await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// The stored TMDB credential, without the credential.
-async fn get_tmdb_settings(
-    State(state): State<SharedState>,
-) -> Result<Json<Option<TmdbSettings>>, ApiError> {
-    state
-        .tmdb_connection()
-        .settings()
-        .await
-        .map(Json)
-        .map_err(ApiError::from)
-}
-
-/// Stores the TMDB credential and asks the arrivals provider to read it now, so a
-/// banner that was empty fills without waiting out a refresh interval of hours.
-async fn update_tmdb_settings(
-    State(state): State<SharedState>,
-    Json(request): Json<UpdateTmdbSettingsRequest>,
-) -> Result<Json<TmdbSettings>, ApiError> {
-    let saved = state.tmdb_connection().save(&request.api_key).await?;
-    info!("tmdb credential stored");
-    refresh_arrivals(&state).await;
-    Ok(Json(saved))
-}
-
-/// Removes the credential and the arrivals it published, so a banner cannot
-/// outlive the key that filled it.
-async fn clear_tmdb_settings(State(state): State<SharedState>) -> Result<StatusCode, ApiError> {
-    state.tmdb_connection().clear().await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// Asks for a discovery refresh of the arrivals source.
-///
-/// Best effort on purpose: the settings write has already been committed and is
-/// what the caller asked for, so a daemon without a discovery service must not
-/// report the write as failed.
-async fn refresh_arrivals(state: &SharedState) {
-    let Some(discovery) = state.discovery.as_ref() else {
-        return;
-    };
-    discovery
-        .request(crate::discovery::providers::arrivals::SOURCE_ID)
-        .await;
 }
 
 async fn categorization(
@@ -1022,12 +994,6 @@ struct PairingCompleteResponse {
 struct UpdateRommSettingsRequest {
     base_url: String,
     token: String,
-}
-
-/// Deliberately not `Debug`: it carries the credential itself.
-#[derive(Deserialize)]
-struct UpdateTmdbSettingsRequest {
-    api_key: String,
 }
 
 /// Deliberately not `Debug`: it carries a password.
@@ -1352,16 +1318,6 @@ impl From<RommControlError> for ApiError {
             RommControlError::InvalidSettings(error) => Self::invalid_romm_settings(error),
             RommControlError::Link(error) => Self::romm_link(error),
             RommControlError::Storage(error) => Self::internal(error),
-        }
-    }
-}
-
-impl From<TmdbControlError> for ApiError {
-    fn from(error: TmdbControlError) -> Self {
-        match error {
-            TmdbControlError::InvalidKey(error) => Self::invalid_romm_settings(error),
-            TmdbControlError::Storage(error) => Self::internal(error),
-            TmdbControlError::Catalog(error) => Self::internal(error),
         }
     }
 }
@@ -3695,16 +3651,39 @@ mod tests {
         );
     }
 
-    /// The TMDB credential is set from the host's own machine: the route exists on
-    /// the loopback admin listener only, and the key never comes back out of it.
+    /// A completed link is returned once, by the poll that finishes it, and the
+    /// banner is confirmed with that session's addons. Both sources are asked to
+    /// read immediately rather than leaving the hero empty until the hourly
+    /// refresh.
     #[tokio::test]
-    async fn the_tmdb_credential_is_set_on_the_admin_port_and_never_echoed() {
+    async fn a_completed_link_refreshes_both_stremio_sources() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Counting {
+            source: &'static str,
+            runs: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl DiscoveryProvider for Counting {
+            fn source_id(&self) -> &'static str {
+                self.source
+            }
+            fn refresh_interval(&self) -> Option<Duration> {
+                None
+            }
+            async fn discover(&self) -> anyhow::Result<Vec<CatalogRecord>> {
+                self.runs.fetch_add(1, Ordering::Relaxed);
+                Ok(Vec::new())
+            }
+        }
+
         let temporary = tempfile::tempdir().unwrap();
         let database = Database::connect(&temporary.path().join("hearthdeck.db"))
             .await
             .unwrap();
         database.migrate().await.unwrap();
-        let state: SharedState = Arc::new(AppState::new(
+        let state = AppState::new(
             Config {
                 bind_address: "127.0.0.1:38400".parse::<SocketAddr>().unwrap(),
                 local_admin_address: "127.0.0.1:38401".parse::<SocketAddr>().unwrap(),
@@ -3716,81 +3695,35 @@ mod tests {
                 bios_source: crate::readiness::BiosSource::resolve(None, None),
             },
             database,
-        ));
-
-        // A paired device on the LAN cannot reach it, and neither can an
-        // unauthenticated caller on the network listener.
-        assert_eq!(
-            router(state.clone())
-                .oneshot(
-                    Request::get("/v1/tmdb/settings")
-                        .body(Body::empty())
-                        .unwrap()
-                )
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::NOT_FOUND
         );
-
-        let (status, stored) = response_json(
-            local_router(state.clone()),
-            Request::put("/v1/tmdb/settings")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({ "api_key": "0123456789abcdef0123456789abcdef" })
-                        .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(stored["configured"], true);
-        assert!(
-            !stored.to_string().contains("0123456789abcdef"),
-            "the key must not be echoed: {stored}"
+        let account_runs = Arc::new(AtomicUsize::new(0));
+        let arrivals_runs = Arc::new(AtomicUsize::new(0));
+        let discovery = DiscoveryService::start(
+            vec![
+                Arc::new(Counting {
+                    source: crate::stremio::SOURCE_ID,
+                    runs: account_runs.clone(),
+                }),
+                Arc::new(Counting {
+                    source: crate::discovery::providers::arrivals::SOURCE_ID,
+                    runs: arrivals_runs.clone(),
+                }),
+            ],
+            state.catalog.clone(),
+            state.events.clone(),
         );
+        let state: SharedState = Arc::new(AppState::with_discovery(state, discovery));
 
-        let (status, settings) = response_json(
-            local_router(state.clone()),
-            Request::get("/v1/tmdb/settings")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(settings["configured"], true);
+        super::refresh_stremio_sources(&state).await;
 
-        let rejected = local_router(state.clone())
-            .oneshot(
-                Request::put("/v1/tmdb/settings")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({ "api_key": "short" }).to_string(),
-                    ))
-                    .unwrap(),
-            )
+        for (source, runs) in [("account", &account_runs), ("arrivals", &arrivals_runs)] {
+            timeout(Duration::from_secs(1), async {
+                while runs.load(Ordering::Relaxed) == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
             .await
-            .unwrap();
-        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
-
-        let cleared = local_router(state.clone())
-            .oneshot(
-                Request::delete("/v1/tmdb/settings")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(cleared.status(), StatusCode::NO_CONTENT);
-
-        let (_, empty) = response_json(
-            local_router(state),
-            Request::get("/v1/tmdb/settings")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(empty, serde_json::Value::Null);
+            .unwrap_or_else(|_| panic!("the {source} source was not refreshed"));
+        }
     }
 }

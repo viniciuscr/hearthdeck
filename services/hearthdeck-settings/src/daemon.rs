@@ -11,10 +11,6 @@
 //! - **Endpoint shapes.** `/v1/health`, `/v1/retro/settings`,
 //!   `/v1/stremio/settings`, `/v1/retro/readiness`, `/v1/categorization` and its
 //!   `enable`/`disable`/`scan` writes.
-//!
-//! Anything that reaches the admin listener stays out of this file on purpose:
-//! TMDB's credential is set there, once, from the host - see
-//! `docs/settings-window.md`.
 
 use std::time::Duration;
 
@@ -48,9 +44,6 @@ pub struct Snapshot {
     /// `None` when the daemon did not answer the categorization read: the row
     /// then shows nothing rather than claiming the feature is off.
     pub categorization: Option<Categorization>,
-    /// Whether the daemon holds a TMDB key. `None` when the loopback admin
-    /// listener could not be reached - which is where the contract serves it.
-    pub tmdb_configured: Option<bool>,
     /// The off-site backup configuration. `None` when this build has no backup
     /// units, or the route did not answer: the page then says so rather than
     /// offering a switch that cannot work.
@@ -245,13 +238,6 @@ pub fn read_backup_status() -> Result<BackupStatus, Error> {
     Client::connect()?.backup_status()
 }
 
-/// Stores a TMDB key. The contract serves that endpoint on the loopback admin
-/// listener rather than the API, so this is the one write that does not carry
-/// the pairing token.
-pub fn save_tmdb_key(api_key: String) -> Result<(), Error> {
-    Client::connect()?.save_tmdb_key(&api_key)
-}
-
 /// Unlinks: the session is gone, and the rows that source owned are removed with
 /// it.
 pub fn unlink_stremio() -> Result<(), Error> {
@@ -313,9 +299,6 @@ struct Client {
     http: reqwest::blocking::Client,
     base_url: String,
     token: Option<String>,
-    /// Where the loopback admin listener is. A field rather than the constant so
-    /// a test can point it at its own stub.
-    admin_port: u16,
 }
 
 impl Client {
@@ -338,17 +321,9 @@ impl Client {
             http,
             base_url,
             token,
-            admin_port: ADMIN_PORT,
         };
         client.pair_if_needed()?;
         Ok(client)
-    }
-
-    /// The admin listener, as a test's stub serves it.
-    #[cfg(test)]
-    fn with_admin_port(mut self, admin_port: u16) -> Self {
-        self.admin_port = admin_port;
-        self
     }
 
     /// The loopback handshake, the same two calls `hearthdeck_client` makes.
@@ -509,46 +484,6 @@ impl Client {
         })
     }
 
-    /// The loopback admin listener, where `/v1/pairing` and `/v1/tmdb/settings`
-    /// live. It is a different port from the API and takes no bearer token,
-    /// which is why the TMDB write cannot reuse `send`.
-    fn admin_url(&self, path: &str) -> Result<String, Error> {
-        let mut url = Url::parse(&self.base_url)?;
-        if !matches!(
-            url.host_str(),
-            Some("127.0.0.1" | "localhost" | "::1" | "[::1]")
-        ) {
-            return Err("the admin listener is loopback only".into());
-        }
-        url.set_port(Some(self.admin_port))
-            .map_err(|()| "the admin port cannot be set")?;
-        url.set_path(path);
-        Ok(url.to_string())
-    }
-
-    fn save_tmdb_key(&self, api_key: &str) -> Result<(), Error> {
-        let response = self
-            .http
-            .put(self.admin_url("/v1/tmdb/settings")?)
-            .json(&serde_json::json!({ "api_key": api_key }))
-            .send()?;
-        let status = response.status();
-        if status.is_success() {
-            return Ok(());
-        }
-        Err(refusal(status).into())
-    }
-
-    fn tmdb_configured(&self) -> Result<bool, Error> {
-        let settings: Option<TmdbSettings> = self
-            .http
-            .get(self.admin_url("/v1/tmdb/settings")?)
-            .send()?
-            .error_for_status()?
-            .json()?;
-        Ok(settings.is_some_and(|settings| settings.configured))
-    }
-
     fn categorization(&self) -> Result<Categorization, Error> {
         let response: Option<CategorizationResponse> = self.get("/v1/categorization")?;
         let response = response.ok_or("the daemon reported no categorization state")?;
@@ -630,14 +565,6 @@ impl Client {
             }
         };
 
-        let tmdb_configured = match self.tmdb_configured() {
-            Ok(configured) => Some(configured),
-            Err(error) => {
-                tracing::warn!(%error, "the TMDB credential could not be read");
-                None
-            }
-        };
-
         let backup = match self.get::<BackupView>("/v1/backup/settings") {
             Ok(backup) => Some(backup),
             Err(error) => {
@@ -661,7 +588,6 @@ impl Client {
             total_systems,
             missing_systems,
             categorization,
-            tmdb_configured,
             backup,
             backup_status,
         }
@@ -735,11 +661,6 @@ enum RommLinkResponse {
     Denied,
     Waiting { seconds_left: u64 },
     Linked { settings: RommSettings },
-}
-
-#[derive(Deserialize)]
-struct TmdbSettings {
-    configured: bool,
 }
 
 #[derive(Deserialize)]
@@ -890,15 +811,6 @@ mod tests {
 
     fn client(base: String) -> Client {
         Client::connect_to(base, Some("test-token".to_string())).expect("a stub client")
-    }
-
-    /// The stub's port, so a test can point the admin listener at the same
-    /// server instead of the real 38401.
-    fn admin_port(base: &str) -> u16 {
-        base.rsplit(':')
-            .next()
-            .and_then(|port| port.parse().ok())
-            .expect("a stub port")
     }
 
     #[test]
@@ -1238,58 +1150,6 @@ mod tests {
             }
         );
         server.join().expect("the stub finished");
-    }
-
-    #[test]
-    fn saving_a_tmdb_key_writes_through_the_admin_listener() {
-        let (base, server) = serve(vec![(
-            200,
-            r#"{"configured":true,"updated_at":"2026-11-07T00:00:00Z"}"#,
-        )]);
-        let port = admin_port(&base);
-
-        client(base)
-            .with_admin_port(port)
-            .save_tmdb_key("tmdb-key")
-            .expect("the key was stored");
-
-        let seen = server.join().expect("the stub finished");
-        assert!(
-            seen[0].starts_with("PUT /v1/tmdb/settings "),
-            "unexpected request: {}",
-            seen[0]
-        );
-        assert!(
-            !seen[0]
-                .to_ascii_lowercase()
-                .contains("authorization: bearer"),
-            "the admin listener takes no pairing token: {}",
-            seen[0]
-        );
-        let body = seen[0].split("\r\n\r\n").nth(1).unwrap_or_default();
-        assert!(body.contains("\"api_key\":\"tmdb-key\""), "{body}");
-    }
-
-    #[test]
-    fn the_tmdb_state_is_read_from_the_admin_listener() {
-        let (base, server) = serve(vec![(
-            200,
-            r#"{"configured":true,"updated_at":"2026-11-07T00:00:00Z"}"#,
-        )]);
-        let port = admin_port(&base);
-
-        let configured = client(base)
-            .with_admin_port(port)
-            .tmdb_configured()
-            .expect("a state");
-
-        assert!(configured, "the daemon reports a stored key");
-        let seen = server.join().expect("the stub finished");
-        assert!(
-            seen[0].starts_with("GET /v1/tmdb/settings "),
-            "unexpected request: {}",
-            seen[0]
-        );
     }
 
     #[test]

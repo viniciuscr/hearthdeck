@@ -19,11 +19,16 @@ use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 use tokio::sync::Mutex;
 
+pub(crate) mod addons;
 pub(crate) mod control;
 
 /// The link service, which turns "somebody who is logged in elsewhere" into a
 /// session on this machine without this machine ever seeing a password.
 const LINK_URL: &str = "https://link.stremio.com/api";
+
+/// The account service: the datastore and the addon collection a linked session
+/// unlocks.
+const ACCOUNT_URL: &str = "https://api.strem.io/api";
 
 /// The catalog source this integration owns.
 ///
@@ -321,6 +326,49 @@ fn string_field(value: &serde_json::Value, field: &str) -> Option<String> {
 fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(reqwest::Client::new)
+}
+
+/// One `api.strem.io` account call: the datastore and the addon collection.
+///
+/// The account API answers HTTP 200 for both success and failure, so the body is
+/// what decides. Neither the request body (which carries the session key) nor an
+/// unexpected response body is ever quoted into an error: both can reach a log
+/// line and a client, and one of them holds the credential.
+pub(crate) async fn account_call(
+    path: &str,
+    auth_key: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let mut payload = body;
+    payload["authKey"] = serde_json::Value::String(auth_key.to_owned());
+
+    let url = format!("{ACCOUNT_URL}/{path}");
+    let response = http()
+        .post(&url)
+        .json(&payload)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .with_context(|| format!("could not reach {url}"))?;
+
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .with_context(|| format!("could not read the answer from {url}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| anyhow!("{url} answered with HTTP {status} and a body that is not JSON"))?;
+
+    if let Some(error) = parsed.get("error").filter(|error| !error.is_null()) {
+        let message = error
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown error");
+        // A message from Stremio describes the failure without naming the key.
+        bail!("the Stremio account API refused {path}: {message}");
+    }
+    Ok(parsed)
 }
 
 /// A JSON GET against one of the two Stremio services.

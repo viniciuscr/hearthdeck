@@ -165,7 +165,6 @@ impl PageKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TextField {
     RommUrl,
-    TmdbKey,
     BackupRemote,
     BackupRoot,
 }
@@ -187,8 +186,6 @@ enum RowAction {
     RommForget,
     StremioLink,
     StremioUnlink,
-    SaveTmdbKey,
-    ImportTmdbKey,
     RestoreRails,
     ScanLibrary,
     InstallCores,
@@ -205,8 +202,6 @@ impl RowAction {
             Self::RommForget => "Forget connection",
             Self::StremioLink => "Link account",
             Self::StremioUnlink => "Unlink",
-            Self::SaveTmdbKey => "Save key",
-            Self::ImportTmdbKey => "Read key from file",
             Self::RestoreRails => "Restore dashboard",
             Self::ScanLibrary => "Scan now",
             Self::InstallCores => "Install missing cores",
@@ -386,7 +381,6 @@ fn flat_items(page: &Page) -> (Vec<Item>, Vec<usize>) {
 /// frame: a caret that is rebuilt is a caret that loses its place.
 struct Inputs {
     romm_url: Entity<InputState>,
-    tmdb_key: Entity<InputState>,
     backup_remote: Entity<InputState>,
     backup_root: Entity<InputState>,
     /// The schedule. Its state owns the up/down stepping, so the row needs no
@@ -398,7 +392,6 @@ impl Inputs {
     fn text(&self, field: TextField) -> &Entity<InputState> {
         match field {
             TextField::RommUrl => &self.romm_url,
-            TextField::TmdbKey => &self.tmdb_key,
             TextField::BackupRemote => &self.backup_remote,
             TextField::BackupRoot => &self.backup_root,
         }
@@ -883,47 +876,6 @@ impl SettingsWindow {
                         }),
                         rows: stremio_rows,
                     },
-                    Group {
-                        title: "TMDB",
-                        status: Some(match self.snapshot.tmdb_configured {
-                            Some(true) => ("Set", Tone::Good),
-                            Some(false) => ("Not set", Tone::Off),
-                            None => ("Unavailable", Tone::Off),
-                        }),
-                        rows: vec![
-                            Row {
-                                label: "API key",
-                                description: Some(
-                                    "Paste a v3 key or a v4 read token from your TMDB account.",
-                                ),
-                                control: Control::Text(TextField::TmdbKey),
-                            },
-                            Row {
-                                label: "Save key",
-                                description: Some(
-                                    "Stored on this machine, never sent anywhere else.",
-                                ),
-                                control: Control::Action(RowAction::SaveTmdbKey),
-                            },
-                            // A file is the way in when the clipboard cannot reach
-                            // this window: put the token there with scp or a shell,
-                            // then read it here. No path to type on a television.
-                            Row {
-                                label: "Key file",
-                                description: Some("Where this window looks for a token to read."),
-                                control: Control::Fact(Value::Text(
-                                    tmdb_key_file()
-                                        .map(|path| path.display().to_string())
-                                        .unwrap_or_else(|| "no home directory".to_string()),
-                                )),
-                            },
-                            Row {
-                                label: "Read key from file",
-                                description: Some("Imports the token above and saves it."),
-                                control: Control::Action(RowAction::ImportTmdbKey),
-                            },
-                        ],
-                    },
                 ],
             },
             Page {
@@ -1264,10 +1216,8 @@ impl SettingsWindow {
             RowAction::RommForget => self.unlink(LinkService::RomM, cx),
             RowAction::StremioLink => self.start_link(LinkService::Stremio, cx),
             RowAction::StremioUnlink => self.unlink(LinkService::Stremio, cx),
-            RowAction::SaveTmdbKey => self.save_tmdb_key(cx),
             RowAction::SaveBackup => self.save_backup(cx),
             RowAction::RunBackup => self.start_backup(cx),
-            RowAction::ImportTmdbKey => self.import_tmdb_key(cx),
             RowAction::InstallCores => self.install_cores(cx),
             RowAction::SyncBios => self.sync_bios(cx),
             RowAction::RestoreRails => self.restore_rails(cx),
@@ -1695,48 +1645,6 @@ impl SettingsWindow {
         .detach();
     }
 
-    /// Saves a pasted TMDB key. The contract serves that endpoint on the admin
-    /// listener, so it is the one write that does not carry the pairing token.
-    fn save_tmdb_key(&mut self, cx: &mut Context<Self>) {
-        if self.busy.is_some() {
-            return;
-        }
-        let key = self.inputs.tmdb_key.read(cx).value().trim().to_string();
-        if key.is_empty() {
-            self.notice = Some("Paste the TMDB key first.".to_string());
-            cx.notify();
-            return;
-        }
-        self.busy = Some(RowAction::SaveTmdbKey);
-        self.notice = Some("Saving the TMDB key...".to_string());
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { daemon::save_tmdb_key(key) })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.busy = None;
-                match result {
-                    Ok(()) => {
-                        this.snapshot.tmdb_configured = Some(true);
-                        this.notice = Some("The TMDB key was saved.".to_string());
-                        clear_field(cx, &this.inputs.tmdb_key);
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "the TMDB key could not be saved");
-                        this.fail_on(
-                            RowAction::SaveTmdbKey,
-                            format!("TMDB key not saved: {error}"),
-                        );
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     /// Writes the destination, the schedule and the switch in one request: the
     /// daemon validates them together, so a refused write leaves the old
     /// configuration whole.
@@ -1904,51 +1812,6 @@ impl SettingsWindow {
                     }
                     None => "Stopped following the run after about six hours.".to_string(),
                 });
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    /// Saves the token from [`tmdb_key_file`]. The window never asks for a path:
-    /// typing one on a television is the problem this exists to avoid.
-    fn import_tmdb_key(&mut self, cx: &mut Context<Self>) {
-        if self.busy.is_some() {
-            return;
-        }
-        let Some(path) = tmdb_key_file() else {
-            self.notice = Some("No home directory to read a key file from.".to_string());
-            cx.notify();
-            return;
-        };
-        self.busy = Some(RowAction::ImportTmdbKey);
-        self.notice = Some(format!("Reading {}...", path.display()));
-        cx.notify();
-        let shown = path.clone();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let key = read_key_file(&path)?;
-                    daemon::save_tmdb_key(key).map_err(|error| error.to_string())
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.busy = None;
-                match result {
-                    Ok(()) => {
-                        this.snapshot.tmdb_configured = Some(true);
-                        this.notice =
-                            Some(format!("The TMDB key was saved from {}.", shown.display()));
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "the TMDB key file could not be used");
-                        this.fail_on(
-                            RowAction::ImportTmdbKey,
-                            format!("TMDB key not read: {error}"),
-                        );
-                    }
-                }
                 cx.notify();
             });
         })
@@ -2141,7 +2004,7 @@ impl SettingsWindow {
         }
         let prefill = Prefill::from_snapshot(&self.snapshot);
         let schedule = self.inputs.backup_schedule.read(cx).time();
-        !self.inputs.tmdb_key.read(cx).value().is_empty()
+        !self.inputs.romm_url.read(cx).value().is_empty()
             || self.inputs.romm_url.read(cx).value() != prefill.romm_url
             || self.inputs.backup_remote.read(cx).value() != prefill.backup_remote
             || self.inputs.backup_root.read(cx).value() != prefill.backup_root
@@ -2153,7 +2016,6 @@ impl SettingsWindow {
         let focused = window.focused(cx)?;
         [
             TextField::RommUrl,
-            TextField::TmdbKey,
             TextField::BackupRemote,
             TextField::BackupRoot,
         ]
@@ -2703,39 +2565,6 @@ impl SettingsWindow {
     }
 }
 
-/// Empties a text field. A write's completion has no window of its own, so the
-/// window is taken from the app when it has one.
-fn clear_field(cx: &mut Context<SettingsWindow>, field: &Entity<InputState>) {
-    let Some(window) = cx.active_window() else {
-        return;
-    };
-    let field = field.clone();
-    let _ = window.update(cx, |_, window, cx| {
-        field.update(cx, |state, cx| state.set_value("", window, cx));
-    });
-}
-
-/// Where a token is read from when the clipboard cannot reach this window:
-/// `HEARTHDECK_TMDB_KEY_FILE`, else `tmdb.key` in the home directory. A file can
-/// be put there with `scp` or a shell, which a television cannot do for itself.
-fn tmdb_key_file() -> Option<std::path::PathBuf> {
-    if let Some(path) = std::env::var_os("HEARTHDECK_TMDB_KEY_FILE") {
-        return Some(std::path::PathBuf::from(path));
-    }
-    std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join("tmdb.key"))
-}
-
-/// The token a key file holds, trimmed. A file of spaces is not a key.
-fn read_key_file(path: &std::path::Path) -> Result<String, String> {
-    let text =
-        std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let key = text.trim();
-    if key.is_empty() {
-        return Err(format!("{} is empty", path.display()));
-    }
-    Ok(key.to_string())
-}
-
 /// How many idle reads a started run gets before the window stops waiting for it
 /// to appear: `--no-block` returns before the job is `activating`.
 const IDLE_GRACE_READS: u32 = 20;
@@ -3220,11 +3049,6 @@ fn main() {
             let inputs = Inputs {
                 romm_url: cx
                     .new(|cx| InputState::new(window, cx).placeholder("http://romm.local:8080")),
-                tmdb_key: cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("TMDB API key")
-                        .masked(true)
-                }),
                 backup_remote: cx.new(|cx| InputState::new(window, cx).placeholder("pcloud")),
                 backup_root: cx
                     .new(|cx| InputState::new(window, cx).placeholder("hearthdeck-backups")),
@@ -3320,34 +3144,6 @@ mod tests {
                 })
                 .collect(),
         }
-    }
-
-    #[test]
-    fn a_key_file_is_trimmed_and_an_empty_one_is_refused() {
-        let path = std::env::temp_dir().join(format!(
-            "hearthdeck-key-test-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-
-        std::fs::write(&path, "  k3y-t0ken\n").expect("a key file");
-        assert_eq!(
-            super::read_key_file(&path),
-            Ok("k3y-t0ken".to_string()),
-            "the token is trimmed of its newline"
-        );
-
-        std::fs::write(&path, "   \n\n").expect("an empty key file");
-        assert!(
-            super::read_key_file(&path).is_err(),
-            "a file of spaces is not a key"
-        );
-
-        let _ = std::fs::remove_file(&path);
-        assert!(
-            super::read_key_file(&path).is_err(),
-            "a missing file is reported, not panicked on"
-        );
     }
 
     /// The card is painted from `tokens.group_box`; editing only `colors` leaves
@@ -3549,7 +3345,11 @@ mod tests {
     fn every_text_row_addresses_its_own_field() {
         // Adding a text field without a row, or listing one twice, is a mistake
         // the page cannot catch at runtime - so the vocabulary is checked here.
-        let fields = [TextField::RommUrl, TextField::TmdbKey];
+        let fields = [
+            TextField::RommUrl,
+            TextField::BackupRemote,
+            TextField::BackupRoot,
+        ];
         for (index, field) in fields.iter().enumerate() {
             assert!(
                 !fields[..index].contains(field),
@@ -3589,7 +3389,6 @@ mod render_tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let inputs = Inputs {
                 romm_url: cx.new(|cx| InputState::new(window, cx)),
-                tmdb_key: cx.new(|cx| InputState::new(window, cx)),
                 backup_remote: cx.new(|cx| InputState::new(window, cx)),
                 backup_root: cx.new(|cx| InputState::new(window, cx)),
                 backup_schedule: cx
@@ -3868,27 +3667,23 @@ mod render_tests {
         cx.simulate_resize(size(px(1280.), px(720.)));
         draw(cx);
 
-        // `Connections` → the TMDB key field, counting only actionable rows:
-        // server address, sign in, link Stremio, then the key.
+        // `Connections` → the RomM address, the first text row on the page.
         cx.simulate_keystrokes("right");
-        for _ in 0..3 {
-            cx.simulate_keystrokes("down");
-        }
         cx.simulate_keystrokes("enter");
         draw(cx);
 
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string("tmdb-token".to_string()));
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("pcloud".to_string()));
         cx.simulate_keystrokes("ctrl-v");
 
-        let pasted = cx.read(|app| view.read(app).inputs.tmdb_key.read(app).value().to_string());
-        assert_eq!(pasted, "tmdb-token", "Ctrl+V lands in the focused field");
+        let pasted = cx.read(|app| view.read(app).inputs.romm_url.read(app).value().to_string());
+        assert_eq!(pasted, "pcloud", "Ctrl+V lands in the focused field");
 
         // The other two Linux paste muscle memories reach the same field, and
         // they replace what is there rather than silently doing nothing.
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string("v4-token".to_string()));
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("romm.local".to_string()));
         cx.simulate_keystrokes("ctrl-shift-v");
-        let replaced = cx.read(|app| view.read(app).inputs.tmdb_key.read(app).value().to_string());
-        assert_eq!(replaced, "v4-token", "Ctrl+Shift+V pastes too");
+        let replaced = cx.read(|app| view.read(app).inputs.romm_url.read(app).value().to_string());
+        assert_eq!(replaced, "romm.local", "Ctrl+Shift+V pastes too");
     }
 
     #[gpui::test]
