@@ -63,12 +63,25 @@ it, and never mirrored into rclone's own configuration.
 - The stored file is written atomically (`0600`, temp file in the same directory,
   rename), the way `backup.env` already is.
 
-## Open risk — verify on the box before calling this done
+## The token question — answered by rclone's own docs
 
-rclone sends the token as `Authorization: Bearer <access_token>`, and it accepts
-only the OAuth JSON blob shape. pCloud's `getauth` returns the legacy `auth`
-token, which is a *different* credential; whether pCloud accepts it in the Bearer
-form is **unverified**. Therefore:
+`rclone.org/pcloud/` settles what was an open risk here:
+
+- rclone's `token` option is "OAuth Access Token as a JSON blob", and its example
+  is `{"access_token":"XXX","token_type":"bearer","expiry":"0001-01-01T00:00:00Z"}`.
+  pCloud's `getauth` token **is** that access token, so the blob we store matches
+  rclone's own shape (the zero expiry included, because pCloud's tokens are not
+  time-bound).
+- `--pcloud-username` / `--pcloud-password` exist "only … when you want to use the
+  cleanup command. Due to a bug in the pcloud API the required API does not support
+  OAuth authentication so we have to rely on user password authentication for it."
+  Password authentication is therefore a supported pCloud path, not a workaround.
+- `hostname` is `api.pcloud.com`, or `eapi.pcloud.com` for EU accounts, and must be
+  set by hand for a remote configured outside `rclone config` — which is why the
+  store keeps it next to the token.
+
+Setup still verifies the token against `userinfo` in the Bearer form before
+storing it, and still fails loudly:
 
 - setup validates the token against `userinfo` using the same header rclone will
   send, and **fails loudly** with a message naming the alternative if pCloud

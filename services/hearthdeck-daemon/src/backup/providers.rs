@@ -165,9 +165,14 @@ impl Store {
     fn write(&self, token: &PcloudToken) -> io::Result<()> {
         // rclone's env-var remote: type, the OAuth blob it insists on, and the
         // host that answered. No `rclone.conf` is touched.
+        // rclone's own example for pCloud is
+        // `{"access_token":"XXX","token_type":"bearer","expiry":"0001-01-01T00:00:00Z"}`:
+        // pCloud's `getauth` token is the access token, and the expiry is the
+        // zero date because pCloud's tokens are not time-bound.
         let blob = serde_json::json!({
             "access_token": token.token,
             "token_type": "bearer",
+            "expiry": "0001-01-01T00:00:00Z",
         });
         let body = format!(
             "RCLONE_CONFIG_PCLOUD_TYPE=pcloud\nRCLONE_CONFIG_PCLOUD_TOKEN={blob}\nRCLONE_CONFIG_PCLOUD_HOSTNAME={}\nHEARTHDECK_PROVIDER_PCLOUD_VERIFIED_AT={}\n",
