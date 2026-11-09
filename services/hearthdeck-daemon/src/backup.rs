@@ -116,6 +116,9 @@ pub struct SettingsView {
     /// Whether `rclone listremotes` knows the selected remote. The UI disables
     /// Enable with an explanation when it does not.
     pub remote_available: bool,
+    /// Whether `rclone` runs at all. A missing package is not a missing remote,
+    /// and the page has to be able to say which of the two it is.
+    pub rclone_installed: bool,
     pub updated_at: Option<DateTime<Utc>>,
 }
 

@@ -1053,8 +1053,21 @@ impl SettingsWindow {
                                 control: Control::Time,
                             },
                         ];
-                        if !backup.remote_available {
-                            // Above the switch it explains, not below it.
+                        if !backup.rclone_installed {
+                            // Above the switch it explains, not below it. This is a
+                            // missing dependency, not a mistake the user made in a
+                            // config file, so it says what to install.
+                            rows.insert(
+                                0,
+                                Row {
+                                    label: "rclone is not installed",
+                                    description: Some(
+                                        "Install it, then refresh: sudo pacman -S --needed rclone",
+                                    ),
+                                    control: Control::Fact(Value::Text("Missing".to_string())),
+                                },
+                            );
+                        } else if !backup.remote_available {
                             rows.insert(0, Row {
                                 label: "Remote not found",
                                 description: Some(
@@ -3748,6 +3761,7 @@ mod render_tests {
                         minute: 30,
                     },
                     remote_available: false,
+                    rclone_installed: true,
                     updated_at: None,
                 }),
                 ..Snapshot::default()
@@ -3780,6 +3794,7 @@ mod render_tests {
                         minute: 30,
                     },
                     remote_available: false,
+                    rclone_installed: true,
                     updated_at: None,
                 }),
                 ..Snapshot::default()

@@ -93,6 +93,10 @@ pub struct BackupView {
     pub root: String,
     pub schedule: BackupSchedule,
     pub remote_available: bool,
+    /// Whether rclone runs at all. Defaulted so a daemon that predates the check
+    /// does not make the whole settings read fail.
+    #[serde(default)]
+    pub rclone_installed: bool,
     pub updated_at: Option<String>,
 }
 

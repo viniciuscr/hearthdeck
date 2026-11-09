@@ -1694,6 +1694,15 @@ components:
             remote_available:
               type: boolean
               description: >-
+                Whether rclone knows the selected remote.
+            rclone_installed:
+              type: boolean
+              description: >-
+                Whether the rclone binary runs at all. A missing package is reported
+                separately from an unknown remote, so the page can name the dependency
+                instead of the configuration.
+              type: boolean
+              description: >-
                 Whether `rclone listremotes` knows the selected remote. False
                 disables Enable, with the "add the remote first" caption.
             updated_at:

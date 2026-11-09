@@ -110,6 +110,12 @@ impl StatusCache {
     }
 }
 
+/// A missing binary and a failing one are both "not usable", but both deserve a
+/// message of their own rather than a claim about the remote's config.
+fn rclone_speaks(output: &std::io::Result<CommandOutput>) -> bool {
+    matches!(output, Ok(output) if output.success)
+}
+
 pub(crate) struct Control<'a> {
     pub store: &'a Store,
     pub runner: &'a dyn CommandRunner,
@@ -125,12 +131,15 @@ impl Control<'_> {
         let timer = self.show_properties(TIMER_UNIT, &["ActiveState"]).await?;
         let enabled = is_running(&timer);
         let remote_available = self.remote_available(&stored.remote).await?;
+        let rclone_installed =
+            rclone_speaks(&self.runner.run(RCLONE, &strings(&["version"])).await);
         Ok(SettingsView {
             enabled,
             remote: stored.remote,
             root: stored.root,
             schedule: stored.schedule,
             remote_available,
+            rclone_installed,
             updated_at: self.store.updated_at(),
         })
     }
@@ -598,6 +607,28 @@ mod tests {
 
     /// A stored provider credential is only useful if a run can see it: the unit
     /// reads the daemon's file into the environment rclone inherits.
+    #[test]
+    fn a_missing_rclone_is_not_a_missing_remote() {
+        use super::{CommandOutput, rclone_speaks};
+
+        let running = Ok(CommandOutput {
+            success: true,
+            stdout: "rclone v1.70.1".to_string(),
+            stderr: String::new(),
+        });
+        assert!(rclone_speaks(&running));
+
+        let refusing = Ok(CommandOutput {
+            success: false,
+            stdout: String::new(),
+            stderr: "command not found".to_string(),
+        });
+        assert!(!rclone_speaks(&refusing));
+
+        let missing = Err(std::io::Error::new(std::io::ErrorKind::NotFound, "rclone"));
+        assert!(!rclone_speaks(&missing), "no binary means not installed");
+    }
+
     #[test]
     fn the_packaged_unit_hands_the_credential_to_a_run() {
         let unit = include_str!("../../../../deploy/systemd/hearthdeck-backup.service");
