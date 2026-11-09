@@ -38,6 +38,10 @@ pub enum ProviderError {
     Refused,
     #[error("pCloud could not be reached: {0}")]
     Transport(String),
+    /// pCloud answered, but not with JSON we can use. Reported separately so a
+    /// wrong path or an edge page is never mistaken for a network failure.
+    #[error("pCloud answered with status {status}")]
+    Answered { status: u16 },
     #[error("the credential could not be stored: {0}")]
     Storage(#[from] io::Error),
 }
@@ -77,10 +81,11 @@ impl HttpPcloud {
 #[async_trait]
 impl PcloudApi for HttpPcloud {
     async fn getauth(&self, email: &str, password: &str) -> Result<PcloudToken, ProviderError> {
+        // The method is `/login`; `getauth=1` asks for the token in the answer.
         // POST body, never a query string: URLs end up in logs and in `ps`.
         let response = self
             .http
-            .post(format!("https://{DEFAULT_HOSTNAME}/getauth"))
+            .post(format!("https://{DEFAULT_HOSTNAME}/login"))
             .form(&[
                 ("getauth", "1"),
                 ("logout", "1"),
@@ -89,27 +94,8 @@ impl PcloudApi for HttpPcloud {
             ])
             .send()
             .await
-            .map_err(|error| ProviderError::Transport(error.to_string()))?
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|error| ProviderError::Transport(error.to_string()))?;
-
-        if response.get("result").and_then(|value| value.as_i64()) != Some(0) {
-            // pCloud's own error text can name the account but never the secret.
-            return Err(ProviderError::Refused);
-        }
-        let token = response
-            .get("auth")
-            .and_then(|value| value.as_str())
-            .ok_or(ProviderError::Refused)?;
-        let hostname = response
-            .get("hostname")
-            .and_then(|value| value.as_str())
-            .unwrap_or(DEFAULT_HOSTNAME);
-        Ok(PcloudToken {
-            token: token.to_string(),
-            hostname: hostname.to_string(),
-        })
+            .map_err(transport)?;
+        judge_login(response.status().as_u16(), body_of(response).await?)
     }
 
     async fn userinfo(&self, token: &str, hostname: &str) -> Result<(), ProviderError> {
@@ -119,12 +105,62 @@ impl PcloudApi for HttpPcloud {
             .bearer_auth(token)
             .send()
             .await
-            .map_err(|error| ProviderError::Transport(error.to_string()))?;
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(ProviderError::Refused)
-        }
+            .map_err(transport)?;
+        judge_userinfo(response.status().as_u16(), body_of(response).await?)
+    }
+}
+
+/// pCloud answers `200` even when it refuses: the verdict is in `result`, where
+/// `0` means success. Judging on the HTTP status alone would accept a bad token.
+fn result_code(body: &serde_json::Value) -> Option<i64> {
+    body.get("result").and_then(|value| value.as_i64())
+}
+
+fn transport(error: reqwest::Error) -> ProviderError {
+    ProviderError::Transport(error.to_string())
+}
+
+async fn body_of(response: reqwest::Response) -> Result<serde_json::Value, ProviderError> {
+    let status = response.status().as_u16();
+    if !response.status().is_success() {
+        return Err(ProviderError::Answered { status });
+    }
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|_| ProviderError::Answered { status })
+}
+
+/// Pure, so the response contract can be pinned by a test instead of the network.
+fn judge_login(status: u16, body: serde_json::Value) -> Result<PcloudToken, ProviderError> {
+    if !(200..300).contains(&status) {
+        return Err(ProviderError::Answered { status });
+    }
+    if result_code(&body) != Some(0) {
+        return Err(ProviderError::Refused);
+    }
+    let token = body
+        .get("auth")
+        .and_then(|value| value.as_str())
+        .ok_or(ProviderError::Refused)?;
+    let hostname = body
+        .get("hostname")
+        .and_then(|value| value.as_str())
+        .unwrap_or(DEFAULT_HOSTNAME);
+    Ok(PcloudToken {
+        token: token.to_string(),
+        hostname: hostname.to_string(),
+    })
+}
+
+fn judge_userinfo(status: u16, body: serde_json::Value) -> Result<(), ProviderError> {
+    if !(200..300).contains(&status) {
+        return Err(ProviderError::Answered { status });
+    }
+    if result_code(&body) == Some(0) {
+        Ok(())
+    } else {
+        Err(ProviderError::Refused)
     }
 }
 
@@ -439,6 +475,39 @@ mod tests {
         assert!(!store.state().configured);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_refusal_that_arrives_with_200_is_a_refusal_not_a_success() {
+        // What pCloud actually answers for a bad password, and for no token.
+        let bad_login = serde_json::json!({"result": 2000, "error": "Log in failed."});
+        assert!(matches!(
+            super::judge_login(200, bad_login),
+            Err(ProviderError::Refused)
+        ));
+        let no_token = serde_json::json!({"result": 1000, "error": "Log in required."});
+        assert!(matches!(
+            super::judge_userinfo(200, no_token),
+            Err(ProviderError::Refused)
+        ));
+    }
+
+    #[test]
+    fn a_login_answer_carries_the_token_and_the_host() {
+        let body = serde_json::json!({"result": 0, "auth": "abc", "hostname": "eapi.pcloud.com"});
+        let token = super::judge_login(200, body).expect("accepted");
+        assert_eq!(token.token, "abc");
+        assert_eq!(token.hostname, "eapi.pcloud.com");
+        assert!(super::judge_userinfo(200, serde_json::json!({"result": 0})).is_ok());
+    }
+
+    #[test]
+    fn a_wrong_path_is_reported_as_an_answer_not_as_unreachable() {
+        // `/getauth` is a 404 HTML page: that must not read as a network failure.
+        assert!(matches!(
+            super::judge_login(404, serde_json::json!({})),
+            Err(ProviderError::Answered { status: 404 })
+        ));
     }
 
     #[test]

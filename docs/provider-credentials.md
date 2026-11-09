@@ -138,3 +138,17 @@ installed. None of them quotes the credential.
    scheduled run inherits the token; a test pins that line. Still to do here: one
    real pCloud account on the box.
 3. Settings page card — done: email, masked password, `Connect`, `Forget`, the `Connected`/`Not set` chip and the redacted error line, with the API host shown beside the verification time. Still to do: the TV, and a real account.
+
+## What the API actually does (measured against pCloud, not assumed)
+
+- **The login method is `POST https://api.pcloud.com/login`** with `getauth=1`,
+  `logout=1`, `username`, `password`. `/getauth` is not a route: it answers
+  `404` with an HTML page. A wrong path is now reported as *"pCloud answered with
+  status 404"*, never as *"could not be reached"*.
+- **pCloud answers `200` even when it refuses.** `{"result":1000,"error":"Log in
+  required."}` for no token, `{"result":2000,"error":"Log in failed."}` for bad
+  credentials. Success is `result == 0`. Judging on the HTTP status alone would
+  accept a bad token, so both calls go through `judge_login` / `judge_userinfo`,
+  which are pure and pinned by tests.
+- A successful login returns `auth` (the token) and `hostname`
+  (`api.pcloud.com`, or `eapi.pcloud.com` for EU accounts).

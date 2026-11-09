@@ -1413,6 +1413,10 @@ impl From<ProviderError> for ApiError {
                 status: StatusCode::BAD_GATEWAY,
                 message,
             },
+            ProviderError::Answered { .. } => Self {
+                status: StatusCode::BAD_GATEWAY,
+                message: error.to_string(),
+            },
             ProviderError::Storage(error) => Self::internal(error),
         }
     }
