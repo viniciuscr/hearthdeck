@@ -15,7 +15,7 @@ The page has four controls and a read-only last-run card:
 
 | Control | Meaning | Default |
 | --- | --- | --- |
-| Nightly copy (switch) | Arms the timer. It is a **draft** until Save, and the card's chip reads `Unsaved` until then | off |
+| Nightly copy (switch) | Arms the timer. It is a **draft** until Save, and the card's marker reads `Unsaved changes` until then | off |
 | Remote | Name of an existing rclone remote (`rclone listremotes`) | `pcloud` |
 | Destination root | Folder under that remote | `hearthdeck-backups` |
 | Schedule | Local hour and minute, stepped with the d-pad | 04:30 |
@@ -31,7 +31,7 @@ why this replaced "configure it in rclone first", is in
 [`provider-credentials.md`](provider-credentials.md).
 
 The page shows the precondition plainly: if the selected remote is not in
-`rclone listremotes`, a "Remote not found" row sits directly above the switch, the
+`rclone listremotes`, the page's `Alert` names it and says how to add it, the
 switch is disabled, and the save is refused with 409 rather than stored.
 Enabling a timer with no remote would only produce nightly failures.
 

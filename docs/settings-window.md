@@ -56,14 +56,30 @@ rows — so the card still reads as one surface. The surface uses the same
 cannot wrap the rows because a card split across list items has no single parent.
 
 The page heading — title, one sentence, and a rule — does not scroll. Only the
-cards do. The page's one-line notice is an `Alert` under the list, above the
-footer, where it cannot scroll away from the action that produced it.
+cards do. A condition that is part of the page's state sits between the heading
+and the list as an `Alert`: a daemon that cannot be reached, rclone missing, a
+remote that is not in rclone, or an unsaved backup draft. It stays for as long as
+the condition does, so it can be read at any point rather than caught as it
+slides past. **Results are notifications, not page state**: a saved setting, a
+refused write, a finished run or a paste that could not read the clipboard is
+pushed to the kit's `NotificationList` and disappears on its own. Drawing those
+under the page gave them the same weight as a setting that is actually on.
 
-A card's heading carries the section name and a status chip (`Tag`) when the
-section has a state worth reading at a glance: `Daemon` says Connected or
-Unavailable, `RomM` Signed in / Needs sign-in / Not set up, `Stremio` Linked /
-Waiting / Not linked. The rows still carry the detail; the chip is what lets a
-glance down the page tell the connections apart.
+A card's heading carries the section name and a status `Marker` at its trailing
+edge when the section has a state worth reading at a glance: `Daemon` says
+Connected or Unavailable, `RomM` Signed in / Needs sign-in / Not set up,
+`Stremio` Linked / Waiting for approval / Not linked, and `Backup` says whether
+the nightly copy is on, off, or has unsaved changes. The marker is at the right
+edge rather than beside the title, so a glance down the page compares states
+without the titles' varying widths moving them. The rows still carry the detail.
+
+Controls are `Size::Large`, and the window's base `rem` is `theme.font_size`
+(21px, set in `theme.rs`), so a field or a button is the same size as a row label
+at three metres. `Window::set_rem_size` is not the lever: the component root sets
+the window's rem from the theme on every prepare and overwrites it. The action
+that moves a page forward is a `primary` button; removal is `danger`; the rest
+keep the kit's default. A request in flight spins its own button and disables
+the other actions, instead of the page narrating what it is doing somewhere else.
 
 A row is a label, an optional sentence under it, and one control on the right.
 There are five shapes, and the shape decides what Enter does:
@@ -145,19 +161,21 @@ leaves the old configuration whole instead of half-applied.
 
 `Remote` and `Destination root` are text rows whose values come from
 `GET /v1/backup/settings`. When `remote_available` is false the daemon knows
-rclone does not list that remote: a `Remote not found` row explains what to do,
-and the switch is drawn disabled — arming a timer that cannot run would only fail
-nightly. Every row on the page is dead in the same way when the units are not
-installed: the 503 becomes a `Not installed` chip and a single explanatory row,
-never an empty switch.
+rclone does not list that remote: the page alert names the missing remote and how
+to add it, and the switch is drawn disabled — arming a timer that cannot run
+would only fail nightly. When the units are not installed, the 503 becomes a
+`Not installed` marker on the card and the page alert says this build does not
+ship them; the page never draws an empty switch.
 
 `Schedule` is the kit's `TimeField` (`gpui-base`'s `TimeFieldState`), not a
 stepper written here: up and down step the selected part, left and right select
-the part, and digits type it. The pad does need one small piece for this —
-`pad_key`, which turns a pad press into the *keystroke* the field already binds
-while a field owns the caret. That is the whole of it: the d-pad steps the
-schedule and moves a caret through the path the keyboard uses, rather than a
-second editing scheme.
+the part, and digits type it. Enter on the row focuses the field, and so does a
+press anywhere on the row — the row is wide and the field is one control at its
+right, so a press on the label has to start editing or the field reads as
+broken. The pad does need one small piece for this — `pad_key`, which turns a pad
+press into the *keystroke* the field already binds while a field owns the caret.
+That is the whole of it: the d-pad steps the schedule and moves a caret through
+the path the keyboard uses, rather than a second editing scheme.
 
 `Last run` reads `GET /v1/backup/status`: the next occurrence, the service's own
 `Result` (with its exit status when it failed), when it finished, and the last

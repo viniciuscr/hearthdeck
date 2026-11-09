@@ -40,15 +40,19 @@ use gpui::{
     WindowOptions, div, list, point, prelude::FluentBuilder as _, px, relative, size,
 };
 use gpui_component::alert::Alert;
-use gpui_component::button::Button;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
+use gpui_component::marker::{Marker, MarkerAlignment, MarkerContent, MarkerIcon};
+use gpui_component::notification::Notification;
 use gpui_component::progress::ProgressCircle;
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::separator::Separator;
 use gpui_component::switch::Switch;
-use gpui_component::tag::Tag;
 use gpui_component::time_field::{TimeField, TimeFieldState, TimePrecision};
-use gpui_component::{ActiveTheme as _, Disableable as _, Icon, IconName, Theme, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Theme, WindowExt as _,
+    h_flex, v_flex,
+};
 use nix::sys::statvfs::statvfs;
 
 use daemon::{Categorization, DeviceOffer, LinkStatus, Snapshot, read_snapshot};
@@ -79,29 +83,31 @@ const TYPE_BODY: f32 = 18.0;
 const TYPE_CAPTION: f32 = 16.0;
 const TYPE_CODE: f32 = 48.0;
 /// The schedule field: an hour and a minute, not a URL.
-const TIME_FIELD_WIDTH: f32 = 190.0;
+const TIME_FIELD_WIDTH: f32 = 240.0;
 /// How long a page change takes to fade the list in. Long enough to read as a
 /// transition, short enough that a pad press feels answered instantly.
 const PAGE_FADE: std::time::Duration = std::time::Duration::from_millis(180);
 /// The space between two cards, and the larger one under the page heading.
 const CARD_GAP: u16 = 24;
 const HEADER_GAP: u16 = 32;
-/// The kit sizes its own controls - a Button's label, an Input's text - from
-/// `rem`, and does not export a way to set them individually. One rem size for
-/// the window lifts their smallest step (0.875rem) to 16.6px, so no control is
-/// the smallest text on the screen.
-const TYPE_REM: f32 = 19.0;
 
 /// The page column, sized for a television rather than a laptop window.
 const SIDEBAR_WIDTH: f32 = 360.0;
 /// How wide the reading column may get on a wide display.
 const CONTENT_MAX_WIDTH: f32 = 1280.0;
 const RING_SIZE: f32 = 64.0;
-/// The width a text field takes on the right of its row.
-const FIELD_WIDTH: f32 = 380.0;
+/// The width a text field takes on the right of its row. The kit's Large input
+/// is wider than the Medium one it replaced, so the column grew with it.
+const FIELD_WIDTH: f32 = 420.0;
+/// A button shorter than its label would read as a chip; this keeps the action
+/// column from collapsing to the width of the longest word.
+const BUTTON_MIN_WIDTH: f32 = 200.0;
 /// The size the window restores to; fullscreen itself is the compositor's call.
 const RESTORE_WIDTH: f32 = 1280.0;
 const RESTORE_HEIGHT: f32 = 720.0;
+/// How many results may wait for the next frame before the oldest is dropped: a
+/// burst of background completions must not stack a wall of toasts.
+const PENDING_NOTICES: usize = 4;
 
 // ---------------------------------------------------------------------------
 // What the page is made of
@@ -218,6 +224,28 @@ impl RowAction {
             _ => "That is already running.",
         }
     }
+
+    /// The action that moves the page forward is the one the eye should land
+    /// on. A page of identical grey buttons reads as a list of facts, which is
+    /// what made the primary actions invisible on the television.
+    fn primary(self) -> bool {
+        matches!(
+            self,
+            Self::RommLink
+                | Self::StremioLink
+                | Self::ScanLibrary
+                | Self::InstallCores
+                | Self::SyncBios
+                | Self::SaveBackup
+                | Self::RunBackup
+        )
+    }
+
+    /// Removing a stored connection cannot be undone, so it is not drawn like
+    /// the action beside it.
+    fn destructive(self) -> bool {
+        matches!(self, Self::RommForget | Self::StremioUnlink)
+    }
 }
 
 /// Which service a pending approval belongs to. Both answer with the same
@@ -326,6 +354,57 @@ enum Tone {
     Busy,
     /// A failure or an unknown state: never "off, and that is fine".
     Danger,
+}
+
+/// What a control's state says at a glance, as a [`Marker`] at the trailing
+/// edge of a card heading.
+fn tone_marker(group: &'static str, label: &'static str, tone: Tone, theme: &Theme) -> AnyElement {
+    let (icon, color) = match tone {
+        Tone::Good => (IconName::CircleCheck, theme.success),
+        Tone::Attention => (IconName::TriangleAlert, theme.warning),
+        Tone::Off => (IconName::Minus, theme.muted_foreground),
+        Tone::Busy => (IconName::LoaderCircle, theme.info),
+        Tone::Danger => (IconName::CircleX, theme.danger),
+    };
+    Marker::new()
+        .id(SharedString::from(format!("status-{group}-{label}")))
+        .role(gpui::Role::Status)
+        .w_auto()
+        .flex_none()
+        .alignment(MarkerAlignment::End)
+        .text_size(px(TYPE_BODY))
+        .text_color(color)
+        .icon(MarkerIcon::new().child(Icon::new(icon)))
+        .content(MarkerContent::new().text(label))
+        .into_any_element()
+}
+
+/// A transient result. Results are notifications, not a strip under the page:
+/// a saved setting is over the moment it is read, and drawing it into the page
+/// made it look like a fact about the configuration. A condition that *is*
+/// state - a missing remote, a dead daemon - stays an [`Alert`] on the page.
+struct Notice {
+    level: NoticeLevel,
+    text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoticeLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+impl NoticeLevel {
+    fn notification(self, text: String) -> Notification {
+        match self {
+            Self::Info => Notification::info(text),
+            Self::Success => Notification::success(text),
+            Self::Warning => Notification::warning(text),
+            Self::Error => Notification::error(text),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -561,14 +640,10 @@ struct SettingsWindow {
     /// The page the list was built for, and the row it was last asked to reveal.
     list_page: usize,
     scrolled_to: Option<(usize, usize)>,
-    /// What the last action row said it would do. One line, under the page.
-    notice: Option<String>,
-    /// Whether that line reports a refusal rather than a result. The two must not
-    /// look the same at three metres.
-    notice_failed: bool,
-    /// The action row the last refusal belongs to, so the eye lands where the
-    /// problem is instead of hunting the strip.
-    failed_action: Option<RowAction>,
+    /// Results waiting for the next frame, where a window exists to deliver
+    /// them. They are notifications, not page state: a completed action is not
+    /// a fact about the configuration.
+    notices: Vec<Notice>,
     /// Set by the first Back that would discard something, so the second one is
     /// the answer rather than a surprise.
     close_armed: bool,
@@ -594,9 +669,7 @@ impl SettingsWindow {
             list: ListState::new(0, ListAlignment::Top, px(400.)),
             list_page: 0,
             scrolled_to: None,
-            notice: None,
-            notice_failed: false,
-            failed_action: None,
+            notices: Vec::new(),
             close_armed: false,
         }
     }
@@ -764,13 +837,9 @@ impl SettingsWindow {
                     .to_string(),
                 )),
             }];
-            if !installed {
-                rows.push(Row {
-                    label: "Install it",
-                    description: Some("sudo pacman -S --needed rclone"),
-                    control: Control::Fact(Value::Text("Missing".to_string())),
-                });
-            } else if remotes.is_empty() {
+            // A missing rclone is the page alert's job; the card only carries
+            // the facts and the refresh action.
+            if installed && remotes.is_empty() {
                 rows.push(Row {
                     label: "No remotes configured",
                     description: Some(
@@ -778,7 +847,7 @@ impl SettingsWindow {
                     ),
                     control: Control::Fact(Value::Text("None".to_string())),
                 });
-            } else {
+            } else if installed {
                 for remote in remotes {
                     rows.push(Row {
                         label: "Remote",
@@ -870,7 +939,7 @@ impl SettingsWindow {
                             .as_ref()
                             .is_some_and(|pending| pending.service == LinkService::Stremio)
                         {
-                            ("Waiting", Tone::Busy)
+                            ("Waiting for approval", Tone::Busy)
                         } else {
                             ("Not linked", Tone::Off)
                         }),
@@ -1004,29 +1073,6 @@ impl SettingsWindow {
                                 control: Control::Time,
                             },
                         ];
-                        if !backup.rclone_installed {
-                            // Above the switch it explains, not below it. This is a
-                            // missing dependency, not a mistake the user made in a
-                            // config file, so it says what to install.
-                            rows.insert(
-                                0,
-                                Row {
-                                    label: "rclone is not installed",
-                                    description: Some(
-                                        "Install it, then refresh: sudo pacman -S --needed rclone",
-                                    ),
-                                    control: Control::Fact(Value::Text("Missing".to_string())),
-                                },
-                            );
-                        } else if !backup.remote_available {
-                            rows.insert(0, Row {
-                                label: "Remote not found",
-                                description: Some(
-                                    "Add it in rclone first (`rclone config`), then refresh this page.",
-                                ),
-                                control: Control::Fact(Value::Text(backup.remote.clone())),
-                            });
-                        }
                         rows.push(Row {
                             label: "Save and apply",
                             description: Some(
@@ -1099,11 +1145,11 @@ impl SettingsWindow {
                             Group {
                                 title: "Off-site backup",
                                 status: Some(if self.backup_pending.is_some() {
-                                    ("Unsaved", Tone::Attention)
+                                    ("Unsaved changes", Tone::Attention)
                                 } else if backup.enabled {
-                                    ("Scheduled", Tone::Good)
+                                    ("Nightly copy on", Tone::Good)
                                 } else {
-                                    ("Not scheduled", Tone::Off)
+                                    ("Nightly copy off", Tone::Off)
                                 }),
                                 rows,
                             },
@@ -1135,6 +1181,73 @@ impl SettingsWindow {
         ]
     }
 
+    /// A condition that *is* the page's state, drawn as an [`Alert`] above the
+    /// cards. Everything else - a saved setting, a refused write, a finished
+    /// run - is a result and goes out as a notification. An alert stays until
+    /// the condition does, so it can be read at any point rather than caught as
+    /// it slides past.
+    fn page_alert(&self, kind: PageKind) -> Option<AnyElement> {
+        if !self.snapshot.daemon {
+            return Some(
+                Alert::error(
+                    "daemon-alert",
+                    "Could not reach the daemon. Start it, then choose Refresh.",
+                )
+                .title("Daemon unavailable")
+                .large()
+                .into_any_element(),
+            );
+        }
+        if kind != PageKind::Backup {
+            return None;
+        }
+        let Some(backup) = self.snapshot.backup.as_ref() else {
+            return Some(
+                Alert::warning(
+                    "backup-missing",
+                    "This Hearthdeck build does not ship the backup units.",
+                )
+                .title("Backup is not installed")
+                .large()
+                .into_any_element(),
+            );
+        };
+        if !backup.rclone_installed {
+            return Some(
+                Alert::warning(
+                    "rclone-missing",
+                    "Install it with `sudo pacman -S --needed rclone`, then refresh this page.",
+                )
+                .title("rclone is not installed")
+                .large()
+                .into_any_element(),
+            );
+        }
+        if !backup.remote_available {
+            return Some(
+                Alert::warning(
+                    "remote-missing",
+                    format!(
+                        "Add `{}` with `rclone config`, then refresh this page.",
+                        backup.remote
+                    ),
+                )
+                .title("Remote not found")
+                .large()
+                .into_any_element(),
+            );
+        }
+        self.backup_pending.is_some().then(|| {
+            Alert::info(
+                "backup-unsaved",
+                "Save and apply writes the switch, the destination and the schedule together.",
+            )
+            .title("Unsaved backup changes")
+            .large()
+            .into_any_element()
+        })
+    }
+
     /// The focused row's control, so a key handler and the drawn cursor cannot
     /// disagree about what Enter would do.
     fn selection(&self) -> Option<Control> {
@@ -1150,23 +1263,49 @@ impl SettingsWindow {
         None
     }
 
-    /// A line under the page that reports a result.
+    /// Queues a result for the next frame. A result is a notification: it is
+    /// over the moment it is read, so drawing it into the page would give it the
+    /// same weight as a setting.
+    fn announce(&mut self, level: NoticeLevel, text: impl Into<String>) {
+        if self.notices.len() >= PENDING_NOTICES {
+            self.notices.remove(0);
+        }
+        self.notices.push(Notice {
+            level,
+            text: text.into(),
+        });
+    }
+
+    /// A completed action.
     fn say(&mut self, text: impl Into<String>) {
-        self.notice = Some(text.into());
-        self.notice_failed = false;
-        self.failed_action = None;
+        self.announce(NoticeLevel::Success, text);
     }
 
-    /// A line under the page that reports a refusal. Same place, different weight.
+    /// A refusal, or a failure.
     fn fail(&mut self, text: impl Into<String>) {
-        self.notice = Some(text.into());
-        self.notice_failed = true;
+        self.announce(NoticeLevel::Error, text);
     }
 
-    /// The same, for a refusal that belongs to one row.
-    fn fail_on(&mut self, action: RowAction, text: impl Into<String>) {
-        self.failed_action = Some(action);
-        self.fail(text);
+    /// Something the user should know but that did not fail outright.
+    fn warn(&mut self, text: impl Into<String>) {
+        self.announce(NoticeLevel::Warning, text);
+    }
+
+    /// Something the user asked to happen, stated without an outcome yet.
+    fn inform(&mut self, text: impl Into<String>) {
+        self.announce(NoticeLevel::Info, text);
+    }
+
+    /// Hands every queued result to the kit's notification list.
+    ///
+    /// It runs at render because that is the only place this window holds a
+    /// `Window`: the writes finish on background tasks, which own a `Context`
+    /// but cannot push a toast. Rendering never fails on this, and the queue is
+    /// bounded, so a burst of completions cannot leave a growing list behind.
+    fn deliver_notices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for notice in self.notices.drain(..) {
+            window.push_notification(notice.level.notification(notice.text), cx);
+        }
     }
 
     /// Reads the daemon and the disk on a background thread: both are blocking,
@@ -1176,7 +1315,6 @@ impl SettingsWindow {
             return;
         }
         self.refreshing = true;
-        self.notice = Some("Reading the daemon and this machine again.".to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let (snapshot, disk) = cx
@@ -1187,9 +1325,6 @@ impl SettingsWindow {
                 this.snapshot = snapshot;
                 this.disk = disk;
                 this.refreshing = false;
-                // "Reading..." was true while the read was in flight and is a lie
-                // the moment it lands.
-                this.notice = None;
                 // The first read brings the values the form edits, and a field
                 // cannot be filled without a window - so it waits for the render.
                 if this.snapshot.daemon && !this.prefilled {
@@ -1203,9 +1338,8 @@ impl SettingsWindow {
     }
 
     fn run(&mut self, action: RowAction, cx: &mut Context<Self>) {
-        self.failed_action = None;
         if !self.action_enabled(action) {
-            self.notice = Some(action.blocked().to_string());
+            self.warn(action.blocked());
             cx.notify();
             return;
         }
@@ -1238,6 +1372,20 @@ impl SettingsWindow {
             RowAction::ScanLibrary => self.categorization_enabled(),
             RowAction::RommLink | RowAction::StremioLink => self.pending_link.is_none(),
             _ => true,
+        }
+    }
+
+    /// Whether this row's own request is the one in flight, so its button spins
+    /// instead of the page narrating "saving..." somewhere else.
+    fn action_loading(&self, action: RowAction) -> bool {
+        if self.busy == Some(action) {
+            return true;
+        }
+        match action {
+            RowAction::Refresh => self.refreshing,
+            RowAction::RommLink => self.linking == Some(LinkService::RomM),
+            RowAction::StremioLink => self.linking == Some(LinkService::Stremio),
+            _ => false,
         }
     }
 
@@ -1314,8 +1462,9 @@ impl SettingsWindow {
         match field {
             ToggleField::Categorization => self.set_categorization(value, cx),
             ToggleField::Backup => {
+                // A draft, not a write. The heading's `Unsaved changes` marker
+                // and the page alert say it; a toast would repeat them.
                 self.backup_pending = Some(value);
-                self.notice = Some("Save and apply to write the switch.".to_string());
                 cx.notify();
             }
         }
@@ -1327,14 +1476,6 @@ impl SettingsWindow {
             return;
         }
         self.categorization_pending = Some(enabled);
-        self.notice = Some(
-            if enabled {
-                "Turning categorization on..."
-            } else {
-                "Turning categorization off..."
-            }
-            .to_string(),
-        );
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -1352,14 +1493,11 @@ impl SettingsWindow {
                             .categorization
                             .as_ref()
                             .and_then(|categorization| categorization.capable);
-                        this.notice = Some(
-                            if state.enabled {
-                                "Categorization is on."
-                            } else {
-                                "Categorization is off."
-                            }
-                            .to_string(),
-                        );
+                        if state.enabled {
+                            this.say("Categorization is on.");
+                        } else {
+                            this.say("Categorization is off.");
+                        }
                         this.snapshot.categorization = Some(Categorization { capable, ..state });
                     }
                     Err(error) => {
@@ -1374,7 +1512,6 @@ impl SettingsWindow {
     }
 
     fn scan_categorization(&mut self, cx: &mut Context<Self>) {
-        self.notice = Some("Asking the daemon to scan...".to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -1382,10 +1519,10 @@ impl SettingsWindow {
                 .spawn(async { daemon::scan_categorization() })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.notice = Some(match result {
-                    Ok(()) => "The daemon accepted the scan.".to_string(),
-                    Err(error) => format!("The scan was not started: {error}"),
-                });
+                match result {
+                    Ok(()) => this.say("The daemon accepted the scan."),
+                    Err(error) => this.fail(format!("The scan was not started: {error}")),
+                }
                 cx.notify();
             });
         })
@@ -1434,7 +1571,7 @@ impl SettingsWindow {
             LinkService::RomM => {
                 let url = self.inputs.romm_url.read(cx).value().trim().to_string();
                 if url.is_empty() {
-                    self.notice = Some("Fill in the RomM server address first.".to_string());
+                    self.warn("Fill in the RomM server address first.");
                     cx.notify();
                     return;
                 }
@@ -1443,10 +1580,6 @@ impl SettingsWindow {
             LinkService::Stremio => None,
         };
         self.linking = Some(service);
-        self.notice = Some(format!(
-            "Asking the daemon for a {} code...",
-            service.label()
-        ));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -1462,7 +1595,7 @@ impl SettingsWindow {
                 this.linking = None;
                 match result {
                     Ok(offer) => {
-                        this.notice = Some(format!(
+                        this.inform(format!(
                             "Approve code {} in {}.",
                             offer.code,
                             service.label()
@@ -1483,8 +1616,7 @@ impl SettingsWindow {
                             "the {} link could not be started",
                             service.label()
                         );
-                        this.notice =
-                            Some(format!("{} link not started: {error}", service.label()));
+                        this.fail(format!("{} link not started: {error}", service.label()));
                     }
                 }
                 cx.notify();
@@ -1545,7 +1677,7 @@ impl SettingsWindow {
                 true
             }
             Ok(LinkStatus::Linked { account }) => {
-                self.notice = Some(format!("{} linked: {account}.", service.label()));
+                self.say(format!("{} linked: {account}.", service.label()));
                 match service {
                     LinkService::RomM => {
                         self.snapshot.romm = Some(daemon::Romm {
@@ -1560,7 +1692,7 @@ impl SettingsWindow {
                 false
             }
             Ok(LinkStatus::Expired) => {
-                self.notice = Some(format!(
+                self.warn(format!(
                     "The {} code expired; ask for a new one.",
                     service.label()
                 ));
@@ -1575,7 +1707,7 @@ impl SettingsWindow {
                 false
             }
             Ok(LinkStatus::Idle) => {
-                self.notice = Some(format!("The {} link was cancelled.", service.label()));
+                self.inform(format!("The {} link was cancelled.", service.label()));
                 self.pending_link = None;
                 cx.notify();
                 false
@@ -1603,7 +1735,6 @@ impl SettingsWindow {
             LinkService::RomM => RowAction::RommForget,
             LinkService::Stremio => RowAction::StremioUnlink,
         });
-        self.notice = Some(format!("Removing the {} connection...", service.label()));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -1619,8 +1750,7 @@ impl SettingsWindow {
                 this.busy = None;
                 match result {
                     Ok(()) => {
-                        this.notice =
-                            Some(format!("The {} connection was removed.", service.label()));
+                        this.say(format!("The {} connection was removed.", service.label()));
                         match service {
                             LinkService::RomM => this.snapshot.romm = None,
                             LinkService::Stremio => this.snapshot.stremio_linked_at = None,
@@ -1663,7 +1793,6 @@ impl SettingsWindow {
             },
         };
         self.busy = Some(RowAction::SaveBackup);
-        self.notice = Some("Saving the backup destination...".to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -1688,7 +1817,7 @@ impl SettingsWindow {
                         // Nothing was written, so the draft is not worth keeping:
                         // the switch drops back to what the daemon actually holds.
                         this.backup_pending = None;
-                        this.fail_on(RowAction::SaveBackup, format!("Backup not saved: {error}"));
+                        this.fail(format!("Backup not saved: {error}"));
                         // A PUT can fail *after* writing the files - the timer
                         // could not be moved - so the page reads back what the
                         // daemon actually holds instead of the old values.
@@ -1708,7 +1837,6 @@ impl SettingsWindow {
             return;
         }
         self.busy = Some(RowAction::RunBackup);
-        self.notice = Some("Starting the backup...".to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -1719,13 +1847,12 @@ impl SettingsWindow {
                 this.busy = None;
                 match result {
                     Ok(()) => {
-                        this.notice =
-                            Some("The backup was started; it can take minutes.".to_string());
+                        this.inform("The backup was started; it can take minutes.");
                         this.watch_backup(cx);
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the backup run could not be started");
-                        this.fail_on(RowAction::RunBackup, format!("Backup not started: {error}"));
+                        this.fail(format!("Backup not started: {error}"));
                     }
                 }
                 cx.notify();
@@ -1802,16 +1929,16 @@ impl SettingsWindow {
             }
             let _ = this.update(cx, |this, cx| {
                 this.watching_backup = false;
-                this.notice = Some(match end {
-                    Some(WatchEnd::Finished) => "The last run finished.".to_string(),
+                match end {
+                    Some(WatchEnd::Finished) => this.say("The last run finished."),
                     Some(WatchEnd::NeverStarted) => {
-                        "No run was seen within a minute of starting it.".to_string()
+                        this.warn("No run was seen within a minute of starting it.")
                     }
                     Some(WatchEnd::Unreadable) => {
-                        "Stopped following the run: the daemon could not be read.".to_string()
+                        this.fail("Stopped following the run: the daemon could not be read.")
                     }
-                    None => "Stopped following the run after about six hours.".to_string(),
-                });
+                    None => this.warn("Stopped following the run after about six hours."),
+                }
                 cx.notify();
             });
         })
@@ -1823,7 +1950,6 @@ impl SettingsWindow {
             return;
         }
         self.busy = Some(RowAction::InstallCores);
-        self.notice = Some("Installing the missing cores...".to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let (report, readiness) = cx
@@ -1834,15 +1960,19 @@ impl SettingsWindow {
                 this.busy = None;
                 match report {
                     Ok(report) => {
-                        this.notice = Some(describe_install(&report));
+                        let text = describe_install(&report);
+                        if report.failed.is_empty() {
+                            this.say(text);
+                        } else if report.installed.is_empty() {
+                            this.fail(text);
+                        } else {
+                            this.warn(text);
+                        }
                         this.apply_readiness(readiness);
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the core install failed");
-                        this.fail_on(
-                            RowAction::InstallCores,
-                            format!("Cores not installed: {error}"),
-                        );
+                        this.fail(format!("Cores not installed: {error}"));
                     }
                 }
                 cx.notify();
@@ -1858,7 +1988,6 @@ impl SettingsWindow {
             return;
         }
         self.busy = Some(RowAction::SyncBios);
-        self.notice = Some("Syncing BIOS files...".to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let (report, readiness) = cx
@@ -1869,12 +1998,19 @@ impl SettingsWindow {
                 this.busy = None;
                 match report {
                     Ok(report) => {
-                        this.notice = Some(describe_sync(&report));
+                        let text = describe_sync(&report);
+                        if report.failed.is_empty() {
+                            this.say(text);
+                        } else if report.fetched.is_empty() {
+                            this.fail(text);
+                        } else {
+                            this.warn(text);
+                        }
                         this.apply_readiness(readiness);
                     }
                     Err(error) => {
                         tracing::warn!(%error, "the BIOS sync failed");
-                        this.fail_on(RowAction::SyncBios, format!("BIOS not synced: {error}"));
+                        this.fail(format!("BIOS not synced: {error}"));
                     }
                 }
                 cx.notify();
@@ -1890,7 +2026,6 @@ impl SettingsWindow {
             return;
         }
         self.busy = Some(RowAction::RestoreRails);
-        self.notice = Some("Rebuilding the dashboard rails...".to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -1899,14 +2034,15 @@ impl SettingsWindow {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = None;
-                this.notice = Some(match result {
-                    Ok(()) => "The dashboard rails were removed; the dashboard derives its own."
-                        .to_string(),
+                match result {
+                    Ok(()) => {
+                        this.say("The dashboard rails were removed; the dashboard derives its own.")
+                    }
                     Err(error) => {
                         tracing::warn!(%error, "the dashboard rails could not be removed");
-                        format!("Rails not removed: {error}")
+                        this.fail(format!("Rails not removed: {error}"));
                     }
-                });
+                }
                 cx.notify();
             });
         })
@@ -1938,10 +2074,9 @@ impl SettingsWindow {
                 } else {
                     // The row is still a cursor row, so pressing Enter has to say
                     // something rather than feel broken.
-                    self.notice = Some(
+                    self.warn(
                         self.toggle_blocked_reason(field)
-                            .unwrap_or("That switch cannot move right now.")
-                            .to_string(),
+                            .unwrap_or("That switch cannot move right now."),
                     );
                     cx.notify();
                 }
@@ -1989,7 +2124,7 @@ impl SettingsWindow {
         // user behind a dialog either: the first press asks, the second answers.
         if !self.close_armed && self.has_unsaved(cx) {
             self.close_armed = true;
-            self.say("Unsaved changes — Back again to close.");
+            self.warn("Unsaved changes — Back again to close.");
             cx.notify();
             return;
         }
@@ -2032,20 +2167,19 @@ impl SettingsWindow {
     /// simply stays empty and the user has no way to tell why.
     fn paste_into_focused_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(field) = self.focused_field(window, cx) else {
-            self.notice = Some("Select a field with Enter before pasting.".to_string());
+            self.warn("Select a field with Enter before pasting.");
             cx.notify();
             return;
         };
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
-            self.notice =
-                Some("The clipboard is empty, or this session cannot read it.".to_string());
+            self.warn("The clipboard is empty, or this session cannot read it.");
             cx.notify();
             return;
         };
         let pasted = text.chars().count();
         let input = self.inputs.text(field).clone();
         input.update(cx, |state, cx| state.set_value(text, window, cx));
-        self.notice = Some(format!("Pasted {}.", plural(pasted, "character")));
+        self.say(format!("Pasted {}.", plural(pasted, "character")));
         cx.notify();
     }
 
@@ -2157,7 +2291,15 @@ impl SettingsWindow {
                                 .text_color(theme.muted_foreground)
                                 .child(page.kind.description()),
                         )
-                        .child(div().pt_2().child(Separator::horizontal().h(px(1.)))),
+                        .child(div().pt_2().child(Separator::horizontal().h(px(1.))))
+                        .when_some(self.page_alert(page.kind), |this, alert| {
+                            this.child(
+                                div()
+                                    .debug_selector(|| "page-alert".to_string())
+                                    .pt_4()
+                                    .child(alert),
+                            )
+                        }),
                 ),
             )
             .child(
@@ -2301,8 +2443,10 @@ impl SettingsWindow {
         let control = row.control.clone();
         // The row's click only carries rows whose control has no click of its
         // own: a switch and a button already do something when pressed, and
-        // clicking them must not also run the row and undo it.
-        let confirm_on_click = matches!(control, Control::Text(_));
+        // clicking them must not also run the row and undo it. A Time row does
+        // open its field: the schedule is one small control on a large row, so
+        // pressing anywhere in the row is how a person starts editing it.
+        let confirm_on_click = matches!(control, Control::Text(_) | Control::Time);
         let view_for_click = view.clone();
         let on_click = move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
             view_for_click.update(cx, |this, cx| {
@@ -2343,6 +2487,10 @@ impl SettingsWindow {
             .child(
                 v_flex()
                     .flex_1()
+                    // Without this a flex item refuses to shrink below its
+                    // text, and a long description pushes the control off the
+                    // right edge of the window.
+                    .min_w_0()
                     .gap_1()
                     .child(
                         div()
@@ -2364,21 +2512,11 @@ impl SettingsWindow {
                         )
                     }),
             )
-            .when(
-                matches!(
-                    control,
-                    Control::Text(_) | Control::Toggle(_) | Control::Time
-                ),
-                |this| {
-                    this.child(
-                        div()
-                            .text_size(px(TYPE_CAPTION))
-                            .text_color(theme.muted_foreground)
-                            .child("Enter to change"),
-                    )
-                },
+            .child(
+                div()
+                    .debug_selector(move || format!("control-{page_index}-{row_index}"))
+                    .child(self.control_element(&view, &control, page_index, row_index, theme)),
             )
-            .child(self.control_element(&view, &control, page_index, row_index, theme))
             // A pointer sets the cursor where it clicked, and does what Enter
             // would have done: nothing on this page is pointer-only.
             .on_click(on_click)
@@ -2395,9 +2533,12 @@ impl SettingsWindow {
     ) -> AnyElement {
         match control {
             Control::Fact(value) => self.value_element(value, theme),
+            // Every control is `Large`: the kit's medium step is sized for a
+            // pointer on a laptop, which is what made these look miniature
+            // beside row text sized for the sofa.
             Control::Text(field) => div()
                 .w(px(FIELD_WIDTH))
-                .child(Input::new(self.inputs.text(*field)))
+                .child(Input::new(self.inputs.text(*field)).large())
                 .into_any_element(),
             Control::Toggle(field) => {
                 let field = *field;
@@ -2411,11 +2552,13 @@ impl SettingsWindow {
                     .gap_2()
                     .when_some(reason, |this, reason| {
                         this.child(
-                            Tag::warning()
-                                .py_1p5()
-                                .px_3()
-                                .text_size(px(TYPE_CAPTION))
-                                .child(reason),
+                            Marker::new()
+                                .w_auto()
+                                .flex_none()
+                                .text_size(px(TYPE_BODY))
+                                .text_color(theme.warning)
+                                .icon(MarkerIcon::new().child(Icon::new(IconName::TriangleAlert)))
+                                .content(MarkerContent::new().text(reason)),
                         )
                     })
                     .child(
@@ -2435,30 +2578,24 @@ impl SettingsWindow {
             }
             Control::Time => div()
                 .w(px(TIME_FIELD_WIDTH))
-                .child(TimeField::new(&self.inputs.backup_schedule))
+                .child(TimeField::new(&self.inputs.backup_schedule).large())
                 .into_any_element(),
             Control::Action(action) => {
                 let action = *action;
                 let view = view.clone();
+                let loading = self.action_loading(action);
                 Button::new(SharedString::from(format!(
                     "action-{page_index}-{row_index}"
                 )))
-                .when(
-                    self.failed_action == Some(action) && self.notice_failed,
-                    |this| {
-                        this.child(
-                            Tag::danger()
-                                .py_1p5()
-                                .px_3()
-                                .text_size(px(TYPE_CAPTION))
-                                .child("Failed"),
-                        )
-                    },
-                )
-                .label(if action == RowAction::Refresh && self.refreshing {
-                    "Refreshing…"
-                } else {
-                    action.label()
+                .label(action.label())
+                .large()
+                .min_w(px(BUTTON_MIN_WIDTH))
+                .when(action.primary(), |this| this.primary())
+                .when(action.destructive(), |this| this.danger())
+                // A press answers at once: the button says it is working while
+                // the daemon does, instead of a line appearing under the page.
+                .when(loading, |this| {
+                    this.icon(IconName::LoaderCircle).loading(true)
                 })
                 .disabled(!self.action_enabled(action))
                 .on_click(move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
@@ -2693,28 +2830,29 @@ fn describe_sync(report: &daemon::BiosSync) -> String {
     }
 }
 
-/// A card's heading: the section name, and a status chip when the section has a
-/// state worth reading at a glance. The rows still carry the detail.
+/// A card's heading: the section name on the left, its state as a [`Marker`] at
+/// the trailing edge. The marker is a label for the card, and the right edge is
+/// where a label is read without hunting beside the title's varying width.
 fn group_title(group: &Group, theme: &Theme) -> AnyElement {
     h_flex()
+        .w_full()
         .items_center()
         .gap_3()
         .child(
             div()
+                .flex_1()
+                .min_w_0()
                 .text_size(px(TYPE_CARD))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.foreground)
                 .child(group.title),
         )
         .when_some(group.status, |this, (label, tone)| {
-            let tag = match tone {
-                Tone::Good => Tag::success(),
-                Tone::Attention => Tag::warning(),
-                Tone::Off => Tag::new(),
-                Tone::Busy => Tag::info(),
-                Tone::Danger => Tag::danger(),
-            };
-            this.child(tag.py_1p5().px_3().text_size(px(TYPE_CAPTION)).child(label))
+            this.child(
+                div()
+                    .debug_selector(move || format!("card-status-{label}"))
+                    .child(tone_marker(group.title, label, tone, theme)),
+            )
         })
         .into_any_element()
 }
@@ -2763,6 +2901,7 @@ impl Render for SettingsWindow {
         // The first read lands after the window exists, so the form it prefills
         // is filled here, where a window is available.
         self.apply_prefill(window, cx);
+        self.deliver_notices(window, cx);
         let theme = cx.theme();
         let pages = self.pages();
         let counts = pages
@@ -2806,31 +2945,6 @@ impl Render for SettingsWindow {
                     .h_full()
                     .min_w_0()
                     .child(self.content(cx, theme, &pages, page_index, items))
-                    // A fixed strip, whether or not there is a notice: a strip
-                    // that appears is a viewport that shrinks under the cursor,
-                    // and the row just pressed can be pushed off screen.
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .h(px(56.))
-                            .items_center()
-                            .justify_center()
-                            .px_8()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .max_w(px(CONTENT_MAX_WIDTH))
-                                    .mx_auto()
-                                    .when_some(self.notice.clone(), |this, notice| {
-                                        let alert = if self.notice_failed {
-                                            Alert::error("settings-notice", notice)
-                                        } else {
-                                            Alert::info("settings-notice", notice)
-                                        };
-                                        this.child(alert.text_size(px(TYPE_CAPTION)))
-                                    }),
-                            ),
-                    )
                     .child(self.footer(theme, self.editing_kind(window, cx))),
             )
     }
@@ -3045,7 +3159,6 @@ fn main() {
         // What `gpui_kit::open_window` did: the application content under a
         // `Root`, which is what gives components their overlay and focus layers.
         let opened = cx.open_window(options, move |window, cx| {
-            window.set_rem_size(px(TYPE_REM));
             let inputs = Inputs {
                 romm_url: cx
                     .new(|cx| InputState::new(window, cx).placeholder("http://romm.local:8080")),
@@ -3122,6 +3235,28 @@ mod tests {
         let line = describe_sync(&report);
         assert!(line.starts_with("Placed 1 file; 1 failed"), "{line}");
         assert!(line.contains("bios/scph5500.bin: not found"), "{line}");
+    }
+
+    /// A page with one button per row is a list of facts. The action that moves
+    /// the page forward is the primary one, and the destructive action is not
+    /// drawn like it.
+    #[test]
+    fn the_forward_actions_are_primary_and_removal_is_its_own_thing() {
+        use super::RowAction;
+
+        assert!(RowAction::SaveBackup.primary());
+        assert!(RowAction::RunBackup.primary());
+        assert!(RowAction::RommLink.primary());
+        assert!(!RowAction::Refresh.primary());
+        assert!(!RowAction::RestoreRails.primary());
+
+        assert!(RowAction::RommForget.destructive());
+        assert!(RowAction::StremioUnlink.destructive());
+        assert!(!RowAction::RommLink.destructive());
+        assert!(
+            !RowAction::RommForget.primary(),
+            "destructive is its own treatment"
+        );
     }
 
     fn plain_row(label: &'static str) -> Row {
@@ -3573,7 +3708,7 @@ mod render_tests {
     fn the_cursor_scrolls_a_row_below_the_fold_into_view(cx: &mut TestAppContext) {
         let (view, cx) = open(cx);
         // Short, like a television drawing at a scale factor of two.
-        cx.simulate_resize(size(px(1000.), px(420.)));
+        cx.simulate_resize(size(px(1000.), px(600.)));
         draw(cx);
         cx.simulate_keystrokes("right");
         draw(cx);
@@ -3688,21 +3823,240 @@ mod render_tests {
 
     #[gpui::test]
     fn a_paste_with_nothing_on_the_clipboard_says_so(cx: &mut TestAppContext) {
-        let (view, cx) = open(cx);
+        use gpui_component::WindowExt as _;
+
+        let (_, cx) = open(cx);
         cx.simulate_resize(size(px(1280.), px(720.)));
         draw(cx);
         cx.simulate_keystrokes("right");
         cx.simulate_keystrokes("enter");
         draw(cx);
 
+        let before = cx.update(|window, cx| window.notifications(cx).len());
         cx.simulate_keystrokes("ctrl-shift-v");
+        draw(cx);
+        let after = cx.update(|window, cx| window.notifications(cx).len());
+        assert_eq!(
+            after,
+            before + 1,
+            "an unreadable clipboard is reported, not silent"
+        );
+    }
 
-        let notice = cx
-            .read(|app| view.read(app).notice.clone())
-            .unwrap_or_default();
+    fn backup_snapshot(remote_available: bool) -> Snapshot {
+        Snapshot {
+            daemon: true,
+            backup: Some(crate::daemon::BackupView {
+                enabled: false,
+                remote: "pcloud".to_string(),
+                root: "hearthdeck-backups".to_string(),
+                schedule: crate::daemon::BackupSchedule {
+                    hour: 4,
+                    minute: 30,
+                },
+                remote_available,
+                rclone_installed: true,
+                remotes: vec!["pcloud".to_string()],
+                updated_at: None,
+            }),
+            ..Snapshot::default()
+        }
+    }
+
+    /// The first row whose control matches: its flat index (where the item and
+    /// the drawn row are) and its cursor index (what a click or arrow addresses).
+    fn locate_row(page: &Page, wanted: impl Fn(&Control) -> bool) -> Option<(usize, usize)> {
+        let mut flat = 0;
+        let mut cursor = 0;
+        for group in &page.groups {
+            for row in &group.rows {
+                if wanted(&row.control) {
+                    return Some((flat, cursor));
+                }
+                if !matches!(row.control, Control::Fact(_)) {
+                    cursor += 1;
+                }
+                flat += 1;
+            }
+        }
+        None
+    }
+
+    /// A result is a notification. Drawing it under the page gave a saved
+    /// setting the same weight as a setting that is actually on.
+    #[gpui::test]
+    fn a_result_is_delivered_as_a_notification(cx: &mut TestAppContext) {
+        use gpui_component::WindowExt as _;
+
+        let (view, cx) = open(cx);
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+        let before = cx.update(|window, cx| window.notifications(cx).len());
+
+        view.update(cx, |this, cx| {
+            this.say("The backup settings were saved.");
+            cx.notify();
+        });
+        draw(cx);
+
+        let after = cx.update(|window, cx| window.notifications(cx).len());
+        assert_eq!(
+            after,
+            before + 1,
+            "the result reached the kit's notification list"
+        );
         assert!(
-            notice.contains("clipboard"),
-            "an unreadable clipboard is reported, not silent: {notice:?}"
+            cx.read(|app| view.read(app).notices.is_empty()),
+            "the queue is drained once the window has delivered it"
+        );
+    }
+
+    /// The status label is a `Marker` at the trailing edge of the heading, not a
+    /// small chip glued to the title's varying width.
+    #[gpui::test]
+    fn the_card_status_is_a_marker_at_the_trailing_edge(cx: &mut TestAppContext) {
+        let (_, cx) = open(cx);
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+
+        let header = cx
+            .debug_bounds(selector(1))
+            .expect("the first card heading draws");
+        let marker = cx
+            .debug_bounds("card-status-Connected")
+            .expect("the status marker draws");
+        assert!(
+            marker.origin.x > header.origin.x + header.size.width / 2.,
+            "the marker is at the trailing edge: marker {marker:?} in header {header:?}"
+        );
+        assert!(
+            marker.size.height > px(0.),
+            "the marker has a readable height: {marker:?}"
+        );
+    }
+
+    /// A missing remote is a condition, so it is an `Alert` above the cards -
+    /// not a fact row that scrolls away and reads like a setting.
+    #[gpui::test]
+    fn a_missing_remote_is_an_alert_above_the_cards(cx: &mut TestAppContext) {
+        let (view, cx) = open_with(backup_snapshot(false), cx);
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+        cx.simulate_keystrokes("left");
+        draw(cx);
+
+        assert!(
+            cx.debug_bounds("page-alert").is_some(),
+            "the backup page draws the alert"
+        );
+        let claimed = cx.read(|app| {
+            let this = view.read(app);
+            this.pages()
+                .into_iter()
+                .find(|page| page.kind == PageKind::Backup)
+                .expect("a backup page")
+                .groups
+                .iter()
+                .flat_map(|group| &group.rows)
+                .any(|row| row.label == "Remote not found")
+        });
+        assert!(!claimed, "the condition is not also drawn as a row");
+    }
+
+    /// Enter on the schedule focuses it; so does a click anywhere on its row.
+    /// The row is wide and the field is one small control, so a press on the
+    /// label has to start editing or the field reads as broken.
+    #[gpui::test]
+    fn the_schedule_opens_from_its_row_and_takes_digits(cx: &mut TestAppContext) {
+        let (view, cx) = open_with(backup_snapshot(true), cx);
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+
+        let page_index = PageKind::ALL
+            .iter()
+            .position(|kind| *kind == PageKind::Backup)
+            .expect("a backup page");
+        let (flat, cursor) = cx.read(|app| {
+            let this = view.read(app);
+            let pages = this.pages();
+            let page = &pages[page_index];
+            locate_row(page, |control| matches!(control, Control::Time))
+                .expect("the schedule is a cursor row")
+        });
+        // Open the page at its top first: the list resets on a page change and
+        // stays there by design, and only a cursor that then moves is revealed.
+        view.update(cx, |this, _| this.nav.select(page_index, 0));
+        draw(cx);
+        for _ in 0..cursor {
+            cx.simulate_keystrokes("down");
+            draw(cx);
+        }
+
+        let (_, items) = cx.read(|app| {
+            let this = view.read(app);
+            let pages = this.pages();
+            flat_items(&pages[page_index])
+        });
+        let item = items[flat];
+        let bounds = cx
+            .debug_bounds(selector(item))
+            .expect("the schedule row draws");
+        cx.simulate_click(
+            point(
+                // Inside the row's own padding, on the label side: the card
+                // surface starts after the list item's horizontal inset.
+                bounds.origin.x + px(120.),
+                bounds.origin.y + bounds.size.height / 2.,
+            ),
+            gpui::Modifiers::default(),
+        );
+        draw(cx);
+
+        let focused = cx.update(|window, cx| {
+            view.read(cx)
+                .inputs
+                .backup_schedule
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        });
+        assert!(focused, "the press on the row focused the schedule");
+
+        cx.simulate_input("0930");
+        let time = cx.read(|app| view.read(app).inputs.backup_schedule.read(app).time());
+        assert_eq!(
+            time,
+            chrono::NaiveTime::from_hms_opt(9, 30, 0).expect("a valid time"),
+            "digits typed after opening the row land in the schedule"
+        );
+    }
+
+    /// The controls are sized for the sofa: a field is taller than the row text
+    /// it sits beside, not smaller than it.
+    #[gpui::test]
+    fn the_inputs_and_buttons_are_sized_for_a_television(cx: &mut TestAppContext) {
+        let (_, cx) = open(cx);
+        cx.simulate_resize(size(px(1280.), px(720.)));
+        draw(cx);
+
+        // Connections: its first row is the RomM address field, and the row
+        // under it is the primary Link RomM button.
+        cx.simulate_keystrokes("right");
+        draw(cx);
+        let field = cx
+            .debug_bounds("control-1-0")
+            .expect("the RomM address field draws");
+        assert!(
+            field.size.height >= px(48.),
+            "a text field is at least a large control: {field:?}"
+        );
+
+        let button = cx
+            .debug_bounds("control-1-1")
+            .expect("the link button draws");
+        assert!(
+            button.size.height >= px(40.),
+            "a button is at least a large control: {button:?}"
         );
     }
 }

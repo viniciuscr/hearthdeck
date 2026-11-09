@@ -15,8 +15,17 @@
 //! more than the hex: surface 1.27:1, border 1.78:1, muted text 6.2:1 on a card,
 //! focus 5.4:1, white on the primary button 5.2:1.
 
-use gpui::{App, Hsla, rgb};
+use gpui::{App, Hsla, px, rgb};
 use gpui_component::{Theme, ThemeMode};
+
+/// The base font size the kit reads for everything it sizes in `rem`.
+///
+/// It is the theme's size, not `Window::set_rem_size`: the component root sets
+/// the window's rem from `theme.font_size` on every prepare, so a value written
+/// straight onto the window is overwritten before the first paint. At 21 it is
+/// exactly a row label's size, so the kit's base step is text a person can read
+/// from the sofa - which is the point of the scale in `main.rs`.
+pub const REM: f32 = 21.0;
 
 /// The page itself.
 const CANVAS: u32 = 0x0a0a0a;
@@ -37,6 +46,9 @@ const PRIMARY: u32 = 0x2563eb;
 pub fn install(cx: &mut App) {
     Theme::change(ThemeMode::Dark, None, cx);
     Theme::update(cx, |theme| {
+        // The root reads this on every prepare and sets the window's rem from
+        // it, so this is the one place a larger control scale takes effect.
+        theme.font_size = px(REM);
         theme.colors.background = color(CANVAS);
         theme.colors.foreground = color(TEXT);
         theme.colors.muted_foreground = color(MUTED);
