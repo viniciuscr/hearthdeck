@@ -1091,7 +1091,16 @@ impl SettingsWindow {
                         }
 
                         let status = self.snapshot.backup_status.as_ref();
-                        let last = vec![
+                        // One row per fact a person can act on. A "None" error row and
+                        // a "Never" timestamp are noise, and a result without the time
+                        // it finished is half an answer, so they are merged.
+                        let last_result = status
+                            .and_then(|status| status.last_result.clone())
+                            .filter(|result| !result.is_empty());
+                        let last_finished = status
+                            .and_then(|status| status.last_finished_at.as_deref())
+                            .map(local_time);
+                        let mut last = vec![
                             Row {
                                 label: "Next run",
                                 description: None,
@@ -1103,42 +1112,35 @@ impl SettingsWindow {
                                 )),
                             },
                             Row {
-                                label: "Last result",
+                                label: "Last run",
                                 description: None,
                                 control: Control::Fact(Value::Text(
-                                    status
-                                        .and_then(|status| status.last_result.clone())
-                                        .filter(|result| !result.is_empty())
-                                        .unwrap_or_else(|| "Never run".to_string()),
+                                    match (last_result, last_finished) {
+                                        (Some(result), Some(finished)) => {
+                                            format!("{result}, {finished}")
+                                        }
+                                        (Some(result), None) => result,
+                                        (None, Some(finished)) => format!("finished {finished}"),
+                                        (None, None) => "Never run".to_string(),
+                                    },
                                 )),
-                            },
-                            Row {
-                                label: "Last finished",
-                                description: None,
-                                control: Control::Fact(Value::Text(
-                                    status
-                                        .and_then(|status| status.last_finished_at.as_deref())
-                                        .map(local_time)
-                                        .unwrap_or_else(|| "Never".to_string()),
-                                )),
-                            },
-                            Row {
-                                label: "Last error",
-                                description: None,
-                                control: Control::Fact(Value::Text(
-                                    status
-                                        .and_then(|status| status.last_error.clone())
-                                        .unwrap_or_else(|| "None".to_string()),
-                                )),
-                            },
-                            Row {
-                                label: "Run now",
-                                description: Some(
-                                    "Starts one run immediately; it can take minutes.",
-                                ),
-                                control: Control::Action(RowAction::RunBackup),
                             },
                         ];
+                        if let Some(error) = status
+                            .and_then(|status| status.last_error.clone())
+                            .filter(|error| !error.is_empty())
+                        {
+                            last.push(Row {
+                                label: "Last error",
+                                description: Some("The runner's own words."),
+                                control: Control::Fact(Value::Text(error)),
+                            });
+                        }
+                        last.push(Row {
+                            label: "Run now",
+                            description: Some("Starts one run immediately; it can take minutes."),
+                            control: Control::Action(RowAction::RunBackup),
+                        });
 
                         vec![
                             rclone_card(),
