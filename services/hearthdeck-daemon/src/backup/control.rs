@@ -130,9 +130,10 @@ impl Control<'_> {
         let stored = self.store.read();
         let timer = self.show_properties(TIMER_UNIT, &["ActiveState"]).await?;
         let enabled = is_running(&timer);
-        let remote_available = self.remote_available(&stored.remote).await?;
         let rclone_installed =
             rclone_speaks(&self.runner.run(RCLONE, &strings(&["version"])).await);
+        let remotes = self.remotes().await;
+        let remote_available = remotes.iter().any(|name| name == &stored.remote);
         Ok(SettingsView {
             enabled,
             remote: stored.remote,
@@ -140,6 +141,7 @@ impl Control<'_> {
             schedule: stored.schedule,
             remote_available,
             rclone_installed,
+            remotes,
             updated_at: self.store.updated_at(),
         })
     }
@@ -149,7 +151,8 @@ impl Control<'_> {
     /// that reads it is enabled.
     pub async fn update(&self, requested: BackupSettings) -> Result<SettingsView, ControlError> {
         self.require_installed().await?;
-        let remote_available = self.remote_available(&requested.remote).await?;
+        let remotes = self.remotes().await;
+        let remote_available = remotes.iter().any(|name| name == &requested.remote);
         validate(&requested, remote_available)?;
 
         if let Err(error) = self.store.write(&requested) {
@@ -319,35 +322,31 @@ impl Control<'_> {
 
     /// Whether `rclone listremotes` knows the remote. A remote that rclone has
     /// never heard of cannot be enabled, and its credentials never reach us.
-    async fn remote_available(&self, remote: &str) -> Result<bool, ControlError> {
-        // A credential the daemon stores is exported into the unit's environment,
-        // so rclone needs no config entry for it. Without this the switch could
-        // never be armed from the page, because `listremotes` reads rclone.conf.
-        if remote == crate::backup::providers::PCLOUD
-            && crate::backup::providers::Store::new(self.store.credentials_path())
-                .state()
-                .configured
-        {
-            return Ok(true);
-        }
+    /// What `rclone listremotes` knows. Sorted and de-duplicated, and every failure
+    /// reads as an empty list: the page learns "missing package" from
+    /// `rclone_installed`, so a remote list is never worth an error of its own.
+    async fn remotes(&self) -> Vec<String> {
         let output = self.runner.run(RCLONE, &strings(&["listremotes"])).await;
         let Ok(output) = output else {
-            warn!("rclone could not be run; treating the remote as absent");
-            return Ok(false);
+            warn!("rclone could not be run; treating the remote list as empty");
+            return Vec::new();
         };
         if !output.success {
-            warn!("rclone listremotes failed; treating the remote as absent");
-            return Ok(false);
+            warn!("rclone listremotes failed; treating the remote list as empty");
+            return Vec::new();
         }
-        // rclone names are case-sensitive, and a case-insensitive match here
-        // would enable a remote that `rclone` itself then refuses.
-        let wanted = format!("{remote}:");
-        Ok(output.stdout.lines().any(|line| line.trim() == wanted))
+        let mut remotes: Vec<String> = output
+            .stdout
+            .lines()
+            .map(|line| line.trim().trim_end_matches(':').to_string())
+            .filter(|name| !name.is_empty())
+            .collect();
+        // rclone names are case-sensitive, so this sorts without folding them.
+        remotes.sort();
+        remotes.dedup();
+        remotes
     }
 
-    /// When the last run finished, from the journal: the service's own timestamp
-    /// property is a localized string, while the journal carries epoch
-    /// microseconds.
     async fn last_finished(&self) -> Option<DateTime<Utc>> {
         let output = self
             .runner

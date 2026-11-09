@@ -119,6 +119,9 @@ pub struct SettingsView {
     /// Whether `rclone` runs at all. A missing package is not a missing remote,
     /// and the page has to be able to say which of the two it is.
     pub rclone_installed: bool,
+    /// Every remote `rclone listremotes` knows, so the page lists what exists
+    /// instead of asking the user to type a name blind.
+    pub remotes: Vec<String>,
     pub updated_at: Option<DateTime<Utc>>,
 }
 

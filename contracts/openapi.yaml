@@ -1701,6 +1701,13 @@ components:
                 Whether the rclone binary runs at all. A missing package is reported
                 separately from an unknown remote, so the page can name the dependency
                 instead of the configuration.
+            remotes:
+              type: array
+              description: >-
+                Every remote rclone knows, so the page can list them instead of
+                asking the user to type a name blind. Empty when rclone is missing.
+              items:
+                type: string
               type: boolean
               description: >-
                 Whether `rclone listremotes` knows the selected remote. False
