@@ -23,6 +23,7 @@ use chrono::{DateTime, Days, Local, TimeZone as _, Utc};
 use serde::{Deserialize, Serialize};
 
 pub mod control;
+pub mod providers;
 
 use std::sync::Arc;
 
@@ -34,6 +35,8 @@ pub struct Backup {
     pub store: Store,
     pub runner: Arc<dyn control::CommandRunner>,
     cache: Arc<control::StatusCache>,
+    providers: providers::Store,
+    pcloud: Arc<dyn providers::PcloudApi>,
 }
 
 impl Backup {
@@ -45,9 +48,18 @@ impl Backup {
     /// that is not the process runner.
     pub fn with_runner(store: Store, runner: Arc<dyn control::CommandRunner>) -> Self {
         Self {
+            providers: providers::Store::new(store.credentials_path()),
             store,
             runner,
             cache: Arc::new(control::StatusCache::new()),
+            pcloud: Arc::new(providers::HttpPcloud::new()),
+        }
+    }
+
+    pub fn providers(&self) -> providers::Providers<'_> {
+        providers::Providers {
+            store: &self.providers,
+            api: self.pcloud.as_ref(),
         }
     }
 
@@ -216,6 +228,12 @@ impl Store {
         self.config_root.join("backup.env")
     }
 
+    /// Where provider credentials live. A separate file from `backup.env` so the
+    /// unit can read it with `EnvironmentFile=-` and a run inherits it.
+    pub(crate) fn credentials_path(&self) -> PathBuf {
+        self.config_root.join("credentials.env")
+    }
+
     pub fn drop_in_path(&self) -> PathBuf {
         self.systemd_root
             .join(format!("{TIMER_UNIT}.d"))
@@ -343,7 +361,7 @@ pub fn next_run(schedule: Schedule, now: DateTime<Local>) -> Option<DateTime<Utc
 /// Writes a file only this user can read: a private directory, a temp file in the
 /// same directory, then a rename - so a crash mid-write leaves the old file
 /// whole.
-fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
+pub(crate) fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
     let Some(directory) = path.parent() else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

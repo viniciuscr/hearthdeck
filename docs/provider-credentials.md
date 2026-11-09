@@ -1,7 +1,7 @@
 # Provider credentials
 
 How a cloud provider's credential gets into Hearthdeck, who owns it, and what
-rclone is allowed to see. Status: **designed, not implemented.** pCloud is the
+rclone is allowed to see. Status: **the daemon half is implemented** — `backup/providers.rs`, the four routes and their tests. The settings-page card and the unit's `EnvironmentFile` line are next. pCloud is the
 first provider; the layer is a registry so a second one is an entry, not a second
 flow.
 

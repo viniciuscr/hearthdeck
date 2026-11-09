@@ -23,9 +23,12 @@ The page has four controls and a read-only last-run card:
 | Last run | Result, finish time, next run | read-only |
 | Run now | Starts one run immediately | — |
 
-Do **not** collect cloud credentials in Hearthdeck. rclone owns them in
-`~/.config/rclone/rclone.conf`; the UI selects a remote by name. This mirrors the
-Stremio rule that the shell never holds the account credential.
+Credentials are entered **once**, in the Backup page, and the daemon stores them
+in a `0600` file it owns (`~/.config/hearthdeck-backup/credentials.env`).
+rclone's own configuration never holds one: a run receives it through the
+environment (`RCLONE_CONFIG_PCLOUD_*`) with `--config=""`. Who may see what, and
+why this replaced "configure it in rclone first", is in
+[`provider-credentials.md`](provider-credentials.md).
 
 The page shows the precondition plainly: if the selected remote is not in
 `rclone listremotes`, a "Remote not found" row sits directly above the switch, the

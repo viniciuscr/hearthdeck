@@ -63,6 +63,112 @@ paths:
           description: This build does not include the backup units
         '502':
           description: The user service manager could not be reached
+  /v1/backup/providers:
+    get:
+      operationId: listBackupProviders
+      security:
+        - bearerAuth: []
+      description: >-
+        The providers a user can configure, and whether one is set up. A
+        credential is stored by the daemon in a private file it owns; it is never
+        returned here and never written into rclone's own configuration.
+      responses:
+        '200':
+          description: The provider list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BackupProvider'
+        '502':
+          description: The user service manager could not be reached
+        '503':
+          description: This build does not include the backup units
+  /v1/backup/providers/{provider}:
+    put:
+      operationId: connectBackupProvider
+      security:
+        - bearerAuth: []
+      description: >-
+        Submits a provider credential once. The daemon validates it with the
+        provider before storing anything, and the request body is never logged,
+        echoed back, or written to rclone's configuration.
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BackupProviderCredential'
+      responses:
+        '200':
+          description: The credential was accepted and stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupProvider'
+        '400':
+          description: A field is not valid
+        '401':
+          description: The provider refused the credential
+        '404':
+          description: That provider is not supported
+        '502':
+          description: The provider could not be reached
+        '503':
+          description: This build does not include the backup units
+    delete:
+      operationId: forgetBackupProvider
+      security:
+        - bearerAuth: []
+      description: Removes the stored credential for a provider.
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: The credential is gone
+        '404':
+          description: That provider is not supported
+        '503':
+          description: This build does not include the backup units
+  /v1/backup/providers/{provider}/verify:
+    post:
+      operationId: verifyBackupProvider
+      security:
+        - bearerAuth: []
+      description: >-
+        Re-checks the stored credential with the provider without the user
+        retyping it, and refreshes the verification time.
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The stored credential is still accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupProvider'
+        '400':
+          description: Nothing is stored, or the stored value is malformed
+        '401':
+          description: The provider refused the stored credential
+        '404':
+          description: That provider is not supported
+        '502':
+          description: The provider could not be reached
+        '503':
+          description: This build does not include the backup units
   /v1/backup/status:
     get:
       operationId: getBackupStatus
@@ -1518,6 +1624,33 @@ components:
           properties:
             status: { type: string, enum: [linked] }
             connection: { $ref: '#/components/schemas/StremioConnection' }
+    BackupProvider:
+      type: object
+      required: [id, configured]
+      properties:
+        id: { type: string }
+        configured:
+          type: boolean
+          description: Whether a credential is stored for this provider.
+        verified_at:
+          type: string
+          format: date-time
+          description: When the provider last accepted the stored credential.
+        hostname:
+          type: string
+          description: The API host that answered, which differs for EU accounts.
+    BackupProviderCredential:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string }
+        password:
+          type: string
+          format: password
+          description: >-
+            Sent once over the paired connection and stored by the daemon in a
+            0600 file it owns. Never logged, never returned, never written into
+            rclone's configuration.
     BackupSettings:
       type: object
       required: [enabled, remote, root, schedule]

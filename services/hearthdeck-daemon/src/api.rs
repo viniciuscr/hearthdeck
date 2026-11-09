@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use chrono::{DateTime, Utc};
 use hearthdeck_ai::categorization::ScanReport;
@@ -28,6 +28,7 @@ use crate::{
     backup::{
         BackupSettings, BackupStatus, SettingsView, ValidationError,
         control::ControlError as BackupControlError,
+        providers::{PROVIDERS, ProviderError, ProviderState},
     },
     categorizer::control::ControlError,
     collections, diagnostics, readiness,
@@ -118,6 +119,15 @@ fn protected_routes() -> Router<SharedState> {
             get(get_backup_settings).put(update_backup_settings),
         )
         .route("/v1/backup/status", get(backup_status))
+        .route("/v1/backup/providers", get(list_backup_providers))
+        .route(
+            "/v1/backup/providers/{provider}",
+            put(connect_backup_provider).delete(forget_backup_provider),
+        )
+        .route(
+            "/v1/backup/providers/{provider}/verify",
+            post(verify_backup_provider),
+        )
         .route("/v1/backup/run", post(run_backup))
         .route("/v1/events", get(events))
 }
@@ -134,6 +144,59 @@ pub fn local_router(state: SharedState) -> Router {
                 .delete(clear_tmdb_settings),
         )
         .with_state(state)
+}
+
+async fn list_backup_providers(State(state): State<SharedState>) -> Json<Vec<ProviderState>> {
+    Json(state.backup.providers().list())
+}
+
+/// The one credential a client may submit. It is read here, handed to the daemon's
+/// provider adapter, and dropped when this function returns: it is never stored by
+/// the API layer and never echoed.
+#[derive(serde::Deserialize)]
+struct ConnectProvider {
+    email: String,
+    password: String,
+}
+
+async fn connect_backup_provider(
+    State(state): State<SharedState>,
+    Path(provider): Path<String>,
+    Json(body): Json<ConnectProvider>,
+) -> Result<Json<ProviderState>, ApiError> {
+    require_provider(&provider)?;
+    Ok(Json(
+        state
+            .backup
+            .providers()
+            .connect_pcloud(&body.email, &body.password)
+            .await?,
+    ))
+}
+
+async fn verify_backup_provider(
+    State(state): State<SharedState>,
+    Path(provider): Path<String>,
+) -> Result<Json<ProviderState>, ApiError> {
+    require_provider(&provider)?;
+    Ok(Json(state.backup.providers().verify_pcloud().await?))
+}
+
+async fn forget_backup_provider(
+    State(state): State<SharedState>,
+    Path(provider): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    require_provider(&provider)?;
+    state.backup.providers().forget_pcloud()?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn require_provider(provider: &str) -> Result<(), ApiError> {
+    if PROVIDERS.contains(&provider) {
+        Ok(())
+    } else {
+        Err(ApiError::not_found())
+    }
 }
 
 async fn get_backup_settings(
@@ -1329,6 +1392,28 @@ impl From<BackupControlError> for ApiError {
                 message,
             },
             BackupControlError::Storage(error) => Self::internal(error),
+        }
+    }
+}
+
+impl From<ProviderError> for ApiError {
+    fn from(error: ProviderError) -> Self {
+        // Every message here is safe to show: the adapter never builds one from a
+        // credential.
+        match error {
+            ProviderError::Invalid(message) => Self {
+                status: StatusCode::BAD_REQUEST,
+                message: message.to_string(),
+            },
+            ProviderError::Refused => Self {
+                status: StatusCode::UNAUTHORIZED,
+                message: error.to_string(),
+            },
+            ProviderError::Transport(message) => Self {
+                status: StatusCode::BAD_GATEWAY,
+                message,
+            },
+            ProviderError::Storage(error) => Self::internal(error),
         }
     }
 }
