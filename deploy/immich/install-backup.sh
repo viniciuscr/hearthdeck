@@ -30,6 +30,10 @@ done
 [[ $EUID -ne 0 ]] || die "run as the desktop user, not root"
 command -v systemctl >/dev/null || die "systemctl is not installed"
 
+if ! id -nG "$(id -un)" | tr ' ' '\n' | grep -qx immich; then
+  die "current user is not in the immich group; run sudo deploy/immich/install.sh, then log out and back in before arming the mirror"
+fi
+
 install -Dm755 "$SCRIPT_DIR/immich-backup" "$HOME/.local/bin/immich-backup"
 install -Dm644 "$SCRIPT_DIR/immich-backup.service" \
   "$HOME/.config/systemd/user/immich-backup.service"

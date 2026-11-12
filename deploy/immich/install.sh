@@ -15,6 +15,8 @@
 #   IMMICH_DEVICE       partition holding the library (default: filesystem label "immich")
 #   IMMICH_MOUNT        mount point (default: /mnt/immich)
 #   IMMICH_USER         service user (default: immich)
+#   IMMICH_DESKTOP_USER user who runs the dump mirror, added to the immich
+#                       group (default: the invoking sudo user)
 #   IMMICH_LAN_SUBNET   optional ufw source subnet for port 2283
 #   IMMICH_NO_START     1 to install without starting the pod, so a dump can be
 #                       seeded into $IMMICH_MOUNT/data/backups first
@@ -23,6 +25,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 MOUNT=${IMMICH_MOUNT:-/mnt/immich}
 USER_NAME=${IMMICH_USER:-immich}
+DESKTOP_USER=${IMMICH_DESKTOP_USER:-${SUDO_USER:-}}
 DEVICE=${IMMICH_DEVICE:-}
 NO_START=${IMMICH_NO_START:-0}
 
@@ -44,6 +47,19 @@ UUID=$(blkid -s UUID -o value "$DEVICE" || true)
 
 mkdir -p "$MOUNT"
 
+# Record the mount by UUID even when the disk is already mounted: a manual
+# `mount` during recovery should not leave the next boot without the entry.
+if awk -v m="$MOUNT" '$1 !~ /^#/ && $2 == m {found=1} END{exit !found}' /etc/fstab; then
+  awk -v m="$MOUNT" -v u="UUID=$UUID" \
+    '$1 == u && $2 == m {ok=1} END{exit !ok}' /etc/fstab \
+    || die "/etc/fstab already mounts $MOUNT from a different device; fix it by hand"
+else
+  cp /etc/fstab "/etc/fstab.bak.$(date +%Y%m%d%H%M%S)"
+  echo "UUID=$UUID $MOUNT ext4 defaults,noatime,nofail,x-systemd.device-timeout=15s 0 2" \
+    >> /etc/fstab
+  systemctl daemon-reload
+fi
+
 if mountpoint -q "$MOUNT"; then
   MOUNTED_UUID=$(findmnt -no UUID "$MOUNT")
   [[ $MOUNTED_UUID == "$UUID" ]] || die "$MOUNT is mounted from UUID $MOUNTED_UUID, not $UUID"
@@ -51,32 +67,49 @@ else
   OTHER_MOUNT=$(findmnt -no TARGET "$DEVICE" 2>/dev/null || true)
   [[ -z $OTHER_MOUNT ]] || die "$DEVICE is already mounted at $OTHER_MOUNT"
 
-  if grep -qE "[[:space:]]${MOUNT}[[:space:]]" /etc/fstab; then
-    grep -qE "^UUID=${UUID}[[:space:]]+${MOUNT}[[:space:]]" /etc/fstab \
-      || die "/etc/fstab already mounts $MOUNT from a different device; fix it by hand"
-  else
-    cp /etc/fstab "/etc/fstab.bak.$(date +%Y%m%d%H%M%S)"
-    echo "UUID=$UUID $MOUNT ext4 defaults,noatime,nofail,x-systemd.device-timeout=15s 0 2" \
-      >> /etc/fstab
-    systemctl daemon-reload
-  fi
   mount "$MOUNT"
 fi
 
 [[ -d "$MOUNT/data" ]] || die "$MOUNT/data does not exist; is this the Immich disk?"
 
+# The library is owned by the service user and its private group. On a fresh
+# install the group may not exist yet, and useradd without -g would try to create
+# it a second time.
+if ! getent group "$USER_NAME" >/dev/null; then
+  groupadd "$USER_NAME"
+fi
 if ! id "$USER_NAME" >/dev/null 2>&1; then
-  useradd -m -s /bin/bash "$USER_NAME"
+  useradd -m -s /bin/bash -g "$USER_NAME" "$USER_NAME"
 fi
 loginctl enable-linger "$USER_NAME"
+
+# The dump mirror runs as the desktop user and reads /mnt/immich/data/backups
+# through this group. Membership only reaches a session at the next login, so
+# the caller is told when it changed.
+GROUP_ADDED=0
+if [[ -n $DESKTOP_USER && $DESKTOP_USER != root && $DESKTOP_USER != "$USER_NAME" ]]; then
+  id "$DESKTOP_USER" >/dev/null 2>&1 \
+    || die "desktop user $DESKTOP_USER does not exist; set IMMICH_DESKTOP_USER"
+  if ! id -nG "$DESKTOP_USER" | tr ' ' '\n' | grep -qx "$USER_NAME"; then
+    usermod -aG "$USER_NAME" "$DESKTOP_USER"
+    GROUP_ADDED=1
+  fi
+elif [[ -z $DESKTOP_USER || $DESKTOP_USER == root ]]; then
+  echo "install-immich: warning: no desktop sudo user detected; add your user to the $USER_NAME group by hand" >&2
+fi
 
 # useradd normally allocates these. The fallback keeps the original 200000
 # range, which is only safe when no other user already owns it.
 grep -q "^$USER_NAME:" /etc/subuid || usermod --add-subuids 200000-265535 "$USER_NAME"
 grep -q "^$USER_NAME:" /etc/subgid || usermod --add-subgids 200000-265535 "$USER_NAME"
 
-if [[ $(stat -c %u "$MOUNT/data") != $(id -u "$USER_NAME") ]]; then
-  echo "setting ownership of $MOUNT/data to $USER_NAME"
+# chown -R touches every file on a 100 GB library, so only do it when the
+# owner or group actually differs. Comparing both catches a UID match with a
+# stale GID, which would leave the mirror unable to read the dumps.
+WANT_OWNER="$(id -u "$USER_NAME"):$(id -g "$USER_NAME")"
+HAVE_OWNER="$(stat -c '%u:%g' "$MOUNT/data")"
+if [[ $HAVE_OWNER != "$WANT_OWNER" ]]; then
+  echo "setting ownership of $MOUNT/data to $WANT_OWNER (was $HAVE_OWNER)"
   chown -R "$USER_NAME:$USER_NAME" "$MOUNT/data"
 fi
 chmod 750 "$MOUNT/data"
@@ -132,6 +165,10 @@ then start the pod:
   systemctl --user start immich-pod
 
 EOF
+  if [[ $GROUP_ADDED == 1 ]]; then
+    echo "Added $DESKTOP_USER to the $USER_NAME group; log out and back in before running the dump mirror."
+  fi
+  echo "Do not reboot until the restore is complete: immich.pod starts at boot."
   exit 0
 fi
 
@@ -149,3 +186,8 @@ If the database already exists, do not restore anything.
 
 Logs: sudo machinectl shell $USER_NAME@   then   podman logs -f immich-server
 EOF
+
+if [[ $GROUP_ADDED == 1 ]]; then
+  echo
+  echo "Added $DESKTOP_USER to the $USER_NAME group; log out and back in (or reboot) before running the dump mirror."
+fi

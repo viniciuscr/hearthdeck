@@ -19,6 +19,15 @@ the why; this file is the runbook for installing, restoring, and backing up.
 | `immich-backup.service` / `.timer` | `~/.config/systemd/user/` | Nightly run at 03:30. |
 | `immich-backup.env.example` | `~/.config/immich-backup.env` | Optional overrides, including the opt-in originals switch. |
 | `install-backup.sh` | run as the desktop user | Installs the mirror script, units, and timer (dumps by default). |
+| `rehearse-restore.sh` | run as the desktop user | Restores a dump into a disposable Postgres and prints the row counts. |
+
+Shared host tooling used by the reinstall:
+
+| Path | Purpose |
+| --- | --- |
+| `deploy/mount-external.sh` | Mount the exFAT backup disk and add its fstab entry; never formats. |
+| `deploy/pre-wipe-check.sh` | Read-only proof that mounts, dumps, timers, and services are ready before a wipe. |
+| `deploy/cloudflared/` | Versioned tunnel Quadlet and installer; the token stays outside git. |
 
 ## What has to survive
 
@@ -95,6 +104,107 @@ podman secret inspect --showsecret immich-db-password
 A dump restore does not carry this secret. On a fresh machine, `install.sh`
 generates a new one and the new cluster uses it; that is expected.
 
+## Before wiping the machine
+
+The two external disks survive; the OS, rootless Podman storage, the Immich
+database volume, the RomM MariaDB volume, the user units, and `~/.config` do
+not. Run this list in order.
+
+### 1. Run the read-only readiness check
+
+From the repository, as the desktop user:
+
+```sh
+deploy/pre-wipe-check.sh
+```
+
+It checks the mounts and their fstab entries, the newest Immich and RomM dumps
+(age, gzip, completion marker), that the mirror copy is byte-identical, the
+timer state and last result, the `immich` group membership, the upload count,
+the live Immich version and health, the tunnel token and unit, RomM, and free
+space. It exits 1 on a hard failure and never mounts, writes, or starts a unit.
+This first run is an early warning; the proof is the second run after step 2.
+
+### 2. Take a final Immich dump and mirror it
+
+The automatic dump runs at 02:00, so a wipe later in the day would restore a
+database missing the most recent uploads. In Immich, open
+**Administration → Job Queues → Create job**, choose **Create Database Dump**,
+and confirm. Wait for a new `immich-db-backup-*.sql.gz` in
+`/mnt/immich/data/backups`, then mirror it:
+
+```sh
+newest=$(ls -t /mnt/immich/data/backups/*.sql.gz | head -1)
+gzip -t "$newest"
+systemctl --user start immich-backup.service
+journalctl --user -u immich-backup -n 20 --no-pager
+sha256sum "$newest" "/mnt/external/immich/backups/$(basename "$newest")"
+deploy/immich/rehearse-restore.sh "$newest"
+deploy/pre-wipe-check.sh
+```
+
+Both hashes must match. The rehearsal restores the final dump into a disposable
+container and prints the row counts; it is the proof that the dump is usable,
+not just recent. A manual dump counts toward the 14-dump retention, so the
+mirror's next `--delete` run keeps the two directories aligned.
+
+### 3. Take a final RomM dump
+
+```sh
+systemctl --user start romm-backup.service
+journalctl --user -u romm-backup -n 20 --no-pager
+dump=$(ls -t /mnt/external/romM/backups/*.sql.gz | head -1)
+gzip -t "$dump"
+```
+
+RomM's library, config, assets, and resources are already on the external disk;
+this only refreshes the database dump.
+
+### 4. Copy the off-disk credentials somewhere safe
+
+A wipe deletes these, and none is reconstructible from the external disk:
+
+| Secret | Path | If lost |
+| --- | --- | --- |
+| Cloudflare tunnel token | `~/.config/cloudflared/tunnel.env` | rotate it in the dashboard |
+| rclone remote config | `~/.config/rclone/rclone.conf` | re-authenticate pCloud |
+| Backup overrides | `~/.config/hearthdeck-backup/backup.env`, `credentials.env` | re-enter in Settings |
+| SSH key for the git remote | `~/.ssh/` | add a new key to GitHub |
+
+Store them in a password manager or an encrypted archive, not as plaintext on
+the exFAT disk. If you copy them to the external disk for the transition, delete
+that copy after the restore.
+
+### 5. Identify the disks, then unplug them if you can
+
+```sh
+lsblk -o NAME,SIZE,SERIAL,MODEL,FSTYPE,LABEL,UUID,MOUNTPOINTS
+```
+
+On this machine the two disks to preserve are:
+
+| Role | Model | Serial | Filesystem | Label / UUID |
+| --- | --- | --- | --- | --- |
+| Immich library | `CT1000X9SSD9` | `2542EA90E4C1` | ext4 | `immich` / `934db15b-…` |
+| Backup + RomM | `CT1000X10SSD9` | `2517EA801282` | exFAT | `Crucial X10` / `86B6-D516` |
+
+The installer sees device letters that may differ from the running system.
+Select the install target by size, model, or serial, never by `sdX` alone. If
+the disks are removable, unplug both before booting the installer and reconnect
+them after the first boot; that is the cheapest way to make the mistake
+impossible.
+
+### 6. Optional: push the final dumps off-site
+
+The external disk holds the final dump, which is enough for a machine wipe. To
+also put it in pCloud, run the off-site job and check it:
+
+```sh
+systemctl --user start hearthdeck-backup.service
+journalctl --user -u hearthdeck-backup -n 30 --no-pager
+rclone lsf pcloud:hearthdeck-backups/immich | sort | tail -3
+```
+
 ## Reinstall after a machine wipe
 
 ### What survived?
@@ -116,25 +226,38 @@ cd hearthdeck
 
 ### 2. Mount the backup disk
 
+The second SSD is the exFAT disk labeled `Crucial X10`. Use the versioned
+script; it finds the partition by label (or by `--device`/`EXTERNAL_UUID`),
+never formats, and appends the `/etc/fstab` entry only when it is missing:
+
 ```sh
-lsblk -f
-sudo mkdir -p /mnt/external
-sudo mount /dev/sdX2 /mnt/external     # or: sudo mount /mnt/external
+sudo deploy/mount-external.sh
 findmnt /mnt/external
 df -h /mnt/external
 ```
 
-Add an `/etc/fstab` entry so the nightly timer does not fail after the next
-reboot. Replace `sdX2` and the uid/gid with the values from `blkid` and `id`:
+If the device letter moved, the label still finds it. To be explicit:
 
 ```sh
-UUID=$(sudo blkid -s UUID -o value /dev/sdX2)
-echo "UUID=$UUID /mnt/external exfat defaults,nofail,uid=$(id -u),gid=$(id -g),umask=022,x-systemd.device-timeout=20 0 0" \
-  | sudo tee -a /etc/fstab
-sudo systemctl daemon-reload
+sudo deploy/mount-external.sh --device /dev/sdX2
 ```
 
-`nofail` keeps the host bootable without the disk. The backup script refuses to
+The script refuses anything that is not exFAT and refuses a disk without the
+`.hearthdeck-backup` sentinel, so a different stick cannot be mounted over the
+backup path. The sentinel is an empty file at the disk root; create it once with
+`sudo touch /mnt/external/.hearthdeck-backup` only when setting up a genuinely
+new backup disk. It assigns the mount to the desktop user (`uid`/`gid` of the
+sudo user) so the nightly timers can write to exFAT, and adds `nofail` so the
+machine still boots without the disk. `deploy/mount-external.sh --dry-run`
+prints the plan without writing.
+
+The live entry is:
+
+```
+UUID=86B6-D516 /mnt/external exfat defaults,nofail,uid=1000,gid=1000,umask=022,x-systemd.device-timeout=20,x-gvfs-show,x-gvfs-name=External 0 0
+```
+
+`nofail` keeps the host bootable without the disk. The backup scripts refuse to
 run unless the mount is present, so a missing disk fails loudly instead of
 writing onto the root filesystem.
 
@@ -155,6 +278,15 @@ destructive and is only for a genuinely blank disk. Then run the command above;
 `IMMICH_NO_START=1` is what lets you put a dump in place before Immich opens its
 onboarding screen. Without it the server starts immediately and the database is
 already migrated by the time you look.
+
+`install.sh` also creates the `immich` group if needed and adds the invoking
+`sudo` user to it, so the dump mirror can read `/mnt/immich/data/backups`.
+Group membership reaches a session only at the next login: log out and back in
+before installing or running the mirror. Do **not** reboot while a dump is
+waiting to be restored: `immich.pod` is enabled at boot and would start the
+empty database first. It compares the data directory's `uid:gid` before a
+recursive `chown`, so a reinstall where the IDs already match does not rewrite
+the whole 110 GB library.
 
 ### 4. Put a dump where Immich can see it
 
@@ -228,7 +360,50 @@ systemctl --user start immich-backup.service
 journalctl --user -u immich-backup -n 50 --no-pager
 ```
 
-This mirrors the dumps. It does not copy the library.
+This mirrors the dumps. It does not copy the library. The installer refuses to
+arm the timer when the current user is not yet in the `immich` group, because
+the 03:30 run would fail without read access.
+
+### 8. Reinstall the Cloudflare tunnel
+
+The Quadlet is versioned at
+[`deploy/cloudflared/cloudflared-immich.container`](../cloudflared/cloudflared-immich.container).
+The token is not: restore `~/.config/cloudflared/tunnel.env` from the copy you
+saved, or rotate the token in the Cloudflare dashboard.
+
+```sh
+install -d -m 700 ~/.config/cloudflared
+install -m 600 /path/to/tunnel.env ~/.config/cloudflared/tunnel.env
+deploy/cloudflared/install-cloudflared.sh
+systemctl --user status cloudflared-immich
+```
+
+The installer refuses to run as root, requires the env file to be mode `600`,
+and only restarts the unit when the checked-in Quadlet changed. `is-enabled`
+reporting `generated` is normal for a Quadlet. Linger must be on for the tunnel
+to start before login:
+
+```sh
+sudo loginctl enable-linger "$USER"
+```
+
+### 9. Restore the off-site backup
+
+The `hearthdeck` package installs `hearthdeck-backup.timer` **disabled** on
+purpose: a nightly job with no cloud remote would only fail. Restore
+`~/.config/rclone/rclone.conf` (or run `rclone config` again) and the optional
+`~/.config/hearthdeck-backup/backup.env`, then enable it once by hand:
+
+```sh
+systemctl --user enable --now hearthdeck-backup.timer
+systemctl --user start hearthdeck-backup.service
+journalctl --user -u hearthdeck-backup -n 30 --no-pager
+rclone lsf pcloud:hearthdeck-backups/immich | sort | tail -3
+```
+
+There is no Settings toggle in the current frontend; the manual enable is the
+documented escape hatch in [`docs/backup-settings.md`](../../docs/backup-settings.md).
+Do not enable it before the rclone remote exists.
 
 ## Nightly copy to the second disk
 
@@ -291,17 +466,28 @@ sha256sum "$(ls -t /mnt/immich/data/backups/*.sql.gz | head -1)" \
 systemctl --user list-timers immich-backup.timer
 ```
 
-The newest dump should have the same hash on both disks. The dump must also end
-with `PostgreSQL database dump complete`, not stop mid-table:
+The newest dump should have the same hash on both disks. It must also contain
+the `PostgreSQL database dump complete` marker, not stop mid-table. pg_dump 14
+writes a `\unrestrict` line after the marker, so search for it instead of
+reading only the last line:
 
 ```sh
-gzip -dc "$(ls -t /mnt/external/immich/backups/*.sql.gz | head -1)" | tail -3
+gzip -dc "$(ls -t /mnt/external/immich/backups/*.sql.gz | head -1)" \
+  | grep '^-- PostgreSQL database dump complete$'
 ```
 
-A real restore is the only proof that the dump is usable. The safe rehearsal is
-a disposable Postgres container with the same image as `immich-db`: restore the
-dump into it, count the users and assets, then remove it. Do not rehearse against
-the live database.
+A real restore is the only proof that the dump is usable. Run the versioned
+rehearsal; it creates a disposable container with the same image as `immich-db`,
+restores the dump, prints the row counts, and removes the container and volume:
+
+```sh
+deploy/immich/rehearse-restore.sh
+deploy/immich/rehearse-restore.sh /mnt/external/immich/backups/<dump>.sql.gz
+```
+
+It never touches the live database or the library. A successful run exits 0 and
+prints `users`, `assets`, `asset_files`, `live_assets`, and the extensions; zero
+users or zero assets means the dump is not a usable catalogue.
 
 ## Verification
 
@@ -353,3 +539,16 @@ findmnt /mnt/immich /mnt/external
 - **The backup timer fails loudly when the second disk is absent.** That is
   intentional: writing to `/mnt/external` on the root filesystem would fill the
   small root partition.
+- **The 02:00 dump is not the pre-wipe dump.** Create one by hand immediately
+  before the wipe and mirror it, or the restore loses the day's uploads.
+- **Group membership is not retroactive.** Adding the desktop user to `immich`
+  affects the next login, not the running systemd user manager. Log out and back
+  in before arming the mirror. Do not reboot while a dump is waiting to be
+  restored: `immich.pod` starts at boot.
+- **The tunnel token is not in git and cannot be read back from Cloudflare.**
+  Preserve `~/.config/cloudflared/tunnel.env` before the wipe, or rotate the
+  token afterwards.
+- **Do not trust `sdX`.** Device letters move between boots and inside the
+  installer. Match the library disk by the `immich` label or its UUID, the
+  backup disk by `Crucial X10` or `86B6-D516`, and use the serials when the
+  installer asks for a target.

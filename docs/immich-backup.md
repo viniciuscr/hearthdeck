@@ -11,8 +11,10 @@ Checked against Immich **v3.3.4** (released 2026-10-20) and Podman **6.1.4** on
 > [`deploy/immich/install.sh`](../deploy/immich/install.sh) does, without
 > touching the library. Use
 > [`deploy/immich/README.md`](../deploy/immich/README.md) for the bare-metal
-> reinstall and restore procedure. The steps below are the original build for a
-> blank disk.
+> reinstall and restore procedure,
+> [`deploy/mount-external.sh`](../deploy/mount-external.sh) for the backup disk,
+> and [`deploy/pre-wipe-check.sh`](../deploy/pre-wipe-check.sh) for the read-only
+> pre-wipe proof. The steps below are the original build for a blank disk.
 
 ## Decision
 
@@ -378,9 +380,12 @@ whose entries point at missing images.
    ```
 
 4. Test a restore. A backup that has never been restored is a hypothesis. The
-   supported path is **Administration → Maintenance → Restore database backup**;
-   the command-line disaster path is in the
+   supported in-place path is **Administration → Maintenance → Restore database
+   backup**; the command-line disaster path is in the
    [official backup docs](https://immich.app/docs/administration/backup-and-restore).
+   To prove a dump without touching the live database, run
+   `deploy/immich/rehearse-restore.sh`: it restores into a disposable Postgres
+   container and volume, prints the row counts, and removes them.
    The reinstall procedure, including seeding a dump from the mirror before the
    first start, is in [`deploy/immich/README.md`](../deploy/immich/README.md).
 

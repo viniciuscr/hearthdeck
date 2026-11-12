@@ -12,7 +12,8 @@ Checked against cloudflared **2026.10.5** and Podman **6.1.4** on 2026-10-27.
 
 - **Runtime:** rootless Podman under the desktop user `vinicius`, declared as a
   Quadlet container in `~/.config/containers/systemd/`, started at boot with
-  `loginctl enable-linger vinicius`.
+  `loginctl enable-linger vinicius`. The unit is versioned at
+  [`deploy/cloudflared/cloudflared-immich.container`](../deploy/cloudflared/cloudflared-immich.container).
 - **Networking:** `Network=host`. The tunnel ingress is
   `photos.viniciuscr.com.br → http://localhost:2283`, so cloudflared must see
   the host's loopback where Immich publishes its port.
@@ -47,6 +48,29 @@ container does not justify a second deployment mechanism.
 The ingress rule and the public hostname are configured in the Cloudflare
 dashboard, not on disk. The token only identifies the tunnel; it does not carry
 the ingress rules.
+
+## Reinstall from this repository
+
+On a new machine, restore the token first and then install the checked-in unit:
+
+```sh
+install -d -m 700 ~/.config/cloudflared
+install -m 600 /path/to/tunnel.env ~/.config/cloudflared/tunnel.env
+deploy/cloudflared/install-cloudflared.sh
+systemctl --user status cloudflared-immich
+```
+
+The installer runs as the desktop user, refuses an env file that is not mode
+`0600`, and only restarts the unit when the checked-in file changed. It does not
+create, print, or copy the token.
+
+`systemctl --user is-enabled cloudflared-immich` reporting `generated` is normal:
+the Quadlet generator creates the unit and its `default.target` dependency from
+the `[Install]` section. Do not `enable` it by hand.
+
+If the token is lost, rotate it in **Networks → Tunnels → your tunnel →
+Configure → Connector**, then replace `TUNNEL_TOKEN` and restart the unit. The
+hostname and ingress rules live in the Cloudflare dashboard, not on disk.
 
 ## 1. Create the tunnel and its token
 
@@ -208,3 +232,6 @@ version.
   Cloudflare Access in front of `photos.viniciuscr.com.br` is the cheap way to
   keep the login page off the open internet. The tunnel does not add
   authentication by itself.
+- **`is-enabled` says `generated`.** That is the Quadlet generator's normal
+  state; the `[Install]` section supplies the boot dependency. Do not try to
+  `systemctl --user enable` the generated unit or conclude it will not start.
